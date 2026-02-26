@@ -34,6 +34,7 @@ pub const CLUSTER_CODE_HASH: &str = CLUSTER_CODE_HASH_MAINNET_V2;
 pub struct ParsedSporeCell {
     pub spore_id: Vec<u8>,
     pub type_script_hash: Vec<u8>,
+    pub is_did: bool,
     pub content_type: String,
     pub content: Vec<u8>,
     pub cluster_id: Option<Vec<u8>>,
@@ -52,6 +53,10 @@ pub struct ParsedClusterCell {
 pub struct SporeParser;
 
 impl SporeParser {
+    pub fn is_did_type_script(code_hash: &[u8]) -> bool {
+        code_hash == parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID).as_slice()
+    }
+
     pub fn is_spore_type_script(code_hash: &[u8]) -> bool {
         let spore_hashes = [
             parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
@@ -89,6 +94,7 @@ impl SporeParser {
         Some(ParsedSporeCell {
             spore_id,
             type_script_hash,
+            is_did: Self::is_did_type_script(&type_code_hash),
             content_type: spore_data.content_type,
             content: spore_data.content,
             cluster_id: spore_data.cluster_id,

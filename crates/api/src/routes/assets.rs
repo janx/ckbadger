@@ -20,6 +20,7 @@ use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOK
 use crate::AppState;
 
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
@@ -1451,6 +1452,167 @@ async fn list_nft_collection_items(
         .get_nft_collection_aggregate(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+
+    if matches!(agg.standard, ckbadger_store::types::NftStandard::DidCkb) {
+        if collection_id_bytes != DID_CKB_SENTINEL_COLLECTION {
+            return Err(ApiError::internal(format!(
+                "did:ckb collection id mismatch: expected=0x{}, got=0x{}",
+                hex::encode(DID_CKB_SENTINEL_COLLECTION),
+                hex::encode(&collection_id_bytes)
+            )));
+        }
+
+        let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::DobEntry)> =
+            Vec::with_capacity((limit + 1) as usize);
+
+        if search_lower.is_some() || !matches!(status_filter, NftItemStatusFilter::All) {
+            let scan_batch_size = (limit * 4).clamp(64, 400) as usize;
+            let mut scan_cursor = cursor_bytes;
+
+            loop {
+                let nft_ids = state
+                    .store
+                    .list_nft_ids_by_collection(
+                        &collection_id_bytes,
+                        scan_cursor.as_deref(),
+                        scan_batch_size,
+                    )
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+                if nft_ids.is_empty() {
+                    break;
+                }
+
+                for nft_id in &nft_ids {
+                    let entry = state
+                        .store
+                        .get_spore(nft_id)
+                        .map_err(|e| ApiError::internal(e.to_string()))?
+                        .ok_or_else(|| {
+                            ApiError::internal(format!(
+                                "nft_by_collection index points to missing spore_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
+                                hex::encode(&collection_id_bytes),
+                                hex::encode(nft_id)
+                            ))
+                        })?;
+
+                    if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
+                        return Err(ApiError::internal(format!(
+                            "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
+                            hex::encode(&collection_id_bytes),
+                            hex::encode(nft_id),
+                            entry.standard.as_str()
+                        )));
+                    }
+
+                    let status_match = match status_filter {
+                        NftItemStatusFilter::All => true,
+                        NftItemStatusFilter::Live => entry.is_live,
+                        NftItemStatusFilter::Recycled => !entry.is_live,
+                    };
+                    if !status_match {
+                        continue;
+                    }
+
+                    if let Some(search) = search_lower.as_deref() {
+                        let name_match = entry
+                            .name
+                            .as_deref()
+                            .map(|name| name.to_ascii_lowercase().contains(search))
+                            .unwrap_or(false);
+                        let nft_id_hex = hex::encode(nft_id);
+                        let id_match = nft_id_hex.contains(search)
+                            || format!("0x{nft_id_hex}").contains(search);
+                        if !name_match && !id_match {
+                            continue;
+                        }
+                    }
+
+                    matched_items.push((nft_id.clone(), entry));
+                    if matched_items.len() > limit as usize {
+                        break;
+                    }
+                }
+
+                if matched_items.len() > limit as usize || nft_ids.len() < scan_batch_size {
+                    break;
+                }
+
+                scan_cursor = nft_ids.last().cloned();
+            }
+        } else {
+            let nft_ids = state
+                .store
+                .list_nft_ids_by_collection(
+                    &collection_id_bytes,
+                    cursor_bytes.as_deref(),
+                    (limit + 1) as usize,
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+
+            for nft_id in nft_ids {
+                let entry = state
+                    .store
+                    .get_spore(&nft_id)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "nft_by_collection index points to missing spore_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
+                            hex::encode(&collection_id_bytes),
+                            hex::encode(&nft_id)
+                        ))
+                    })?;
+
+                if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
+                    return Err(ApiError::internal(format!(
+                        "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
+                        hex::encode(&collection_id_bytes),
+                        hex::encode(&nft_id),
+                        entry.standard.as_str()
+                    )));
+                }
+
+                matched_items.push((nft_id, entry));
+            }
+        }
+
+        let has_more = matched_items.len() as i64 > limit;
+        let page_items: Vec<(Vec<u8>, ckbadger_store::types::DobEntry)> =
+            matched_items.into_iter().take(limit as usize).collect();
+
+        let rows = page_items
+            .iter()
+            .map(|(nft_id, entry)| NftCollectionItemResponse {
+                nft_id: format!("0x{}", hex::encode(nft_id)),
+                name: entry.name.clone(),
+                standard: "did_ckb".to_string(),
+                owner_lock_hash: entry
+                    .owner_lock_hash
+                    .as_ref()
+                    .map(|h| format!("0x{}", hex::encode(h))),
+                is_live: entry.is_live,
+                created_at_block: entry.created_at_block,
+                expired_at: None,
+                tx_hash: None,
+                output_index: None,
+            })
+            .collect();
+
+        let next_cursor = if has_more {
+            page_items
+                .last()
+                .map(|(id, _)| format!("0x{}", hex::encode(id)))
+        } else {
+            None
+        };
+
+        return ok(CursorPaginatedResponse::new(
+            rows,
+            agg.total_count,
+            limit,
+            next_cursor,
+        ));
+    }
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::NftEntry)> =
         Vec::with_capacity((limit + 1) as usize);

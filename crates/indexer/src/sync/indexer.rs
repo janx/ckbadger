@@ -45,6 +45,7 @@ use super::SyncProgress;
 #[allow(dead_code)]
 const PARTITION_SIZE: u64 = 5_000_000;
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 const OMNILOCK_CODE_HASH_MAINNET_V2: &str =
     "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26";
 const OMNILOCK_CODE_HASH_MAINNET_V1: &str =
@@ -1331,6 +1332,9 @@ fn classify_nft_collection_id(type_code_hash: &[u8], type_args: &[u8]) -> Option
     }
     if DotbitParser::is_account_cell_type_script(type_code_hash) {
         return Some(DOTBIT_SENTINEL_COLLECTION.to_vec());
+    }
+    if SporeParser::is_did_type_script(type_code_hash) {
+        return Some(DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
     None
 }
@@ -4284,12 +4288,17 @@ impl Indexer {
                                     }
                                     if DotbitParser::is_account_cell_type_script(type_code_hash)
                                         || MnftParser::is_token_type_script(type_code_hash)
+                                        || SporeParser::is_did_type_script(type_code_hash)
                                     {
                                         let collection_id =
                                             if DotbitParser::is_account_cell_type_script(
                                                 type_code_hash,
                                             ) {
                                                 Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                                            } else if SporeParser::is_did_type_script(
+                                                type_code_hash,
+                                            ) {
+                                                Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
                                             } else if let Some(cached) =
                                                 nft_type_index_cache.get(type_script_hash)
                                             {
@@ -6145,10 +6154,13 @@ impl Indexer {
                             }
                             if DotbitParser::is_account_cell_type_script(type_code_hash)
                                 || MnftParser::is_token_type_script(type_code_hash)
+                                || SporeParser::is_did_type_script(type_code_hash)
                             {
                                 let collection_id =
                                     if DotbitParser::is_account_cell_type_script(type_code_hash) {
                                         Some(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                                    } else if SporeParser::is_did_type_script(type_code_hash) {
+                                        Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
                                     } else if let Some(cached) =
                                         nft_type_index_cache.get(type_script_hash)
                                     {
@@ -11888,6 +11900,15 @@ mod tests {
         let collection_id = classify_nft_collection_id(&dotbit_code_hash, &[])
             .expect("dotbit account type should map to sentinel collection");
         assert_eq!(collection_id, DOTBIT_SENTINEL_COLLECTION.to_vec());
+    }
+
+    #[test]
+    fn test_classify_nft_collection_id_did_ckb_uses_sentinel_collection() {
+        let did_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
+        let collection_id = classify_nft_collection_id(&did_code_hash, &[0x99; 32])
+            .expect("did:ckb type should map to sentinel collection");
+        assert_eq!(collection_id, DID_CKB_SENTINEL_COLLECTION.to_vec());
     }
 
     #[test]

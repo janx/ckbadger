@@ -580,11 +580,11 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Occupied' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -620,10 +620,10 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -684,15 +684,33 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('shows on-chain ratio and storage badge for nft assets', async () => {
+  it('shows storage badge for nft assets', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
     render(<AssetsPage />);
     fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('100.00%')).toBeInTheDocument();
       expect(screen.getByText('FULLY ON-CHAIN')).toBeInTheDocument();
+    });
+  });
+
+  it('uses updated table headers and removes on-chain/transfers columns', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+
+    render(<AssetsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Standard' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Sort by Transfers' })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Sort by On-chain' })).not.toBeInTheDocument();
     });
   });
 

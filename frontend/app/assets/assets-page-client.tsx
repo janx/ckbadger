@@ -270,16 +270,8 @@ function AssetTable({
                       <div className="ml-auto h-4 w-10 rounded bg-slate-800" />
                     </div>
                   )}
-                  {assetType !== 'token' && (
-                    <div className={smallNumberColumnClass}>
-                      <div className="ml-auto h-4 w-12 rounded bg-slate-800" />
-                    </div>
-                  )}
                   <div className={smallNumberColumnClass}>
                     <div className="ml-auto h-4 w-12 rounded bg-slate-800" />
-                  </div>
-                  <div className={mediumNumberColumnClass}>
-                    <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
                   </div>
                   <div className={mediumNumberColumnClass}>
                     <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
@@ -316,16 +308,13 @@ function AssetTable({
               assetType === 'token' ? 'Token' : 'Collection',
               nameColumnClass
             )}
-            {renderSortHeader('type', 'Type', typeColumnClass)}
+            {renderSortHeader('type', 'Standard', typeColumnClass)}
             {assetType !== 'token' &&
               renderSortHeader('supply', 'Items', smallNumberColumnClass, 'right')}
-            {assetType !== 'token' &&
-              renderSortHeader('onchainRatio', 'On-chain', smallNumberColumnClass, 'right')}
             {renderSortHeader('transfers24h', '24h Txns', smallNumberColumnClass, 'right')}
             {renderSortHeader('holders', 'Holders', mediumNumberColumnClass, 'right')}
-            {renderSortHeader('transfers', 'Transfers', mediumNumberColumnClass, 'right')}
-            {renderSortHeader('occupied', 'Occupied', capacityColumnClass, 'right')}
-            {renderSortHeader('capacity', 'Capacity', capacityColumnClass, 'right')}
+            {renderSortHeader('occupied', 'Occupied (CKB)', capacityColumnClass, 'right')}
+            {renderSortHeader('capacity', 'Capacity (CKB)', capacityColumnClass, 'right')}
           </div>
           {assets.map((asset: Asset) => (
             <TerminalRow key={asset.id}>
@@ -407,23 +396,11 @@ function AssetTable({
                     {formatNumber(asset.totalSupply || 0)}
                   </div>
                 )}
-                {assetType !== 'token' && (
-                  <div
-                    className={`${smallNumberColumnClass} font-mono tabular-nums text-slate-300`}
-                  >
-                    {asset.fullyOnchainRatio
-                      ? `${(Number(asset.fullyOnchainRatio) * 100).toFixed(2)}%`
-                      : '-'}
-                  </div>
-                )}
                 <div className={`${smallNumberColumnClass} text-amber font-mono tabular-nums`}>
                   {formatNumber(asset.transfers24h)}
                 </div>
                 <div className={`${mediumNumberColumnClass} font-mono tabular-nums text-slate-400`}>
                   {formatNumber(asset.holdersCount)}
-                </div>
-                <div className={`${mediumNumberColumnClass} font-mono tabular-nums text-slate-400`}>
-                  {formatNumber(asset.transfersCount)}
                 </div>
                 <div className={`${capacityColumnClass} font-mono tabular-nums text-slate-300`}>
                   {(() => {

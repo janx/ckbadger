@@ -438,6 +438,9 @@ pub enum NftStandard {
     /// .bit (DotBit) domain name account. Single-collection standard:
     /// all .bit accounts belong to one implicit ".bit" collection.
     DotBit,
+    /// did:ckb decentralized identity. Single-collection standard:
+    /// all did:ckb IDs belong to one implicit did:ckb collection.
+    DidCkb,
 }
 
 impl NftStandard {
@@ -448,6 +451,7 @@ impl NftStandard {
             NftStandard::MnftClass => "mnft_class",
             NftStandard::MnftToken => "mnft",
             NftStandard::DotBit => "dotbit",
+            NftStandard::DidCkb => "did_ckb",
         }
     }
 
@@ -456,6 +460,7 @@ impl NftStandard {
         match self {
             NftStandard::MnftIssuer | NftStandard::MnftClass | NftStandard::MnftToken => "m-nft",
             NftStandard::DotBit => "dotbit",
+            NftStandard::DidCkb => "did_ckb",
         }
     }
 }
@@ -1292,6 +1297,7 @@ mod tests {
         assert_eq!(NftStandard::MnftClass.as_str(), "mnft_class");
         assert_eq!(NftStandard::MnftToken.as_str(), "mnft");
         assert_eq!(NftStandard::DotBit.as_str(), "dotbit");
+        assert_eq!(NftStandard::DidCkb.as_str(), "did_ckb");
     }
 
     #[test]
@@ -1300,6 +1306,7 @@ mod tests {
         assert_eq!(NftStandard::MnftClass.asset_standard(), "m-nft");
         assert_eq!(NftStandard::MnftToken.asset_standard(), "m-nft");
         assert_eq!(NftStandard::DotBit.asset_standard(), "dotbit");
+        assert_eq!(NftStandard::DidCkb.asset_standard(), "did_ckb");
     }
 
     // ---- Bincode roundtrip: NftEntry variants ----

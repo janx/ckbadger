@@ -3838,6 +3838,100 @@ async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() 
 }
 
 #[tokio::test]
+async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
+    let store = test_store();
+    let did_collection_id = *b"did_ckb_collection______________";
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &did_collection_id,
+        &NftCollectionAggregate {
+            name: Some("did:ckb".to_string()),
+            standard: NftStandard::DidCkb,
+            total_count: 2,
+            live_count: 2,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=nft&standard=did:ckb")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["assetType"], "nft");
+    assert_eq!(rows[0]["standard"], "did_ckb");
+    assert_eq!(rows[0]["name"], "did:ckb");
+}
+
+#[tokio::test]
+async fn test_nft_collection_items_supports_did_ckb_collection_from_spore_data() {
+    let store = test_store();
+    let did_collection_id = *b"did_ckb_collection______________";
+    let did_id = [0xD3u8; 32];
+
+    store
+        .put_spore_direct(
+            &did_id,
+            &DobEntry {
+                standard: DobStandard::DidCkb,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: Some("did:alice.ckb".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 321,
+                created_at_tx: vec![0x22; 32],
+                extra: DobExtra::DidCkb,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &did_collection_id,
+        &NftCollectionAggregate {
+            name: Some("did:ckb".to_string()),
+            standard: NftStandard::DidCkb,
+            total_count: 1,
+            live_count: 1,
+        },
+    );
+    batch.put_nft_by_collection(&did_collection_id, &did_id);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/0x{}/items",
+            hex::encode(did_collection_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["standard"], "did_ckb");
+    assert_eq!(rows[0]["name"], "did:alice.ckb");
+    assert_eq!(rows[0]["isLive"], true);
+}
+
+#[tokio::test]
 async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_pagination() {
     let store = test_store();
     let token_a = [0x11u8; 32];
