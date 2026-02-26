@@ -20,7 +20,7 @@ use crate::response::{
 };
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    is_ckb_address, is_known_script_name, merge_script_info_for_reference,
+    ensure_derived_ready, is_ckb_address, is_known_script_name, merge_script_info_for_reference,
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::AppState;
@@ -53,28 +53,6 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
-
-fn ensure_derived_ready(
-    state: &AppState,
-) -> Result<(), (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let sync = state
-        .store
-        .get_sync_status()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if sync.derived_tip_block_number < sync.tip_block_number {
-        return Err((
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(ApiError::new(
-                "derived_syncing",
-                format!(
-                    "derived store syncing: core_tip={}, derived_tip={}",
-                    sync.tip_block_number, sync.derived_tip_block_number
-                ),
-            )),
-        ));
-    }
-    Ok(())
-}
 
 fn is_known_script_label(name: &str) -> bool {
     let trimmed = name.trim();
@@ -1855,6 +1833,8 @@ async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
+    ensure_derived_ready(state.as_ref())?;
+
     let limit = params.limit.clamp(1, 100) as usize;
 
     let code_hash_bytes = hex::decode(
@@ -1984,6 +1964,8 @@ async fn get_address(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
 ) -> ApiResult<AddressResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     // Check cache first
     let cache_key = CacheKeys::address_balance(&addr);
     if let Some(cached) = state.cache.get::<AddressResponse>(&cache_key).await {
@@ -2022,63 +2004,56 @@ async fn get_address(
         .list_cells_by_lock(&lock_hash, 1, None)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (lock_script, address) = if let Some((_, _, info)) = cells_for_script.first() {
-        // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
-        let hash_type_num = state
-            .derived_store
-            .get_script_info(&info.lock_code_hash)
-            .ok()
-            .flatten()
-            .map(|si| si.hash_type as i16)
-            .unwrap_or(1); // Default to "type"
+    let (lock_script, lock_script_info, address) =
+        if let Some((_, _, info)) = cells_for_script.first() {
+            let script_info = state
+                .derived_store
+                .get_script_info(&info.lock_code_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        let hash_type_str = match hash_type_num {
-            0 => "data",
-            1 => "type",
-            2 => "data1",
-            4 => "data2",
-            _ => "data",
-        };
+            // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
+            let hash_type_num = script_info
+                .as_ref()
+                .map(|si| si.hash_type as i16)
+                .unwrap_or(1); // Default to "type"
 
-        let script = ScriptResponse {
-            code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-            hash_type: hash_type_str.to_string(),
-            args: format!("0x{}", hex::encode(&info.lock_args)),
-        };
+            let hash_type_str = match hash_type_num {
+                0 => "data",
+                1 => "type",
+                2 => "data1",
+                4 => "data2",
+                _ => "data",
+            };
 
-        let addr = input_address.or_else(|| {
-            script_to_address(
-                &info.lock_code_hash,
-                hash_type_num,
-                &info.lock_args,
-                &state.ckb_network,
-            )
-            .ok()
-        });
+            let script = ScriptResponse {
+                code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+                hash_type: hash_type_str.to_string(),
+                args: format!("0x{}", hex::encode(&info.lock_args)),
+            };
 
-        (Some(script), addr)
-    } else {
-        // No live cells found, also check consumed cells for script info.
-        // For now, just return what we have.
-        (None, input_address)
-    };
+            let addr = input_address.or_else(|| {
+                script_to_address(
+                    &info.lock_code_hash,
+                    hash_type_num,
+                    &info.lock_args,
+                    &state.ckb_network,
+                )
+                .ok()
+            });
 
-    // Look up lock script info from script_info CF
-    let lock_script_info = if let Some((_, _, info)) = cells_for_script.first() {
-        state
-            .derived_store
-            .get_script_info(&info.lock_code_hash)
-            .ok()
-            .flatten()
-            .map(|si| LockScriptInfo {
+            let script_info_response = script_info.map(|si| LockScriptInfo {
                 code_hash: format!("0x{}", hex::encode(&si.code_hash)),
                 name: si.name.unwrap_or_else(|| "Unknown".to_string()),
                 script_kind: Some("lock".to_string()),
                 deprecated: false,
-            })
-    } else {
-        None
-    };
+            });
+
+            (Some(script), script_info_response, addr)
+        } else {
+            // No live cells found, also check consumed cells for script info.
+            // For now, just return what we have.
+            (None, None, input_address)
+        };
 
     let recent_activities_count = transactions_count;
 
@@ -2107,10 +2082,10 @@ fn lookup_code_cell_scripts(
     store: &ckbadger_store::CkbadgerStore,
     data_hash: &[u8],
     type_script_hash: Option<&Vec<u8>>,
-) -> Option<Vec<CodeCellScript>> {
+) -> Result<Option<Vec<CodeCellScript>>, (axum::http::StatusCode, axum::Json<ApiError>)> {
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = store
         .list_script_infos()
-        .ok()?
+        .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
         .map(|(_, info)| info)
         .collect();
@@ -2173,9 +2148,9 @@ fn lookup_code_cell_scripts(
     }
 
     if scripts.is_empty() {
-        None
+        Ok(None)
     } else {
-        Some(scripts)
+        Ok(Some(scripts))
     }
 }
 
@@ -2266,6 +2241,8 @@ async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
 ) -> ApiResult<CellDetailResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
@@ -2309,15 +2286,14 @@ async fn get_cell(
         _ => "data",
     };
 
-    let type_script = info.type_code_hash.as_ref().map(|code_hash| {
+    let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
         let type_hash_type_num: i16 = state
             .derived_store
             .get_script_info(code_hash)
-            .ok()
-            .flatten()
+            .map_err(|e| ApiError::internal(e.to_string()))?
             .map(|si| si.hash_type as i16)
             .unwrap_or(1);
-        ScriptResponse {
+        Some(ScriptResponse {
             code_hash: format!("0x{}", hex::encode(code_hash)),
             hash_type: hash_type_str(type_hash_type_num).to_string(),
             args: format!(
@@ -2326,8 +2302,10 @@ async fn get_cell(
                     .as_ref()
                     .map_or_else(String::new, hex::encode)
             ),
-        }
-    });
+        })
+    } else {
+        None
+    };
 
     let address = script_to_address(
         &info.lock_code_hash,
@@ -2366,9 +2344,11 @@ async fn get_cell(
         hash
     });
 
-    let code_cell_of = data_hash.as_ref().and_then(|dh| {
-        lookup_code_cell_scripts(&state.derived_store, dh, info.type_script_hash.as_ref())
-    });
+    let code_cell_of = if let Some(dh) = data_hash.as_ref() {
+        lookup_code_cell_scripts(&state.derived_store, dh, info.type_script_hash.as_ref())?
+    } else {
+        None
+    };
 
     let data_analysis = cell_data
         .as_ref()
@@ -2700,25 +2680,26 @@ async fn get_address_transactions(
             // Resolve script labels from collected code hashes (type + lock scripts)
             let mut script_labels: Vec<String> = script_code_hashes
                 .iter()
-                .map(|ch| {
+                .map(
+                    |ch| -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
                     let known_name = state
                         .derived_store
                         .get_script_info(ch)
-                        .ok()
-                        .flatten()
+                        .map_err(|e| ApiError::internal(e.to_string()))?
                         .and_then(|si| si.name)
                         .map(|name| name.trim().to_string())
                         .filter(|name| is_known_script_label(name));
-                    known_name.unwrap_or_else(|| format_script_code_hash_label(ch))
-                })
-                .filter(|name| {
-                    // Filter out common lock scripts that aren't interesting as labels
-                    !matches!(
-                        name.as_str(),
-                        "Default Lock" | "Default Multisig" | "anyone_can_pay"
-                    )
-                })
-                .collect();
+                    Ok(known_name.unwrap_or_else(|| format_script_code_hash_label(ch)))
+                    },
+                )
+                .collect::<Result<Vec<_>, _>>()?;
+            // Filter out common lock scripts that aren't interesting as labels.
+            script_labels.retain(|name| {
+                !matches!(
+                    name.as_str(),
+                    "Default Lock" | "Default Multisig" | "anyone_can_pay"
+                )
+            });
             script_labels.sort();
             script_labels.dedup();
 

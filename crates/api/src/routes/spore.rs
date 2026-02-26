@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
+use crate::utils::{
+    apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready, parse_chart_date_range,
+};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT};
 use crate::AppState;
 
@@ -1053,6 +1055,8 @@ async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
@@ -1166,6 +1170,8 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
@@ -1274,6 +1280,8 @@ async fn get_cluster_occupation_chart(
     Path(cluster_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -1347,6 +1355,8 @@ async fn get_spore_occupation_chart(
     Path(spore_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 

@@ -17,7 +17,7 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::script_to_address;
+use crate::utils::{ensure_derived_ready, script_to_address};
 use crate::AppState;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -437,18 +437,30 @@ fn resolve_stored_input_type_hash_type(
     derived_store: &ckbadger_store::CkbadgerStore,
     type_script_hash: Option<&[u8]>,
     type_code_hash: &[u8],
-) -> String {
+) -> Result<String, RouteError> {
     if let Some(type_hash) = type_script_hash {
-        if let Ok(Some(token)) = core_store.get_token(type_hash) {
-            return hash_type_to_string(token.hash_type as i16);
+        match core_store.get_token(type_hash) {
+            Ok(Some(token)) => return Ok(hash_type_to_string(token.hash_type as i16)),
+            Ok(None) => {}
+            Err(e) => {
+                return Err(ApiError::internal(format!(
+                    "failed to resolve token hash_type for type_script_hash=0x{}: {}",
+                    hex::encode(type_hash),
+                    e
+                )));
+            }
         }
     }
 
-    if let Ok(Some(script)) = derived_store.get_script_info(type_code_hash) {
-        return hash_type_to_string(script.hash_type as i16);
+    match derived_store.get_script_info(type_code_hash) {
+        Ok(Some(script)) => Ok(hash_type_to_string(script.hash_type as i16)),
+        Ok(None) => Ok("unknown".to_string()),
+        Err(e) => Err(ApiError::internal(format!(
+            "failed to resolve script hash_type for type_code_hash=0x{}: {}",
+            hex::encode(type_code_hash),
+            e
+        ))),
     }
-
-    "unknown".to_string()
 }
 
 async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
@@ -582,6 +594,8 @@ async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionDetailResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
@@ -748,7 +762,7 @@ fn build_inputs_outputs_from_ckb(
     let inputs: Vec<TransactionInputResponse> = rpc_tx
         .inputs
         .iter()
-        .map(|input| {
+        .map(|input| -> Result<TransactionInputResponse, RouteError> {
             let prev_tx_hash_hex = &input.previous_output.tx_hash;
             let prev_index_hex = &input.previous_output.index;
             let prev_index = u32::from_str_radix(
@@ -794,22 +808,25 @@ fn build_inputs_outputs_from_ckb(
                             hash_type: hash_type_to_string(info.lock_hash_type),
                             args: format!("0x{}", hex::encode(&info.lock_args)),
                         };
-                        let type_resp =
-                            info.type_code_hash
-                                .as_ref()
-                                .map(|type_code_hash| ScriptResponse {
+                        let type_resp = info
+                            .type_code_hash
+                            .as_ref()
+                            .map(|type_code_hash| -> Result<ScriptResponse, RouteError> {
+                                Ok(ScriptResponse {
                                     code_hash: format!("0x{}", hex::encode(type_code_hash)),
                                     hash_type: resolve_stored_input_type_hash_type(
                                         core_store,
                                         derived_store,
                                         info.type_script_hash.as_deref(),
                                         type_code_hash,
-                                    ),
+                                    )?,
                                     args: format!(
                                         "0x{}",
                                         hex::encode(info.type_args.as_deref().unwrap_or(&[]))
                                     ),
-                                });
+                                })
+                            })
+                            .transpose()?;
 
                         let addr = script_to_address(
                             &info.lock_code_hash,
@@ -890,7 +907,7 @@ fn build_inputs_outputs_from_ckb(
                 (None, None, None, None)
             };
 
-            TransactionInputResponse {
+            Ok(TransactionInputResponse {
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
                     index: prev_index as i32,
@@ -900,9 +917,9 @@ fn build_inputs_outputs_from_ckb(
                 lock,
                 r#type: type_script,
                 address,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut outputs_capacity: u128 = 0;
     let mut outputs_occupied_capacity: u128 = 0;

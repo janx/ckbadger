@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
 use crate::utils::{
-    apply_live_capacity_delta, format_duration, resolve_dob_collection_name,
+    apply_live_capacity_delta, ensure_derived_ready, format_duration, resolve_dob_collection_name,
     resolve_nft_collection_name,
 };
 use crate::AppState;
@@ -140,6 +140,7 @@ pub struct NetworkStats {
 }
 
 async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStats> {
+    ensure_derived_ready(state.as_ref())?;
     if let Some(cached) = state
         .cache
         .get::<NetworkStats>(CacheKeys::NETWORK_STATS)
@@ -159,6 +160,7 @@ async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<Netw
 }
 
 async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "statistics:tx-stats";
     if let Some(cached) = state.cache.get::<TxStatsResponse>(cache_key).await {
         return ok(cached);
@@ -696,6 +698,7 @@ fn build_most_utilized_share_chart(
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:most-utilized-scripts:v2";
     if let Some(cached) = state
         .cache
@@ -852,6 +855,7 @@ async fn get_most_utilized_scripts_chart(
 async fn get_most_utilized_assets_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedAssetsChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:most-utilized-assets:v2";
     if let Some(cached) = state
         .cache
@@ -1059,6 +1063,7 @@ async fn get_most_utilized_assets_chart(
 async fn get_transaction_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let daily_stats = state
         .derived_store
         .list_daily_stats_with_dates()
@@ -1087,6 +1092,7 @@ async fn get_transaction_count_chart(
 async fn get_cell_count_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let daily_stats = state
         .derived_store
         .list_daily_stats_with_dates()
@@ -1146,6 +1152,7 @@ async fn get_cell_count_chart(
 }
 
 async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:knowledge-size:v2";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -1288,6 +1295,7 @@ fn build_circulating_supply_by_date_map(
 async fn get_common_knowledge_composition_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:common-knowledge-composition:v1";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         return ok(cached);
@@ -1671,6 +1679,7 @@ async fn get_cell_age_vs_occupied_capacity_chart(
 async fn get_capacity_turnover_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:capacity-turnover-ratio:v1";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -1967,6 +1976,7 @@ pub(crate) fn build_block_time_distribution_response(
 async fn get_epoch_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:epoch-time-distribution";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2004,6 +2014,7 @@ async fn get_epoch_time_distribution_chart(
 async fn get_epoch_time_length_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:epoch-time-length";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2043,6 +2054,7 @@ async fn get_epoch_time_length_chart(
 async fn get_average_block_time_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:average-block-time";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2230,15 +2242,15 @@ async fn fetch_network_stats_from_db(
     };
 
     // Get compact_target from daily block stats for difficulty/hash rate
-    let daily_block_stats = derived_store
+    let daily_block_stats = match derived_store
         .get_daily_block_stats(&today_str)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .or_else(|| {
-            derived_store
-                .get_daily_block_stats(&yesterday_str)
-                .ok()
-                .flatten()
-        });
+    {
+        Some(stats) => Some(stats),
+        None => derived_store
+            .get_daily_block_stats(&yesterday_str)
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+    };
 
     let compact_target = daily_block_stats
         .as_ref()
@@ -2432,6 +2444,7 @@ async fn fetch_network_stats_from_db(
 }
 
 async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:hash-rate";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2479,6 +2492,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
 }
 
 async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:difficulty";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2524,6 +2538,7 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
 }
 
 async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:uncle-rate";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
@@ -2589,6 +2604,7 @@ pub struct MinerDistributionResponse {
 async fn get_miner_address_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MinerDistributionResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:miner-address-distribution";
     if let Some(cached) = state
         .cache
@@ -2695,6 +2711,7 @@ fn snapshot_secondary_cumulative(
 async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:total-supply";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         return ok(cached);
@@ -2827,6 +2844,7 @@ fn calculate_nominal_apc(year: f64) -> f64 {
 async fn get_secondary_issuance_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
     let cache_key = "chart:secondary-issuance";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         return ok(cached);

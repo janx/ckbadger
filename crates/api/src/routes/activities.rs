@@ -1,39 +1,18 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     routing::get,
-    Json, Router,
+    Router,
 };
 use ckbadger_store::types::{AssetAction, AssetChange};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::address::address_to_lock_script_hash;
+use crate::utils::{address::address_to_lock_script_hash, ensure_derived_ready};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/addresses/{addr}/activities", get(get_address_activities))
-}
-
-fn ensure_derived_ready(state: &AppState) -> Result<(), (StatusCode, Json<ApiError>)> {
-    let sync = state
-        .store
-        .get_sync_status()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if sync.derived_tip_block_number < sync.tip_block_number {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError::new(
-                "derived_syncing",
-                format!(
-                    "derived store syncing: core_tip={}, derived_tip={}",
-                    sync.tip_block_number, sync.derived_tip_block_number
-                ),
-            )),
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

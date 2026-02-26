@@ -12,7 +12,7 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::address::compute_script_hash;
 use crate::utils::{
-    accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive,
+    accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready,
     parse_chart_date_range, resolve_dob_collection_name, resolve_nft_collection_name,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
@@ -23,26 +23,6 @@ const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 type DotbitLiveOutpoint = Option<(String, i16)>;
-
-fn ensure_derived_ready(state: &AppState) -> Result<(), ApiRouteError> {
-    let sync = state
-        .store
-        .get_sync_status()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if sync.derived_tip_block_number < sync.tip_block_number {
-        return Err((
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError::new(
-                "derived_syncing",
-                format!(
-                    "derived store syncing: core_tip={}, derived_tip={}",
-                    sync.tip_block_number, sync.derived_tip_block_number
-                ),
-            )),
-        ));
-    }
-    Ok(())
-}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -272,6 +252,8 @@ async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
+    ensure_derived_ready(state.as_ref())?;
+
     let limit = params.limit.clamp(1, 100);
 
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
@@ -1255,6 +1237,8 @@ async fn get_nft_collection(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
 ) -> ApiResult<NftCollectionDetailResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
@@ -1634,6 +1618,8 @@ async fn get_nft_collection_occupation_chart(
     Path(collection_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 

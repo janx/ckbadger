@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::script_to_address;
+use crate::utils::{ensure_derived_ready, script_to_address};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -84,6 +84,8 @@ async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
+    ensure_derived_ready(state.as_ref())?;
+
     let limit = params.limit.clamp(1, 100);
 
     let cache_key = format!("{}:{}", CacheKeys::LATEST_BLOCKS, limit);
@@ -353,6 +355,8 @@ async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
+    ensure_derived_ready(state.as_ref())?;
+
     let store = state.store.clone();
     let ckb_store = state.ckb_store.clone();
 
