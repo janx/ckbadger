@@ -42,6 +42,9 @@ fn parse_epoch_string(epoch: &str) -> (i64, i32, i32) {
 pub struct SyncStatusRow {
     pub tip_block: i64,
     pub chain_tip: i64,
+    pub derived_tip_block: Option<i64>,
+    pub derived_lag_blocks: Option<i64>,
+    pub derived_sync_in_progress: bool,
     pub is_syncing: bool,
     pub is_bulk_sync: bool,
     pub progress: f64,
@@ -132,6 +135,7 @@ pub struct ApiServiceInfo {
     pub reachable: bool,
     pub latency_ms: Option<f64>,
     pub status_code: Option<u16>,
+    pub derived_syncing: bool,
     pub latest_block: Option<i64>,
     pub tps: Option<String>,
     pub avg_block_time: Option<String>,
@@ -223,6 +227,40 @@ fn ttl_or_none(ttl_secs: i64) -> Option<i64> {
     }
 }
 
+fn derive_sync_status_fields(
+    tip_block: i64,
+    status_data: Option<&SyncStatusData>,
+) -> (Option<i64>, Option<i64>, bool) {
+    let Some(status) = status_data else {
+        return (None, None, false);
+    };
+
+    let derived_tip = status
+        .derived_tip_block_number
+        .unwrap_or(status.tip_block_number);
+    let lag = (tip_block - derived_tip).max(0);
+    let in_progress = status.derived_sync_in_progress || lag > 0;
+    (Some(derived_tip), Some(lag), in_progress)
+}
+
+fn response_indicates_derived_syncing(status_code: u16, body: &str) -> bool {
+    if status_code != 503 {
+        return false;
+    }
+    if body.contains("derived_syncing") {
+        return true;
+    }
+
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.as_str().map(str::to_string))
+        })
+        .is_some_and(|error| error == "derived_syncing")
+}
+
 pub struct TuiDb {
     store: Arc<CkbadgerStore>,
     redis: Option<redis::aio::MultiplexedConnection>,
@@ -297,6 +335,8 @@ impl TuiDb {
         let tip_block = progress.current_block as i64;
         let chain_tip = progress.target_block as i64;
         let blocks_behind = chain_tip - tip_block;
+        let (derived_tip_block, derived_lag_blocks, derived_sync_in_progress) =
+            derive_sync_status_fields(tip_block, status_data.as_ref());
 
         let elapsed_time = status_data.as_ref().and_then(|s| {
             s.sync_started_at.map(|started| {
@@ -310,6 +350,9 @@ impl TuiDb {
         SyncStatusRow {
             tip_block,
             chain_tip,
+            derived_tip_block,
+            derived_lag_blocks,
+            derived_sync_in_progress,
             is_syncing: blocks_behind > 100,
             is_bulk_sync: blocks_behind > 1000,
             progress: progress.progress_percentage,
@@ -343,6 +386,8 @@ impl TuiDb {
     fn build_from_status(&self, status: &SyncStatusData) -> Result<SyncStatusRow> {
         let tip_block = status.tip_block_number;
         let (chain_tip, _) = self.store.get_sync_tip()?;
+        let (derived_tip_block, derived_lag_blocks, derived_sync_in_progress) =
+            derive_sync_status_fields(tip_block, Some(status));
 
         let blocks_behind = chain_tip - tip_block;
         let is_syncing = blocks_behind > 100;
@@ -375,6 +420,9 @@ impl TuiDb {
         Ok(SyncStatusRow {
             tip_block,
             chain_tip,
+            derived_tip_block,
+            derived_lag_blocks,
+            derived_sync_in_progress,
             is_syncing,
             is_bulk_sync: blocks_behind > 1000,
             progress,
@@ -409,6 +457,9 @@ impl TuiDb {
         Ok(SyncStatusRow {
             tip_block: tip,
             chain_tip: tip,
+            derived_tip_block: None,
+            derived_lag_blocks: None,
+            derived_sync_in_progress: false,
             is_syncing: false,
             is_bulk_sync: false,
             progress: 100.0,
@@ -479,15 +530,23 @@ impl TuiDb {
             }
         };
 
+        api_info.reachable = true;
         api_info.status_code = Some(response.status().as_u16());
         if !response.status().is_success() {
-            api_info.error = Some(format!("http {}", response.status()));
+            let status_code = response.status().as_u16();
+            let status_text = response.status().to_string();
+            let body = response.text().await.unwrap_or_default();
+            api_info.derived_syncing = response_indicates_derived_syncing(status_code, &body);
+            if api_info.derived_syncing {
+                api_info.error = Some("derived_syncing".to_string());
+            } else {
+                api_info.error = Some(format!("http {}", status_text));
+            }
             return (None, api_info);
         }
 
         match response.json::<ApiNetworkStats>().await {
             Ok(stats) => {
-                api_info.reachable = true;
                 api_info.latest_block = Some(stats.latest_block);
                 api_info.tps = Some(stats.tps.clone());
                 api_info.avg_block_time = Some(stats.avg_block_time.clone());
@@ -637,9 +696,11 @@ impl TuiDb {
 #[cfg(test)]
 mod tests {
     use super::{
-        age_since, parse_epoch_string, parse_info_map, parse_keyspace_db0,
-        runtime_diag_from_status, ttl_or_none,
+        age_since, derive_sync_status_fields, parse_epoch_string, parse_info_map,
+        parse_keyspace_db0, response_indicates_derived_syncing, runtime_diag_from_status,
+        ttl_or_none,
     };
+    use ckbadger_common::SyncStatusData;
     use ckbadger_store::RuntimeStatus;
 
     #[test]
@@ -689,6 +750,45 @@ mod tests {
         assert_eq!(ttl_or_none(-1), Some(-1));
         assert_eq!(ttl_or_none(0), Some(0));
         assert_eq!(ttl_or_none(15), Some(15));
+    }
+
+    #[test]
+    fn derive_sync_status_fields_maps_lag_and_progress() {
+        let status = SyncStatusData {
+            tip_block_number: 120,
+            derived_tip_block_number: Some(100),
+            derived_sync_in_progress: false,
+            ..Default::default()
+        };
+        let (derived_tip, lag, in_progress) = derive_sync_status_fields(120, Some(&status));
+        assert_eq!(derived_tip, Some(100));
+        assert_eq!(lag, Some(20));
+        assert!(in_progress);
+    }
+
+    #[test]
+    fn derive_sync_status_fields_handles_missing_status() {
+        let (derived_tip, lag, in_progress) = derive_sync_status_fields(120, None);
+        assert_eq!(derived_tip, None);
+        assert_eq!(lag, None);
+        assert!(!in_progress);
+    }
+
+    #[test]
+    fn response_indicates_derived_syncing_detects_marker() {
+        assert!(response_indicates_derived_syncing(
+            503,
+            r#"{"error":"derived_syncing","message":"derived store syncing"}"#
+        ));
+        assert!(response_indicates_derived_syncing(503, "derived_syncing"));
+        assert!(!response_indicates_derived_syncing(
+            500,
+            r#"{"error":"derived_syncing"}"#
+        ));
+        assert!(!response_indicates_derived_syncing(
+            503,
+            r#"{"error":"internal"}"#
+        ));
     }
 
     #[test]
