@@ -63,6 +63,41 @@ struct Cli {
 
     #[arg(
         long,
+        default_value = "0.70",
+        help = "Soft memory ratio threshold to trigger bulk checkpoint flush"
+    )]
+    bulk_memory_ratio_target: f64,
+
+    #[arg(
+        long,
+        default_value = "0.82",
+        help = "Hard memory ratio threshold to force immediate bulk checkpoint flush"
+    )]
+    bulk_memory_ratio_hard: f64,
+
+    #[arg(
+        long,
+        default_value = "20000",
+        help = "Minimum accumulated blocks before soft-threshold bulk checkpoint flush"
+    )]
+    bulk_checkpoint_min_blocks: u64,
+
+    #[arg(
+        long,
+        default_value = "300000",
+        help = "Maximum accumulated blocks before forced bulk checkpoint flush"
+    )]
+    bulk_checkpoint_max_blocks: u64,
+
+    #[arg(
+        long,
+        default_value = "8",
+        help = "Minimum seconds between soft-threshold bulk checkpoint flushes"
+    )]
+    bulk_checkpoint_min_interval_sec: u64,
+
+    #[arg(
+        long,
         env = "CKB_DATA_PATH",
         help = "Path to CKB node's RocksDB data directory for direct reads (e.g., /var/lib/ckb/data/db)"
     )]
@@ -332,6 +367,11 @@ async fn run_sync(args: Cli) -> Result<()> {
         pipeline_buffer: args.pipeline_buffer,
         redis_url: args.redis_url.or_else(|| std::env::var("REDIS_URL").ok()),
         bulk_sync_threshold: args.bulk_sync_threshold,
+        bulk_memory_ratio_target: args.bulk_memory_ratio_target,
+        bulk_memory_ratio_hard: args.bulk_memory_ratio_hard,
+        bulk_checkpoint_min_blocks: args.bulk_checkpoint_min_blocks,
+        bulk_checkpoint_max_blocks: args.bulk_checkpoint_max_blocks,
+        bulk_checkpoint_min_interval_sec: args.bulk_checkpoint_min_interval_sec,
         fast_sync_mode: true,
         ckb_data_path: args.ckb_data_path,
         token_labels_path: args.token_labels_path,

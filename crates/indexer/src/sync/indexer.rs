@@ -2505,6 +2505,350 @@ struct TxData {
 
 type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
 
+type AddressBalanceChanges = HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>;
+
+struct ParsedBatchEnvelope {
+    batch_epoch: u64,
+    start_block: u64,
+    end_block: u64,
+    chain_tip: u64,
+    batch_tx_count: u64,
+    blocks: Arc<Vec<BlockResponseWithCycles>>,
+    all_parsed_blocks: Vec<crate::parser::block::ParsedBlock>,
+    all_tx_data: Vec<TxData>,
+    input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    address_balance_changes: AddressBalanceChanges,
+    script_usage_changes: ScriptUsageChanges,
+    script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+    token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+    spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
+    nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+}
+
+struct PendingParsedBatch {
+    batch_epoch: u64,
+    start_block: u64,
+    end_block: u64,
+    chain_tip: u64,
+    blocks: Vec<BlockResponseWithCycles>,
+    all_parsed_blocks: Vec<crate::parser::block::ParsedBlock>,
+    all_tx_data: Vec<TxData>,
+    input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    address_balance_changes: AddressBalanceChanges,
+    script_usage_changes: ScriptUsageChanges,
+    script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
+    token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+    spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
+    nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+    estimated_bytes: usize,
+}
+
+impl PendingParsedBatch {
+    fn from_envelope(batch: ParsedBatchEnvelope) -> Self {
+        let estimated_bytes = estimate_batch_envelope_bytes(&batch);
+        let blocks = match Arc::try_unwrap(batch.blocks) {
+            Ok(blocks) => blocks,
+            Err(blocks) => (*blocks).clone(),
+        };
+        Self {
+            batch_epoch: batch.batch_epoch,
+            start_block: batch.start_block,
+            end_block: batch.end_block,
+            chain_tip: batch.chain_tip,
+            blocks,
+            all_parsed_blocks: batch.all_parsed_blocks,
+            all_tx_data: batch.all_tx_data,
+            input_cell_info: batch.input_cell_info,
+            batch_cell_infos: batch.batch_cell_infos,
+            address_balance_changes: batch.address_balance_changes,
+            script_usage_changes: batch.script_usage_changes,
+            script_daily_changes: batch.script_daily_changes,
+            token_daily_changes: batch.token_daily_changes,
+            spore_type_index_changes: batch.spore_type_index_changes,
+            spore_daily_changes: batch.spore_daily_changes,
+            cluster_daily_changes: batch.cluster_daily_changes,
+            nft_type_index_changes: batch.nft_type_index_changes,
+            nft_daily_changes: batch.nft_daily_changes,
+            estimated_bytes,
+        }
+    }
+
+    fn append(&mut self, batch: ParsedBatchEnvelope) -> Result<()> {
+        let incoming_estimated_bytes = estimate_batch_envelope_bytes(&batch);
+        if batch.batch_epoch != self.batch_epoch {
+            bail!(
+                "pending batch epoch mismatch: pending={} incoming={}",
+                self.batch_epoch,
+                batch.batch_epoch
+            );
+        }
+        let expected_start = self
+            .end_block
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("pending batch end_block overflow: {}", self.end_block))?;
+        if batch.start_block != expected_start {
+            bail!(
+                "pending batch discontinuity: expected_start={} got_start={}",
+                expected_start,
+                batch.start_block
+            );
+        }
+
+        let blocks = match Arc::try_unwrap(batch.blocks) {
+            Ok(blocks) => blocks,
+            Err(blocks) => (*blocks).clone(),
+        };
+        self.end_block = batch.end_block;
+        self.chain_tip = self.chain_tip.max(batch.chain_tip);
+        self.blocks.extend(blocks);
+        self.all_parsed_blocks.extend(batch.all_parsed_blocks);
+        self.all_tx_data.extend(batch.all_tx_data);
+        self.input_cell_info.extend(batch.input_cell_info);
+        self.batch_cell_infos.extend(batch.batch_cell_infos);
+        merge_address_balance_changes(
+            &mut self.address_balance_changes,
+            batch.address_balance_changes,
+        )?;
+        merge_i64_i64_i128_i128_i128_i128(
+            &mut self.script_usage_changes,
+            batch.script_usage_changes,
+        )?;
+        merge_i128_i128(&mut self.script_daily_changes, batch.script_daily_changes)?;
+        merge_i128_i128(&mut self.token_daily_changes, batch.token_daily_changes)?;
+        self.spore_type_index_changes
+            .extend(batch.spore_type_index_changes);
+        merge_i128_i128(&mut self.spore_daily_changes, batch.spore_daily_changes)?;
+        merge_i128_i128(&mut self.cluster_daily_changes, batch.cluster_daily_changes)?;
+        self.nft_type_index_changes
+            .extend(batch.nft_type_index_changes);
+        merge_i128_i128(&mut self.nft_daily_changes, batch.nft_daily_changes)?;
+        self.estimated_bytes = self
+            .estimated_bytes
+            .saturating_add(incoming_estimated_bytes);
+        Ok(())
+    }
+
+    fn blocks_count(&self) -> u64 {
+        u64::try_from(self.all_parsed_blocks.len()).unwrap_or(u64::MAX)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingOverlayCellInfo {
+    epoch: u64,
+    info: LiveCellInfo,
+}
+
+struct BatchEnvelopeSizeInput {
+    blocks_count: usize,
+    txs_count: usize,
+    cells_count: usize,
+    addr_changes_count: usize,
+    script_usage_count: usize,
+    script_daily_count: usize,
+    token_daily_count: usize,
+    spore_daily_count: usize,
+    cluster_daily_count: usize,
+    nft_daily_count: usize,
+}
+
+struct BulkCheckpointDecisionInput {
+    pending_blocks: u64,
+    memory_ratio: Option<f64>,
+    since_last_flush: Duration,
+    min_blocks: u64,
+    max_blocks: u64,
+    min_interval: Duration,
+    soft_ratio: f64,
+    hard_ratio: f64,
+}
+
+struct WritePipelineContext<'a> {
+    parse_rx: &'a mut tokio::sync::mpsc::Receiver<ParsedBatchEnvelope>,
+    parse_tx_for_writer_depth: &'a tokio::sync::mpsc::Sender<ParsedBatchEnvelope>,
+    parse_tx_pending_txs_for_writer: &'a AtomicU64,
+    committed_tip_for_cache_for_writer: &'a AtomicI64,
+    pending_overlay_cells: &'a DashMap<(Vec<u8>, i16), PendingOverlayCellInfo>,
+}
+
+fn estimate_batch_envelope_bytes(batch: &ParsedBatchEnvelope) -> usize {
+    estimate_batch_envelope_bytes_from_counts(&BatchEnvelopeSizeInput {
+        blocks_count: batch.blocks.len(),
+        txs_count: batch.all_tx_data.len(),
+        cells_count: batch.batch_cell_infos.len(),
+        addr_changes_count: batch.address_balance_changes.len(),
+        script_usage_count: batch.script_usage_changes.len(),
+        script_daily_count: batch.script_daily_changes.len(),
+        token_daily_count: batch.token_daily_changes.len(),
+        spore_daily_count: batch.spore_daily_changes.len(),
+        cluster_daily_count: batch.cluster_daily_changes.len(),
+        nft_daily_count: batch.nft_daily_changes.len(),
+    })
+}
+
+fn estimate_batch_envelope_bytes_from_counts(input: &BatchEnvelopeSizeInput) -> usize {
+    // Heuristic only; used for adaptive flush decisions, not correctness.
+    input
+        .blocks_count
+        .saturating_mul(8 * 1024)
+        .saturating_add(input.txs_count.saturating_mul(2 * 1024))
+        .saturating_add(input.cells_count.saturating_mul(256))
+        .saturating_add(input.addr_changes_count.saturating_mul(160))
+        .saturating_add(input.script_usage_count.saturating_mul(128))
+        .saturating_add(input.script_daily_count.saturating_mul(96))
+        .saturating_add(input.token_daily_count.saturating_mul(96))
+        .saturating_add(input.spore_daily_count.saturating_mul(96))
+        .saturating_add(input.cluster_daily_count.saturating_mul(96))
+        .saturating_add(input.nft_daily_count.saturating_mul(96))
+}
+
+fn merge_i128_i128<K: std::cmp::Eq + std::hash::Hash>(
+    target: &mut HashMap<K, (i128, i128)>,
+    incoming: HashMap<K, (i128, i128)>,
+) -> Result<()> {
+    for (key, (a, b)) in incoming {
+        let entry = target.entry(key).or_insert((0, 0));
+        entry.0 = entry
+            .0
+            .checked_add(a)
+            .ok_or_else(|| anyhow!("delta overflow while merging first i128 value"))?;
+        entry.1 = entry
+            .1
+            .checked_add(b)
+            .ok_or_else(|| anyhow!("delta overflow while merging second i128 value"))?;
+    }
+    Ok(())
+}
+
+fn merge_i64_i64_i128_i128_i128_i128<K: std::cmp::Eq + std::hash::Hash>(
+    target: &mut HashMap<K, (i64, i64, i128, i128, i128, i128)>,
+    incoming: HashMap<K, (i64, i64, i128, i128, i128, i128)>,
+) -> Result<()> {
+    for (key, (a, b, c, d, e, f)) in incoming {
+        let entry = target.entry(key).or_insert((0, 0, 0, 0, 0, 0));
+        entry.0 = entry
+            .0
+            .checked_add(a)
+            .ok_or_else(|| anyhow!("delta overflow while merging script metric 0"))?;
+        entry.1 = entry
+            .1
+            .checked_add(b)
+            .ok_or_else(|| anyhow!("delta overflow while merging script metric 1"))?;
+        entry.2 = entry
+            .2
+            .checked_add(c)
+            .ok_or_else(|| anyhow!("delta overflow while merging script metric 2"))?;
+        entry.3 = entry
+            .3
+            .checked_add(d)
+            .ok_or_else(|| anyhow!("delta overflow while merging script metric 3"))?;
+        entry.4 = entry
+            .4
+            .checked_add(e)
+            .ok_or_else(|| anyhow!("delta overflow while merging script metric 4"))?;
+        entry.5 = entry
+            .5
+            .checked_add(f)
+            .ok_or_else(|| anyhow!("delta overflow while merging script metric 5"))?;
+    }
+    Ok(())
+}
+
+fn merge_address_balance_changes(
+    target: &mut AddressBalanceChanges,
+    incoming: AddressBalanceChanges,
+) -> Result<()> {
+    for (lock_hash, (bal, live, total, txs, block_num, tx_hash, occupied)) in incoming {
+        let entry = target
+            .entry(lock_hash)
+            .or_insert((0, 0, 0, 0, block_num, tx_hash.clone(), 0));
+        entry.0 = entry
+            .0
+            .checked_add(bal)
+            .ok_or_else(|| anyhow!("address balance delta overflow"))?;
+        entry.1 = entry
+            .1
+            .checked_add(live)
+            .ok_or_else(|| anyhow!("address live_cells delta overflow"))?;
+        entry.2 = entry
+            .2
+            .checked_add(total)
+            .ok_or_else(|| anyhow!("address total_cells delta overflow"))?;
+        entry.3 = entry
+            .3
+            .checked_add(txs)
+            .ok_or_else(|| anyhow!("address txs_count delta overflow"))?;
+        entry.6 = entry
+            .6
+            .checked_add(occupied)
+            .ok_or_else(|| anyhow!("address occupied_capacity delta overflow"))?;
+        if block_num > entry.4 {
+            entry.4 = block_num;
+            entry.5 = tx_hash;
+        }
+    }
+    Ok(())
+}
+
+fn auto_bulk_checkpoint_max_blocks(configured_max: u64, cgroup: &CgroupMemorySnapshot) -> u64 {
+    let Some(limit_bytes) = cgroup.memory_max_bytes else {
+        return configured_max.max(1);
+    };
+    let gib = limit_bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+    let scale = if gib >= 64.0 {
+        1.0
+    } else if gib >= 48.0 {
+        0.85
+    } else if gib >= 32.0 {
+        0.65
+    } else if gib >= 24.0 {
+        0.50
+    } else if gib >= 16.0 {
+        0.40
+    } else {
+        0.25
+    };
+    ((configured_max as f64) * scale).round().max(1.0) as u64
+}
+
+fn decide_bulk_checkpoint_flush_reason(
+    input: &BulkCheckpointDecisionInput,
+) -> Option<&'static str> {
+    if input.pending_blocks >= input.max_blocks {
+        return Some("max_blocks");
+    }
+    if let Some(ratio) = input.memory_ratio {
+        if ratio >= input.hard_ratio {
+            return Some("hard_limit");
+        }
+        if ratio >= input.soft_ratio
+            && input.pending_blocks >= input.min_blocks
+            && input.since_last_flush >= input.min_interval
+        {
+            return Some("soft_limit");
+        }
+    }
+    None
+}
+
+fn evict_committed_overlay_cells(
+    overlay: &DashMap<(Vec<u8>, i16), PendingOverlayCellInfo>,
+    epoch: u64,
+    committed_tip: i64,
+) -> usize {
+    let before = overlay.len();
+    overlay.retain(|_, v| !(v.epoch == epoch && v.info.created_at_block <= committed_tip));
+    before.saturating_sub(overlay.len())
+}
+
 fn parse_tx_cycles(
     raw_cycles_hex: Option<&String>,
     tx_hash: &str,
@@ -3337,31 +3681,9 @@ impl Indexer {
         use tokio::sync::mpsc;
 
         type FetchedBatch = (u64, u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
-        type ParsedBatch = (
-            u64,
-            u64,
-            u64,
-            u64,
-            u64, // batch_tx_count
-            Arc<Vec<BlockResponseWithCycles>>,
-            Vec<crate::parser::block::ParsedBlock>,
-            Vec<TxData>,
-            HashMap<(Vec<u8>, i16), LiveCellInfo>,
-            // Pre-computed in parser stage:
-            HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
-            HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
-            ScriptUsageChanges,                    // script_usage_changes
-            HashMap<(Vec<u8>, bool, u32), (i128, i128)>, // script_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // token_daily_changes
-            HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // spore_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // cluster_daily_changes
-            HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
-        );
-
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
-        let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
+        let (parse_tx, mut parse_rx) =
+            mpsc::channel::<ParsedBatchEnvelope>(self.config.pipeline_buffer);
         let parse_tx_pending_txs = Arc::new(AtomicU64::new(0));
         let committed_tip_for_cache = Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0));
         self.pipeline_perf
@@ -3382,6 +3704,8 @@ impl Indexer {
         let parse_tx_for_fetcher_depth = parse_tx.clone();
         let parse_tx_pending_txs_for_parser = Arc::clone(&parse_tx_pending_txs);
         let parse_tx_pending_txs_for_writer = Arc::clone(&parse_tx_pending_txs);
+        let pending_overlay_cells: Arc<DashMap<(Vec<u8>, i16), PendingOverlayCellInfo>> =
+            Arc::new(DashMap::new());
 
         // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
@@ -3635,6 +3959,7 @@ impl Indexer {
         let writer_for_parser = self.writer.clone();
         let rpc_for_parser = self.rpc.clone();
         let cell_cache_for_parser = Arc::clone(&self.cell_cache);
+        let pending_overlay_cells_for_parser = Arc::clone(&pending_overlay_cells);
         let committed_tip_for_cache_for_parser = Arc::clone(&committed_tip_for_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
@@ -3714,6 +4039,7 @@ impl Indexer {
                     }
 
                     let mut attempt_cache_hits: usize = 0;
+                    let mut attempt_overlay_hits: usize = 0;
                     let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> =
                         HashMap::new();
                     for (tx_hash, idx) in &all_input_outpoints {
@@ -3738,6 +4064,18 @@ impl Indexer {
                                     udt_amount: cached.udt_amount,
                                 },
                             );
+                        }
+                    }
+                    for (tx_hash, idx) in &all_input_outpoints {
+                        let outpoint = (tx_hash.clone(), *idx);
+                        if attempt_input_cell_info.contains_key(&outpoint) {
+                            continue;
+                        }
+                        if let Some(entry) = pending_overlay_cells_for_parser.get(&outpoint) {
+                            if entry.epoch == batch_epoch {
+                                attempt_overlay_hits += 1;
+                                attempt_input_cell_info.insert(outpoint, entry.info.clone());
+                            }
                         }
                     }
 
@@ -3794,7 +4132,11 @@ impl Indexer {
                     );
 
                     if !db_lookup_failed && unresolved_outpoints.is_empty() {
-                        break Some((attempt_input_cell_info, attempt_cache_hits, db_lookups));
+                        break Some((
+                            attempt_input_cell_info,
+                            attempt_cache_hits + attempt_overlay_hits,
+                            db_lookups,
+                        ));
                     }
 
                     unresolved_retry_count += 1;
@@ -3946,6 +4288,15 @@ impl Indexer {
                             },
                         );
                     }
+                }
+                for (outpoint, info) in &batch_cell_infos {
+                    pending_overlay_cells_for_parser.insert(
+                        outpoint.clone(),
+                        PendingOverlayCellInfo {
+                            epoch: batch_epoch,
+                            info: info.clone(),
+                        },
+                    );
                 }
 
                 // Pass 2: Compute input capacity + fee
@@ -4440,12 +4791,12 @@ impl Indexer {
                 let batch_tx_count_u64 =
                     u64::try_from(tx_count).expect("parsed batch tx count exceeds u64");
                 if parse_tx
-                    .send((
+                    .send(ParsedBatchEnvelope {
                         batch_epoch,
                         start_block,
                         end_block,
                         chain_tip,
-                        batch_tx_count_u64,
+                        batch_tx_count: batch_tx_count_u64,
                         blocks,
                         all_parsed_blocks,
                         all_tx_data,
@@ -4460,7 +4811,7 @@ impl Indexer {
                         cluster_daily_changes,
                         nft_type_index_changes,
                         nft_daily_changes,
-                    ))
+                    })
                     .await
                     .is_err()
                 {
@@ -4473,10 +4824,40 @@ impl Indexer {
         // === Writer loop ===
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
+        let mut pending_checkpoint: Option<PendingParsedBatch> = None;
+        let mut last_bulk_checkpoint_flush_at = Instant::now();
+        let bulk_checkpoint_min_interval =
+            Duration::from_secs(self.config.bulk_checkpoint_min_interval_sec.max(1));
+        let soft_memory_ratio = self.config.bulk_memory_ratio_target.clamp(0.10, 0.98);
+        let hard_memory_ratio = self
+            .config
+            .bulk_memory_ratio_hard
+            .clamp(soft_memory_ratio + 0.01, 0.995);
+        let startup_cgroup = read_cgroup_memory_snapshot();
+        let startup_auto_max_blocks = auto_bulk_checkpoint_max_blocks(
+            self.config.bulk_checkpoint_max_blocks,
+            &startup_cgroup,
+        );
+        let startup_min_blocks = self
+            .config
+            .bulk_checkpoint_min_blocks
+            .max(1)
+            .min(startup_auto_max_blocks);
+        info!(
+            startup_auto_max_blocks,
+            startup_min_blocks,
+            soft_memory_ratio = format!("{:.3}", soft_memory_ratio),
+            hard_memory_ratio = format!("{:.3}", hard_memory_ratio),
+            bulk_checkpoint_min_interval_sec = self.config.bulk_checkpoint_min_interval_sec,
+            cgroup_memory_max_bytes = startup_cgroup.memory_max_bytes,
+            "Bulk checkpoint runtime configured"
+        );
         loop {
             if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
                 let drained = Self::drain_channel(&mut parse_rx).await;
                 parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                pending_checkpoint = None;
+                pending_overlay_cells.clear();
                 if let Some(repeat) = self.repeated_warning_snapshot(
                     "pipeline_deep_fork_unresolved",
                     Duration::from_secs(120),
@@ -4498,57 +4879,41 @@ impl Indexer {
             let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);
             let t_recv = Instant::now();
             match tokio::time::timeout(recv_timeout, parse_rx.recv()).await {
-                Ok(Some((
-                    batch_epoch,
-                    start_block,
-                    end_block,
-                    chain_tip,
-                    parsed_batch_tx_count_u64,
-                    blocks,
-                    all_parsed_blocks,
-                    all_tx_data,
-                    input_cell_info,
-                    batch_cell_infos,
-                    address_balance_changes,
-                    script_usage_changes,
-                    script_daily_changes,
-                    token_daily_changes,
-                    spore_type_index_changes,
-                    spore_daily_changes,
-                    cluster_daily_changes,
-                    nft_type_index_changes,
-                    nft_daily_changes,
-                ))) => {
+                Ok(Some(parsed_batch)) => {
                     consecutive_idle_timeouts = 0;
                     atomic_saturating_sub_u64(
                         &parse_tx_pending_txs_for_writer,
-                        parsed_batch_tx_count_u64,
+                        parsed_batch.batch_tx_count,
                     );
                     let recv_wait_ms = t_recv.elapsed().as_secs_f64() * 1000.0;
                     let current_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                    if batch_epoch != current_epoch {
+                    if parsed_batch.batch_epoch != current_epoch {
                         debug!(
-                            batch_epoch,
+                            batch_epoch = parsed_batch.batch_epoch,
                             current_epoch,
                             "Dropping stale parsed batch {}-{}",
-                            start_block,
-                            end_block
+                            parsed_batch.start_block,
+                            parsed_batch.end_block
                         );
                         continue;
                     }
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
                     committed_tip_for_cache_for_writer.store(db_tip, Ordering::SeqCst);
-                    let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
+                    let expected_start = if let Some(pending) = pending_checkpoint.as_ref() {
+                        pending.end_block.checked_add(1).ok_or_else(|| {
+                            anyhow!("pending end_block overflow: {}", pending.end_block)
+                        })?
+                    } else if db_tip == 0 && db_tip_hash.is_none() {
                         0
                     } else {
                         (db_tip + 1) as u64
                     };
 
-                    if start_block != expected_start {
+                    if parsed_batch.start_block != expected_start {
                         let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
                         let pipeline = self.pipeline_perf.snapshot();
-                        let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                        let blocks_behind = parsed_batch.chain_tip.saturating_sub(db_tip as u64);
                         if let Some(repeat) = self.repeated_warning_snapshot(
                             "pipeline_batch_mismatch",
                             Duration::from_secs(5),
@@ -4557,10 +4922,10 @@ impl Indexer {
                                 run_id = %self.run_id,
                                 pipeline_epoch = current_epoch,
                                 db_tip,
-                                chain_tip,
+                                chain_tip = parsed_batch.chain_tip,
                                 blocks_behind,
                                 expected_start,
-                                got_start = start_block,
+                                got_start = parsed_batch.start_block,
                                 writer_queue_depth,
                                 repeat_count = repeat.total_count,
                                 suppressed_since_last = repeat.suppressed_since_last_emit,
@@ -4574,24 +4939,28 @@ impl Indexer {
                         self.request_pipeline_reset(
                             "pipeline batch mismatch",
                             Some(expected_start),
-                            Some(start_block),
+                            Some(parsed_batch.start_block),
                             Some(writer_queue_depth),
                         );
                         let drained = Self::drain_channel(&mut parse_rx).await;
                         parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                        pending_checkpoint = None;
+                        pending_overlay_cells.clear();
                         info!(
                             run_id = %self.run_id,
                             pipeline_epoch = current_epoch,
                             drained,
                             expected_start,
-                            got_start = start_block,
+                            got_start = parsed_batch.start_block,
                             "Pipeline mismatch drain completed"
                         );
                         continue;
                     }
 
-                    let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
-                    if blocks_behind <= self.config.bulk_sync_threshold {
+                    let blocks_behind = parsed_batch.chain_tip.saturating_sub(db_tip as u64);
+                    if pending_checkpoint.is_none()
+                        && blocks_behind <= self.config.bulk_sync_threshold
+                    {
                         if let Some(ref stored_hash) = db_tip_hash {
                             if db_tip > 0 {
                                 match self
@@ -4605,7 +4974,7 @@ impl Indexer {
                                             run_id = %self.run_id,
                                             pipeline_epoch = current_epoch,
                                             db_tip,
-                                            chain_tip,
+                                            chain_tip = parsed_batch.chain_tip,
                                             "Reorg handled, draining stale parsed batches"
                                         );
                                         self.request_pipeline_reset(
@@ -4616,6 +4985,8 @@ impl Indexer {
                                         );
                                         let drained = Self::drain_channel(&mut parse_rx).await;
                                         parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                                        pending_checkpoint = None;
+                                        pending_overlay_cells.clear();
                                         info!(
                                             run_id = %self.run_id,
                                             pipeline_epoch = current_epoch,
@@ -4631,7 +5002,7 @@ impl Indexer {
                                             run_id = %self.run_id,
                                             pipeline_epoch = current_epoch,
                                             db_tip,
-                                            chain_tip,
+                                            chain_tip = parsed_batch.chain_tip,
                                             "Deep fork detected, sync paused"
                                         );
                                         self.request_pipeline_reset(
@@ -4642,6 +5013,8 @@ impl Indexer {
                                         );
                                         let drained = Self::drain_channel(&mut parse_rx).await;
                                         parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                                        pending_checkpoint = None;
+                                        pending_overlay_cells.clear();
                                         info!(
                                             run_id = %self.run_id,
                                             pipeline_epoch = current_epoch,
@@ -4656,270 +5029,141 @@ impl Indexer {
                             }
                         }
                     }
+                    let batch_is_bulk = is_bulk_sync_batch(
+                        parsed_batch.chain_tip,
+                        parsed_batch.end_block,
+                        self.config.bulk_sync_threshold,
+                    );
 
-                    let db_start = Instant::now();
-                    let batch_tx_count = all_tx_data.len();
-                    let batch_tx_count_u64 =
-                        u64::try_from(batch_tx_count).expect("batch tx count exceeds u64");
-                    let write_metrics = match self
-                        .write_parsed_batch(
-                            &blocks,
-                            &all_parsed_blocks,
-                            all_tx_data,
-                            input_cell_info,
-                            batch_cell_infos,
-                            address_balance_changes,
-                            script_usage_changes,
-                            script_daily_changes,
-                            token_daily_changes,
-                            spore_type_index_changes,
-                            spore_daily_changes,
-                            cluster_daily_changes,
-                            nft_type_index_changes,
-                            nft_daily_changes,
-                            chain_tip,
-                        )
-                        .await
-                    {
-                        Ok(metrics) => metrics,
-                        Err(e) => {
-                            let incident_id = self.report_incident(
-                                "pipeline_batch_write_failed",
-                                format!(
-                                    "start_block={} end_block={} chain_tip={} error={:?}",
-                                    start_block, end_block, chain_tip, e
-                                ),
-                            );
-                            error!(
-                                run_id = %self.run_id,
-                                incident_id = %incident_id,
-                                start_block,
-                                end_block,
-                                chain_tip,
-                                error = ?e,
-                                "Sync error while writing parsed batch"
-                            );
-                            let bulk_sync_mode = is_bulk_sync_batch(
-                                chain_tip,
-                                end_block,
-                                self.config.bulk_sync_threshold,
-                            );
-                            if bulk_sync_mode {
-                                return Err(e).with_context(|| {
-                                format!(
-                                    "bulk sync fail-fast for range {}-{} (chain_tip={}): \
-                                     no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
-                                    start_block, end_block, chain_tip
-                                )
+                    if batch_is_bulk {
+                        if let Some(pending) = pending_checkpoint.as_mut() {
+                            pending.append(parsed_batch)?;
+                        } else {
+                            pending_checkpoint =
+                                Some(PendingParsedBatch::from_envelope(parsed_batch));
+                        }
+
+                        let cgroup = read_cgroup_memory_snapshot();
+                        let dynamic_max_blocks =
+                            auto_bulk_checkpoint_max_blocks(startup_auto_max_blocks, &cgroup);
+                        let dynamic_min_blocks = startup_min_blocks.min(dynamic_max_blocks).max(1);
+                        let memory_ratio = cgroup_memory_ratio_pct(&cgroup).map(|v| v / 100.0);
+                        let pending_blocks = pending_checkpoint
+                            .as_ref()
+                            .map(PendingParsedBatch::blocks_count)
+                            .unwrap_or(0);
+                        let flush_reason =
+                            decide_bulk_checkpoint_flush_reason(&BulkCheckpointDecisionInput {
+                                pending_blocks,
+                                memory_ratio,
+                                since_last_flush: last_bulk_checkpoint_flush_at.elapsed(),
+                                min_blocks: dynamic_min_blocks,
+                                max_blocks: dynamic_max_blocks,
+                                min_interval: bulk_checkpoint_min_interval,
+                                soft_ratio: soft_memory_ratio,
+                                hard_ratio: hard_memory_ratio,
                             });
-                            }
-                            if let Err(cleanup_err) = self.writer.cleanup_batch_range(
-                                i64::try_from(start_block).map_err(|_| {
-                                    anyhow!(
-                                        "batch cleanup start_block exceeds i64: {}",
-                                        start_block
-                                    )
-                                })?,
-                                i64::try_from(end_block).map_err(|_| {
-                                    anyhow!("batch cleanup end_block exceeds i64: {}", end_block)
-                                })?,
-                            ) {
-                                error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-                            } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
-                                i64::try_from(start_block).map_err(|_| {
-                                    anyhow!(
-                                    "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
-                                    start_block
-                                )
-                                })? - 1,
-                            ) {
-                                error!(
-                                    "Failed to rebuild HODL tracker after batch cleanup: {:?}",
-                                    rebuild_err
-                                );
-                                return Err(rebuild_err);
-                            }
-                            self.request_pipeline_reset("batch write failed", None, None, None);
-                            let drained = Self::drain_channel(&mut parse_rx).await;
-                            parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
-                            info!(
-                                run_id = %self.run_id,
-                                pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
-                                drained,
-                                "Batch write failure drain completed"
-                            );
-                            sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
-                    };
-                    let db_elapsed = db_start.elapsed();
-                    self.perf.add_db_write(db_elapsed);
-                    self.perf
-                        .add_db_commit(duration_from_millis(write_metrics.commit_ms));
-
-                    if db_elapsed.as_secs() >= 5 {
-                        let stats = self.writer.store().memory_stats();
-                        warn!(
-                            db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
-                            commit_ms = format!("{:.1}", write_metrics.commit_ms),
-                            compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
-                            running_compactions = stats.num_running_compactions,
-                            l0_total = stats.l0_files_count,
-                            l0_max = stats.l0_files_max,
-                            l0_worst_cf = stats.l0_worst_cf,
-                            memtable_mb = stats.memtable_bytes / (1024 * 1024),
-                            imm_memtables = stats.immutable_memtables,
-                            "Slow write stage detected"
-                        );
-                    }
-
-                    if let Some(last_block) = all_parsed_blocks.last() {
-                        committed_tip_for_cache_for_writer
-                            .store(last_block.number, Ordering::SeqCst);
-                        self.progress.record_batch(
-                            last_block.number as u64,
-                            all_parsed_blocks.len() as u64,
-                            batch_tx_count_u64,
-                        );
-
-                        let mode = if self.is_bulk_sync_active() {
-                            "[BULK]"
+                        if let Some(reason) = flush_reason {
+                            let pending_batch = pending_checkpoint.take().ok_or_else(|| {
+                                anyhow!("missing pending batch before bulk flush")
+                            })?;
+                            self.write_pipeline_batch(
+                                pending_batch,
+                                recv_wait_ms,
+                                Some(reason),
+                                &mut WritePipelineContext {
+                                    parse_rx: &mut parse_rx,
+                                    parse_tx_for_writer_depth: &parse_tx_for_writer_depth,
+                                    parse_tx_pending_txs_for_writer:
+                                        &parse_tx_pending_txs_for_writer,
+                                    committed_tip_for_cache_for_writer:
+                                        &committed_tip_for_cache_for_writer,
+                                    pending_overlay_cells: &pending_overlay_cells,
+                                },
+                            )
+                            .await?;
+                            last_bulk_checkpoint_flush_at = Instant::now();
                         } else {
-                            ""
-                        };
-                        let partition_range = format_partition_range(start_block, end_block);
-                        let boundary_info = if crosses_partition_boundary(start_block, end_block) {
-                            " (crosses boundary)"
-                        } else {
-                            ""
-                        };
-                        let writer_queue = parse_tx_for_writer_depth.max_capacity()
-                            - parse_tx_for_writer_depth.capacity();
-                        self.pipeline_perf.record_write(
-                            db_elapsed,
-                            write_metrics.commit_ms,
-                            recv_wait_ms,
-                            writer_queue,
-                            parse_tx_for_writer_depth.max_capacity(),
-                        );
-                        let adaptive_snapshot_before = self.adaptive_batch_controller.snapshot();
-                        let parse_queue_pending_txs =
-                            parse_tx_pending_txs_for_writer.load(Ordering::Relaxed);
-                        let parse_queue_capacity_txs =
-                            u64::try_from(parse_tx_for_writer_depth.max_capacity())
-                                .unwrap_or(u64::MAX)
-                                .saturating_mul(adaptive_snapshot_before.target_batch_txs.max(1));
-                        // Model queue pressure by pending tx volume to avoid over-reacting to
-                        // temporary small-block bursts with dense transactions.
-                        let parse_queue_fill_pct = queue_fill_percentage(
-                            Some(parse_queue_pending_txs),
-                            Some(parse_queue_capacity_txs),
-                        );
-                        let writer_queue_fill_pct = parse_queue_fill_pct;
-                        let memory_ratio_pct =
-                            cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
-                        if let Some(adjustment) =
-                            self.adaptive_batch_controller
-                                .update_after_write(AdaptiveBatchInput {
-                                    write_ms: db_elapsed.as_secs_f64() * 1000.0,
-                                    batch_tx_count,
-                                    parse_queue_fill_pct,
-                                    writer_queue_fill_pct,
-                                    memory_ratio_pct,
-                                })
-                        {
-                            info!(
-                                run_id = %self.run_id,
-                                reason = adjustment.reason,
-                                previous_target_batch_txs = adjustment.previous_target_batch_txs,
-                                new_target_batch_txs = adjustment.new_target_batch_txs,
-                                previous_inflight_limit = adjustment.previous_inflight_limit,
-                                new_inflight_limit = adjustment.new_inflight_limit,
-                                previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
-                                new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
-                                parse_queue_fill_pct = parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                writer_queue_fill_pct = writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                parse_queue_pending_txs,
-                                parse_queue_capacity_txs,
-                                memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
-                                db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
-                                db_commit_ms = format!("{:.1}", write_metrics.commit_ms),
-                                "Adaptive batch controller adjusted"
+                            debug!(
+                                pending_blocks,
+                                pending_batches_est_bytes = pending_checkpoint
+                                    .as_ref()
+                                    .map(|p| p.estimated_bytes)
+                                    .unwrap_or(0),
+                                memory_ratio = memory_ratio.map(|v| format!("{:.3}", v)),
+                                dynamic_min_blocks,
+                                dynamic_max_blocks,
+                                "Buffered parsed batch for bulk checkpoint"
                             );
                         }
-                        let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
-                        info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
-                            start_block,
-                            end_block,
-                            self.progress.blocks_remaining(),
-                            db_elapsed.as_secs_f64(),
-                            write_metrics.commit_ms,
-                            writer_queue,
-                            recv_wait_ms,
-                            adaptive_snapshot.target_batch_txs,
-                            adaptive_snapshot.min_target_batch_txs,
-                            adaptive_snapshot.inflight_limit,
-                            partition_range,
-                            boundary_info,
-                            mode
-                        );
-
-                        if !self.is_secondary_issuance_bulk_active() {
-                            for block in &all_parsed_blocks {
-                                if let Err(e) = self
-                                    .update_secondary_issuance(
-                                        &format!("0x{}", hex::encode(&block.hash)),
-                                        &hex::encode(&block.dao),
-                                        block.number,
-                                        block.timestamp,
-                                    )
-                                    .await
-                                {
-                                    warn!(
-                                        "Failed to update secondary issuance for block {}: {}",
-                                        block.number, e
-                                    );
-                                }
-                            }
-                        }
-
-                        let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-                        if crossed_1000 && !self.is_bulk_sync_active() {
-                            match i64::try_from((end_block / 1000) * 1000) {
-                                Ok(update_block) => {
-                                    let writer = self.writer.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) =
-                                            writer.recalculate_dao_extended_statistics(update_block)
-                                        {
-                                            warn!("Failed to recalculate DAO statistics: {}", e);
-                                        }
-                                    });
-                                }
-                                Err(_) => warn!(
-                                    run_id = %self.run_id,
-                                    end_block,
-                                    "Skipping DAO extended statistics recalc: block exceeds i64 range"
-                                ),
-                            }
-                        }
-
-                        self.maybe_invalidate_chart_caches(end_block).await;
-                        self.check_bulk_sync_completion().await;
+                        continue;
                     }
 
-                    self.perf
-                        .blocks_count
-                        .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
-                    self.perf.report_and_reset();
+                    if let Some(pending_batch) = pending_checkpoint.take() {
+                        self.write_pipeline_batch(
+                            pending_batch,
+                            recv_wait_ms,
+                            Some("bulk_exit"),
+                            &mut WritePipelineContext {
+                                parse_rx: &mut parse_rx,
+                                parse_tx_for_writer_depth: &parse_tx_for_writer_depth,
+                                parse_tx_pending_txs_for_writer: &parse_tx_pending_txs_for_writer,
+                                committed_tip_for_cache_for_writer:
+                                    &committed_tip_for_cache_for_writer,
+                                pending_overlay_cells: &pending_overlay_cells,
+                            },
+                        )
+                        .await?;
+                        last_bulk_checkpoint_flush_at = Instant::now();
+                    }
+
+                    self.write_pipeline_batch(
+                        PendingParsedBatch::from_envelope(parsed_batch),
+                        recv_wait_ms,
+                        None,
+                        &mut WritePipelineContext {
+                            parse_rx: &mut parse_rx,
+                            parse_tx_for_writer_depth: &parse_tx_for_writer_depth,
+                            parse_tx_pending_txs_for_writer: &parse_tx_pending_txs_for_writer,
+                            committed_tip_for_cache_for_writer: &committed_tip_for_cache_for_writer,
+                            pending_overlay_cells: &pending_overlay_cells,
+                        },
+                    )
+                    .await?;
                 }
                 Ok(None) => {
                     fetcher.abort();
                     parser.abort();
+                    pending_overlay_cells.clear();
                     return Err(anyhow::anyhow!("Pipeline channel closed"));
                 }
                 Err(_timeout) => {
+                    if let Some(pending) = pending_checkpoint.take() {
+                        let pending_blocks = pending.blocks_count();
+                        let should_flush_idle = pending_blocks > 0
+                            && last_bulk_checkpoint_flush_at.elapsed()
+                                >= bulk_checkpoint_min_interval;
+                        if should_flush_idle {
+                            self.write_pipeline_batch(
+                                pending,
+                                0.0,
+                                Some("idle_finalize"),
+                                &mut WritePipelineContext {
+                                    parse_rx: &mut parse_rx,
+                                    parse_tx_for_writer_depth: &parse_tx_for_writer_depth,
+                                    parse_tx_pending_txs_for_writer:
+                                        &parse_tx_pending_txs_for_writer,
+                                    committed_tip_for_cache_for_writer:
+                                        &committed_tip_for_cache_for_writer,
+                                    pending_overlay_cells: &pending_overlay_cells,
+                                },
+                            )
+                            .await?;
+                            last_bulk_checkpoint_flush_at = Instant::now();
+                            continue;
+                        }
+                        pending_checkpoint = Some(pending);
+                    }
                     // Idle timeout - no pending batches. If any worker exited, fail fast
                     // instead of spinning forever with stale progress.
                     consecutive_idle_timeouts = consecutive_idle_timeouts.saturating_add(1);
@@ -4980,6 +5224,7 @@ impl Indexer {
                         );
                         fetcher.abort();
                         parser.abort();
+                        pending_overlay_cells.clear();
                         error!(
                             run_id = %self.run_id,
                             incident_id = %incident_id,
@@ -4999,6 +5244,302 @@ impl Indexer {
                 }
             }
         }
+    }
+
+    async fn write_pipeline_batch(
+        &self,
+        batch: PendingParsedBatch,
+        recv_wait_ms: f64,
+        checkpoint_reason: Option<&'static str>,
+        context: &mut WritePipelineContext<'_>,
+    ) -> Result<()> {
+        let PendingParsedBatch {
+            batch_epoch,
+            start_block,
+            end_block,
+            chain_tip,
+            blocks,
+            all_parsed_blocks,
+            all_tx_data,
+            input_cell_info,
+            batch_cell_infos,
+            address_balance_changes,
+            script_usage_changes,
+            script_daily_changes,
+            token_daily_changes,
+            spore_type_index_changes,
+            spore_daily_changes,
+            cluster_daily_changes,
+            nft_type_index_changes,
+            nft_daily_changes,
+            estimated_bytes: _,
+        } = batch;
+        let db_start = Instant::now();
+        let batch_tx_count = all_tx_data.len();
+        let batch_tx_count_u64 = u64::try_from(batch_tx_count).expect("batch tx count exceeds u64");
+        let write_metrics = match self
+            .write_parsed_batch(
+                &blocks,
+                &all_parsed_blocks,
+                all_tx_data,
+                input_cell_info,
+                batch_cell_infos,
+                address_balance_changes,
+                script_usage_changes,
+                script_daily_changes,
+                token_daily_changes,
+                spore_type_index_changes,
+                spore_daily_changes,
+                cluster_daily_changes,
+                nft_type_index_changes,
+                nft_daily_changes,
+                chain_tip,
+            )
+            .await
+        {
+            Ok(metrics) => metrics,
+            Err(e) => {
+                let incident_id = self.report_incident(
+                    "pipeline_batch_write_failed",
+                    format!(
+                        "start_block={} end_block={} chain_tip={} error={:?}",
+                        start_block, end_block, chain_tip, e
+                    ),
+                );
+                error!(
+                    run_id = %self.run_id,
+                    incident_id = %incident_id,
+                    start_block,
+                    end_block,
+                    chain_tip,
+                    error = ?e,
+                    "Sync error while writing parsed batch"
+                );
+                let bulk_sync_mode =
+                    is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+                if bulk_sync_mode {
+                    return Err(e).with_context(|| {
+                        format!(
+                            "bulk sync fail-fast for range {}-{} (chain_tip={}): \
+                             no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
+                            start_block, end_block, chain_tip
+                        )
+                    });
+                }
+                if let Err(cleanup_err) = self.writer.cleanup_batch_range(
+                    i64::try_from(start_block).map_err(|_| {
+                        anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
+                    })?,
+                    i64::try_from(end_block).map_err(|_| {
+                        anyhow!("batch cleanup end_block exceeds i64: {}", end_block)
+                    })?,
+                ) {
+                    error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+                } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
+                    i64::try_from(start_block).map_err(|_| {
+                        anyhow!(
+                            "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
+                            start_block
+                        )
+                    })? - 1,
+                ) {
+                    error!(
+                        "Failed to rebuild HODL tracker after batch cleanup: {:?}",
+                        rebuild_err
+                    );
+                    return Err(rebuild_err);
+                }
+                self.request_pipeline_reset("batch write failed", None, None, None);
+                let drained = Self::drain_channel(context.parse_rx).await;
+                context
+                    .parse_tx_pending_txs_for_writer
+                    .store(0, Ordering::Relaxed);
+                context.pending_overlay_cells.clear();
+                info!(
+                    run_id = %self.run_id,
+                    pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                    drained,
+                    "Batch write failure drain completed"
+                );
+                sleep(Duration::from_secs(5)).await;
+                return Ok(());
+            }
+        };
+        let db_elapsed = db_start.elapsed();
+        self.perf.add_db_write(db_elapsed);
+        self.perf
+            .add_db_commit(duration_from_millis(write_metrics.commit_ms));
+
+        if db_elapsed.as_secs() >= 5 {
+            let stats = self.writer.store().memory_stats();
+            warn!(
+                db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                commit_ms = format!("{:.1}", write_metrics.commit_ms),
+                compaction_pending_mb = stats.compaction_pending_bytes / (1024 * 1024),
+                running_compactions = stats.num_running_compactions,
+                l0_total = stats.l0_files_count,
+                l0_max = stats.l0_files_max,
+                l0_worst_cf = stats.l0_worst_cf,
+                memtable_mb = stats.memtable_bytes / (1024 * 1024),
+                imm_memtables = stats.immutable_memtables,
+                "Slow write stage detected"
+            );
+        }
+
+        if let Some(last_block) = all_parsed_blocks.last() {
+            context
+                .committed_tip_for_cache_for_writer
+                .store(last_block.number, Ordering::SeqCst);
+            self.progress.record_batch(
+                last_block.number as u64,
+                all_parsed_blocks.len() as u64,
+                batch_tx_count_u64,
+            );
+            let evicted_overlay = evict_committed_overlay_cells(
+                context.pending_overlay_cells,
+                batch_epoch,
+                last_block.number,
+            );
+
+            let mode = if self.is_bulk_sync_active() {
+                "[BULK]"
+            } else {
+                ""
+            };
+            let partition_range = format_partition_range(start_block, end_block);
+            let boundary_info = if crosses_partition_boundary(start_block, end_block) {
+                " (crosses boundary)"
+            } else {
+                ""
+            };
+            let writer_queue = context.parse_tx_for_writer_depth.max_capacity()
+                - context.parse_tx_for_writer_depth.capacity();
+            self.pipeline_perf.record_write(
+                db_elapsed,
+                write_metrics.commit_ms,
+                recv_wait_ms,
+                writer_queue,
+                context.parse_tx_for_writer_depth.max_capacity(),
+            );
+            let adaptive_snapshot_before = self.adaptive_batch_controller.snapshot();
+            let parse_queue_pending_txs = context
+                .parse_tx_pending_txs_for_writer
+                .load(Ordering::Relaxed);
+            let parse_queue_capacity_txs =
+                u64::try_from(context.parse_tx_for_writer_depth.max_capacity())
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(adaptive_snapshot_before.target_batch_txs.max(1));
+            // Model queue pressure by pending tx volume to avoid over-reacting to
+            // temporary small-block bursts with dense transactions.
+            let parse_queue_fill_pct = queue_fill_percentage(
+                Some(parse_queue_pending_txs),
+                Some(parse_queue_capacity_txs),
+            );
+            let writer_queue_fill_pct = parse_queue_fill_pct;
+            let memory_ratio_pct = cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
+            if let Some(adjustment) =
+                self.adaptive_batch_controller
+                    .update_after_write(AdaptiveBatchInput {
+                        write_ms: db_elapsed.as_secs_f64() * 1000.0,
+                        batch_tx_count,
+                        parse_queue_fill_pct,
+                        writer_queue_fill_pct,
+                        memory_ratio_pct,
+                    })
+            {
+                info!(
+                    run_id = %self.run_id,
+                    reason = adjustment.reason,
+                    previous_target_batch_txs = adjustment.previous_target_batch_txs,
+                    new_target_batch_txs = adjustment.new_target_batch_txs,
+                    previous_inflight_limit = adjustment.previous_inflight_limit,
+                    new_inflight_limit = adjustment.new_inflight_limit,
+                    previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
+                    new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
+                    parse_queue_fill_pct = parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
+                    writer_queue_fill_pct = writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
+                    parse_queue_pending_txs,
+                    parse_queue_capacity_txs,
+                    memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
+                    db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                    db_commit_ms = format!("{:.1}", write_metrics.commit_ms),
+                    "Adaptive batch controller adjusted"
+                );
+            }
+            let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
+            info!(
+                "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}{}{}",
+                start_block,
+                end_block,
+                self.progress.blocks_remaining(),
+                db_elapsed.as_secs_f64(),
+                write_metrics.commit_ms,
+                writer_queue,
+                recv_wait_ms,
+                adaptive_snapshot.target_batch_txs,
+                adaptive_snapshot.min_target_batch_txs,
+                adaptive_snapshot.inflight_limit,
+                partition_range,
+                boundary_info,
+                mode,
+                checkpoint_reason
+                    .map(|reason| format!(" checkpoint={}", reason))
+                    .unwrap_or_default(),
+                if evicted_overlay > 0 {
+                    format!(" evicted_overlay={}", evicted_overlay)
+                } else {
+                    String::new()
+                }
+            );
+
+            if !self.is_secondary_issuance_bulk_active() {
+                for block in &all_parsed_blocks {
+                    if let Err(e) = self
+                        .update_secondary_issuance(
+                            &format!("0x{}", hex::encode(&block.hash)),
+                            &hex::encode(&block.dao),
+                            block.number,
+                            block.timestamp,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to update secondary issuance for block {}: {}",
+                            block.number, e
+                        );
+                    }
+                }
+            }
+
+            let crossed_1000 = (start_block / 1000) != (end_block / 1000);
+            if crossed_1000 && !self.is_bulk_sync_active() {
+                match i64::try_from((end_block / 1000) * 1000) {
+                    Ok(update_block) => {
+                        let writer = self.writer.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = writer.recalculate_dao_extended_statistics(update_block)
+                            {
+                                warn!("Failed to recalculate DAO statistics: {}", e);
+                            }
+                        });
+                    }
+                    Err(_) => warn!(
+                        run_id = %self.run_id,
+                        end_block,
+                        "Skipping DAO extended statistics recalc: block exceeds i64 range"
+                    ),
+                }
+            }
+
+            self.maybe_invalidate_chart_caches(end_block).await;
+            self.check_bulk_sync_completion().await;
+        }
+
+        self.perf
+            .blocks_count
+            .fetch_add(all_parsed_blocks.len() as u64, Ordering::Relaxed);
+        self.perf.report_and_reset();
+        Ok(())
     }
 
     async fn fetch_blocks_with_config(
@@ -12910,5 +13451,119 @@ mod tests {
             last_snapshot_date: Some("20240102".to_string()),
         };
         assert!(should_rebuild_hodl_tracker_state(Some(&ahead), 100));
+    }
+
+    #[test]
+    fn test_decide_bulk_checkpoint_flush_reason() {
+        let min_interval = Duration::from_secs(8);
+        assert_eq!(
+            decide_bulk_checkpoint_flush_reason(&BulkCheckpointDecisionInput {
+                pending_blocks: 300_000,
+                memory_ratio: Some(0.20),
+                since_last_flush: Duration::from_secs(1),
+                min_blocks: 20_000,
+                max_blocks: 300_000,
+                min_interval,
+                soft_ratio: 0.70,
+                hard_ratio: 0.82,
+            }),
+            Some("max_blocks")
+        );
+        assert_eq!(
+            decide_bulk_checkpoint_flush_reason(&BulkCheckpointDecisionInput {
+                pending_blocks: 50_000,
+                memory_ratio: Some(0.85),
+                since_last_flush: Duration::from_secs(1),
+                min_blocks: 20_000,
+                max_blocks: 300_000,
+                min_interval,
+                soft_ratio: 0.70,
+                hard_ratio: 0.82,
+            }),
+            Some("hard_limit")
+        );
+        assert_eq!(
+            decide_bulk_checkpoint_flush_reason(&BulkCheckpointDecisionInput {
+                pending_blocks: 50_000,
+                memory_ratio: Some(0.72),
+                since_last_flush: Duration::from_secs(9),
+                min_blocks: 20_000,
+                max_blocks: 300_000,
+                min_interval,
+                soft_ratio: 0.70,
+                hard_ratio: 0.82,
+            }),
+            Some("soft_limit")
+        );
+        assert_eq!(
+            decide_bulk_checkpoint_flush_reason(&BulkCheckpointDecisionInput {
+                pending_blocks: 10_000,
+                memory_ratio: Some(0.72),
+                since_last_flush: Duration::from_secs(30),
+                min_blocks: 20_000,
+                max_blocks: 300_000,
+                min_interval,
+                soft_ratio: 0.70,
+                hard_ratio: 0.82,
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn test_merge_address_balance_changes_keeps_latest_activity() {
+        let mut target: AddressBalanceChanges = HashMap::new();
+        target.insert(vec![1u8; 32], (100, 2, 2, 1, 100, vec![0xaa], 200));
+        let mut incoming: AddressBalanceChanges = HashMap::new();
+        incoming.insert(vec![1u8; 32], (-40, -1, 1, 3, 110, vec![0xbb], -80));
+        incoming.insert(vec![2u8; 32], (70, 1, 1, 1, 105, vec![0xcc], 90));
+
+        merge_address_balance_changes(&mut target, incoming).expect("merge should succeed");
+
+        let first = target
+            .get(&vec![1u8; 32])
+            .expect("first address should exist");
+        assert_eq!(first.0, 60);
+        assert_eq!(first.1, 1);
+        assert_eq!(first.2, 3);
+        assert_eq!(first.3, 4);
+        assert_eq!(first.4, 110);
+        assert_eq!(first.5, vec![0xbb]);
+        assert_eq!(first.6, 120);
+
+        let second = target
+            .get(&vec![2u8; 32])
+            .expect("second address should exist");
+        assert_eq!(second.0, 70);
+        assert_eq!(second.4, 105);
+        assert_eq!(second.5, vec![0xcc]);
+    }
+
+    #[test]
+    fn test_auto_bulk_checkpoint_max_blocks_scales_by_cgroup_limit() {
+        let cfg_max = 300_000u64;
+        let unlimited = CgroupMemorySnapshot::default();
+        assert_eq!(
+            auto_bulk_checkpoint_max_blocks(cfg_max, &unlimited),
+            cfg_max
+        );
+
+        let low_mem = CgroupMemorySnapshot {
+            memory_current_bytes: Some(0),
+            memory_max_bytes: Some(8 * 1024 * 1024 * 1024),
+            memory_max_raw: None,
+            oom_events: None,
+            oom_kill_events: None,
+        };
+        assert!(auto_bulk_checkpoint_max_blocks(cfg_max, &low_mem) < cfg_max);
+
+        let high_mem = CgroupMemorySnapshot {
+            memory_current_bytes: Some(0),
+            memory_max_bytes: Some(64 * 1024 * 1024 * 1024),
+            memory_max_raw: None,
+            oom_events: None,
+            oom_kill_events: None,
+        };
+        assert_eq!(auto_bulk_checkpoint_max_blocks(cfg_max, &high_mem), cfg_max);
     }
 }

@@ -29,6 +29,16 @@ pub struct Config {
     pub redis_url: Option<String>,
     #[serde(default = "default_bulk_sync_threshold")]
     pub bulk_sync_threshold: u64,
+    #[serde(default = "default_bulk_memory_ratio_target")]
+    pub bulk_memory_ratio_target: f64,
+    #[serde(default = "default_bulk_memory_ratio_hard")]
+    pub bulk_memory_ratio_hard: f64,
+    #[serde(default = "default_bulk_checkpoint_min_blocks")]
+    pub bulk_checkpoint_min_blocks: u64,
+    #[serde(default = "default_bulk_checkpoint_max_blocks")]
+    pub bulk_checkpoint_max_blocks: u64,
+    #[serde(default = "default_bulk_checkpoint_min_interval_sec")]
+    pub bulk_checkpoint_min_interval_sec: u64,
     #[serde(default = "default_fast_sync_mode")]
     pub fast_sync_mode: bool,
     /// Path to CKB node's RocksDB data directory for direct reads.
@@ -78,6 +88,26 @@ fn default_bulk_sync_threshold() -> u64 {
 
 fn default_fast_sync_mode() -> bool {
     true
+}
+
+fn default_bulk_memory_ratio_target() -> f64 {
+    0.70
+}
+
+fn default_bulk_memory_ratio_hard() -> f64 {
+    0.82
+}
+
+fn default_bulk_checkpoint_min_blocks() -> u64 {
+    20_000
+}
+
+fn default_bulk_checkpoint_max_blocks() -> u64 {
+    300_000
+}
+
+fn default_bulk_checkpoint_min_interval_sec() -> u64 {
+    8
 }
 
 fn default_token_labels_path() -> String {
@@ -140,6 +170,21 @@ mod tests {
     #[test]
     fn test_default_token_labels_path() {
         assert_eq!(default_token_labels_path(), "docs/token-labels");
+    }
+
+    #[test]
+    fn test_default_bulk_memory_ratios() {
+        assert_eq!(default_bulk_memory_ratio_target(), 0.70);
+        assert_eq!(default_bulk_memory_ratio_hard(), 0.82);
+        assert!(default_bulk_memory_ratio_hard() > default_bulk_memory_ratio_target());
+    }
+
+    #[test]
+    fn test_default_bulk_checkpoint_window() {
+        assert_eq!(default_bulk_checkpoint_min_blocks(), 20_000);
+        assert_eq!(default_bulk_checkpoint_max_blocks(), 300_000);
+        assert_eq!(default_bulk_checkpoint_min_interval_sec(), 8);
+        assert!(default_bulk_checkpoint_max_blocks() > default_bulk_checkpoint_min_blocks());
     }
 
     #[test]
