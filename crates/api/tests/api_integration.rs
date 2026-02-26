@@ -8,11 +8,10 @@ use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
-    ClusterDailyDelta, DailyBlockStats, DailyStats, DobEntry, DobExtra, DobStandard, EpochStats,
-    HourlyStats, LiveCellInfo, MinerStats, NftCollectionAggregate, NftDailyDelta, NftEntry,
-    NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta,
-    TokenInfo,
+    ActivityEntry, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DailyBlockStats,
+    DailyStats, DobEntry, DobExtra, DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats,
+    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ScriptDailyDelta,
+    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -4715,6 +4714,9 @@ async fn test_assets_nft_item_activities_mnft() {
     let class_id = [0x31u8; 24];
     let token_id = [0x41u8; 28];
     let owner_lock_hash = vec![0x77u8; 32];
+    let previous_owner_lock_hash = vec![0x66u8; 32];
+    let mint_tx = vec![0x93; 32];
+    let transfer_tx = vec![0x91; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_nft(
@@ -4735,64 +4737,54 @@ async fn test_assets_nft_item_activities_mnft() {
             },
         },
     );
-    batch.put_activity(
-        &owner_lock_hash,
+    batch.put_mnft_token_outpoint(&mint_tx, 0, &token_id);
+    batch.put_mnft_token_outpoint(&transfer_tx, 0, &token_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: previous_owner_lock_hash,
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: Some(vec![0x44; 32]),
+            type_code_hash: Some(vec![0x55; 32]),
+            type_args: Some(token_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
         300,
-        0,
-        &ActivityEntry {
-            tx_hash: vec![0x91; 32],
-            block_number: 300,
-            tx_index: 0,
-            timestamp: 1_700_000_300,
-            ckb_delta: 0,
-            occupied_delta: 0,
-            is_cellbase: false,
-            asset_changes: vec![AssetChange::Nft {
-                nft_id: token_id.to_vec(),
-                standard: "m-nft".to_string(),
-                action: AssetAction::Transfer,
-            }],
-            peers: vec![],
-        },
+        Some(&transfer_tx),
     );
-    batch.put_activity(
-        &owner_lock_hash,
-        200,
-        0,
-        &ActivityEntry {
-            tx_hash: vec![0x92; 32],
-            block_number: 200,
-            tx_index: 0,
-            timestamp: 1_700_000_200,
-            ckb_delta: 0,
-            occupied_delta: 0,
-            is_cellbase: false,
-            asset_changes: vec![AssetChange::Nft {
-                nft_id: vec![0x55; 28],
-                standard: "m-nft".to_string(),
-                action: AssetAction::Transfer,
-            }],
-            peers: vec![],
-        },
-    );
-    batch.put_activity(
-        &owner_lock_hash,
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
         100,
         0,
-        &ActivityEntry {
-            tx_hash: vec![0x93; 32],
-            block_number: 100,
-            tx_index: 0,
-            timestamp: 1_700_000_100,
-            ckb_delta: 0,
-            occupied_delta: 0,
+        &TxIndexEntry {
             is_cellbase: false,
-            asset_changes: vec![AssetChange::Nft {
-                nft_id: token_id.to_vec(),
-                standard: "m-nft".to_string(),
-                action: AssetAction::Mint,
-            }],
-            peers: vec![],
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 300, 0);
+    batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_300,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
         },
     );
     batch.commit().unwrap();
@@ -4880,8 +4872,12 @@ async fn test_assets_nft_item_activities_mnft() {
 async fn test_assets_nft_item_activities_dotbit() {
     let store = test_store();
     let account_id = [0x11u8; 20];
-    let other_account_id = [0x22u8; 20];
-    let owner_lock_hash = vec![0x88u8; 32];
+    let owner_a = vec![0x88u8; 32];
+    let owner_b = vec![0x77u8; 32];
+    let owner_c = vec![0x66u8; 32];
+    let mint_tx = vec![0xa2; 32];
+    let transfer_tx_1 = vec![0xa1; 32];
+    let transfer_tx_2 = vec![0xa4; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_nft(
@@ -4890,7 +4886,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             standard: NftStandard::DotBit,
             collection_id: None,
             token_id: Some(account_id.to_vec()),
-            owner_lock_hash: Some(owner_lock_hash.clone()),
+            owner_lock_hash: Some(owner_c.clone()),
             name: Some("alice.bit".to_string()),
             is_live: true,
             created_at_block: 120,
@@ -4899,64 +4895,89 @@ async fn test_assets_nft_item_activities_dotbit() {
             },
         },
     );
-    batch.put_activity(
-        &owner_lock_hash,
-        320,
+    batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    batch.put_dotbit_account_outpoint(&transfer_tx_1, 0, &account_id);
+    batch.put_dotbit_account_outpoint(&transfer_tx_2, 0, &account_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
         0,
-        &ActivityEntry {
-            tx_hash: vec![0xa1; 32],
-            block_number: 320,
-            tx_index: 0,
-            timestamp: 1_700_000_320,
-            ckb_delta: 0,
-            occupied_delta: 0,
-            is_cellbase: false,
-            asset_changes: vec![AssetChange::Nft {
-                nft_id: account_id.to_vec(),
-                standard: "dotbit".to_string(),
-                action: AssetAction::Transfer,
-            }],
-            peers: vec![],
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 300,
+            lock_script_hash: owner_a,
+            lock_code_hash: vec![0x31; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x32; 20],
+            type_script_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some(vec![0x34; 32]),
+            type_args: Some(account_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
         },
+        320,
+        Some(&transfer_tx_1),
     );
-    batch.put_activity(
-        &owner_lock_hash,
+    batch.put_consumed_cell_with_consumer(
+        &transfer_tx_1,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 320,
+            lock_script_hash: owner_b,
+            lock_code_hash: vec![0x41; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x42; 20],
+            type_script_hash: Some(vec![0x43; 32]),
+            type_code_hash: Some(vec![0x44; 32]),
+            type_args: Some(account_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        340,
+        Some(&transfer_tx_2),
+    );
+    batch.put_tx_hash_map(&mint_tx, 300, 0);
+    batch.put_tx_index(
         300,
         0,
-        &ActivityEntry {
-            tx_hash: vec![0xa2; 32],
-            block_number: 300,
-            tx_index: 0,
-            timestamp: 1_700_000_300,
-            ckb_delta: 0,
-            occupied_delta: 0,
+        &TxIndexEntry {
             is_cellbase: false,
-            asset_changes: vec![AssetChange::Nft {
-                nft_id: account_id.to_vec(),
-                standard: "dotbit".to_string(),
-                action: AssetAction::Mint,
-            }],
-            peers: vec![],
+            timestamp: 1_700_000_300,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
         },
     );
-    batch.put_activity(
-        &owner_lock_hash,
-        280,
+    batch.put_tx_hash_map(&transfer_tx_1, 320, 0);
+    batch.put_tx_index(
+        320,
         0,
-        &ActivityEntry {
-            tx_hash: vec![0xa3; 32],
-            block_number: 280,
-            tx_index: 0,
-            timestamp: 1_700_000_280,
-            ckb_delta: 0,
-            occupied_delta: 0,
+        &TxIndexEntry {
             is_cellbase: false,
-            asset_changes: vec![AssetChange::Nft {
-                nft_id: other_account_id.to_vec(),
-                standard: "dotbit".to_string(),
-                action: AssetAction::Transfer,
-            }],
-            peers: vec![],
+            timestamp: 1_700_000_320,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx_2, 340, 0);
+    batch.put_tx_index(
+        340,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_340,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
         },
     );
     batch.commit().unwrap();
@@ -4976,11 +4997,13 @@ async fn test_assets_nft_item_activities_dotbit() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["data"].as_array().unwrap().len(), 2);
-    assert_eq!(json["data"][0]["blockNumber"], 320);
+    assert_eq!(json["data"].as_array().unwrap().len(), 3);
+    assert_eq!(json["data"][0]["blockNumber"], 340);
     assert_eq!(json["data"][0]["actions"][0], "transfer");
-    assert_eq!(json["data"][1]["blockNumber"], 300);
-    assert_eq!(json["data"][1]["actions"][0], "mint");
+    assert_eq!(json["data"][1]["blockNumber"], 320);
+    assert_eq!(json["data"][1]["actions"][0], "transfer");
+    assert_eq!(json["data"][2]["blockNumber"], 300);
+    assert_eq!(json["data"][2]["actions"][0], "mint");
 
     let request = Request::builder()
         .uri(format!(
@@ -4994,7 +5017,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
-    assert_eq!(json["data"][0]["blockNumber"], 320);
+    assert_eq!(json["data"][0]["blockNumber"], 340);
     assert_eq!(json["hasMore"], true);
     let next_cursor = json["nextCursor"]
         .as_str()
@@ -5013,7 +5036,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
-    assert_eq!(json["data"][0]["blockNumber"], 300);
+    assert_eq!(json["data"][0]["blockNumber"], 320);
 
     let request = Request::builder()
         .uri(format!(
@@ -5026,8 +5049,142 @@ async fn test_assets_nft_item_activities_dotbit() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
     assert_eq!(json["data"][0]["actions"][0], "transfer");
+}
+
+#[tokio::test]
+async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
+    let store = test_store();
+    let account_id = [0x31u8; 20];
+    let owner_a = vec![0x21u8; 32];
+    let owner_b = vec![0x22u8; 32];
+    let mint_tx = vec![0xb1; 32];
+    let transfer_tx = vec![0xb2; 32];
+    let burn_tx = vec![0xb3; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft(
+        &account_id,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(account_id.to_vec()),
+            owner_lock_hash: None,
+            name: Some("recycled.bit".to_string()),
+            is_live: false,
+            created_at_block: 100,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: owner_a,
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x52; 20],
+            type_script_hash: Some(vec![0x53; 32]),
+            type_code_hash: Some(vec![0x54; 32]),
+            type_args: Some(account_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        200,
+        Some(&transfer_tx),
+    );
+    batch.put_consumed_cell_with_consumer(
+        &transfer_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 200,
+            lock_script_hash: owner_b,
+            lock_code_hash: vec![0x61; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x62; 20],
+            type_script_hash: Some(vec![0x63; 32]),
+            type_code_hash: Some(vec![0x64; 32]),
+            type_args: Some(account_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        260,
+        Some(&burn_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&burn_tx, 260, 0);
+    batch.put_tx_index(
+        260,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_260,
+            inputs_count: 1,
+            outputs_count: 0,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=20",
+            hex::encode(account_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"].as_array().unwrap().len(), 3);
+    assert_eq!(json["data"][0]["blockNumber"], 260);
+    assert_eq!(json["data"][0]["actions"][0], "burn");
+    assert_eq!(json["data"][1]["actions"][0], "transfer");
+    assert_eq!(json["data"][2]["actions"][0], "mint");
 }
 
 #[tokio::test]

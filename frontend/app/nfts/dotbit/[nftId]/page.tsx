@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { Header } from '@/components/layout/header';
 import { Address } from '@/components/ui/address';
@@ -53,33 +53,10 @@ function normalizeActivityAction(action: string): string {
   return action.toLowerCase();
 }
 
-type DotbitActivityFilter = 'all' | 'mint' | 'transfer' | 'recycled';
-
-function parseActivityFilter(raw: string | null): DotbitActivityFilter {
-  switch (raw?.toLowerCase()) {
-    case 'mint':
-      return 'mint';
-    case 'transfer':
-      return 'transfer';
-    case 'recycled':
-      return 'recycled';
-    default:
-      return 'all';
-  }
-}
-
 function parseActivityCursor(raw: string | null): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function toActivityActionParam(
-  filter: DotbitActivityFilter
-): 'mint' | 'transfer' | 'burn' | undefined {
-  if (filter === 'all') return undefined;
-  if (filter === 'recycled') return 'burn';
-  return filter;
 }
 
 export default function DotbitItemDetailPage() {
@@ -89,14 +66,10 @@ export default function DotbitItemDetailPage() {
   const searchParams = useSearchParams();
   const rawNftId = params.nftId as string;
   const nftId = normalizeNftId(rawNftId);
-  const [activityFilter, setActivityFilter] = useState<DotbitActivityFilter>(() =>
-    parseActivityFilter(searchParams.get('activity'))
-  );
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );
   const [activityCursorHistory, setActivityCursorHistory] = useState<string[]>([]);
-  const hasActivityFilterMounted = useRef(false);
 
   const detailQuery = useQuery({
     queryKey: ['dotbit-item-detail', nftId],
@@ -114,28 +87,17 @@ export default function DotbitItemDetailPage() {
   });
 
   const { data: itemActivities, isLoading: isActivitiesLoading } = useQuery({
-    queryKey: ['dotbit-item-activities', detail?.nftId, activityFilter, activityCursor],
+    queryKey: ['dotbit-item-activities', detail?.nftId, activityCursor],
     queryFn: () => {
-      const params: { limit: number; cursor?: string; action?: 'mint' | 'transfer' | 'burn' } = {
-        limit: 20,
-      };
+      const params: { limit: number; cursor?: string } = { limit: 20 };
       if (activityCursor) {
         params.cursor = activityCursor;
-      }
-      const action = toActivityActionParam(activityFilter);
-      if (action) {
-        params.action = action;
       }
       return api.getDotbitItemActivities(detail!.nftId, params);
     },
     enabled: !!detail?.nftId,
     retry: false,
   });
-
-  const resetActivityPagination = useCallback(() => {
-    setActivityCursor(undefined);
-    setActivityCursorHistory([]);
-  }, []);
 
   const goToNextActivityPage = useCallback(
     (nextCursor: string | null | undefined) => {
@@ -158,20 +120,7 @@ export default function DotbitItemDetailPage() {
   }, [activityCursorHistory]);
 
   useEffect(() => {
-    if (!hasActivityFilterMounted.current) {
-      hasActivityFilterMounted.current = true;
-      return;
-    }
-    resetActivityPagination();
-  }, [activityFilter, resetActivityPagination]);
-
-  useEffect(() => {
     const nextParams = new URLSearchParams(searchParams.toString());
-    if (activityFilter === 'all') {
-      nextParams.delete('activity');
-    } else {
-      nextParams.set('activity', activityFilter);
-    }
     if (activityCursor) {
       nextParams.set('activity_cursor', activityCursor);
     } else {
@@ -183,7 +132,7 @@ export default function DotbitItemDetailPage() {
       return;
     }
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
-  }, [activityCursor, activityFilter, pathname, router, searchParams]);
+  }, [activityCursor, pathname, router, searchParams]);
 
   if (detailQuery.isLoading) {
     return (
@@ -334,26 +283,7 @@ export default function DotbitItemDetailPage() {
           </TerminalPanel>
 
           <TerminalPanel>
-            <TerminalPanelHeader
-              indicator="active"
-              actions={
-                <select
-                  value={activityFilter}
-                  onChange={(event) =>
-                    setActivityFilter(event.target.value as DotbitActivityFilter)
-                  }
-                  aria-label="Activity Filter"
-                  className="focus:border-terminal-green rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors"
-                >
-                  <option value="all">All</option>
-                  <option value="mint">Mint</option>
-                  <option value="transfer">Transfer</option>
-                  <option value="recycled">Recycled</option>
-                </select>
-              }
-            >
-              Activities
-            </TerminalPanelHeader>
+            <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
               <div className="flex items-center gap-1.5 border-b border-slate-800 px-4 py-2">
                 <span className="bg-terminal-green/15 text-terminal-green rounded px-2.5 py-1 font-mono text-xs">

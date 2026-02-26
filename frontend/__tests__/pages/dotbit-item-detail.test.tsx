@@ -48,8 +48,8 @@ describe('DotbitItemDetailPage', () => {
     } as any);
   });
 
-  it('hydrates activity filter and cursor from URL query', async () => {
-    mockSearchParams = new URLSearchParams('activity=transfer&activity_cursor=500:0');
+  it('hydrates activity cursor from URL query', async () => {
+    mockSearchParams = new URLSearchParams('activity_cursor=500:0');
     vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
       nftId: '0xabc',
       name: 'alice.bit',
@@ -68,12 +68,8 @@ describe('DotbitItemDetailPage', () => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
         limit: 20,
         cursor: '500:0',
-        action: 'transfer',
       });
     });
-
-    const activityFilter = screen.getByLabelText('Activity Filter') as HTMLSelectElement;
-    expect(activityFilter.value).toBe('transfer');
   });
 
   it('renders dotbit detail sections', async () => {
@@ -148,7 +144,7 @@ describe('DotbitItemDetailPage', () => {
     expect(blockLinks.length).toBeGreaterThan(0);
   });
 
-  it('applies activity filter and cursor pagination', async () => {
+  it('applies cursor pagination', async () => {
     vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
       nftId: '0xabc',
       name: 'alice.bit',
@@ -214,22 +210,6 @@ describe('DotbitItemDetailPage', () => {
     await waitFor(() => {
       expect(
         mockReplace.mock.calls.some((call) => String(call[0]).includes('activity_cursor=500%3A0'))
-      ).toBe(true);
-    });
-
-    fireEvent.change(screen.getByLabelText('Activity Filter'), {
-      target: { value: 'transfer' },
-    });
-
-    await waitFor(() => {
-      expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
-        limit: 20,
-        action: 'transfer',
-      });
-    });
-    await waitFor(() => {
-      expect(
-        mockReplace.mock.calls.some((call) => String(call[0]).includes('activity=transfer'))
       ).toBe(true);
     });
   });

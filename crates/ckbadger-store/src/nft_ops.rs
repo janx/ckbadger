@@ -257,6 +257,37 @@ impl CkbadgerStore {
         Ok(resolved)
     }
 
+    /// List all historical mNFT token outpoints recorded for a token ID.
+    pub fn list_mnft_token_outpoints_by_token_id(
+        &self,
+        token_id: &[u8],
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+        let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut outpoints = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT) {
+                break;
+            }
+            if key.len() != keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid mnft token outpoint key length: expected {}, got {}",
+                    keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if value.as_ref() != token_id {
+                continue;
+            }
+
+            outpoints.push(keys::decode_outpoint(&key[1..35]));
+        }
+
+        Ok(outpoints)
+    }
+
     pub fn get_dotbit_account_id_by_outpoint(
         &self,
         tx_hash: &[u8],
@@ -354,6 +385,37 @@ impl CkbadgerStore {
         }
 
         Ok(resolved)
+    }
+
+    /// List all historical .bit account outpoints recorded for an account ID.
+    pub fn list_dotbit_account_outpoints_by_account_id(
+        &self,
+        account_id: &[u8],
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
+        let prefix = [keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT];
+        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let mut outpoints = Vec::new();
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.first() != Some(&keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT) {
+                break;
+            }
+            if key.len() != keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid dotbit outpoint key length: expected {}, got {}",
+                    keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if value.as_ref() != account_id {
+                continue;
+            }
+
+            outpoints.push(keys::decode_dotbit_account_outpoint_key(&key));
+        }
+
+        Ok(outpoints)
     }
 
     pub fn get_nft_type_index(
@@ -983,6 +1045,54 @@ mod tests {
         let (tx_hash, output_index) = outpoints.get(&token_id).unwrap();
         assert_eq!(tx_hash, &live_tx);
         assert_eq!(*output_index, live_idx);
+    }
+
+    #[test]
+    fn test_list_mnft_token_outpoints_by_token_id_returns_all_matches() {
+        let (_dir, store) = test_store();
+        let token_id = vec![0x91u8; 28];
+        let tx_a = vec![0x81u8; 32];
+        let tx_b = vec![0x82u8; 32];
+        let tx_other = vec![0x83u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_mnft_token_outpoint(&tx_a, 1, &token_id);
+        batch.put_mnft_token_outpoint(&tx_b, 2, &token_id);
+        batch.put_mnft_token_outpoint(&tx_other, 3, &[0x55u8; 28]);
+        batch.commit().unwrap();
+
+        let mut outpoints = store
+            .list_mnft_token_outpoints_by_token_id(&token_id)
+            .unwrap();
+        outpoints.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+        assert_eq!(outpoints.len(), 2);
+        assert_eq!(outpoints[0], (tx_a, 1));
+        assert_eq!(outpoints[1], (tx_b, 2));
+    }
+
+    #[test]
+    fn test_list_dotbit_account_outpoints_by_account_id_returns_all_matches() {
+        let (_dir, store) = test_store();
+        let account_id = vec![0x61u8; 20];
+        let tx_a = vec![0x71u8; 32];
+        let tx_b = vec![0x72u8; 32];
+        let tx_other = vec![0x73u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dotbit_account_outpoint(&tx_a, 4, &account_id);
+        batch.put_dotbit_account_outpoint(&tx_b, 5, &account_id);
+        batch.put_dotbit_account_outpoint(&tx_other, 6, &[0x44u8; 20]);
+        batch.commit().unwrap();
+
+        let mut outpoints = store
+            .list_dotbit_account_outpoints_by_account_id(&account_id)
+            .unwrap();
+        outpoints.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+        assert_eq!(outpoints.len(), 2);
+        assert_eq!(outpoints[0], (tx_a, 4));
+        assert_eq!(outpoints[1], (tx_b, 5));
     }
 
     #[test]
