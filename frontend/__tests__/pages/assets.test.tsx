@@ -121,6 +121,59 @@ const mockDotbitNftAssets = {
   nextCursor: null,
 };
 
+const mockMixedNftAssets = {
+  data: [
+    {
+      id: '0x1111111111111111111111111111111111111111111111111111111111111111',
+      assetType: 'nft' as const,
+      standard: 'spore',
+      name: 'Spore With Icon',
+      symbol: null,
+      iconUrl: null,
+      published: false,
+      famous: false,
+      tags: null,
+      holdersCount: 10,
+      transfersCount: 12,
+      transfers24h: 1,
+      decimals: null,
+      totalSupply: '10',
+      contentType: null,
+      contentSize: null,
+      clusterId: '0x1111111111111111111111111111111111111111111111111111111111111111',
+      clusterName: 'Spore With Icon',
+      liveCapacity: '3000000000',
+      liveOccupiedCapacity: '1000000000',
+    },
+    {
+      id: '0x2222222222222222222222222222222222222222222222222222222222222222',
+      assetType: 'nft' as const,
+      standard: 'm-nft',
+      name: 'MNFT Without Icon',
+      symbol: null,
+      iconUrl: null,
+      published: false,
+      famous: false,
+      tags: null,
+      holdersCount: 8,
+      transfersCount: 9,
+      transfers24h: 0,
+      decimals: null,
+      totalSupply: '8',
+      contentType: null,
+      contentSize: null,
+      clusterId: null,
+      clusterName: null,
+      liveCapacity: '2000000000',
+      liveOccupiedCapacity: '900000000',
+    },
+  ],
+  total: 2,
+  limit: 20,
+  hasMore: false,
+  nextCursor: null,
+};
+
 const emptyAssets = {
   data: [],
   total: 0,
@@ -451,6 +504,26 @@ describe('AssetsPage', () => {
       expect(link).toHaveAttribute('href', '/nfts/dotbit');
       expect(screen.getAllByText('DOTBIT').length).toBeGreaterThan(0);
     });
+  });
+
+  it('keeps collection names aligned by rendering a fixed icon slot for every NFT row', async () => {
+    vi.mocked(api.getAssets).mockImplementation((params) => {
+      const assetType = params?.type;
+      return Promise.resolve(assetType === 'nft' ? mockMixedNftAssets : emptyAssets);
+    });
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Spore With Icon')).toBeInTheDocument();
+      expect(screen.getByText('MNFT Without Icon')).toBeInTheDocument();
+    });
+
+    const iconSlots = screen.getAllByTestId('asset-icon-slot');
+    expect(iconSlots).toHaveLength(2);
+    expect(iconSlots[0]).toHaveTextContent('🗂️');
+    expect(iconSlots[1].textContent?.trim()).toBe('');
   });
 
   it('shows verified badge for published tokens', async () => {
