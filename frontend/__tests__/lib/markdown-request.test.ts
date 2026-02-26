@@ -16,7 +16,7 @@ describe('resolveMarkdownRewrite', () => {
     expect(decision).toEqual({
       rewrite: true,
       sourcePath: '/blocks/123',
-      internalPrefix: '/__md',
+      internalPrefix: '/ai-md',
     });
   });
 
@@ -32,7 +32,7 @@ describe('resolveMarkdownRewrite', () => {
       rewrite: true,
       sourcePath: '/tx/0xabc',
       removeFormatParam: true,
-      internalPrefix: '/__md',
+      internalPrefix: '/ai-md',
     });
   });
 
@@ -47,7 +47,7 @@ describe('resolveMarkdownRewrite', () => {
     expect(decision).toEqual({
       rewrite: true,
       sourcePath: '/charts/hash-rate',
-      internalPrefix: '/__md',
+      internalPrefix: '/ai-md',
     });
   });
 
@@ -62,7 +62,7 @@ describe('resolveMarkdownRewrite', () => {
     expect(decision).toEqual({
       rewrite: true,
       sourcePath: '/tx/0xabc',
-      internalPrefix: '/__raw',
+      internalPrefix: '/ai-raw',
     });
   });
 
@@ -78,7 +78,7 @@ describe('resolveMarkdownRewrite', () => {
       rewrite: true,
       sourcePath: '/blocks/123',
       removeFormatParam: true,
-      internalPrefix: '/__raw',
+      internalPrefix: '/ai-raw',
     });
   });
 
@@ -94,7 +94,7 @@ describe('resolveMarkdownRewrite', () => {
       rewrite: true,
       sourcePath: '/tx/0xabc',
       removeFormatParam: true,
-      internalPrefix: '/__md',
+      internalPrefix: '/ai-md',
     });
   });
 
@@ -109,7 +109,7 @@ describe('resolveMarkdownRewrite', () => {
     expect(decision).toEqual({
       rewrite: true,
       sourcePath: '/cell/0xabc-0',
-      internalPrefix: '/__raw',
+      internalPrefix: '/ai-raw',
     });
   });
 

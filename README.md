@@ -256,8 +256,11 @@ API_PORT=3001
 API_RATE_LIMIT=100  # requests per minute
 
 # Frontend
-NEXT_PUBLIC_API_URL=http://localhost:3001
+NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
 NEXT_PUBLIC_WS_URL=ws://localhost:3001/ws
+# Optional server-side API base for Next.js route handlers (.md/.raw)
+# In docker-compose frontend container, set this to http://api:3001/api/v1
+CKBADGER_SERVER_API_URL=http://localhost:3001/api/v1
 
 # Verify subcommand (runs outside Docker, calls the ckbadger API)
 CKBADGER_API_URL=http://localhost:3001/api/v1
@@ -540,8 +543,8 @@ ckbadger/
 │   └── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
-│   │   ├── __md/           # Markdown route handlers for AI-friendly page output
-│   │   └── __raw/          # Raw route handlers for tool-oriented payload output
+│   │   ├── ai-md/          # Markdown route handlers for AI-friendly page output
+│   │   └── ai-raw/         # Raw route handlers for tool-oriented payload output
 │   ├── components/         # React components
 │   │   ├── ui/             # Reusable UI (Hash, Capacity, etc.)
 │   │   └── cell-graph.tsx  # Force-directed graph visualization

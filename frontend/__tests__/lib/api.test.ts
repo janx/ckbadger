@@ -1,9 +1,43 @@
-import { api } from '@/lib/api';
+import { api, resolveApiBase } from '@/lib/api';
 import { DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 
 describe('api', () => {
+  describe('resolveApiBase', () => {
+    it('prefers CKBADGER_SERVER_API_URL for server runtime', () => {
+      const base = resolveApiBase(
+        {
+          CKBADGER_SERVER_API_URL: 'http://api:3001/api/v1/',
+          NEXT_PUBLIC_API_URL: 'http://localhost:3001/api/v1',
+        },
+        'server'
+      );
+
+      expect(base).toBe('http://api:3001/api/v1');
+    });
+
+    it('prefers NEXT_PUBLIC_API_URL for client runtime', () => {
+      const base = resolveApiBase(
+        {
+          CKBADGER_SERVER_API_URL: 'http://api:3001/api/v1',
+          NEXT_PUBLIC_API_URL: 'http://localhost:3001/api/v1/',
+        },
+        'client'
+      );
+
+      expect(base).toBe('http://localhost:3001/api/v1');
+    });
+
+    it('falls back to default when both env vars are missing', () => {
+      const serverBase = resolveApiBase({}, 'server');
+      const clientBase = resolveApiBase({}, 'client');
+
+      expect(serverBase).toBe('http://localhost:3001/api/v1');
+      expect(clientBase).toBe('http://localhost:3001/api/v1');
+    });
+  });
+
   describe('query parameter building', () => {
     beforeEach(() => {
       vi.spyOn(global, 'fetch');

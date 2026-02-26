@@ -867,10 +867,10 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Verify runner     | `crates/indexer/src/verify/mod.rs`                               |
 | Explorer cache    | `{data_path}/.verify-cache/*.json`                               |
 | Frontend API      | `frontend/lib/api.ts`                                            |
-| Markdown route    | `frontend/app/__md/[[...slug]]/route.ts`                         |
+| Markdown route    | `frontend/app/ai-md/[[...slug]]/route.ts`                        |
 | Markdown parser   | `frontend/lib/ai/markdown-route.ts`                              |
 | Markdown renderer | `frontend/lib/ai/markdown-renderer.ts`                           |
-| Raw route         | `frontend/app/__raw/[[...slug]]/route.ts`                        |
+| Raw route         | `frontend/app/ai-raw/[[...slug]]/route.ts`                       |
 | Raw parser        | `frontend/lib/ai/raw-route.ts`                                   |
 | Raw renderer      | `frontend/lib/ai/raw-renderer.ts`                                |
 | Capabilities API  | `frontend/app/capabilities/route.ts`                             |
