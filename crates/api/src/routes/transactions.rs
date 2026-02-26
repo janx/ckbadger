@@ -433,17 +433,18 @@ fn parse_hash_type_label_to_i16(hash_type: &str) -> i16 {
 }
 
 fn resolve_stored_input_type_hash_type(
-    store: &ckbadger_store::CkbadgerStore,
+    core_store: &ckbadger_store::CkbadgerStore,
+    derived_store: &ckbadger_store::CkbadgerStore,
     type_script_hash: Option<&[u8]>,
     type_code_hash: &[u8],
 ) -> String {
     if let Some(type_hash) = type_script_hash {
-        if let Ok(Some(token)) = store.get_token(type_hash) {
+        if let Ok(Some(token)) = core_store.get_token(type_hash) {
             return hash_type_to_string(token.hash_type as i16);
         }
     }
 
-    if let Ok(Some(script)) = store.get_script_info(type_code_hash) {
+    if let Ok(Some(script)) = derived_store.get_script_info(type_code_hash) {
         return hash_type_to_string(script.hash_type as i16);
     }
 
@@ -664,6 +665,7 @@ async fn get_transaction_detail(
                     &tx_view,
                     ckb_store,
                     &state.store,
+                    &state.derived_store,
                     &state.ckb_network,
                     block_number,
                 )?
@@ -733,7 +735,8 @@ fn empty_inputs_outputs() -> (
 fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
     ckb_store: &ckb_store_reader::CkbChainReader,
-    store: &ckbadger_store::CkbadgerStore,
+    core_store: &ckbadger_store::CkbadgerStore,
+    derived_store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
 ) -> Result<TxIoBundle, RouteError> {
@@ -766,12 +769,12 @@ fn build_inputs_outputs_from_ckb(
 
             let (capacity, lock, type_script, address) = if prev_tx_hash_bytes.len() == 32 {
                 // Try live cells first, then consumed cells in our store
-                let cell_info = store
+                let cell_info = core_store
                     .get_cell(&prev_tx_hash_bytes, prev_index as i16)
                     .ok()
                     .flatten()
                     .or_else(|| {
-                        store
+                        core_store
                             .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16)
                             .ok()
                             .flatten()
@@ -797,7 +800,8 @@ fn build_inputs_outputs_from_ckb(
                                 .map(|type_code_hash| ScriptResponse {
                                     code_hash: format!("0x{}", hex::encode(type_code_hash)),
                                     hash_type: resolve_stored_input_type_hash_type(
-                                        store,
+                                        core_store,
+                                        derived_store,
                                         info.type_script_hash.as_deref(),
                                         type_code_hash,
                                     ),

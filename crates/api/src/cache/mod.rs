@@ -62,18 +62,11 @@ impl CacheBackend {
         let sync = store.get_sync_status().unwrap_or_default();
         let tip = sync.tip_block_number;
 
-        // Get latest daily stats for totals
-        let daily_stats = store.list_daily_stats_with_dates().unwrap_or_default();
-        let (total_tx, total_cells, total_live_cells) = if let Some((_, stats)) = daily_stats.last()
-        {
-            (
-                sync.total_transactions,
-                stats.total_all_cells,
-                stats.total_live_cells,
-            )
-        } else {
-            (sync.total_transactions, 0, 0)
-        };
+        // Fallback should not depend on historical stats CF placement.
+        // Use sync_status counters as the source of truth.
+        let total_tx = sync.total_transactions;
+        let total_cells = sync.total_cells_created;
+        let total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
 
         SyncStatusData {
             tip_block_number: tip,
@@ -224,5 +217,30 @@ mod tests {
         assert!(CacheTtl::CHART > CacheTtl::BLOCK);
         assert!(CacheTtl::CHART > CacheTtl::TRANSACTION);
         assert!(CacheTtl::CHART > CacheTtl::NETWORK_STATS);
+    }
+
+    #[tokio::test]
+    async fn test_sync_status_fallback_uses_sync_totals() {
+        let cache = CacheBackend::None;
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: 42,
+                tip_block_hash: vec![0xab; 32],
+                total_transactions: 1234,
+                total_cells_created: 300,
+                total_cells_consumed: 120,
+                last_synced_at: 1_700_000_000,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let status = cache.get_sync_status_from_store(&store).await;
+        assert_eq!(status.tip_block_number, 42);
+        assert_eq!(status.total_transactions, 1234);
+        assert_eq!(status.total_cells, 300);
+        assert_eq!(status.total_live_cells, 180);
     }
 }

@@ -111,6 +111,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let data_path = cli.data_path.clone();
+    let derived_data_path = cli.derived_data_path.clone();
     let ckb_data_path = cli.ckb_data_path.clone();
 
     match cli.command {
@@ -123,7 +124,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::LabelImport(args)) => {
-            run_label_import_command(data_path, ckb_data_path, args).await
+            let derived_data_path =
+                derived_data_path.unwrap_or_else(|| format!("{}-derived", data_path));
+            run_label_import_command(data_path, derived_data_path, ckb_data_path, args).await
         }
         // Default (no subcommand) or explicit `sync` → run sync daemon
         None | Some(Command::Sync) => run_sync(cli).await,
@@ -351,12 +354,8 @@ async fn run_sync(args: Cli) -> Result<()> {
         info!("Code hash index backfill complete: {} cells indexed", count);
     }
 
-    // One-time backfill: populate addr_txs index if empty
-    if !store.addr_txs_populated() {
-        info!("addr_txs index empty — running one-time backfill from cells...");
-        let count = store.backfill_addr_txs()?;
-        info!("addr_txs backfill complete: {} entries indexed", count);
-    }
+    // addr_txs is derived-only and written inline during sync.
+    // We do not run startup backfill against derived because it has no live/consumed cell tables.
 
     // One-time backfill: rebuild avg_block_time_ms from block headers
     let mut sync_status = store.get_sync_status()?;
@@ -401,7 +400,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         sync_status = store.get_sync_status()?;
     }
 
-    reconcile_token_daily_deltas_on_startup(&store)?;
+    reconcile_token_daily_deltas_on_startup(&derived_store)?;
 
     let repo = Repository::new(store.clone());
     let (db_tip, db_tip_hash) = repo.get_sync_tip().await?;
@@ -826,11 +825,14 @@ async fn run_sync(args: Cli) -> Result<()> {
 
 async fn run_label_import_command(
     data_path: String,
+    derived_data_path: String,
     ckb_data_path: Option<String>,
     args: LabelImportArgs,
 ) -> Result<()> {
     info!("Opening ckbadger-store at: {}", data_path);
-    let store = Arc::new(CkbadgerStore::open(&data_path)?);
+    let core_store = Arc::new(CkbadgerStore::open(&data_path)?);
+    info!("Opening derived ckbadger-store at: {}", derived_data_path);
+    let derived_store = Arc::new(CkbadgerStore::open(&derived_data_path)?);
 
     let ckb_store = match ckb_data_path.as_deref() {
         Some(path) => {
@@ -841,7 +843,7 @@ async fn run_label_import_command(
         None => None,
     };
 
-    let config = LabelImportConfig {
+    let base_config = LabelImportConfig {
         token_labels_path: args.token_labels_path,
         network: args.network,
         import_udt: args.import_udt,
@@ -849,7 +851,30 @@ async fn run_label_import_command(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        run_label_import(store.as_ref(), ckb_store.as_deref(), &config)
+        let mut summary = ckbadger_common::LabelImportResult::default();
+
+        if base_config.import_udt {
+            let mut core_config = base_config.clone();
+            core_config.import_scripts = false;
+            let core_result =
+                run_label_import(core_store.as_ref(), ckb_store.as_deref(), &core_config)?;
+            summary.udt_labels_imported += core_result.udt_labels_imported;
+            summary.errors.extend(core_result.errors);
+        }
+
+        if base_config.import_scripts {
+            let mut derived_config = base_config;
+            derived_config.import_udt = false;
+            let derived_result = run_label_import(
+                derived_store.as_ref(),
+                ckb_store.as_deref(),
+                &derived_config,
+            )?;
+            summary.script_labels_imported += derived_result.script_labels_imported;
+            summary.errors.extend(derived_result.errors);
+        }
+
+        Ok::<ckbadger_common::LabelImportResult, anyhow::Error>(summary)
     })
     .await
     .expect("label import task panicked")?;

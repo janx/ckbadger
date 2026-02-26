@@ -1082,7 +1082,7 @@ async fn get_cluster(
         .as_ref()
         .and_then(|e| e.owner_lock_hash.clone());
     let daily = state
-        .store
+        .derived_store
         .list_cluster_daily_deltas(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_occupation_chart(
@@ -1177,7 +1177,7 @@ async fn get_spore(
     match entry {
         Some(entry) => {
             let daily = state
-                .store
+                .derived_store
                 .list_spore_daily_deltas(&id)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let chart = build_capacity_occupation_chart(
@@ -1297,14 +1297,14 @@ async fn get_cluster_occupation_chart(
         .and_then(|e| e.name.clone())
         .unwrap_or_else(|| "Spore Cluster".to_string());
     let daily = state
-        .store
+        .derived_store
         .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .store
+            .derived_store
             .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
@@ -1362,14 +1362,14 @@ async fn get_spore_occupation_chart(
     }
 
     let daily = state
-        .store
+        .derived_store
         .list_spore_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .store
+            .derived_store
             .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {

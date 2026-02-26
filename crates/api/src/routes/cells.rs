@@ -54,6 +54,28 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
 
+fn ensure_derived_ready(
+    state: &AppState,
+) -> Result<(), (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let sync = state
+        .store
+        .get_sync_status()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if sync.derived_tip_block_number < sync.tip_block_number {
+        return Err((
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(ApiError::new(
+                "derived_syncing",
+                format!(
+                    "derived store syncing: core_tip={}, derived_tip={}",
+                    sync.tip_block_number, sync.derived_tip_block_number
+                ),
+            )),
+        ));
+    }
+    Ok(())
+}
+
 fn is_known_script_label(name: &str) -> bool {
     let trimmed = name.trim();
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
@@ -1848,7 +1870,7 @@ async fn list_cells_by_script(
     })?;
 
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
@@ -2003,7 +2025,7 @@ async fn get_address(
     let (lock_script, address) = if let Some((_, _, info)) = cells_for_script.first() {
         // LiveCellInfo doesn't store hash_type directly; derive from code_hash via script_info
         let hash_type_num = state
-            .store
+            .derived_store
             .get_script_info(&info.lock_code_hash)
             .ok()
             .flatten()
@@ -2044,7 +2066,7 @@ async fn get_address(
     // Look up lock script info from script_info CF
     let lock_script_info = if let Some((_, _, info)) = cells_for_script.first() {
         state
-            .store
+            .derived_store
             .get_script_info(&info.lock_code_hash)
             .ok()
             .flatten()
@@ -2289,7 +2311,7 @@ async fn get_cell(
 
     let type_script = info.type_code_hash.as_ref().map(|code_hash| {
         let type_hash_type_num: i16 = state
-            .store
+            .derived_store
             .get_script_info(code_hash)
             .ok()
             .flatten()
@@ -2344,9 +2366,9 @@ async fn get_cell(
         hash
     });
 
-    let code_cell_of = data_hash
-        .as_ref()
-        .and_then(|dh| lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref()));
+    let code_cell_of = data_hash.as_ref().and_then(|dh| {
+        lookup_code_cell_scripts(&state.derived_store, dh, info.type_script_hash.as_ref())
+    });
 
     let data_analysis = cell_data
         .as_ref()
@@ -2493,6 +2515,8 @@ async fn get_address_transactions(
     axum::extract::Path(addr): axum::extract::Path<String>,
     Query(params): Query<AddressTxParams>,
 ) -> ApiResult<CursorPaginatedResponse<AddressTransactionResponse>> {
+    ensure_derived_ready(&state)?;
+
     let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
@@ -2507,7 +2531,7 @@ async fn get_address_transactions(
 
     // Fetch recent transactions for this address (newest first)
     let addr_txs = state
-        .store
+        .derived_store
         .list_addr_txs_recent(&lock_hash, limit + 1, cursor)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2678,7 +2702,7 @@ async fn get_address_transactions(
                 .iter()
                 .map(|ch| {
                     let known_name = state
-                        .store
+                        .derived_store
                         .get_script_info(ch)
                         .ok()
                         .flatten()

@@ -78,7 +78,7 @@ async fn list_hardforks(
     let mut events = Vec::with_capacity(hardforks.len());
     for spec in hardforks {
         let activation_block = state
-            .store
+            .derived_store
             .get_epoch_stats(spec.activation_epoch)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map(|stats| stats.start_block);

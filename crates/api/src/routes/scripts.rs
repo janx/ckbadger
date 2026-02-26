@@ -460,7 +460,7 @@ async fn lookup_scripts(
         code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
 
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
@@ -571,7 +571,7 @@ async fn get_code_cell(
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
@@ -609,7 +609,7 @@ async fn list_scripts(
     let network = params.network.as_deref().unwrap_or(&state.ckb_network);
 
     let all_scripts = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -720,7 +720,7 @@ async fn get_script(
     let network = &state.ckb_network;
 
     let all_scripts = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -768,7 +768,7 @@ async fn get_script_usage(
     Path(name): Path<String>,
 ) -> ApiResult<ScriptUsageResponse> {
     let all_scripts = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -936,7 +936,7 @@ fn build_script_occupation_chart(
         let mut baseline_daily: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
         for (code_hash, is_type) in &unique_targets {
             let baseline = state
-                .store
+                .derived_store
                 .list_script_daily_deltas_in_range(
                     code_hash,
                     *is_type,
@@ -964,7 +964,7 @@ fn build_script_occupation_chart(
     let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
     for (code_hash, is_type) in &unique_targets {
         let deltas = state
-            .store
+            .derived_store
             .list_script_daily_deltas_in_range(code_hash, *is_type, from_date, to_date)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
@@ -1030,7 +1030,7 @@ async fn get_script_occupation_chart(
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
     let all_scripts = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1077,7 +1077,7 @@ async fn get_script_occupation_chart_by_code_hash(
 
     let code_hash = parse_code_hash_hex(&params.code_hash)?;
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
+        .derived_store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()

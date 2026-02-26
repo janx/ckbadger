@@ -9,9 +9,10 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
-    ClusterDailyDelta, DobEntry, DobExtra, DobStandard, EpochStats, LiveCellInfo,
-    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo,
+    ClusterDailyDelta, DailyBlockStats, DailyStats, DobEntry, DobExtra, DobStandard, EpochStats,
+    HourlyStats, LiveCellInfo, MinerStats, NftCollectionAggregate, NftDailyDelta, NftEntry,
+    NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta, TokenDailyDelta,
+    TokenInfo,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -84,8 +85,9 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
 
 #[tokio::test]
 async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
-    let store = test_store();
-    store
+    let core_store = test_store();
+    let derived_store = test_store();
+    derived_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -101,7 +103,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
         )
         .unwrap();
 
-    let mut batch = StoreBatch::new(store.as_ref());
+    let mut batch = StoreBatch::new(core_store.as_ref());
     batch.put_block_header(
         19_000_000,
         &CachedBlockHeader {
@@ -116,7 +118,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     );
     batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = test_config_with_derived(core_store, derived_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/hardforks")
@@ -175,6 +177,334 @@ async fn test_recent_blocks_endpoint_empty_db() {
 }
 
 #[tokio::test]
+async fn test_tx_stats_reads_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+    let this_hour = now.timestamp() - 60;
+    let date = ckbadger_common::block_date(now);
+    let date_str = date.format("%Y%m%d").to_string();
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: vec![0x10; 32],
+            timestamp: now_ms,
+            epoch_number: 1,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    derived_store
+        .put_hourly_stats(
+            &this_hour.to_string(),
+            &HourlyStats {
+                hour: this_hour,
+                blocks_count: 1,
+                transactions_count: 77,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+            },
+        )
+        .unwrap();
+    derived_store
+        .put_daily_stats(
+            &date_str,
+            &DailyStats {
+                blocks_count: 1,
+                transactions_count: 456,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+                occupied_capacity_created: 0,
+                occupied_capacity_consumed: 0,
+                total_live_cells: 0,
+                total_dead_cells: 0,
+                total_all_cells: 0,
+                total_data_size: 0,
+                knowledge_size: None,
+                avg_block_time_ms: None,
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/tx-stats")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["currentHour"], 77);
+    assert!(!json["dailyData"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_epoch_time_charts_read_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+
+    let start = chrono::Utc::now() - chrono::Duration::hours(4);
+    let end = chrono::Utc::now();
+
+    derived_store.put_epoch_time_dist(240, 3).unwrap();
+    derived_store
+        .put_epoch_stats(
+            12,
+            &EpochStats {
+                epoch_number: 12,
+                start_block: 1,
+                end_block: Some(100),
+                blocks_count: 100,
+                length: 1800,
+                start_timestamp: start,
+                end_timestamp: Some(end),
+                transactions_count: 200,
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+
+    let dist_request = Request::builder()
+        .uri("/api/v1/charts/epoch-time-distribution")
+        .body(Body::empty())
+        .unwrap();
+    let dist_response = app.clone().oneshot(dist_request).await.unwrap();
+    assert_eq!(dist_response.status(), StatusCode::OK);
+    let dist_body = dist_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let dist_json: serde_json::Value = serde_json::from_slice(&dist_body).unwrap();
+    let dist_data = dist_json["data"].as_array().unwrap();
+    assert!(dist_data
+        .iter()
+        .any(|point| point["date"] == "4.00" && point["value"] == "3"));
+
+    let length_request = Request::builder()
+        .uri("/api/v1/charts/epoch-time-length")
+        .body(Body::empty())
+        .unwrap();
+    let length_response = app.clone().oneshot(length_request).await.unwrap();
+    assert_eq!(length_response.status(), StatusCode::OK);
+    let length_body = length_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let length_json: serde_json::Value = serde_json::from_slice(&length_body).unwrap();
+    let length_data = length_json["data"].as_array().unwrap();
+    assert_eq!(length_data.len(), 1);
+    assert_eq!(length_data[0]["value2"], "100");
+}
+
+#[tokio::test]
+async fn test_network_stats_reads_derived_statistics() {
+    let core_store = test_store();
+    let derived_store = test_store();
+
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+    let today = ckbadger_common::block_date(now);
+    let yesterday = today - chrono::Duration::days(1);
+    let today_str = today.format("%Y%m%d").to_string();
+    let yesterday_str = yesterday.format("%Y%m%d").to_string();
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x22; 32],
+            timestamp: now_ms,
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    derived_store
+        .put_epoch_stats(
+            42,
+            &EpochStats {
+                epoch_number: 42,
+                start_block: 1,
+                end_block: None,
+                blocks_count: 11,
+                length: 1800,
+                start_timestamp: now - chrono::Duration::seconds(110),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+    derived_store
+        .put_daily_stats(
+            &today_str,
+            &DailyStats {
+                blocks_count: 1,
+                transactions_count: 120,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+                occupied_capacity_created: 0,
+                occupied_capacity_consumed: 0,
+                total_live_cells: 0,
+                total_dead_cells: 0,
+                total_all_cells: 0,
+                total_data_size: 0,
+                knowledge_size: None,
+                avg_block_time_ms: None,
+            },
+        )
+        .unwrap();
+    derived_store
+        .put_daily_stats(
+            &yesterday_str,
+            &DailyStats {
+                blocks_count: 1,
+                transactions_count: 80,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+                occupied_capacity_created: 0,
+                occupied_capacity_consumed: 0,
+                total_live_cells: 0,
+                total_dead_cells: 0,
+                total_all_cells: 0,
+                total_data_size: 0,
+                knowledge_size: None,
+                avg_block_time_ms: None,
+            },
+        )
+        .unwrap();
+    derived_store
+        .put_daily_block_stats(
+            &today_str,
+            &DailyBlockStats {
+                avg_compact_target: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 5,
+                avg_block_time_ms: Some(10_000),
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["transactionsPerDay"], "200");
+}
+
+#[tokio::test]
+async fn test_daily_block_charts_read_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+
+    derived_store
+        .put_daily_block_stats(
+            "20260101",
+            &DailyBlockStats {
+                avg_compact_target: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 2,
+                avg_block_time_ms: Some(10_000),
+            },
+        )
+        .unwrap();
+    derived_store
+        .put_daily_block_stats(
+            "20260102",
+            &DailyBlockStats {
+                avg_compact_target: 2_000_000.0,
+                block_count: 120,
+                total_uncles: 3,
+                avg_block_time_ms: Some(10_000),
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+
+    for path in [
+        "/api/v1/charts/hash-rate",
+        "/api/v1/charts/difficulty",
+        "/api/v1/charts/uncle-rate",
+    ] {
+        let request = Request::builder().uri(path).body(Body::empty()).unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(!json["data"].as_array().unwrap().is_empty(), "path={path}");
+    }
+}
+
+#[tokio::test]
+async fn test_miner_distribution_reads_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+
+    let miner_hash = vec![0x66; 32];
+    derived_store
+        .put_miner_stats(
+            "20260101",
+            &miner_hash,
+            &MinerStats {
+                miner_lock_hash: miner_hash.clone(),
+                blocks_count: 10,
+                last_block_number: 99,
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/charts/miner-address-distribution")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["totalBlocks"], 10);
+    assert_eq!(json["data"][0]["blocksMined"], 10);
+}
+
+#[tokio::test]
 async fn test_blocks_list_empty_db() {
     let store = test_store();
     let config = test_config(store);
@@ -191,8 +521,9 @@ async fn test_blocks_list_empty_db() {
 
 #[tokio::test]
 async fn test_get_block_includes_hardfork_activation() {
-    let store = test_store();
-    store
+    let core_store = test_store();
+    let derived_store = test_store();
+    derived_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -208,7 +539,7 @@ async fn test_get_block_includes_hardfork_activation() {
         )
         .unwrap();
 
-    let mut batch = StoreBatch::new(store.as_ref());
+    let mut batch = StoreBatch::new(core_store.as_ref());
     batch.put_block_header(
         8_775_638,
         &CachedBlockHeader {
@@ -223,7 +554,7 @@ async fn test_get_block_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = test_config_with_derived(core_store, derived_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks/8775638")
@@ -251,8 +582,9 @@ async fn test_get_block_includes_hardfork_activation() {
 
 #[tokio::test]
 async fn test_blocks_list_includes_hardfork_activation() {
-    let store = test_store();
-    store
+    let core_store = test_store();
+    let derived_store = test_store();
+    derived_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -268,7 +600,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
         )
         .unwrap();
 
-    let mut batch = StoreBatch::new(store.as_ref());
+    let mut batch = StoreBatch::new(core_store.as_ref());
     batch.put_block_header(
         8_775_639,
         &CachedBlockHeader {
@@ -295,7 +627,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = test_config_with_derived(core_store, derived_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks?limit=2")
@@ -2374,6 +2706,68 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
 }
 
 #[tokio::test]
+async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+    let type_hash = vec![0x64; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    core_store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Derived Delta Token".to_string()),
+                symbol: Some("DDT".to_string()),
+                decimals: Some(8),
+                total_supply: Some(0),
+                max_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    derived_store
+        .put_token_daily_delta(
+            &type_hash,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/tokens/{}/charts/occupation",
+            type_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["date"], "2024-01-15");
+    assert_eq!(data[0]["values"]["occupied"], "60");
+    assert_eq!(data[0]["values"]["unoccupied"], "40");
+}
+
+#[tokio::test]
 async fn test_token_occupation_chart_rejects_invalid_date_range() {
     let store = test_store();
     let type_hash = vec![0x45; 32];
@@ -4253,4 +4647,130 @@ async fn test_address_activities_reads_from_derived_store() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_address_transactions_returns_503_when_derived_store_lags() {
+    let core_store = test_store();
+    let derived_store = test_store();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = 100;
+            s.derived_tip_block_number = 80;
+        })
+        .unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/transactions",
+            "11".repeat(32)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "derived_syncing");
+}
+
+#[tokio::test]
+async fn test_address_transactions_reads_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+    let lock_hash = vec![0x33; 32];
+    let tx_hash = vec![0xab; 32];
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
+    core_batch.commit().unwrap();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+            s.derived_tip_block_number = 10;
+        })
+        .unwrap();
+
+    let config = test_config_with_derived(core_store.clone(), derived_store.clone());
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/transactions",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 0);
+
+    let mut derived_batch = StoreBatch::new(derived_store.as_ref());
+    derived_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
+    derived_batch.commit().unwrap();
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/transactions",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["txHash"], format!("0x{}", hex::encode(&tx_hash)));
+}
+
+#[tokio::test]
+async fn test_scripts_list_reads_from_derived_store() {
+    let core_store = test_store();
+    let derived_store = test_store();
+
+    let core_script_hash = vec![0x11; 32];
+    let derived_script_hash = vec![0x22; 32];
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_script_info(
+        &core_script_hash,
+        &ScriptInfo {
+            code_hash: core_script_hash.clone(),
+            hash_type: 1,
+            name: Some("CoreOnlyScript".to_string()),
+            ..Default::default()
+        },
+    );
+    core_batch.commit().unwrap();
+
+    let mut derived_batch = StoreBatch::new(derived_store.as_ref());
+    derived_batch.put_script_info(
+        &derived_script_hash,
+        &ScriptInfo {
+            code_hash: derived_script_hash.clone(),
+            hash_type: 1,
+            name: Some("DerivedOnlyScript".to_string()),
+            ..Default::default()
+        },
+    );
+    derived_batch.commit().unwrap();
+
+    let config = test_config_with_derived(core_store, derived_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/scripts?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["name"], "DerivedOnlyScript");
 }

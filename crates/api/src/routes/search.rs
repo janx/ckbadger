@@ -295,7 +295,7 @@ async fn search(
 
             if scope_allows(scope, &[SearchScope::Script]) {
                 let script = state
-                    .store
+                    .derived_store
                     .get_script_info(&hash_bytes)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 if let Some(script_info) = script {
@@ -439,7 +439,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Script]) {
             let mut script_matches: Vec<_> = state
-                .store
+                .derived_store
                 .list_script_infos()
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .into_iter()
