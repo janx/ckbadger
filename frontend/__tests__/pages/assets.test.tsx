@@ -82,6 +82,9 @@ const mockClusterAssets = {
       clusterName: 'Test Collection',
       liveCapacity: '9000000000',
       liveOccupiedCapacity: '5000000000',
+      storageTier: 'fully_onchain' as const,
+      fullyOnchainRatio: '1.0000',
+      fullyOnchainCount: 50,
     },
   ],
   total: 1,
@@ -144,6 +147,9 @@ const mockMixedNftAssets = {
       clusterName: 'Spore With Icon',
       liveCapacity: '3000000000',
       liveOccupiedCapacity: '1000000000',
+      storageTier: 'fully_onchain' as const,
+      fullyOnchainRatio: '1.0000',
+      fullyOnchainCount: 10,
     },
     {
       id: '0x2222222222222222222222222222222222222222222222222222222222222222',
@@ -166,6 +172,9 @@ const mockMixedNftAssets = {
       clusterName: null,
       liveCapacity: '2000000000',
       liveOccupiedCapacity: '900000000',
+      storageTier: 'centralized_dependent' as const,
+      fullyOnchainRatio: '0.0000',
+      fullyOnchainCount: 0,
     },
   ],
   total: 2,
@@ -601,6 +610,42 @@ describe('AssetsPage', () => {
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href')?.startsWith('/tokens/'));
       expect(tokenLinks[0]).toHaveTextContent('ALPHA');
+    });
+  });
+
+  it('filters NFT assets by storage tier', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'nft', storageTier: undefined })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter by storage tier'), {
+      target: { value: 'fully_onchain' },
+    });
+
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'nft', storageTier: 'fully_onchain' })
+      );
+      expect(window.location.search).toContain('storageTier=fully_onchain');
+    });
+  });
+
+  it('shows on-chain ratio and storage badge for nft assets', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('100.00%')).toBeInTheDocument();
+      expect(screen.getByText('FULLY ON-CHAIN')).toBeInTheDocument();
     });
   });
 });

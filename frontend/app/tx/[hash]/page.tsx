@@ -1164,7 +1164,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                 disabled={activeWitnessIndex === null && activeScriptGroupKey === null}
                 className={`rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
                   activeWitnessIndex === null && activeScriptGroupKey === null
-                    ? 'cursor-not-allowed border-slate-800 text-slate-600'
+                    ? 'cursor-not-allowed border-slate-800 text-slate-500'
                     : 'border-slate-700/70 text-slate-300 hover:border-slate-500/80 hover:text-slate-200'
                 }`}
               >

@@ -75,6 +75,7 @@ mod tests {
             total_count: 100,
             live_count: 80,
             owner_count: 25,
+            ..Default::default()
         };
 
         let mut batch = StoreBatch::new(&store);

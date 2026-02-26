@@ -24,6 +24,12 @@ import { formatCkbCompact } from '@/lib/utils';
 
 type AssetTab = 'token' | 'nft';
 type SortDirection = 'asc' | 'desc';
+type StorageTierFilter =
+  | 'all'
+  | 'fully_onchain'
+  | 'decentralized_external'
+  | 'centralized_dependent'
+  | 'unknown';
 type AssetSortKey =
   | 'name'
   | 'type'
@@ -32,10 +38,18 @@ type AssetSortKey =
   | 'holders'
   | 'transfers'
   | 'occupied'
-  | 'capacity';
+  | 'capacity'
+  | 'onchainRatio';
 
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
 const NFT_STANDARD_OPTIONS = ['spore', 'm-nft', 'dotbit', 'd-id'];
+const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
+  'all',
+  'fully_onchain',
+  'decentralized_external',
+  'centralized_dependent',
+  'unknown',
+];
 
 function normalizeAssetTab(value: string | null): AssetTab {
   if (value === 'dob') {
@@ -54,6 +68,32 @@ function normalizeStandardFilter(value: string | null): string | undefined {
   }
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeStorageTier(value: string | null): StorageTierFilter {
+  if (!value) {
+    return 'all';
+  }
+  const normalized = value.trim().toLowerCase() as StorageTierFilter;
+  if (STORAGE_TIER_OPTIONS.includes(normalized)) {
+    return normalized;
+  }
+  return 'all';
+}
+
+function formatStorageTierLabel(value: StorageTierFilter): string {
+  switch (value) {
+    case 'fully_onchain':
+      return 'Fully On-chain';
+    case 'decentralized_external':
+      return 'Decentralized External';
+    case 'centralized_dependent':
+      return 'Centralized Dependency';
+    case 'unknown':
+      return 'Unknown';
+    default:
+      return 'All Storage';
+  }
 }
 
 function formatStandardLabel(standard: string): string {
@@ -85,10 +125,12 @@ function AssetTable({
   assetType,
   search,
   standard,
+  storageTier,
 }: {
   assetType: AssetTab;
   search: string | undefined;
   standard: string | undefined;
+  storageTier: StorageTierFilter;
 }) {
   const pagination = useCursorPagination();
   const { reset } = pagination;
@@ -99,10 +141,19 @@ function AssetTable({
     setSortKey('capacity');
     setSortDirection('desc');
     reset();
-  }, [assetType, standard, reset]);
+  }, [assetType, standard, storageTier, reset]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['assets', assetType, pagination.cursor, search, standard, sortKey, sortDirection],
+    queryKey: [
+      'assets',
+      assetType,
+      pagination.cursor,
+      search,
+      standard,
+      sortKey,
+      sortDirection,
+      storageTier,
+    ],
     queryFn: () =>
       api.getAssets({
         limit: 20,
@@ -112,6 +163,7 @@ function AssetTable({
         standard,
         sortKey,
         sortDirection,
+        storageTier: assetType === 'nft' && storageTier !== 'all' ? storageTier : undefined,
       }),
     placeholderData: keepPreviousData,
   });
@@ -143,6 +195,14 @@ function AssetTable({
   };
 
   const getTypeBadgeLabel = (asset: Asset) => asset.standard.toUpperCase();
+  const getStorageBadgeLabel = (asset: Asset) => {
+    const tier = asset.storageTier;
+    if (!tier) return null;
+    if (tier === 'fully_onchain') return 'FULLY ON-CHAIN';
+    if (tier === 'decentralized_external') return 'DECENTRALIZED';
+    if (tier === 'centralized_dependent') return 'CENTRALIZED';
+    return 'UNKNOWN';
+  };
 
   const toggleSort = (nextKey: AssetSortKey) => {
     if (nextKey === sortKey) {
@@ -217,6 +277,8 @@ function AssetTable({
         {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', 'flex-1')}
         {renderSortHeader('type', 'Type', 'w-20 shrink-0')}
         {assetType !== 'token' && renderSortHeader('supply', 'Items', 'w-24 shrink-0', 'right')}
+        {assetType !== 'token' &&
+          renderSortHeader('onchainRatio', 'On-chain', 'w-24 shrink-0', 'right')}
         {renderSortHeader('transfers24h', '24h Txns', 'w-24 shrink-0', 'right')}
         {renderSortHeader('holders', 'Holders', 'w-28 shrink-0', 'right')}
         {renderSortHeader('transfers', 'Transfers', 'w-28 shrink-0', 'right')}
@@ -255,6 +317,11 @@ function AssetTable({
                       <span className="text-terminal-green font-medium hover:underline">
                         {getAssetName(asset)}
                       </span>
+                      {asset.assetType === 'nft' && getStorageBadgeLabel(asset) && (
+                        <span className="rounded border border-slate-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                          {getStorageBadgeLabel(asset)}
+                        </span>
+                      )}
                       {asset.published && (
                         <span className="text-terminal-green" title="Verified">
                           <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
@@ -293,6 +360,13 @@ function AssetTable({
             {assetType !== 'token' && (
               <div className="w-24 shrink-0 text-right font-mono text-white">
                 {formatNumber(asset.totalSupply || 0)}
+              </div>
+            )}
+            {assetType !== 'token' && (
+              <div className="w-24 shrink-0 text-right font-mono text-slate-300">
+                {asset.fullyOnchainRatio
+                  ? `${(Number(asset.fullyOnchainRatio) * 100).toFixed(2)}%`
+                  : '-'}
               </div>
             )}
             <div className="text-amber w-24 shrink-0 text-right font-mono">
@@ -355,12 +429,17 @@ export function AssetsPageClient() {
   const [standard, setStandard] = useState<string | undefined>(() =>
     normalizeStandardFilter(searchParams.get('standard'))
   );
+  const [storageTier, setStorageTier] = useState<StorageTierFilter>(() =>
+    normalizeStorageTier(searchParams.get('storageTier'))
+  );
 
   useEffect(() => {
     const tabFromUrl = normalizeAssetTab(searchParams.get('type'));
     setActiveTab((prev) => (prev === tabFromUrl ? prev : tabFromUrl));
     const standardFromUrl = normalizeStandardFilter(searchParams.get('standard'));
     setStandard((prev) => (prev === standardFromUrl ? prev : standardFromUrl));
+    const storageTierFromUrl = normalizeStorageTier(searchParams.get('storageTier'));
+    setStorageTier((prev) => (prev === storageTierFromUrl ? prev : storageTierFromUrl));
   }, [searchParams]);
 
   const handleSearch = (e: React.FormEvent) => {
@@ -379,9 +458,11 @@ export function AssetsPageClient() {
     setSearch(undefined);
     setSearchInput('');
     setStandard(undefined);
+    setStorageTier('all');
     const params = new URLSearchParams(searchParams.toString());
     params.set('type', nextTab);
     params.delete('standard');
+    params.delete('storageTier');
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
@@ -394,6 +475,19 @@ export function AssetsPageClient() {
       params.set('standard', nextStandard);
     } else {
       params.delete('standard');
+    }
+    const query = params.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  };
+
+  const handleStorageTierChange = (value: string) => {
+    const nextStorageTier = normalizeStorageTier(value);
+    setStorageTier(nextStorageTier);
+    const params = new URLSearchParams(searchParams.toString());
+    if (nextStorageTier === 'all') {
+      params.delete('storageTier');
+    } else {
+      params.set('storageTier', nextStorageTier);
     }
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
@@ -457,6 +551,20 @@ export function AssetsPageClient() {
                       </option>
                     ))}
                   </select>
+                  {activeTab === 'nft' && (
+                    <select
+                      value={storageTier}
+                      onChange={(event) => handleStorageTierChange(event.target.value)}
+                      aria-label="Filter by storage tier"
+                      className="focus:border-terminal-dark focus:ring-terminal-dark rounded border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                    >
+                      {STORAGE_TIER_OPTIONS.map((item) => (
+                        <option key={item} value={item}>
+                          {formatStorageTierLabel(item)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <TabsList>
                     <TabsTrigger value="token">Tokens</TabsTrigger>
                     <TabsTrigger value="nft">NFTs</TabsTrigger>
@@ -469,11 +577,21 @@ export function AssetsPageClient() {
 
             <TerminalPanelContent padding="none">
               <TabsContent value="token">
-                <AssetTable assetType="token" search={search} standard={standard} />
+                <AssetTable
+                  assetType="token"
+                  search={search}
+                  standard={standard}
+                  storageTier="all"
+                />
               </TabsContent>
 
               <TabsContent value="nft">
-                <AssetTable assetType="nft" search={search} standard={standard} />
+                <AssetTable
+                  assetType="nft"
+                  search={search}
+                  standard={standard}
+                  storageTier={storageTier}
+                />
               </TabsContent>
             </TerminalPanelContent>
           </Tabs>

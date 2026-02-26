@@ -603,6 +603,9 @@ interface Asset {
   clusterName: string | null;
   liveCapacity: string | null;
   liveOccupiedCapacity: string | null;
+  storageTier?: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+  fullyOnchainRatio?: string | null;
+  fullyOnchainCount?: number | null;
 }
 
 interface AssetQueryParams {
@@ -619,8 +622,10 @@ interface AssetQueryParams {
     | 'holders'
     | 'transfers'
     | 'occupied'
-    | 'capacity';
+    | 'capacity'
+    | 'onchainRatio';
   sortDirection?: 'asc' | 'desc';
+  storageTier?: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
 }
 
 interface TokenHolderParams {
@@ -715,6 +720,14 @@ interface SporeCluster {
   createdAtBlock: number;
   liveCapacity?: string | null;
   liveOccupiedCapacity?: string | null;
+  storageProfile?: {
+    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+    fullyOnchainCount: number;
+    decentralizedExternalCount: number;
+    centralizedDependentCount: number;
+    unknownCount: number;
+    fullyOnchainRatio: string;
+  };
 }
 
 interface SporeNft {
@@ -730,6 +743,21 @@ interface SporeNft {
   createdAtBlock: number;
   liveCapacity?: string | null;
   liveOccupiedCapacity?: string | null;
+  mediaProfile?: {
+    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+    sources: Array<{
+      uri: string;
+      scheme: string;
+      sourceLocation: string;
+      dependencyTier:
+        | 'fully_onchain'
+        | 'decentralized_external'
+        | 'centralized_dependent'
+        | 'unknown';
+    }>;
+    hasRenderableImage: boolean;
+    issues: string[];
+  } | null;
 }
 
 interface DobTrait {
@@ -754,6 +782,14 @@ interface NftCollection {
   liveCount: number;
   liveCapacity: string;
   liveOccupiedCapacity: string;
+  storageProfile?: {
+    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
+    fullyOnchainCount: number;
+    decentralizedExternalCount: number;
+    centralizedDependentCount: number;
+    unknownCount: number;
+    fullyOnchainRatio: string;
+  };
 }
 
 interface NftCollectionItem {
@@ -1382,9 +1418,16 @@ export const api = {
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.search) query.set('search', params.search);
     if (params.sortKey) {
-      query.set('sort_key', params.sortKey === 'transfers24h' ? 'transfers_24h' : params.sortKey);
+      if (params.sortKey === 'transfers24h') {
+        query.set('sort_key', 'transfers_24h');
+      } else if (params.sortKey === 'onchainRatio') {
+        query.set('sort_key', 'onchain_ratio');
+      } else {
+        query.set('sort_key', params.sortKey);
+      }
     }
     if (params.sortDirection) query.set('sort_direction', params.sortDirection);
+    if (params.storageTier) query.set('storage_tier', params.storageTier);
     return fetchApi(`/assets?${query}`);
   },
 

@@ -57,6 +57,17 @@ fn default_limit() -> i64 {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClusterStorageProfileResponse {
+    pub tier: String,
+    pub fully_onchain_count: i64,
+    pub decentralized_external_count: i64,
+    pub centralized_dependent_count: i64,
+    pub unknown_count: i64,
+    pub fully_onchain_ratio: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClusterResponse {
     pub cluster_id: String,
     pub name: Option<String>,
@@ -67,6 +78,25 @@ pub struct ClusterResponse {
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
+    pub storage_profile: ClusterStorageProfileResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeMediaSourceResponse {
+    pub uri: String,
+    pub scheme: String,
+    pub source_location: String,
+    pub dependency_tier: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeMediaProfileResponse {
+    pub tier: String,
+    pub sources: Vec<SporeMediaSourceResponse>,
+    pub has_renderable_image: bool,
+    pub issues: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +114,7 @@ pub struct SporeResponse {
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
+    pub media_profile: Option<SporeMediaProfileResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,12 +142,31 @@ fn spore_to_response(
     live_capacity: Option<i128>,
     live_occupied_capacity: Option<i128>,
 ) -> SporeResponse {
-    let (content_type, content_size) = match &entry.extra {
+    let (content_type, content_size, media_profile) = match &entry.extra {
         ckbadger_store::DobExtra::Spore {
             content_type,
             content_length,
-        } => (content_type.clone(), *content_length as i32),
-        _ => (String::new(), 0),
+            media_profile,
+        } => (
+            content_type.clone(),
+            *content_length as i32,
+            Some(SporeMediaProfileResponse {
+                tier: media_profile.tier.as_str().to_string(),
+                sources: media_profile
+                    .sources
+                    .iter()
+                    .map(|source| SporeMediaSourceResponse {
+                        uri: source.uri.clone(),
+                        scheme: source.scheme.clone(),
+                        source_location: source.source_location.clone(),
+                        dependency_tier: source.dependency_tier.as_str().to_string(),
+                    })
+                    .collect(),
+                has_renderable_image: media_profile.has_renderable_image,
+                issues: media_profile.issues.clone(),
+            }),
+        ),
+        _ => (String::new(), 0, None),
     };
     SporeResponse {
         spore_id: format!("0x{}", hex::encode(spore_id)),
@@ -138,6 +188,7 @@ fn spore_to_response(
         created_at_block: entry.created_at_block,
         live_capacity: live_capacity.map(|v| v.to_string()),
         live_occupied_capacity: live_occupied_capacity.map(|v| v.to_string()),
+        media_profile,
     }
 }
 
@@ -836,6 +887,66 @@ fn latest_capacity_from_chart(
     (Some("0".to_string()), Some("0".to_string()))
 }
 
+fn format_ratio_4(numerator: i64, denominator: i64) -> String {
+    if denominator <= 0 {
+        return "0.0000".to_string();
+    }
+    let scaled = numerator
+        .saturating_mul(10_000)
+        .checked_div(denominator)
+        .unwrap_or(0);
+    let whole = scaled / 10_000;
+    let frac = (scaled % 10_000).abs();
+    format!("{whole}.{frac:04}")
+}
+
+fn resolve_storage_tier(
+    fully_onchain: i64,
+    decentralized_external: i64,
+    centralized_dependent: i64,
+    unknown: i64,
+) -> String {
+    if centralized_dependent > 0 {
+        return "centralized_dependent".to_string();
+    }
+    if decentralized_external > 0 {
+        return "decentralized_external".to_string();
+    }
+    if fully_onchain > 0 && unknown == 0 {
+        return "fully_onchain".to_string();
+    }
+    "unknown".to_string()
+}
+
+fn cluster_storage_profile_from_aggregate(
+    aggregate: Option<&ckbadger_store::types::ClusterAggregate>,
+    spores_count: i64,
+) -> ClusterStorageProfileResponse {
+    let fully_onchain_count = aggregate.map(|a| a.fully_onchain_count).unwrap_or(0);
+    let decentralized_external_count = aggregate
+        .map(|a| a.decentralized_external_count)
+        .unwrap_or(0);
+    let centralized_dependent_count = aggregate
+        .map(|a| a.centralized_dependent_count)
+        .unwrap_or(0);
+    let unknown_count = aggregate
+        .map(|a| a.unknown_count)
+        .unwrap_or(spores_count.max(0));
+    ClusterStorageProfileResponse {
+        tier: resolve_storage_tier(
+            fully_onchain_count,
+            decentralized_external_count,
+            centralized_dependent_count,
+            unknown_count,
+        ),
+        fully_onchain_count,
+        decentralized_external_count,
+        centralized_dependent_count,
+        unknown_count,
+        fully_onchain_ratio: format_ratio_4(fully_onchain_count, spores_count),
+    }
+}
+
 /// List clusters — use cached NFT assets (filtered to Spore) when available.
 async fn list_clusters(
     State(state): State<Arc<AppState>>,
@@ -874,6 +985,11 @@ fn serve_clusters_from_cache(
                 hex::decode(cluster_id_hex.strip_prefix("0x").unwrap_or(cluster_id_hex)).ok()?;
 
             let cluster_entry = state.store.get_spore(&cluster_id_bytes).ok().flatten();
+            let cluster_aggregate = state
+                .store
+                .get_cluster_aggregate(&cluster_id_bytes)
+                .ok()
+                .flatten();
             let created_at_block = cluster_entry
                 .as_ref()
                 .map(|e| e.created_at_block)
@@ -896,6 +1012,10 @@ fn serve_clusters_from_cache(
                 created_at_block,
                 live_capacity: None,
                 live_occupied_capacity: None,
+                storage_profile: cluster_storage_profile_from_aggregate(
+                    cluster_aggregate.as_ref(),
+                    entry.transfers_count,
+                ),
             })
         })
         .collect();
@@ -976,6 +1096,7 @@ fn serve_clusters_from_store(
         .into_iter()
         .map(|(cluster_id, (owner, spores_count, created_at_block))| {
             let cluster_entry = state.store.get_spore(cluster_id).ok().flatten();
+            let cluster_aggregate = state.store.get_cluster_aggregate(cluster_id).ok().flatten();
             let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
             let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
             ClusterResponse {
@@ -991,6 +1112,10 @@ fn serve_clusters_from_store(
                 created_at_block: *created_at_block,
                 live_capacity: None,
                 live_occupied_capacity: None,
+                storage_profile: cluster_storage_profile_from_aggregate(
+                    cluster_aggregate.as_ref(),
+                    i64::from(*spores_count),
+                ),
             }
         })
         .collect();
@@ -1065,6 +1190,10 @@ async fn get_cluster(
         .store
         .get_spore(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let cluster_aggregate = state
+        .store
+        .get_cluster_aggregate(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Count spores in cluster using secondary index
     let spores_count = state
@@ -1121,6 +1250,10 @@ async fn get_cluster(
         created_at_block,
         live_capacity,
         live_occupied_capacity,
+        storage_profile: cluster_storage_profile_from_aggregate(
+            cluster_aggregate.as_ref(),
+            spores_count,
+        ),
     })
 }
 

@@ -38,6 +38,13 @@ function isListSort(value: string | null): value is ListSort {
   return !!value && LIST_SORT_VALUES.includes(value as ListSort);
 }
 
+function formatStorageTierLabel(tier: string): string {
+  if (tier === 'fully_onchain') return 'Fully On-chain';
+  if (tier === 'decentralized_external') return 'Decentralized External';
+  if (tier === 'centralized_dependent') return 'Centralized Dependency';
+  return 'Unknown';
+}
+
 export default function ClusterDetailPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -340,7 +347,19 @@ export default function ClusterDetailPage() {
 
         <PageHeader
           title={cluster.name || 'Unnamed Collection'}
-          badge={<Badge variant="neutral">Spore Cluster</Badge>}
+          badge={
+            <Badge
+              variant={
+                cluster.storageProfile?.tier === 'fully_onchain'
+                  ? 'green'
+                  : cluster.storageProfile?.tier === 'centralized_dependent'
+                    ? 'red'
+                    : 'neutral'
+              }
+            >
+              Spore Cluster
+            </Badge>
+          }
           subtitle="On-chain cluster metadata, capacity footprint, and spore composition."
         />
 
@@ -356,6 +375,23 @@ export default function ClusterDetailPage() {
               <div className="font-mono text-xs text-slate-500">Full collection supply</div>
             </TerminalPanelContent>
           </TerminalPanel>
+
+          {cluster.storageProfile && (
+            <TerminalPanel variant="inset">
+              <TerminalPanelContent className="space-y-2">
+                <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
+                  Storage Integrity
+                </div>
+                <div className="text-terminal-green text-base font-semibold">
+                  {formatStorageTierLabel(cluster.storageProfile.tier)}
+                </div>
+                <div className="font-mono text-xs text-slate-400">
+                  On-chain ratio:{' '}
+                  {(Number(cluster.storageProfile.fullyOnchainRatio) * 100).toFixed(2)}%
+                </div>
+              </TerminalPanelContent>
+            </TerminalPanel>
+          )}
 
           <TerminalPanel variant="inset">
             <TerminalPanelContent className="space-y-2">
@@ -560,13 +596,13 @@ export default function ClusterDetailPage() {
                     </select>
 
                     <div className="font-mono text-xs text-slate-500">
-                      {filteredAndSortedSpores.length} shown /{' '}
-                      {formatNumber(sporesData?.total || 0)} total
+                      {filteredAndSortedSpores.length} shown / {formatNumber(cluster.sporesCount)}{' '}
+                      total
                     </div>
                   </div>
                 }
               >
-                Spores in this collection ({formatNumber(sporesData?.total || 0)})
+                Spores in this collection ({formatNumber(cluster.sporesCount)})
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
                 {sporesLoading ? (
@@ -685,10 +721,11 @@ export default function ClusterDetailPage() {
               {sporesData && filteredAndSortedSpores.length > 0 && (
                 <TerminalPanelFooter>
                   <CursorPagination
-                    total={sporesData.total}
+                    total={cluster.sporesCount}
                     totalLabel="Spores"
                     pageSize={20}
                     page={sporesPagination.page}
+                    currentCount={filteredAndSortedSpores.length}
                     hasMore={sporesData.hasMore}
                     hasPrevious={sporesPagination.hasPrevious}
                     onNext={() => sporesPagination.goToNext(sporesData.nextCursor)}

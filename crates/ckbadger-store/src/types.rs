@@ -339,12 +339,59 @@ impl DobStandard {
 }
 
 /// Standard-specific data for DOB entries, stored inline via bincode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageDependencyTier {
+    FullyOnchain,
+    DecentralizedExternal,
+    CentralizedDependent,
+    #[default]
+    Unknown,
+}
+
+impl StorageDependencyTier {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StorageDependencyTier::FullyOnchain => "fully_onchain",
+            StorageDependencyTier::DecentralizedExternal => "decentralized_external",
+            StorageDependencyTier::CentralizedDependent => "centralized_dependent",
+            StorageDependencyTier::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeMediaSource {
+    pub uri: String,
+    pub scheme: String,
+    pub source_location: String,
+    #[serde(default)]
+    pub dependency_tier: StorageDependencyTier,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SporeMediaProfile {
+    #[serde(default)]
+    pub tier: StorageDependencyTier,
+    #[serde(default)]
+    pub sources: Vec<SporeMediaSource>,
+    #[serde(default)]
+    pub has_renderable_image: bool,
+    #[serde(default)]
+    pub issues: Vec<String>,
+}
+
+/// Standard-specific data for DOB entries, stored inline via bincode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DobExtra {
     /// Spore item: MIME content type and content byte length.
     Spore {
         content_type: String,
         content_length: i64,
+        #[serde(default)]
+        media_profile: SporeMediaProfile,
     },
     /// Spore cluster: no extra fields (name/description live on `DobEntry`).
     SporeCluster,
@@ -472,6 +519,14 @@ pub struct ClusterAggregate {
     pub total_count: i64,
     pub live_count: i64,
     pub owner_count: i64,
+    #[serde(default)]
+    pub fully_onchain_count: i64,
+    #[serde(default)]
+    pub decentralized_external_count: i64,
+    #[serde(default)]
+    pub centralized_dependent_count: i64,
+    #[serde(default)]
+    pub unknown_count: i64,
 }
 
 /// Pre-aggregated NFT collection data, maintained inline by the indexer.
@@ -1397,6 +1452,7 @@ mod tests {
             extra: DobExtra::Spore {
                 content_type: "image/png".to_string(),
                 content_length: 4096,
+                media_profile: SporeMediaProfile::default(),
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1406,9 +1462,11 @@ mod tests {
             DobExtra::Spore {
                 content_type,
                 content_length,
+                media_profile,
             } => {
                 assert_eq!(content_type, "image/png");
                 assert_eq!(content_length, 4096);
+                assert_eq!(media_profile.tier, StorageDependencyTier::Unknown);
             }
             _ => panic!("wrong variant"),
         }

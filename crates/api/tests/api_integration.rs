@@ -11,7 +11,7 @@ use ckbadger_store::types::{
     ActivityEntry, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DailyBlockStats,
     DailyStats, DobEntry, DobExtra, DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats,
     NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -1126,6 +1126,7 @@ async fn test_search_name_matches_script_token_and_cluster_assets() {
             total_count: 10,
             live_count: 8,
             owner_count: 2,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -1778,6 +1779,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             total_count: 5,
             live_count: 5,
             owner_count: 3,
+            ..Default::default()
         },
     );
     batch.put_nft_collection_aggregate(
@@ -3330,6 +3332,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
     assert_eq!(json["liveOccupiedCapacity"], "50");
+    assert_eq!(json["mediaProfile"]["tier"], "unknown");
 }
 
 #[tokio::test]
@@ -3374,6 +3377,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
         extra: DobExtra::Spore {
             content_type: "image/png".to_string(),
             content_length: 1024,
+            media_profile: SporeMediaProfile::default(),
         },
     };
     store.put_spore_direct(&spore_id, &spore_entry).unwrap();
@@ -3523,6 +3527,7 @@ async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
         extra: DobExtra::Spore {
             content_type: "dob/0".to_string(),
             content_length: 128,
+            media_profile: SporeMediaProfile::default(),
         },
     };
     store.put_spore_direct(&spore_id, &spore_entry).unwrap();
@@ -3574,6 +3579,7 @@ async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing
             total_count: 3,
             live_count: 3,
             owner_count: 1,
+            ..Default::default()
         },
     );
     batch.commit().unwrap();
@@ -3704,6 +3710,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
             total_count: 1,
             live_count: 1,
             owner_count: 1,
+            ..Default::default()
         },
     );
     batch.put_nft_collection_aggregate(
@@ -3748,6 +3755,73 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
     assert_eq!(nft_json["data"].as_array().unwrap().len(), 1);
     assert_eq!(nft_json["data"][0]["standard"], "spore");
     assert_eq!(nft_json["data"][0]["assetType"], "nft");
+}
+
+#[tokio::test]
+async fn test_assets_list_supports_storage_tier_filter_and_onchain_ratio_sort() {
+    let store = test_store();
+    let cluster_onchain = [0x81u8; 32];
+    let cluster_centralized = [0x82u8; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cluster_aggregate(
+        &cluster_onchain,
+        &ClusterAggregate {
+            name: Some("Onchain Cluster".to_string()),
+            description: None,
+            total_count: 5,
+            live_count: 5,
+            owner_count: 2,
+            fully_onchain_count: 5,
+            decentralized_external_count: 0,
+            centralized_dependent_count: 0,
+            unknown_count: 0,
+        },
+    );
+    batch.put_cluster_aggregate(
+        &cluster_centralized,
+        &ClusterAggregate {
+            name: Some("Centralized Cluster".to_string()),
+            description: None,
+            total_count: 4,
+            live_count: 4,
+            owner_count: 2,
+            fully_onchain_count: 0,
+            decentralized_external_count: 0,
+            centralized_dependent_count: 4,
+            unknown_count: 0,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=nft&storage_tier=fully_onchain")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["name"], "Onchain Cluster");
+    assert_eq!(rows[0]["storageTier"], "fully_onchain");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets?type=nft&sort_key=onchain_ratio&sort_direction=desc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["name"], "Onchain Cluster");
+    assert_eq!(rows[1]["name"], "Centralized Cluster");
 }
 
 #[tokio::test]

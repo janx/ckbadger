@@ -37,6 +37,9 @@ pub struct CachedAssetEntry {
     pub cluster_name: Option<String>,
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
+    pub storage_tier: Option<String>,
+    pub fully_onchain_ratio: Option<String>,
+    pub fully_onchain_count: Option<i64>,
     // Token-specific fields (None for NFT entries)
     pub type_code_hash: Option<String>,
     pub type_hash_type: Option<String>,
@@ -67,8 +70,45 @@ impl CachedAssetEntry {
             cluster_name: self.cluster_name.clone(),
             live_capacity: self.live_capacity.clone(),
             live_occupied_capacity: self.live_occupied_capacity.clone(),
+            storage_tier: self.storage_tier.clone(),
+            fully_onchain_ratio: self.fully_onchain_ratio.clone(),
+            fully_onchain_count: self.fully_onchain_count,
         }
     }
+}
+
+fn format_ratio_4(numerator: i64, denominator: i64) -> String {
+    if denominator <= 0 {
+        return "0.0000".to_string();
+    }
+    let scaled = numerator
+        .saturating_mul(10_000)
+        .checked_div(denominator)
+        .unwrap_or(0);
+    let whole = scaled / 10_000;
+    let frac = (scaled % 10_000).abs();
+    format!("{whole}.{frac:04}")
+}
+
+fn resolve_storage_tier(
+    fully_onchain: i64,
+    decentralized_external: i64,
+    centralized_dependent: i64,
+    unknown: i64,
+) -> String {
+    if centralized_dependent > 0 {
+        return "centralized_dependent".to_string();
+    }
+    if decentralized_external > 0 {
+        return "decentralized_external".to_string();
+    }
+    if fully_onchain > 0 && unknown == 0 {
+        return "fully_onchain".to_string();
+    }
+    if unknown > 0 {
+        return "unknown".to_string();
+    }
+    "unknown".to_string()
 }
 
 /// Background loop that refreshes the assets cache every 30 seconds.
@@ -158,6 +198,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_name: None,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: None,
+            fully_onchain_ratio: None,
+            fully_onchain_count: None,
             type_code_hash: Some(format!("0x{}", hex::encode(&info.type_code_hash))),
             type_hash_type: Some(hash_type_to_string(info.hash_type)),
             type_args: Some(format!("0x{}", hex::encode(&info.type_args))),
@@ -214,6 +257,13 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
                     e
                 )
             })?;
+        let fully_onchain_ratio = format_ratio_4(agg.fully_onchain_count, agg.live_count);
+        let storage_tier = resolve_storage_tier(
+            agg.fully_onchain_count,
+            agg.decentralized_external_count,
+            agg.centralized_dependent_count,
+            agg.unknown_count,
+        );
 
         nft_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -234,6 +284,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: Some(storage_tier),
+            fully_onchain_ratio: Some(fully_onchain_ratio),
+            fully_onchain_count: Some(agg.fully_onchain_count),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -294,6 +347,9 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: Some("unknown".to_string()),
+            fully_onchain_ratio: Some("0.0000".to_string()),
+            fully_onchain_count: Some(0),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

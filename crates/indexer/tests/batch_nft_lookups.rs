@@ -2,7 +2,9 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
-use ckbadger_store::{DobEntry, DobExtra, DobStandard, NftEntry, NftExtra, NftStandard};
+use ckbadger_store::{
+    DobEntry, DobExtra, DobStandard, NftEntry, NftExtra, NftStandard, SporeMediaProfile,
+};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
@@ -29,6 +31,7 @@ fn test_spore_insert_retrieve() {
         extra: DobExtra::Spore {
             content_type: "image/png".to_string(),
             content_length: 4096,
+            media_profile: SporeMediaProfile::default(),
         },
     };
 
@@ -68,6 +71,7 @@ fn test_spore_consume_burn() {
         extra: DobExtra::Spore {
             content_type: "text/plain".to_string(),
             content_length: 256,
+            media_profile: SporeMediaProfile::default(),
         },
     };
 
@@ -93,6 +97,7 @@ fn test_spore_consume_burn() {
         extra: DobExtra::Spore {
             content_type: "text/plain".to_string(),
             content_length: 256,
+            media_profile: SporeMediaProfile::default(),
         },
     };
 
@@ -167,6 +172,7 @@ fn test_list_spores_with_limit() {
             extra: DobExtra::Spore {
                 content_type: format!("type_{}", i),
                 content_length: i as i64 * 100,
+                media_profile: SporeMediaProfile::default(),
             },
         };
         batch.put_spore(&spore_id, &entry);

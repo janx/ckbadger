@@ -1,11 +1,16 @@
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
-use crate::parser::{ParsedClusterCell, ParsedSporeCell};
+use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{ClusterAggregate, DobEntry, DobExtra, DobStandard, SporeTypeIndex};
+use ckbadger_store::types::{
+    ClusterAggregate, DobEntry, DobExtra, DobStandard, SporeTypeIndex, StorageDependencyTier,
+};
 use ckbadger_store::CkbadgerStore;
+
+#[cfg(test)]
+use ckbadger_store::types::SporeMediaProfile;
 
 use super::BatchWriter;
 
@@ -192,6 +197,54 @@ impl BatchWriter {
         Ok(())
     }
 
+    fn spore_media_tier(entry: &DobEntry) -> StorageDependencyTier {
+        match &entry.extra {
+            DobExtra::Spore { media_profile, .. } => media_profile.tier,
+            _ => StorageDependencyTier::Unknown,
+        }
+    }
+
+    fn adjust_cluster_tier_count(
+        &self,
+        cluster_id: &[u8],
+        agg: &mut ClusterAggregate,
+        tier: StorageDependencyTier,
+        delta: i64,
+        context: &str,
+    ) -> Result<()> {
+        if delta == 0 {
+            return Ok(());
+        }
+        let slot = match tier {
+            StorageDependencyTier::FullyOnchain => &mut agg.fully_onchain_count,
+            StorageDependencyTier::DecentralizedExternal => &mut agg.decentralized_external_count,
+            StorageDependencyTier::CentralizedDependent => &mut agg.centralized_dependent_count,
+            StorageDependencyTier::Unknown => &mut agg.unknown_count,
+        };
+        let next = slot.checked_add(delta).ok_or_else(|| {
+            anyhow::anyhow!(
+                "cluster tier count overflow: cluster_id=0x{}, tier={}, current={}, delta={}, context={}",
+                hex::encode(cluster_id),
+                tier.as_str(),
+                *slot,
+                delta,
+                context
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "cluster tier count underflow: cluster_id=0x{}, tier={}, current={}, delta={}, context={}",
+                hex::encode(cluster_id),
+                tier.as_str(),
+                *slot,
+                delta,
+                context
+            );
+        }
+        *slot = next;
+        Ok(())
+    }
+
     pub(crate) fn insert_spore_cluster(
         &self,
         cluster: &ParsedClusterCell,
@@ -242,6 +295,14 @@ impl BatchWriter {
     ) -> Result<()> {
         let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
+        let old_live_tier = if was_live {
+            existing
+                .as_ref()
+                .map(Self::spore_media_tier)
+                .unwrap_or(StorageDependencyTier::Unknown)
+        } else {
+            StorageDependencyTier::Unknown
+        };
         let old_cluster = existing.as_ref().and_then(|e| e.collection_id.clone());
         let old_owner = if was_live {
             existing.as_ref().and_then(|e| e.owner_lock_hash.clone())
@@ -249,6 +310,25 @@ impl BatchWriter {
             None
         };
         let new_cluster = spore.cluster_id.clone();
+        let cluster_description = if let Some(cluster_id) = new_cluster.as_ref() {
+            state
+                .get_spore(self.store.as_ref(), cluster_id)?
+                .and_then(|entry| {
+                    if entry.standard == DobStandard::SporeCluster {
+                        entry.description
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+        let media_profile = analyze_spore_media_profile(
+            &spore.content_type,
+            &spore.content,
+            cluster_description.as_deref(),
+        );
+        let new_live_tier = media_profile.tier;
         let entry = DobEntry {
             standard: DobStandard::Spore,
             collection_id: new_cluster.clone(),
@@ -267,6 +347,7 @@ impl BatchWriter {
             extra: DobExtra::Spore {
                 content_type: spore.content_type.clone(),
                 content_length: spore.content.len() as i64,
+                media_profile,
             },
         };
         batch.put_spore(&spore.spore_id, &entry);
@@ -289,6 +370,13 @@ impl BatchWriter {
                         );
                     }
                     old_agg.live_count -= 1;
+                    self.adjust_cluster_tier_count(
+                        old_cluster_id,
+                        &mut old_agg,
+                        old_live_tier,
+                        -1,
+                        "cluster move old cluster",
+                    )?;
                     self.apply_owner_transition(
                         old_cluster_id,
                         old_owner.as_deref(),
@@ -313,9 +401,23 @@ impl BatchWriter {
                 // New spore: increment counts
                 agg.total_count = agg.total_count.saturating_add(1);
                 agg.live_count = agg.live_count.saturating_add(1);
+                self.adjust_cluster_tier_count(
+                    cluster_id,
+                    &mut agg,
+                    new_live_tier,
+                    1,
+                    "insert new spore",
+                )?;
             } else if !was_live || old_cluster.as_ref() != Some(cluster_id) {
                 // Re-activate consumed spore or move a live spore to another cluster.
                 agg.live_count = agg.live_count.saturating_add(1);
+                self.adjust_cluster_tier_count(
+                    cluster_id,
+                    &mut agg,
+                    new_live_tier,
+                    1,
+                    "reactivate or move spore",
+                )?;
             } else {
                 // Re-insert (transfer) — increment hourly bucket for 24h tracking
                 let hour_bucket = timestamp_ms / 3_600_000;
@@ -324,6 +426,22 @@ impl BatchWriter {
                 let next = current.saturating_add(1);
                 batch.put_spore_hourly_transfer(cluster_id, hour_bucket, next);
                 state.put_spore_hourly_transfer(key, next);
+                if old_live_tier != new_live_tier {
+                    self.adjust_cluster_tier_count(
+                        cluster_id,
+                        &mut agg,
+                        old_live_tier,
+                        -1,
+                        "in-place spore media tier update",
+                    )?;
+                    self.adjust_cluster_tier_count(
+                        cluster_id,
+                        &mut agg,
+                        new_live_tier,
+                        1,
+                        "in-place spore media tier update",
+                    )?;
+                }
             }
 
             let owner_from = if was_live && old_cluster.as_ref() == Some(cluster_id) {
@@ -366,6 +484,7 @@ impl BatchWriter {
 
             let old_owner = entry.owner_lock_hash.clone();
             let cluster_id = entry.collection_id.clone();
+            let old_tier = Self::spore_media_tier(&entry);
 
             entry.is_live = false;
             entry.owner_lock_hash = None;
@@ -383,6 +502,7 @@ impl BatchWriter {
                     );
                 }
                 agg.live_count -= 1;
+                self.adjust_cluster_tier_count(cid, &mut agg, old_tier, -1, "consume spore")?;
                 self.apply_owner_transition(
                     cid,
                     old_owner.as_deref(),
@@ -543,8 +663,14 @@ mod tests {
             created_at_block: 1,
             created_at_tx: vec![0xAA; 32],
             extra: DobExtra::Spore {
-                content_type: "text/plain".to_string(),
+                content_type: "image/png".to_string(),
                 content_length: 4,
+                media_profile: SporeMediaProfile {
+                    tier: StorageDependencyTier::FullyOnchain,
+                    sources: Vec::new(),
+                    has_renderable_image: false,
+                    issues: Vec::new(),
+                },
             },
         }
     }
@@ -553,8 +679,8 @@ mod tests {
         ParsedSporeCell {
             spore_id: spore_id.to_vec(),
             type_script_hash: vec![0x99; 32],
-            content_type: "text/plain".to_string(),
-            content: b"test".to_vec(),
+            content_type: "image/png".to_string(),
+            content: vec![0x89, 0x50, 0x4e, 0x47],
             cluster_id: Some(cluster_id.to_vec()),
             owner_lock_hash: owner_lock.to_vec(),
         }
@@ -698,6 +824,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
+                    fully_onchain_count: 1,
                     ..Default::default()
                 },
             );
@@ -734,6 +861,7 @@ mod tests {
         let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
         assert_eq!(agg.owner_count, 1);
         assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.fully_onchain_count, 1);
         assert_eq!(
             store
                 .get_cluster_owner_count(&cluster_id, &owner_a)
@@ -769,6 +897,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 0,
+                    fully_onchain_count: 1,
                     ..Default::default()
                 },
             );
@@ -812,6 +941,7 @@ mod tests {
                     total_count: 1,
                     live_count: 0,
                     owner_count: 1,
+                    fully_onchain_count: 1,
                     ..Default::default()
                 },
             );
@@ -854,6 +984,7 @@ mod tests {
                     total_count: 1,
                     live_count: 0,
                     owner_count: 1,
+                    fully_onchain_count: 1,
                     ..Default::default()
                 },
             );
@@ -890,6 +1021,7 @@ mod tests {
                     total_count: 1,
                     live_count: 1,
                     owner_count: 1,
+                    fully_onchain_count: 1,
                     ..Default::default()
                 },
             );
@@ -916,8 +1048,10 @@ mod tests {
         let new_agg = store.get_cluster_aggregate(&new_cluster).unwrap().unwrap();
         assert_eq!(old_agg.live_count, 0);
         assert_eq!(old_agg.owner_count, 0);
+        assert_eq!(old_agg.fully_onchain_count, 0);
         assert_eq!(new_agg.live_count, 1);
         assert_eq!(new_agg.owner_count, 1);
+        assert_eq!(new_agg.fully_onchain_count, 1);
     }
 
     #[test]

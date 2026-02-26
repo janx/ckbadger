@@ -36,6 +36,7 @@ export default function SporeDetailPage() {
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [dotbitStatusFilter, setDotbitStatusFilter] = useState<NftItemStatusFilter>('all');
+  const [externalPreviewFailed, setExternalPreviewFailed] = useState(false);
   const collectionItemsPagination = useCursorPagination();
   const { reset: resetCollectionItemsPagination } = collectionItemsPagination;
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
@@ -184,6 +185,15 @@ export default function SporeDetailPage() {
     return new Intl.NumberFormat().format(num);
   };
 
+  const formatStorageTier = (
+    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown'
+  ) => {
+    if (tier === 'fully_onchain') return 'Fully On-chain';
+    if (tier === 'decentralized_external') return 'Decentralized External';
+    if (tier === 'centralized_dependent') return 'Centralized Dependency';
+    return 'Unknown';
+  };
+
   const getContentTypeIcon = (contentType: string) => {
     if (contentType.startsWith('image/')) return '🖼️';
     if (contentType.startsWith('video/')) return '🎬';
@@ -253,6 +263,42 @@ export default function SporeDetailPage() {
     }
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(dobContent.svgMarkup)}`;
   }, [dobContent?.svgMarkup]);
+
+  const externalImagePreviewUrl = useMemo(() => {
+    const sources = spore?.mediaProfile?.sources ?? [];
+    const firstImageSource = sources.find((source) => {
+      const uri = source.uri.toLowerCase();
+      return (
+        uri.startsWith('https://') ||
+        uri.startsWith('http://') ||
+        uri.startsWith('data:image/') ||
+        uri.endsWith('.png') ||
+        uri.endsWith('.jpg') ||
+        uri.endsWith('.jpeg') ||
+        uri.endsWith('.gif') ||
+        uri.endsWith('.webp') ||
+        uri.endsWith('.svg') ||
+        uri.endsWith('.avif')
+      );
+    });
+    if (!firstImageSource) {
+      return null;
+    }
+    const uri = firstImageSource.uri;
+    if (uri.startsWith('ipfs://')) {
+      const cidPath = uri.replace('ipfs://', '');
+      return `https://ipfs.io/ipfs/${cidPath}`;
+    }
+    if (uri.startsWith('ar://')) {
+      const id = uri.replace('ar://', '');
+      return `https://arweave.net/${id}`;
+    }
+    return uri;
+  }, [spore?.mediaProfile?.sources]);
+
+  useEffect(() => {
+    setExternalPreviewFailed(false);
+  }, [externalImagePreviewUrl]);
 
   const isPageLoading =
     sporeQuery.isLoading || (shouldQueryCollection && collectionQuery.isLoading);
@@ -333,6 +379,28 @@ export default function SporeDetailPage() {
                       {formatNumber(collection.totalCount)}
                     </span>
                   </DataField>
+                  {collection.storageProfile && (
+                    <>
+                      <DataField label="Storage Tier">
+                        <Badge
+                          variant={
+                            collection.storageProfile.tier === 'fully_onchain'
+                              ? 'green'
+                              : collection.storageProfile.tier === 'centralized_dependent'
+                                ? 'red'
+                                : 'neutral'
+                          }
+                        >
+                          {formatStorageTier(collection.storageProfile.tier)}
+                        </Badge>
+                      </DataField>
+                      <DataField label="Fully On-chain Ratio">
+                        <span className="font-mono text-slate-300">
+                          {(Number(collection.storageProfile.fullyOnchainRatio) * 100).toFixed(2)}%
+                        </span>
+                      </DataField>
+                    </>
+                  )}
                 </DataGrid>
               </TerminalPanelContent>
             </TerminalPanel>
@@ -585,9 +653,11 @@ export default function SporeDetailPage() {
     ? 'DOB decoder generated SVG preview from cluster metadata and DNA bytes.'
     : mediaPreviewUrl
       ? 'Bytes were decoded into a media blob using the on-chain contentType.'
-      : previewTextSnippet
-        ? 'Bytes were decoded as UTF-8 text for direct inspection.'
-        : 'Payload is shown as a generic binary asset because no richer decoder matched.';
+      : externalImagePreviewUrl && !externalPreviewFailed
+        ? 'Resolved an image URI from media metadata and rendered via direct fetch.'
+        : previewTextSnippet
+          ? 'Bytes were decoded as UTF-8 text for direct inspection.'
+          : 'Payload is shown as a generic binary asset because no richer decoder matched.';
 
   const renderSporePreview = () => {
     if (isSporeCellLoading) {
@@ -626,6 +696,24 @@ export default function SporeDetailPage() {
               unoptimized
               sizes="(max-width: 768px) 100vw, 50vw"
               className="rounded border border-slate-700 object-contain"
+            />
+          </div>
+        </div>
+      );
+    }
+
+    if (externalImagePreviewUrl && !externalPreviewFailed) {
+      return (
+        <div className="h-64 bg-slate-950/60 p-3">
+          <div className="relative h-full w-full">
+            <Image
+              src={externalImagePreviewUrl}
+              alt="Spore external media preview"
+              fill
+              unoptimized
+              sizes="(max-width: 768px) 100vw, 50vw"
+              className="rounded border border-slate-700 object-contain"
+              onError={() => setExternalPreviewFailed(true)}
             />
           </div>
         </div>
@@ -739,6 +827,33 @@ export default function SporeDetailPage() {
                     </div>
                     <div className="mt-1 text-xs text-slate-300">{renderPipeline}</div>
                   </div>
+                  {spore.mediaProfile && (
+                    <div className="rounded border border-slate-800 bg-slate-900/50 px-3 py-2 sm:col-span-2">
+                      <div className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                        Storage Tier
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-xs">
+                        <Badge
+                          variant={
+                            spore.mediaProfile.tier === 'fully_onchain'
+                              ? 'green'
+                              : spore.mediaProfile.tier === 'centralized_dependent'
+                                ? 'red'
+                                : spore.mediaProfile.tier === 'decentralized_external'
+                                  ? 'neutral'
+                                  : 'neutral'
+                          }
+                        >
+                          {formatStorageTier(spore.mediaProfile.tier)}
+                        </Badge>
+                        <span className="text-slate-400">
+                          {spore.mediaProfile.hasRenderableImage
+                            ? 'Renderable image detected'
+                            : 'No renderable image detected'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                   {dobContent?.dnaHex && (
                     <div className="rounded border border-cyan-900/70 bg-cyan-950/20 px-3 py-2 sm:col-span-2">
                       <div className="font-mono text-[10px] uppercase tracking-wider text-cyan-400/80">
@@ -752,6 +867,55 @@ export default function SporeDetailPage() {
                 </div>
               </TerminalPanelContent>
             </TerminalPanel>
+
+            {spore.mediaProfile && (
+              <TerminalPanel>
+                <TerminalPanelHeader indicator="active">Media Sources</TerminalPanelHeader>
+                <TerminalPanelContent>
+                  {!spore.mediaProfile.sources.length ? (
+                    <div className="text-xs text-slate-500">
+                      No explicit media URI dependencies.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {spore.mediaProfile.sources.map((source, index) => (
+                        <div
+                          key={`${source.uri}-${index}`}
+                          className="rounded border border-slate-800 bg-slate-900/40 p-2"
+                        >
+                          <div className="mb-1 flex items-center gap-2">
+                            <Badge
+                              variant={
+                                source.dependencyTier === 'fully_onchain'
+                                  ? 'green'
+                                  : source.dependencyTier === 'centralized_dependent'
+                                    ? 'red'
+                                    : 'neutral'
+                              }
+                            >
+                              {formatStorageTier(source.dependencyTier)}
+                            </Badge>
+                            <span className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                              {source.sourceLocation}
+                            </span>
+                          </div>
+                          <div className="break-all font-mono text-xs text-slate-200">
+                            {source.uri}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!!spore.mediaProfile.issues.length && (
+                    <div className="mt-3 space-y-1 rounded border border-rose-900/40 bg-rose-950/10 p-2 font-mono text-xs text-rose-300">
+                      {spore.mediaProfile.issues.map((issue) => (
+                        <div key={issue}>- {issue}</div>
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+              </TerminalPanel>
+            )}
           </div>
 
           <div className="space-y-6 xl:col-span-3">

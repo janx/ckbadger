@@ -205,6 +205,33 @@ describe('SporeDetailPage', () => {
     });
   });
 
+  it('renders media source analysis from API profile', async () => {
+    vi.mocked(api.getSporeNft).mockResolvedValue({
+      ...mockSpore,
+      mediaProfile: {
+        tier: 'fully_onchain',
+        hasRenderableImage: true,
+        issues: [],
+        sources: [
+          {
+            uri: 'btcfs://abcdi0',
+            scheme: 'btcfs',
+            sourceLocation: 'dob_svg',
+            dependencyTier: 'fully_onchain',
+          },
+        ],
+      },
+    } as any);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Media Sources')).toBeInTheDocument();
+      expect(screen.getByText('btcfs://abcdi0')).toBeInTheDocument();
+      expect(screen.getAllByText('Fully On-chain').length).toBeGreaterThan(0);
+    });
+  });
+
   it('uses vertical layout for long identity fields', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 

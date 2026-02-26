@@ -7,6 +7,7 @@ interface CursorPaginationProps {
   totalLabel?: string;
   page?: number;
   pageSize?: number;
+  currentCount?: number;
   hasMore: boolean;
   hasPrevious: boolean;
   onNext: () => void;
@@ -19,6 +20,7 @@ export function CursorPagination({
   totalLabel = 'items',
   page,
   pageSize,
+  currentCount,
   hasMore,
   hasPrevious,
   onNext,
@@ -26,17 +28,28 @@ export function CursorPagination({
   className,
 }: CursorPaginationProps) {
   const totalPages = total !== undefined && pageSize ? Math.ceil(total / pageSize) : undefined;
+  const canShowRange = page !== undefined && pageSize !== undefined && currentCount !== undefined;
+  const rangeStart = canShowRange && currentCount > 0 ? (page - 1) * pageSize + 1 : 0;
+  const rangeEnd = canShowRange && currentCount > 0 ? rangeStart + currentCount - 1 : 0;
 
   return (
     <div className={cn('flex w-full items-center justify-between', className)}>
-      {total !== undefined ? (
-        <span className="font-mono text-sm text-slate-500">
-          {total.toLocaleString()} {totalLabel}
-          {pageSize !== undefined && <>, {pageSize} per page</>}
-        </span>
-      ) : (
-        <span />
-      )}
+      <span className="font-mono text-sm text-slate-500">
+        {canShowRange ? (
+          <>
+            Showing {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()}
+            {total !== undefined ? ` of ${total.toLocaleString()}` : ''} {totalLabel}
+            {pageSize !== undefined ? `, ${pageSize} per page` : ''}
+          </>
+        ) : total !== undefined ? (
+          <>
+            {total.toLocaleString()} {totalLabel}
+            {pageSize !== undefined ? `, ${pageSize} per page` : ''}
+          </>
+        ) : (
+          '\u00a0'
+        )}
+      </span>
       <div className="flex items-center gap-3">
         <button
           type="button"
@@ -48,8 +61,8 @@ export function CursorPagination({
         </button>
         {page !== undefined && (
           <span className="font-mono text-sm text-slate-500">
-            {page}
-            {totalPages !== undefined ? ` / ${totalPages}` : ''}
+            Page {page}
+            {totalPages !== undefined ? ` of ${totalPages}` : ''}
           </span>
         )}
         <button

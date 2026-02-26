@@ -64,6 +64,7 @@ pub struct ListParams {
     sort_key: AssetSortKey,
     #[serde(default = "default_sort_direction")]
     sort_direction: SortDirection,
+    storage_tier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +112,7 @@ enum AssetSortKey {
     Transfers,
     Occupied,
     Capacity,
+    OnchainRatio,
 }
 
 fn default_asset_sort_key() -> AssetSortKey {
@@ -158,6 +160,20 @@ pub struct AssetResponse {
     pub cluster_name: Option<String>,
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
+    pub storage_tier: Option<String>,
+    pub fully_onchain_ratio: Option<String>,
+    pub fully_onchain_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionStorageProfileResponse {
+    pub tier: String,
+    pub fully_onchain_count: i64,
+    pub decentralized_external_count: i64,
+    pub centralized_dependent_count: i64,
+    pub unknown_count: i64,
+    pub fully_onchain_ratio: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,6 +186,7 @@ pub struct NftCollectionDetailResponse {
     pub live_count: i64,
     pub live_capacity: String,
     pub live_occupied_capacity: String,
+    pub storage_profile: CollectionStorageProfileResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -259,9 +276,11 @@ async fn list_assets(
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
     let filter_type = params.asset_type;
     let filter_standard = normalize_assets_standard(params.standard.as_deref());
+    let filter_storage_tier = normalize_assets_storage_tier(params.storage_tier.as_deref())?;
 
     let request = CachedAssetsRequest {
         standard: filter_standard.as_deref(),
+        storage_tier: filter_storage_tier.as_deref(),
         search: search_lower.as_deref(),
         limit,
         cursor: params.cursor.as_deref(),
@@ -292,6 +311,7 @@ async fn list_assets(
 /// Falls back to direct computation when cache is cold.
 struct CachedAssetsRequest<'a> {
     standard: Option<&'a str>,
+    storage_tier: Option<&'a str>,
     search: Option<&'a str>,
     limit: i64,
     cursor: Option<&'a str>,
@@ -356,6 +376,15 @@ fn fetch_assets_cached(
     if let Some(standard_filter) = request.standard {
         all_cached.retain(|entry| entry.standard.eq_ignore_ascii_case(standard_filter));
     }
+    if let Some(storage_tier_filter) = request.storage_tier {
+        all_cached.retain(|entry| {
+            entry.asset_type == "nft"
+                && entry
+                    .storage_tier
+                    .as_deref()
+                    .is_some_and(|tier| tier == storage_tier_filter)
+        });
+    }
 
     // Apply search filter
     if let Some(s) = request.search {
@@ -413,6 +442,26 @@ fn normalize_assets_standard(value: Option<&str>) -> Option<String> {
     })
 }
 
+fn normalize_assets_storage_tier(
+    value: Option<&str>,
+) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    match normalized.as_str() {
+        "fully_onchain" | "decentralized_external" | "centralized_dependent" | "unknown" => {
+            Ok(Some(normalized))
+        }
+        _ => Err(ApiError::bad_request(
+            "Invalid storage_tier. Expected one of: fully_onchain, decentralized_external, centralized_dependent, unknown",
+        )),
+    }
+}
+
 /// Parse cursor string.
 /// New format: "asset_type:id"
 /// Legacy format: "transfers_24h:holders_count:id:asset_type"
@@ -464,6 +513,75 @@ fn compare_optional_i128(
     }
 }
 
+fn compare_optional_i64(
+    left: Option<i64>,
+    right: Option<i64>,
+    direction: SortDirection,
+) -> Ordering {
+    match (left, right) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(l), Some(r)) => apply_direction(l.cmp(&r), direction),
+    }
+}
+
+fn parse_ratio_1e4(value: Option<&str>) -> Option<i64> {
+    let raw = value?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut split = raw.split('.');
+    let whole = split.next()?.parse::<i64>().ok()?;
+    let frac = split.next().unwrap_or("0");
+    if split.next().is_some() {
+        return None;
+    }
+    let mut frac_buf = String::with_capacity(4);
+    for ch in frac.chars().take(4) {
+        if !ch.is_ascii_digit() {
+            return None;
+        }
+        frac_buf.push(ch);
+    }
+    while frac_buf.len() < 4 {
+        frac_buf.push('0');
+    }
+    let frac_num = frac_buf.parse::<i64>().ok()?;
+    whole.checked_mul(10_000)?.checked_add(frac_num)
+}
+
+fn format_ratio_4(numerator: i64, denominator: i64) -> String {
+    if denominator <= 0 {
+        return "0.0000".to_string();
+    }
+    let scaled = numerator
+        .saturating_mul(10_000)
+        .checked_div(denominator)
+        .unwrap_or(0);
+    let whole = scaled / 10_000;
+    let frac = (scaled % 10_000).abs();
+    format!("{whole}.{frac:04}")
+}
+
+fn resolve_storage_tier(
+    fully_onchain: i64,
+    decentralized_external: i64,
+    centralized_dependent: i64,
+    unknown: i64,
+) -> String {
+    if centralized_dependent > 0 {
+        return "centralized_dependent".to_string();
+    }
+    if decentralized_external > 0 {
+        return "decentralized_external".to_string();
+    }
+    if fully_onchain > 0 && unknown == 0 {
+        return "fully_onchain".to_string();
+    }
+    "unknown".to_string()
+}
+
 fn asset_display_name(entry: &CachedAssetEntry) -> String {
     if entry.asset_type == "token" {
         entry
@@ -513,6 +631,11 @@ fn compare_asset_entries(
         AssetSortKey::Capacity => compare_optional_i128(
             parse_i128_opt(left.live_capacity.as_deref()),
             parse_i128_opt(right.live_capacity.as_deref()),
+            direction,
+        ),
+        AssetSortKey::OnchainRatio => compare_optional_i64(
+            parse_ratio_1e4(left.fully_onchain_ratio.as_deref()),
+            parse_ratio_1e4(right.fully_onchain_ratio.as_deref()),
             direction,
         ),
     };
@@ -1274,6 +1397,14 @@ async fn get_nft_collection(
 
     let standard = agg.standard.asset_standard().to_string();
     let name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+    let storage_profile = CollectionStorageProfileResponse {
+        tier: "unknown".to_string(),
+        fully_onchain_count: 0,
+        decentralized_external_count: 0,
+        centralized_dependent_count: 0,
+        unknown_count: agg.live_count,
+        fully_onchain_ratio: format_ratio_4(0, agg.live_count),
+    };
 
     ok(NftCollectionDetailResponse {
         collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
@@ -1283,6 +1414,7 @@ async fn get_nft_collection(
         live_count: agg.live_count,
         live_capacity,
         live_occupied_capacity,
+        storage_profile,
     })
 }
 
@@ -1750,6 +1882,9 @@ fn compute_token_assets(
             cluster_name: None,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: None,
+            fully_onchain_ratio: None,
+            fully_onchain_count: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -1796,6 +1931,13 @@ fn compute_nft_assets(
                 )
             }))
             .map_err(|e| ApiError::internal(e.to_string()))?;
+        let fully_onchain_ratio = format_ratio_4(agg.fully_onchain_count, agg.live_count);
+        let storage_tier = resolve_storage_tier(
+            agg.fully_onchain_count,
+            agg.decentralized_external_count,
+            agg.centralized_dependent_count,
+            agg.unknown_count,
+        );
 
         result.push(CachedAssetEntry {
             id: cluster_hex.clone(),
@@ -1816,6 +1958,9 @@ fn compute_nft_assets(
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: Some(storage_tier),
+            fully_onchain_ratio: Some(fully_onchain_ratio),
+            fully_onchain_count: Some(agg.fully_onchain_count),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -1862,6 +2007,9 @@ fn compute_nft_assets(
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
             live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: Some("unknown".to_string()),
+            fully_onchain_ratio: Some("0.0000".to_string()),
+            fully_onchain_count: Some(0),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

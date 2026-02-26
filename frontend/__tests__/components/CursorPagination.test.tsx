@@ -32,4 +32,23 @@ describe('CursorPagination', () => {
     expect(onPrevious).toHaveBeenCalledTimes(1);
     expect(onNext).toHaveBeenCalledTimes(1);
   });
+
+  it('shows detailed range and page information', () => {
+    render(
+      <CursorPagination
+        hasMore
+        hasPrevious
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+        total={105}
+        page={2}
+        pageSize={20}
+        currentCount={20}
+        totalLabel="Spores"
+      />
+    );
+
+    expect(screen.getByText('Showing 21-40 of 105 Spores, 20 per page')).toBeInTheDocument();
+    expect(screen.getByText('Page 2 of 6')).toBeInTheDocument();
+  });
 });

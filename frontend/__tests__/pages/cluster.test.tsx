@@ -173,7 +173,7 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Spores in this collection (2)')).toBeInTheDocument();
+      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
     });
@@ -270,7 +270,7 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('2 shown / 2 total')).toBeInTheDocument();
+      expect(screen.getByText('2 shown / 5 total')).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
@@ -278,7 +278,7 @@ describe('ClusterDetailPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
+      expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
       expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
     });
   });
@@ -314,7 +314,7 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('No spores match current filters')).toBeInTheDocument();
-      expect(screen.getByText('0 shown / 2 total')).toBeInTheDocument();
+      expect(screen.getByText('0 shown / 5 total')).toBeInTheDocument();
     });
   });
 
@@ -333,7 +333,7 @@ describe('ClusterDetailPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
+      expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
       expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
     });
@@ -350,7 +350,7 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByLabelText('Filter spores by content type')).toHaveValue('text');
       expect(screen.getByLabelText('Sort spores')).toHaveValue('sizeAsc');
       expect(screen.getByLabelText('Search spores')).toHaveValue('text/plain');
-      expect(screen.getByText('1 shown / 2 total')).toBeInTheDocument();
+      expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
     });
   });
 
@@ -507,6 +507,8 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Previous' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+      expect(screen.getByText('Showing 1-2 of 5 Spores, 20 per page')).toBeInTheDocument();
+      expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
     });
   });
 
