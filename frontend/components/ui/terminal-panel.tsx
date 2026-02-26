@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode } from 'react';
+import { type HTMLAttributes, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type IndicatorStatus = 'active' | 'warning' | 'inactive' | 'none';
@@ -157,15 +157,16 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
   );
 }
 
-interface TerminalRowProps {
+interface TerminalRowProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   className?: string;
   hoverable?: boolean;
 }
 
-export function TerminalRow({ children, className, hoverable = true }: TerminalRowProps) {
+export function TerminalRow({ children, className, hoverable = true, ...props }: TerminalRowProps) {
   return (
     <div
+      {...props}
       className={cn(
         'border-b border-slate-800/50 px-4 py-3 last:border-b-0',
         hoverable && 'row-scan hover:bg-slate-850/50 transition-colors',

@@ -235,17 +235,18 @@ describe('TransactionDetailPage', () => {
       expect(api.getTransactionDetail).toHaveBeenCalled();
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /Witness \(2\)/ }));
-    expect(mockReplace).toHaveBeenCalled();
-    expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('tab=witness');
-
-    expect(screen.getByTestId('tx-witness-tab')).toBeInTheDocument();
+    expect(await screen.findByTestId('tx-witness-tab')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-item-1')).toBeInTheDocument();
-    expect(screen.getByTestId('tx-witness-inference-panel')).toBeInTheDocument();
-    expect(screen.getByText('extra_witnesses')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-deterministic-section')).toBeInTheDocument();
     expect(screen.getByText('WitnessArgs')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=0');
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
 
     fireEvent.click(screen.getByTestId('tx-witness-segment-item-1'));
     expect(screen.getByTestId('tx-witness-active-segment')).toBeInTheDocument();
@@ -262,19 +263,19 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-witness-active-segment')).toHaveTextContent(
       /(inputType|outputType)/
     );
-    expect(screen.queryByText('extra_witnesses')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear focus' }));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
     expect(screen.queryByTestId('tx-witness-focused-group')).not.toBeInTheDocument();
-    expect(screen.getByText('extra_witnesses')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Go witness #1' }));
+    fireEvent.click(screen.getByTestId('tx-witness-item-1'));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=1');
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
     expect(screen.getByText('DASWitness')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId('tx-witness-item-1'));
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
     fireEvent.click(screen.getByTestId('tx-witness-heuristic-item-0'));
     expect(screen.getByTestId('tx-witness-heuristic-detail-0')).toBeInTheDocument();
   });

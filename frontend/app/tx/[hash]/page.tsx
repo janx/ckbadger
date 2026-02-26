@@ -22,12 +22,18 @@ import { CellGraph } from '@/components/cell-graph';
 import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
 import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
-import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
+import { analyzeWitness, buildScriptGroupLens } from '@/lib/witness-analysis';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
 type TxGraphView = 'flow' | 'graph';
-const TX_TAB_VALUES = ['io', 'scripts', 'celldeps', 'witness', 'graph'] as const;
-type TxTab = (typeof TX_TAB_VALUES)[number];
+const SECTION_TAB_VALUES = ['io', 'scripts', 'celldeps', 'graph'] as const;
+type SectionTab = (typeof SECTION_TAB_VALUES)[number];
+const SECTION_TAB_TITLES: Record<SectionTab, string> = {
+  io: 'Inputs/Outputs',
+  scripts: 'Scripts',
+  celldeps: 'Cell Deps',
+  graph: 'Graph',
+};
 
 const WITNESS_BYTES_PER_ROW = 24;
 const EMPTY_WITNESSES: string[] = [];
@@ -100,8 +106,8 @@ function findPreferredSegmentIndex(
   return index >= 0 ? index : null;
 }
 
-function isTxTabValue(value: string | null): value is TxTab {
-  return value !== null && (TX_TAB_VALUES as readonly string[]).includes(value);
+function isSectionTabValue(value: string | null): value is SectionTab {
+  return value !== null && (SECTION_TAB_VALUES as readonly string[]).includes(value);
 }
 
 function parseNonNegativeInt(value: string | null): number | null {
@@ -111,6 +117,14 @@ function parseNonNegativeInt(value: string | null): number | null {
   return parsed;
 }
 
+function normalizeScriptHashType(hashType: string | undefined): string {
+  return hashType ?? 'unknown';
+}
+
+function normalizeScriptArgs(args: string | undefined): string {
+  return args ?? '0x';
+}
+
 export default function TransactionDetailPage() {
   const params = useParams();
   const pathname = usePathname();
@@ -118,8 +132,8 @@ export default function TransactionDetailPage() {
   const router = useRouter();
   const hash = params.hash as string;
   const tabFromQuery = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<TxTab>(() =>
-    isTxTabValue(tabFromQuery) ? tabFromQuery : 'io'
+  const [activeSectionTab, setActiveSectionTab] = useState<SectionTab>(() =>
+    isSectionTabValue(tabFromQuery) ? tabFromQuery : 'io'
   );
 
   const {
@@ -242,11 +256,11 @@ export default function TransactionDetailPage() {
   };
 
   useEffect(() => {
-    const nextTab = isTxTabValue(tabFromQuery) ? tabFromQuery : 'io';
-    if (nextTab !== activeTab) {
-      setActiveTab(nextTab);
+    const nextTab = isSectionTabValue(tabFromQuery) ? tabFromQuery : 'io';
+    if (nextTab !== activeSectionTab) {
+      setActiveSectionTab(nextTab);
     }
-  }, [activeTab, tabFromQuery]);
+  }, [activeSectionTab, tabFromQuery]);
 
   const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -255,9 +269,9 @@ export default function TransactionDetailPage() {
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
   };
 
-  const handleTabChange = (nextValue: string) => {
-    if (!isTxTabValue(nextValue)) return;
-    setActiveTab(nextValue);
+  const handleSectionTabChange = (nextValue: string) => {
+    if (!isSectionTabValue(nextValue)) return;
+    setActiveSectionTab(nextValue);
     updateSearchParams((nextParams) => {
       if (nextValue === 'io') {
         nextParams.delete('tab');
@@ -266,6 +280,65 @@ export default function TransactionDetailPage() {
       }
     });
   };
+
+  const selectedWitnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
+  const selectedScriptGroupFromQuery = searchParams.get('wg');
+  const [linkedWitnessIndex, setLinkedWitnessIndex] = useState<number | null>(
+    selectedWitnessFromQuery
+  );
+  const [linkedScriptGroupKey, setLinkedScriptGroupKey] = useState<string | null>(
+    selectedScriptGroupFromQuery
+  );
+
+  useEffect(() => {
+    setLinkedWitnessIndex(selectedWitnessFromQuery);
+    setLinkedScriptGroupKey(selectedScriptGroupFromQuery);
+  }, [hash, selectedScriptGroupFromQuery, selectedWitnessFromQuery]);
+
+  const ioHighlightState = useMemo(() => {
+    const highlightedInputIndices = new Set<number>();
+    const highlightedOutputIndices = new Set<number>();
+    if (!tx) return { highlightedInputIndices, highlightedOutputIndices };
+
+    const groups = buildScriptGroupLens(tx);
+    const focusedGroup =
+      linkedScriptGroupKey !== null
+        ? (groups.find((group) => group.key === linkedScriptGroupKey) ?? null)
+        : null;
+    const associatedGroups =
+      focusedGroup !== null
+        ? [focusedGroup]
+        : linkedWitnessIndex !== null
+          ? groups.filter((group) => group.witnessIndex === linkedWitnessIndex)
+          : [];
+
+    associatedGroups.forEach((group) => {
+      group.inputIndices.forEach((inputIndex) => highlightedInputIndices.add(inputIndex));
+    });
+
+    if (associatedGroups.length === 0 && linkedWitnessIndex !== null && tx.inputs) {
+      if (linkedWitnessIndex >= 0 && linkedWitnessIndex < tx.inputs.length) {
+        highlightedInputIndices.add(linkedWitnessIndex);
+      }
+    }
+
+    if (associatedGroups.length > 0 && tx.outputs) {
+      tx.outputs.forEach((output, outputIndex) => {
+        const isLinked = associatedGroups.some((group) => {
+          const script = group.kind === 'lock' ? output.lock : output.type;
+          if (!script?.codeHash) return false;
+          return (
+            script.codeHash === group.codeHash &&
+            normalizeScriptHashType(script.hashType) === group.hashType &&
+            normalizeScriptArgs(script.args) === group.args
+          );
+        });
+        if (isLinked) highlightedOutputIndices.add(outputIndex);
+      });
+    }
+
+    return { highlightedInputIndices, highlightedOutputIndices };
+  }, [linkedScriptGroupKey, linkedWitnessIndex, tx]);
 
   if (isLoading) {
     return (
@@ -461,142 +534,167 @@ export default function TransactionDetailPage() {
           </TerminalPanelContent>
         </TerminalPanel>
 
-        <TerminalPanel>
-          <Tabs value={activeTab} onValueChange={handleTabChange}>
-            <TerminalPanelHeader>
-              <TabsList>
-                <TabsTrigger value="io">
-                  Inputs/Outputs ({tx.inputsCount} → {tx.outputsCount})
-                </TabsTrigger>
-                <TabsTrigger value="scripts">Scripts</TabsTrigger>
-                <TabsTrigger value="celldeps">Cell Deps</TabsTrigger>
-                <TabsTrigger value="witness">Witness ({tx.witnesses?.length ?? 0})</TabsTrigger>
-                <TabsTrigger value="graph">Graph</TabsTrigger>
-              </TabsList>
+        <TerminalPanel className="mb-8">
+          <Tabs value={activeSectionTab} onValueChange={handleSectionTabChange}>
+            <TerminalPanelHeader
+              indicator="active"
+              actions={
+                <TabsList>
+                  <TabsTrigger value="io">
+                    Inputs/Outputs ({tx.inputsCount} {'->'} {tx.outputsCount})
+                  </TabsTrigger>
+                  <TabsTrigger value="scripts">Scripts</TabsTrigger>
+                  <TabsTrigger value="celldeps">Cell Deps</TabsTrigger>
+                  <TabsTrigger value="graph">Graph</TabsTrigger>
+                </TabsList>
+              }
+            >
+              {SECTION_TAB_TITLES[activeSectionTab]}
             </TerminalPanelHeader>
+            <TerminalPanelContent className="p-0">
+              <TabsContent value="io" className="mt-0 p-0">
+                <InputsOutputsTab
+                  tx={tx}
+                  scriptLookup={scriptLookup}
+                  highlightedInputIndices={ioHighlightState.highlightedInputIndices}
+                  highlightedOutputIndices={ioHighlightState.highlightedOutputIndices}
+                />
+              </TabsContent>
 
-            <TabsContent value="io" className="p-0">
-              <InputsOutputsTab tx={tx} scriptLookup={scriptLookup} />
-            </TabsContent>
+              <TabsContent value="scripts" className="mt-0 p-0">
+                <ScriptsSummaryTab tx={tx} scriptLookup={scriptLookup} />
+              </TabsContent>
 
-            <TabsContent value="scripts" className="p-0">
-              <ScriptsSummaryTab tx={tx} scriptLookup={scriptLookup} />
-            </TabsContent>
+              <TabsContent value="celldeps" className="mt-0 p-0">
+                <CellDepsTab cellDeps={cellDeps} isLoading={cellDepsLoading} />
+              </TabsContent>
 
-            <TabsContent value="celldeps" className="p-0">
-              <CellDepsTab cellDeps={cellDeps} isLoading={cellDepsLoading} />
-            </TabsContent>
-
-            <TabsContent value="witness" className="p-0">
-              <WitnessTab tx={tx} scriptLookup={scriptLookup} />
-            </TabsContent>
-
-            <TabsContent value="graph" className="p-4">
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="inline-flex rounded border border-slate-700/70 bg-slate-900/60 p-1">
-                    <button
-                      type="button"
-                      className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                        txGraphView === 'flow'
-                          ? 'bg-terminal-green/15 text-terminal-green'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                      onClick={() => setTxGraphView('flow')}
-                    >
-                      Flow View
-                    </button>
-                    <button
-                      type="button"
-                      className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                        txGraphView === 'graph'
-                          ? 'bg-terminal-green/15 text-terminal-green'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                      onClick={() => setTxGraphView('graph')}
-                    >
-                      Graph View
-                    </button>
+              <TabsContent
+                value="graph"
+                className="mt-0 rounded border border-slate-800/80 bg-slate-900/40 p-4"
+              >
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="inline-flex rounded border border-slate-700/70 bg-slate-900/60 p-1">
+                      <button
+                        type="button"
+                        className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                          txGraphView === 'flow'
+                            ? 'bg-terminal-green/15 text-terminal-green'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        onClick={() => setTxGraphView('flow')}
+                      >
+                        Flow View
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                          txGraphView === 'graph'
+                            ? 'bg-terminal-green/15 text-terminal-green'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        onClick={() => setTxGraphView('graph')}
+                      >
+                        Graph View
+                      </button>
+                    </div>
+                    {graphInsights.nodeCount > 0 && (
+                      <span className="text-xs text-slate-500">
+                        {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
+                      </span>
+                    )}
                   </div>
-                  {graphInsights.nodeCount > 0 && (
-                    <span className="text-xs text-slate-500">
-                      {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
-                    </span>
+
+                  {txGraphView === 'flow' ? (
+                    <div data-testid="tx-relationship-flow" className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Inputs in Graph
+                          </div>
+                          <div className="mt-1 font-mono text-lg text-slate-100">
+                            {graphInsights.inputLinkCount}
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Outputs in Graph
+                          </div>
+                          <div className="mt-1 font-mono text-lg text-slate-100">
+                            {graphInsights.outputNodes.length}
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Live Outputs
+                          </div>
+                          <div className="text-terminal-green mt-1 font-mono text-lg">
+                            {
+                              graphInsights.outputNodes.filter((node) => node.status === 'live')
+                                .length
+                            }
+                          </div>
+                        </div>
+                        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                          <div className="text-xs uppercase tracking-wide text-slate-400">
+                            Dead Outputs
+                          </div>
+                          <div className="mt-1 font-mono text-lg text-red-400">
+                            {
+                              graphInsights.outputNodes.filter((node) => node.status === 'dead')
+                                .length
+                            }
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                          Transaction Flow Snapshot
+                        </div>
+                        <div className="mt-2 text-sm text-slate-300">
+                          Inputs: <span className="font-mono text-slate-100">{tx.inputsCount}</span>{' '}
+                          {'->'} Outputs:{' '}
+                          <span className="font-mono text-slate-100">{tx.outputsCount}</span> |
+                          Graph Edges:{' '}
+                          <span className="font-mono text-slate-100">
+                            {graphInsights.outputLinkCount}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : graphData && graphData.nodes.length > 0 ? (
+                    <CellGraph
+                      nodes={graphData.nodes}
+                      links={graphData.links}
+                      onNodeClick={handleGraphNodeClick}
+                      width={undefined}
+                      height={graphInsights.graphHeight}
+                    />
+                  ) : (
+                    <p className="py-8 text-center text-slate-500">Loading graph...</p>
                   )}
                 </div>
-
-                {txGraphView === 'flow' ? (
-                  <div data-testid="tx-relationship-flow" className="space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                        <div className="text-xs uppercase tracking-wide text-slate-400">
-                          Inputs in Graph
-                        </div>
-                        <div className="mt-1 font-mono text-lg text-slate-100">
-                          {graphInsights.inputLinkCount}
-                        </div>
-                      </div>
-                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                        <div className="text-xs uppercase tracking-wide text-slate-400">
-                          Outputs in Graph
-                        </div>
-                        <div className="mt-1 font-mono text-lg text-slate-100">
-                          {graphInsights.outputNodes.length}
-                        </div>
-                      </div>
-                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                        <div className="text-xs uppercase tracking-wide text-slate-400">
-                          Live Outputs
-                        </div>
-                        <div className="text-terminal-green mt-1 font-mono text-lg">
-                          {
-                            graphInsights.outputNodes.filter((node) => node.status === 'live')
-                              .length
-                          }
-                        </div>
-                      </div>
-                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                        <div className="text-xs uppercase tracking-wide text-slate-400">
-                          Dead Outputs
-                        </div>
-                        <div className="mt-1 font-mono text-lg text-red-400">
-                          {
-                            graphInsights.outputNodes.filter((node) => node.status === 'dead')
-                              .length
-                          }
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
-                        Transaction Flow Snapshot
-                      </div>
-                      <div className="mt-2 text-sm text-slate-300">
-                        Inputs: <span className="font-mono text-slate-100">{tx.inputsCount}</span>{' '}
-                        {'->'} Outputs:{' '}
-                        <span className="font-mono text-slate-100">{tx.outputsCount}</span> | Graph
-                        Edges:{' '}
-                        <span className="font-mono text-slate-100">
-                          {graphInsights.outputLinkCount}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ) : graphData && graphData.nodes.length > 0 ? (
-                  <CellGraph
-                    nodes={graphData.nodes}
-                    links={graphData.links}
-                    onNodeClick={handleGraphNodeClick}
-                    width={undefined}
-                    height={graphInsights.graphHeight}
-                  />
-                ) : (
-                  <p className="py-8 text-center text-slate-500">Loading graph...</p>
-                )}
-              </div>
-            </TabsContent>
+              </TabsContent>
+            </TerminalPanelContent>
           </Tabs>
+        </TerminalPanel>
+
+        <TerminalPanel>
+          <TerminalPanelHeader indicator="active">
+            Witness ({tx.witnesses?.length ?? 0})
+          </TerminalPanelHeader>
+          <TerminalPanelContent className="p-0">
+            <WitnessTab
+              tx={tx}
+              scriptLookup={scriptLookup}
+              onSelectionChange={(witnessIndex, groupKey) => {
+                setLinkedWitnessIndex(witnessIndex);
+                setLinkedScriptGroupKey(groupKey);
+              }}
+            />
+          </TerminalPanelContent>
         </TerminalPanel>
       </main>
     </div>
@@ -606,6 +704,15 @@ export default function TransactionDetailPage() {
 interface TabProps {
   tx: NonNullable<Awaited<ReturnType<typeof api.getTransactionDetail>>>;
   scriptLookup?: ScriptLookupResponse;
+}
+
+interface InputsOutputsTabProps extends TabProps {
+  highlightedInputIndices?: Set<number>;
+  highlightedOutputIndices?: Set<number>;
+}
+
+interface WitnessTabProps extends TabProps {
+  onSelectionChange?: (witnessIndex: number, groupKey: string | null) => void;
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
@@ -662,7 +769,12 @@ function ScriptLabel({
   );
 }
 
-function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
+function InputsOutputsTab({
+  tx,
+  scriptLookup,
+  highlightedInputIndices,
+  highlightedOutputIndices,
+}: InputsOutputsTabProps) {
   return (
     <div className="grid gap-6 p-4 lg:grid-cols-2">
       <div>
@@ -672,7 +784,15 @@ function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
         {tx.inputs && tx.inputs.length > 0 ? (
           <div className="rounded-lg border border-slate-800 bg-slate-900/50">
             {tx.inputs.map((input, index) => (
-              <TerminalRow key={index} className="flex flex-col gap-2">
+              <TerminalRow
+                key={index}
+                data-testid={`tx-io-input-${index}`}
+                className={`flex flex-col gap-2 ${
+                  highlightedInputIndices?.has(index)
+                    ? 'io-linked-highlight border-cyan-400/60 bg-cyan-500/10 ring-1 ring-cyan-400/30'
+                    : ''
+                }`}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-slate-500">#{index}</span>
@@ -725,7 +845,15 @@ function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
         {tx.outputs && tx.outputs.length > 0 ? (
           <div className="rounded-lg border border-slate-800 bg-slate-900/50">
             {tx.outputs.map((output, index) => (
-              <TerminalRow key={index} className="flex flex-col gap-2">
+              <TerminalRow
+                key={index}
+                data-testid={`tx-io-output-${index}`}
+                className={`flex flex-col gap-2 ${
+                  highlightedOutputIndices?.has(index)
+                    ? 'io-linked-highlight border-cyan-400/60 bg-cyan-500/10 ring-1 ring-cyan-400/30'
+                    : ''
+                }`}
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-xs text-slate-500">#{index}</span>
@@ -758,7 +886,7 @@ function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
   );
 }
 
-function WitnessTab({ tx, scriptLookup }: TabProps) {
+function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -772,10 +900,6 @@ function WitnessTab({ tx, scriptLookup }: TabProps) {
     [tx.inputsCount, witnesses]
   );
   const scriptGroupLens = useMemo(() => buildScriptGroupLens(tx), [tx]);
-  const witnessInsights = useMemo(
-    () => inferWitnessInsights(tx, witnessAnalyses, scriptGroupLens),
-    [tx, witnessAnalyses, scriptGroupLens]
-  );
 
   const [activeWitnessIndex, setActiveWitnessIndex] = useState(() => witnessFromQuery ?? 0);
   const [hoveredSegmentIndex, setHoveredSegmentIndex] = useState<number | null>(null);
@@ -835,22 +959,10 @@ function WitnessTab({ tx, scriptLookup }: TabProps) {
       ? (scriptGroupLens.find((group) => group.key === activeScriptGroupKey) ?? null)
       : null;
   const activeDeterministic = activeWitness?.deterministic ?? null;
-  const visibleWitnessInsights = useMemo(() => {
-    if (!activeScriptGroup) return witnessInsights;
-    return witnessInsights.filter((insight) => {
-      const related = insight.relatedWitnessIndices ?? [];
-      return related.length === 0 || related.includes(activeScriptGroup.witnessIndex);
-    });
-  }, [activeScriptGroup, witnessInsights]);
 
   const syncWitnessQuery = (nextWitnessIndex: number, nextGroupKey: string | null) => {
     const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.set('tab', 'witness');
-    if (nextWitnessIndex > 0) {
-      nextParams.set('witness', String(nextWitnessIndex));
-    } else {
-      nextParams.delete('witness');
-    }
+    nextParams.set('witness', String(nextWitnessIndex));
     if (nextGroupKey) {
       nextParams.set('wg', nextGroupKey);
     } else {
@@ -947,6 +1059,7 @@ function WitnessTab({ tx, scriptLookup }: TabProps) {
   const selectWitness = (witnessIndex: number) => {
     setActiveScriptGroupKey(null);
     setActiveWitnessIndex(witnessIndex);
+    onSelectionChange?.(witnessIndex, null);
     syncWitnessQuery(witnessIndex, null);
   };
 
@@ -954,139 +1067,142 @@ function WitnessTab({ tx, scriptLookup }: TabProps) {
     const nextGroupKey = activeScriptGroupKey === groupKey ? null : groupKey;
     setActiveScriptGroupKey(nextGroupKey);
     setActiveWitnessIndex(witnessIndex);
+    onSelectionChange?.(witnessIndex, nextGroupKey);
     syncWitnessQuery(witnessIndex, nextGroupKey);
   };
 
-  const jumpToWitnessFromInference = (witnessIndex: number) => {
-    setActiveScriptGroupKey(null);
-    setActiveWitnessIndex(witnessIndex);
-    syncWitnessQuery(witnessIndex, null);
-  };
+  const inputWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'input').length;
+  const extraWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'extra').length;
 
   return (
     <div className="space-y-4 p-4" data-testid="tx-witness-tab">
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Witness Entries</div>
-          <div className="mt-1 font-mono text-lg text-slate-100">{witnessAnalyses.length}</div>
-        </div>
-        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Input Witnesses</div>
-          <div className="text-terminal-green mt-1 font-mono text-lg">
-            {witnessAnalyses.filter((witness) => witness.role === 'input').length}
-          </div>
-        </div>
-        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-          <div className="text-xs uppercase tracking-wide text-slate-400">Extra Witnesses</div>
-          <div className="mt-1 font-mono text-lg text-cyan-300">
-            {witnessAnalyses.filter((witness) => witness.role === 'extra').length}
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
-          Witness Entries
-        </div>
-        <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
-          {witnessAnalyses.map((witness) => (
-            <button
-              key={witness.index}
-              type="button"
-              data-testid={`tx-witness-item-${witness.index}`}
-              onClick={() => selectWitness(witness.index)}
-              className={`rounded border px-2 py-1.5 text-left transition ${
-                witness.index === activeWitnessIndex
-                  ? 'border-terminal-green/70 bg-terminal-green/10'
-                  : 'border-slate-700/70 bg-slate-900/70 hover:border-slate-500/70'
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="font-mono text-[11px] text-slate-100">#{witness.index}</div>
-                <Badge variant={witness.role === 'input' ? 'green' : 'gray'}>{witness.role}</Badge>
-              </div>
-              <div className="mt-1 font-mono text-[11px] text-slate-400">
-                {witness.byteLength.toLocaleString()} bytes
-              </div>
-              <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
-                {witness.previewHex ? `0x${witness.previewHex.slice(0, 40)}` : '0x'}
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {scriptGroupLens.length > 0 && (
+      <div className={`grid gap-3 ${scriptGroupLens.length > 0 ? 'md:grid-cols-2' : ''}`}>
         <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
-          <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
-            Script Group Lens
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-[11px] uppercase tracking-wider text-slate-500">
+              Witness Entries
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="rounded border border-slate-700/70 bg-slate-900/80 px-1.5 py-0.5 font-mono text-[11px] text-slate-300">
+                total {witnessAnalyses.length}
+              </span>
+              <span className="border-terminal-green/30 bg-terminal-green/10 text-terminal-green rounded border px-1.5 py-0.5 font-mono text-[11px]">
+                input {inputWitnessCount}
+              </span>
+              <span className="rounded border border-cyan-400/30 bg-cyan-500/10 px-1.5 py-0.5 font-mono text-[11px] text-cyan-300">
+                extra {extraWitnessCount}
+              </span>
+            </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {scriptGroupLens.map((group) => {
-              const groupScriptName = scriptLookup?.[group.codeHash]?.name ?? null;
-              const isFocused = activeScriptGroup?.key === group.key;
-              return (
-                <div
-                  key={group.key}
-                  className={`rounded border px-2 py-1.5 ${
-                    isFocused
-                      ? 'border-cyan-400/70 bg-cyan-500/10'
-                      : group.witnessIndex === activeWitnessIndex
-                        ? 'border-terminal-green/70 bg-terminal-green/10'
-                        : 'border-slate-700/70 bg-slate-900/70'
-                  }`}
-                >
-                  <div className="mb-1 flex items-center gap-1.5">
-                    <Badge variant="gray">{group.kind}</Badge>
-                    <Badge variant="gray">{getScriptRefBadgeLabel(group.hashType)}</Badge>
-                    <button
-                      type="button"
-                      data-testid={`tx-script-group-focus-${group.witnessIndex}-${group.kind}`}
-                      onClick={() => toggleScriptGroupFocus(group.key, group.witnessIndex)}
-                      className="text-terminal-green font-mono text-xs hover:underline"
-                    >
-                      {isFocused ? 'focused' : `witness #${group.witnessIndex}`}
-                    </button>
-                  </div>
-                  {hasKnownScriptName(groupScriptName) ? (
-                    <Link
-                      href={getScriptHref({
-                        codeHash: group.codeHash,
-                        hashType: group.hashType,
-                        scriptKind: group.kind,
-                        scriptName: groupScriptName,
-                      })}
-                      className="text-terminal-green text-sm hover:underline"
-                    >
-                      {groupScriptName}
-                    </Link>
-                  ) : (
-                    <Link
-                      href={getScriptHref({
-                        codeHash: group.codeHash,
-                        hashType: group.hashType,
-                        scriptKind: group.kind,
-                        scriptName: groupScriptName,
-                      })}
-                      className="group"
-                    >
-                      <HexDisplay
-                        value={group.codeHash}
-                        size="sm"
-                        color="accent"
-                        className="group-hover:underline"
-                      />
-                    </Link>
-                  )}
-                  <div className="mt-1 font-mono text-[11px] text-slate-500">
-                    inputs: [{group.inputIndices.join(', ')}]
-                  </div>
+
+          <div className="grid gap-1 sm:grid-cols-2">
+            {witnessAnalyses.map((witness) => (
+              <button
+                key={witness.index}
+                type="button"
+                data-testid={`tx-witness-item-${witness.index}`}
+                onClick={() => selectWitness(witness.index)}
+                className={`rounded border px-2 py-1.5 text-left transition ${
+                  witness.index === activeWitnessIndex
+                    ? 'border-terminal-green/70 bg-terminal-green/10'
+                    : 'border-slate-700/70 bg-slate-900/70 hover:border-slate-500/70'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-mono text-[11px] text-slate-100">#{witness.index}</div>
+                  <Badge variant={witness.role === 'input' ? 'green' : 'gray'}>
+                    {witness.role}
+                  </Badge>
                 </div>
-              );
-            })}
+                <div className="mt-1 font-mono text-[11px] text-slate-400">
+                  {witness.byteLength.toLocaleString()} bytes
+                </div>
+                <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
+                  {witness.previewHex ? `0x${witness.previewHex.slice(0, 40)}` : '0x'}
+                </div>
+              </button>
+            ))}
           </div>
         </div>
-      )}
+        {scriptGroupLens.length > 0 && (
+          <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
+            <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
+              Script Group Lens
+            </div>
+            <div className="grid gap-1.5">
+              {scriptGroupLens.map((group) => {
+                const groupScriptName = scriptLookup?.[group.codeHash]?.name ?? null;
+                const isFocused = activeScriptGroup?.key === group.key;
+                return (
+                  <div
+                    key={group.key}
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`tx-script-group-focus-${group.witnessIndex}-${group.kind}`}
+                    onClick={() => toggleScriptGroupFocus(group.key, group.witnessIndex)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        toggleScriptGroupFocus(group.key, group.witnessIndex);
+                      }
+                    }}
+                    className={`rounded border px-2 py-1.5 ${
+                      isFocused
+                        ? 'border-cyan-400/70 bg-cyan-500/10'
+                        : group.witnessIndex === activeWitnessIndex
+                          ? 'border-terminal-green/70 bg-terminal-green/10'
+                          : 'border-slate-700/70 bg-slate-900/70'
+                    } cursor-pointer transition hover:border-slate-500/80`}
+                  >
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                      <Badge variant="gray">{group.kind}</Badge>
+                      <Badge variant="gray">{getScriptRefBadgeLabel(group.hashType)}</Badge>
+                      <span className="text-terminal-green font-mono text-xs">
+                        {isFocused ? 'focused' : `witness #${group.witnessIndex}`}
+                      </span>
+                    </div>
+                    {hasKnownScriptName(groupScriptName) ? (
+                      <Link
+                        href={getScriptHref({
+                          codeHash: group.codeHash,
+                          hashType: group.hashType,
+                          scriptKind: group.kind,
+                          scriptName: groupScriptName,
+                        })}
+                        onClick={(event) => event.stopPropagation()}
+                        className="text-terminal-green text-sm hover:underline"
+                      >
+                        {groupScriptName}
+                      </Link>
+                    ) : (
+                      <Link
+                        href={getScriptHref({
+                          codeHash: group.codeHash,
+                          hashType: group.hashType,
+                          scriptKind: group.kind,
+                          scriptName: groupScriptName,
+                        })}
+                        onClick={(event) => event.stopPropagation()}
+                        className="group"
+                      >
+                        <HexDisplay
+                          value={group.codeHash}
+                          size="sm"
+                          color="accent"
+                          className="group-hover:underline"
+                        />
+                      </Link>
+                    )}
+                    <div className="mt-1 font-mono text-[11px] text-slate-500">
+                      inputs: [{group.inputIndices.join(', ')}]
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
 
       {activeScriptGroup && (
         <div
@@ -1101,88 +1217,13 @@ function WitnessTab({ tx, scriptLookup }: TabProps) {
             type="button"
             onClick={() => {
               setActiveScriptGroupKey(null);
+              onSelectionChange?.(activeWitness.index, null);
               syncWitnessQuery(activeWitness.index, null);
             }}
             className="rounded border border-cyan-400/50 px-2 py-1 font-mono text-xs text-cyan-200 hover:bg-cyan-500/20"
           >
             Clear focus
           </button>
-        </div>
-      )}
-
-      {witnessInsights.length > 0 && (
-        <div
-          data-testid="tx-witness-inference-panel"
-          className="rounded border border-slate-800 bg-slate-900/50 p-3"
-        >
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] uppercase tracking-wider text-slate-500">
-              Execution Inference
-            </span>
-            {activeScriptGroup && (
-              <Badge variant="neutral">focus witness #{activeScriptGroup.witnessIndex}</Badge>
-            )}
-          </div>
-          {visibleWitnessInsights.length === 0 ? (
-            <div className="rounded border border-slate-700/70 bg-slate-900/70 px-2 py-2 text-xs text-slate-500">
-              No inference items matched this script-group focus.
-            </div>
-          ) : (
-            <div className="grid gap-2 sm:grid-cols-2">
-              {visibleWitnessInsights.map((insight, idx) => {
-                const relatedWitnessIndices = Array.from(
-                  new Set(
-                    (insight.relatedWitnessIndices ?? []).filter(
-                      (witnessIndex) => witnessIndex >= 0 && witnessIndex < witnessAnalyses.length
-                    )
-                  )
-                ).sort((a, b) => a - b);
-                return (
-                  <div
-                    key={`${insight.kind}-${idx}`}
-                    data-testid={`tx-witness-inference-item-${idx}`}
-                    className="rounded border border-slate-700/70 bg-slate-900/70 px-2 py-1.5"
-                  >
-                    <div className="mb-1 flex items-center gap-1.5">
-                      <Badge
-                        variant={
-                          insight.severity === 'error'
-                            ? 'red'
-                            : insight.severity === 'warning'
-                              ? 'amber'
-                              : 'green'
-                        }
-                      >
-                        {insight.severity}
-                      </Badge>
-                      <span className="font-mono text-[11px] text-slate-300">{insight.kind}</span>
-                    </div>
-                    <div className="text-[11px] leading-4 text-slate-300">{insight.message}</div>
-                    {insight.detail && (
-                      <div className="mt-1 break-all font-mono text-[11px] text-slate-500">
-                        {insight.detail}
-                      </div>
-                    )}
-                    {relatedWitnessIndices.length > 0 && (
-                      <div className="mt-1.5 flex flex-wrap gap-1">
-                        {relatedWitnessIndices.map((witnessIndex) => (
-                          <button
-                            key={`${insight.kind}-witness-${witnessIndex}`}
-                            type="button"
-                            data-testid={`tx-witness-inference-jump-${idx}-${witnessIndex}`}
-                            onClick={() => jumpToWitnessFromInference(witnessIndex)}
-                            className="hover:border-terminal-green/70 hover:text-terminal-green rounded border border-slate-600/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-300"
-                          >
-                            Go witness #{witnessIndex}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       )}
 
