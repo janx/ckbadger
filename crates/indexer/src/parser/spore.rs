@@ -57,14 +57,17 @@ impl SporeParser {
         code_hash == parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID).as_slice()
     }
 
-    pub fn is_spore_type_script(code_hash: &[u8]) -> bool {
+    pub fn is_spore_nft_type_script(code_hash: &[u8]) -> bool {
         let spore_hashes = [
             parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
-            parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID),
             parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V2),
             parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V1),
         ];
         spore_hashes.iter().any(|h| code_hash == h.as_slice())
+    }
+
+    pub fn is_spore_type_script(code_hash: &[u8]) -> bool {
+        Self::is_spore_nft_type_script(code_hash) || Self::is_did_type_script(code_hash)
     }
 
     pub fn is_cluster_type_script(code_hash: &[u8]) -> bool {
@@ -79,22 +82,35 @@ impl SporeParser {
     pub fn parse_spore_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedSporeCell> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
+        let is_did = Self::is_did_type_script(&type_code_hash);
 
-        if !Self::is_spore_type_script(&type_code_hash) {
+        if !is_did && !Self::is_spore_nft_type_script(&type_code_hash) {
             return None;
         }
-
-        let data = parse_hex_to_bytes(data_hex);
-        let spore_data = Self::parse_spore_data(&data)?;
 
         let spore_id = parse_hex_to_bytes(&type_script.args);
         let type_script_hash = ScriptParser::compute_script_hash(type_script);
         let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
 
+        if is_did {
+            return Some(ParsedSporeCell {
+                spore_id,
+                type_script_hash,
+                is_did: true,
+                content_type: String::new(),
+                content: Vec::new(),
+                cluster_id: None,
+                owner_lock_hash,
+            });
+        }
+
+        let data = parse_hex_to_bytes(data_hex);
+        let spore_data = Self::parse_spore_data(&data)?;
+
         Some(ParsedSporeCell {
             spore_id,
             type_script_hash,
-            is_did: Self::is_did_type_script(&type_code_hash),
+            is_did: false,
             content_type: spore_data.content_type,
             content: spore_data.content,
             cluster_id: spore_data.cluster_id,
@@ -277,6 +293,14 @@ mod tests {
         }
     }
 
+    fn create_did_type_script(did_id: &str) -> Script {
+        Script {
+            code_hash: SPORE_CODE_HASH_MAINNET_DID.to_string(),
+            hash_type: "type".to_string(),
+            args: did_id.to_string(),
+        }
+    }
+
     fn create_cluster_type_script(cluster_id: &str) -> Script {
         Script {
             code_hash: CLUSTER_CODE_HASH.to_string(),
@@ -340,10 +364,22 @@ mod tests {
         let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH);
         assert!(SporeParser::is_spore_type_script(&spore_hash));
 
+        let did_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID);
+        assert!(SporeParser::is_spore_type_script(&did_hash));
+
         let other_hash = parse_hex_to_bytes(
             "0x0000000000000000000000000000000000000000000000000000000000000000",
         );
         assert!(!SporeParser::is_spore_type_script(&other_hash));
+    }
+
+    #[test]
+    fn test_is_spore_nft_type_script_excludes_did() {
+        let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH);
+        assert!(SporeParser::is_spore_nft_type_script(&spore_hash));
+
+        let did_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID);
+        assert!(!SporeParser::is_spore_nft_type_script(&did_hash));
     }
 
     #[test]
@@ -399,6 +435,24 @@ mod tests {
         let parsed = result.unwrap();
         assert!(parsed.cluster_id.is_some());
         assert_eq!(parsed.cluster_id.as_ref().unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_parse_did_cell_uses_did_path_without_cluster_id() {
+        let did_id = "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_did_type_script(did_id)),
+        };
+
+        // did:ckb uses its own NFT standard; parser must not interpret payload as spore molecule.
+        let data_hex = "0x0102030405";
+        let parsed = SporeParser::parse_spore_cell(&output, data_hex).expect("should parse did");
+        assert!(parsed.is_did);
+        assert!(parsed.cluster_id.is_none());
+        assert!(parsed.content_type.is_empty());
+        assert!(parsed.content.is_empty());
     }
 
     #[test]

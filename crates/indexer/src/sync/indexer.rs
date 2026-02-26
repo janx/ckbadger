@@ -4141,7 +4141,7 @@ impl Indexer {
                             cell.type_args.as_ref(),
                         ) {
                             if type_args.len() >= 32
-                                && SporeParser::is_spore_type_script(type_code_hash)
+                                && SporeParser::is_spore_nft_type_script(type_code_hash)
                             {
                                 let spore_id = type_args[..32].to_vec();
                                 let cluster_id =
@@ -4254,7 +4254,7 @@ impl Indexer {
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
                                 {
-                                    if SporeParser::is_spore_type_script(type_code_hash) {
+                                    if SporeParser::is_spore_nft_type_script(type_code_hash) {
                                         let spore_index = if let Some(cached) =
                                             spore_type_index_cache.get(type_script_hash)
                                         {
@@ -6025,7 +6025,9 @@ impl Indexer {
                     cell.type_code_hash.as_ref(),
                     cell.type_args.as_ref(),
                 ) {
-                    if type_args.len() >= 32 && SporeParser::is_spore_type_script(type_code_hash) {
+                    if type_args.len() >= 32
+                        && SporeParser::is_spore_nft_type_script(type_code_hash)
+                    {
                         let spore_id = type_args[..32].to_vec();
                         let cluster_id = SporeParser::parse_spore_cluster_id_from_data(&cell.data);
                         let index = SporeTypeIndex {
@@ -6122,7 +6124,7 @@ impl Indexer {
                         if let (Some(type_script_hash), Some(type_code_hash)) =
                             (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
                         {
-                            if SporeParser::is_spore_type_script(type_code_hash) {
+                            if SporeParser::is_spore_nft_type_script(type_code_hash) {
                                 let spore_index = if let Some(cached) =
                                     spore_type_index_cache.get(type_script_hash)
                                 {
