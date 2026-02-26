@@ -49,6 +49,7 @@ services:
         condition: service_healthy
     environment:
       CKBADGER_DATA_PATH: /data/ckbadger-store
+      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db
@@ -60,7 +61,7 @@ services:
         hard: 65536
     volumes:
       - ${CKB_HOST_DATA_DIR:-ckb-data}:/var/lib/ckb:ro
-      - ckbadger-data:/data/ckbadger-store
+      - ckbadger-data:/data
       - ./docs/token-labels:/app/token-labels:ro
       - ./docs/script-name-overrides.json:/app/script-name-overrides.json:ro
     restart: unless-stopped
@@ -75,6 +76,7 @@ services:
         condition: service_healthy
     environment:
       CKBADGER_DATA_PATH: /data/ckbadger-store
+      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db
@@ -85,7 +87,7 @@ services:
         hard: 65536
     volumes:
       - ${CKB_HOST_DATA_DIR:-ckb-data}:/var/lib/ckb:ro
-      - ckbadger-data:/data/ckbadger-store:ro
+      - ckbadger-data:/data:ro
     ports:
       - '3001:3001'
     restart: unless-stopped

@@ -171,7 +171,7 @@ make up CKB_NODE_MODE=external           # Force external mode for one run
 
 `reset CONFIRM=1` removes:
 
-- local `CKBADGER_DATA_PATH` (+ api secondary path)
+- local `CKBADGER_DATA_PATH` / `CKBADGER_DERIVED_DATA_PATH` (+ both api secondary paths)
 - Docker volumes `ckbadger-data` and `redis-data`
 - keeps `ckb-data` untouched
 
@@ -304,6 +304,7 @@ cargo run -p ckbadger-indexer -- \
 
 # Environment variables (common)
 CKBADGER_DATA_PATH=./data/ckbadger-store
+CKBADGER_DERIVED_DATA_PATH=./data/ckbadger-store-derived
 CKB_RPC_URL=http://localhost:8114
 REDIS_URL=redis://localhost:6379
 ```
@@ -441,11 +442,17 @@ Optional flags:
 
 ## ckbadger-store (Embedded Storage Engine)
 
-All data is stored in a single RocksDB instance (`ckbadger-store` crate) with multiple column families. The indexer opens it read-write; the API opens a secondary (read-only) instance.
+ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-| Parameter            | Default                 | Description            |
-| -------------------- | ----------------------- | ---------------------- |
-| `CKBADGER_DATA_PATH` | `./data/ckbadger-store` | RocksDB data directory |
+- core store (`CKBADGER_DATA_PATH`) for canonical chain state
+- derived store (`CKBADGER_DERIVED_DATA_PATH`) for derived/query-optimized datasets
+
+The indexer opens both stores read-write; the API opens both stores in secondary (read-only) mode.
+
+| Parameter                    | Default                         | Description                    |
+| ---------------------------- | ------------------------------- | ------------------------------ |
+| `CKBADGER_DATA_PATH`         | `./data/ckbadger-store`         | Core RocksDB data directory    |
+| `CKBADGER_DERIVED_DATA_PATH` | `./data/ckbadger-store-derived` | Derived RocksDB data directory |
 
 **Key Column Families:**
 
@@ -463,8 +470,8 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with mu
 
 **Key Design:**
 
-- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands
-- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API
+- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands (core + derived)
+- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API (core + derived)
 - All store operations are synchronous (RocksDB reads are fast)
 
 **Memory Considerations:**
@@ -478,8 +485,10 @@ All data is stored in a single RocksDB instance (`ckbadger-store` crate) with mu
 # Default: uses ./data/ckbadger-store
 cargo run -p ckbadger-indexer
 
-# Custom path
-CKBADGER_DATA_PATH=/ssd/ckbadger-store cargo run -p ckbadger-indexer
+# Custom paths
+CKBADGER_DATA_PATH=/ssd/ckbadger-store \
+CKBADGER_DERIVED_DATA_PATH=/ssd/ckbadger-store-derived \
+cargo run -p ckbadger-indexer
 ```
 
 ## Data Integrity Verification (`verify` subcommand)

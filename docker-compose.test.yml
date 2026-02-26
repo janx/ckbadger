@@ -12,9 +12,10 @@ services:
   api-test:
     build:
       context: .
-      dockerfile: docker/api/Dockerfile
+      dockerfile: docker/Dockerfile.api
     environment:
       CKBADGER_DATA_PATH: /data/ckbadger-store
+      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
       REDIS_URL: redis://redis-test:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-https://mainnet.ckbapp.dev}
       CKB_NETWORK: mainnet
@@ -25,7 +26,7 @@ services:
       redis-test:
         condition: service_healthy
     volumes:
-      - test-data:/data/ckbadger-store:ro
+      - test-data:/data:ro
     healthcheck:
       test: ['CMD', 'curl', '-f', 'http://localhost:3001/api/v1/blocks']
       interval: 10s
@@ -34,8 +35,8 @@ services:
 
   frontend-test:
     build:
-      context: ./frontend
-      dockerfile: ../docker/frontend/Dockerfile
+      context: .
+      dockerfile: docker/Dockerfile.frontend
     environment:
       NEXT_PUBLIC_API_URL: http://api-test:3001/api/v1
     ports:
