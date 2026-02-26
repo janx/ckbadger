@@ -2022,19 +2022,19 @@ const PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS: u64 = 8;
 const BULK_PHASE_COMMIT_SLOW_WARN_MS: f64 = 2_000.0;
 const ADAPTIVE_BATCH_BASE_MIN_TXS: u64 = 10_000;
 const ADAPTIVE_BATCH_HARD_MIN_TXS: u64 = 2_000;
-const ADAPTIVE_BATCH_MAX_TXS: u64 = 400_000;
+const ADAPTIVE_BATCH_MAX_TXS: u64 = 160_000;
 const ADAPTIVE_BATCH_INITIAL_TXS: u64 = 40_000;
 const ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF: u64 = 4_000_000;
-const ADAPTIVE_BATCH_EARLY_TARGET_TXS: u64 = 200_000;
+const ADAPTIVE_BATCH_EARLY_TARGET_TXS: u64 = 120_000;
 const ADAPTIVE_BATCH_MIN_BLOCKS: u64 = 1;
 const ADAPTIVE_BATCH_MAX_BLOCKS: u64 = 5_000;
 const ADAPTIVE_BATCH_TPB_EMA_ALPHA_PCT: u64 = 20; // 0.20
 const ADAPTIVE_BATCH_INITIAL_TPB_MILLI: u64 = 20_000; // 20.0 tx/block
 const ADAPTIVE_BATCH_INITIAL_INFLIGHT: u64 = 3;
 const ADAPTIVE_BATCH_COOLDOWN_STEPS: u64 = 3;
-const ADAPTIVE_BATCH_WRITE_TARGET_MS: f64 = 5_000.0;
-const ADAPTIVE_BATCH_WRITE_LO_MS: f64 = 2_500.0;
-const ADAPTIVE_BATCH_WRITE_HI_MS: f64 = 12_000.0;
+const ADAPTIVE_BATCH_WRITE_TARGET_MS: f64 = 3_000.0;
+const ADAPTIVE_BATCH_WRITE_LO_MS: f64 = 1_500.0;
+const ADAPTIVE_BATCH_WRITE_HI_MS: f64 = 8_000.0;
 const ADAPTIVE_BATCH_WRITE_HEALTHY_US_PER_TX: f64 = 300.0;
 const ADAPTIVE_BATCH_WRITE_TARGET_US_PER_TX: f64 = 450.0;
 const ADAPTIVE_BATCH_WRITE_HI_US_PER_TX: f64 = 900.0;
@@ -11393,7 +11393,7 @@ mod tests {
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 1.0,
-                batch_tx_count: 10_000,
+                batch_tx_count: 8_000,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -11458,7 +11458,7 @@ mod tests {
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_TARGET_MS + 10.0,
-                batch_tx_count: 10_000,
+                batch_tx_count: 5_000,
                 parse_queue_fill_pct: Some(75.0),
                 writer_queue_fill_pct: Some(87.5),
                 memory_ratio_pct: Some(10.0),
@@ -11489,7 +11489,7 @@ mod tests {
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 500.0,
-                batch_tx_count: 10_000,
+                batch_tx_count: 8_000,
                 parse_queue_fill_pct: Some(97.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
