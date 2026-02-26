@@ -1,5 +1,5 @@
-const MARKDOWN_INTERNAL_PREFIX = '/__md';
-const RAW_INTERNAL_PREFIX = '/__raw';
+const MARKDOWN_INTERNAL_PREFIX = '/ai-md';
+const RAW_INTERNAL_PREFIX = '/ai-raw';
 const RAW_ACCEPT = 'application/vnd.ckbadger.raw+json';
 
 interface MarkdownRewriteInput {
@@ -13,7 +13,7 @@ export interface MarkdownRewriteDecision {
   rewrite: boolean;
   sourcePath?: string;
   removeFormatParam?: boolean;
-  internalPrefix?: '/__md' | '/__raw';
+  internalPrefix?: '/ai-md' | '/ai-raw';
 }
 
 function normalizePathname(pathname: string): string {

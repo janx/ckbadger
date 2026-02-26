@@ -54,7 +54,8 @@ describe('parseMarkdownSourcePath', () => {
     const appDir = path.join(process.cwd(), 'app');
     const pageFiles = walk(appDir).filter((file) => file.endsWith('/page.tsx'));
     const routes = pageFiles
-      .filter((file) => !file.includes('/__md/'))
+      .filter((file) => !file.includes('/ai-md/'))
+      .filter((file) => !file.includes('/ai-raw/'))
       .map((file) => routeFromPageFile(file))
       .sort();
 

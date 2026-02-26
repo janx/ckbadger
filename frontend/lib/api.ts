@@ -1,7 +1,32 @@
 import { normalizeNftAssetId } from '@/lib/nft-collections';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
+const DEFAULT_API_BASE = 'http://localhost:3001/api/v1';
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+export function resolveApiBase(
+  env: {
+    [key: string]: string | undefined;
+    CKBADGER_SERVER_API_URL?: string;
+    NEXT_PUBLIC_API_URL?: string;
+  } = process.env,
+  runtime: 'server' | 'client' = typeof window === 'undefined' ? 'server' : 'client'
+): string {
+  const serverApiUrl = env.CKBADGER_SERVER_API_URL?.trim();
+  const publicApiUrl = env.NEXT_PUBLIC_API_URL?.trim();
+
+  const base =
+    runtime === 'server'
+      ? (serverApiUrl ?? publicApiUrl ?? DEFAULT_API_BASE)
+      : (publicApiUrl ?? serverApiUrl ?? DEFAULT_API_BASE);
+
+  return trimTrailingSlash(base);
+}
+
+const API_BASE = resolveApiBase();
 
 interface PaginatedResponse<T> {
   data: T[];

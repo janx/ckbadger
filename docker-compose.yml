@@ -101,6 +101,7 @@ services:
       - api
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:3001/api/v1
+      CKBADGER_SERVER_API_URL: http://api:3001/api/v1
     ports:
       - '3000:3000'
     restart: unless-stopped

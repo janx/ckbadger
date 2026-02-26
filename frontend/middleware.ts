@@ -2,8 +2,8 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { resolveMarkdownRewrite } from '@/lib/ai/markdown-request';
 
-const MARKDOWN_INTERNAL_PREFIX = '/__md';
-const RAW_INTERNAL_PREFIX = '/__raw';
+const MARKDOWN_INTERNAL_PREFIX = '/ai-md';
+const RAW_INTERNAL_PREFIX = '/ai-raw';
 
 export function middleware(request: NextRequest): NextResponse {
   const decision = resolveMarkdownRewrite({
