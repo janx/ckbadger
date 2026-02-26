@@ -240,13 +240,18 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-item-1')).toBeInTheDocument();
-    expect(screen.getByTestId('tx-witness-deterministic-section')).toBeInTheDocument();
-    expect(screen.getByText('WitnessArgs')).toBeInTheDocument();
+    expect(screen.getByText('Script Groups')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('tx-witness-deterministic-section')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('tx-witness-item-0'));
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=0');
     expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('border-terminal-green/70');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('border-terminal-green/70');
+    expect(screen.getByTestId('tx-witness-deterministic-section')).toBeInTheDocument();
+    expect(screen.getByText('WitnessArgs')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('tx-witness-segment-item-1'));
     expect(screen.getByTestId('tx-witness-active-segment')).toBeInTheDocument();
@@ -278,5 +283,93 @@ describe('TransactionDetailPage', () => {
     expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
     fireEvent.click(screen.getByTestId('tx-witness-heuristic-item-0'));
     expect(screen.getByTestId('tx-witness-heuristic-detail-0')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-clear-selection'));
+    const lastReplaceCall = String(mockReplace.mock.calls.at(-1)?.[0]);
+    expect(lastReplaceCall).not.toContain('witness=');
+    expect(lastReplaceCall).not.toContain('wg=');
+    expect(screen.queryByTestId('tx-witness-focused-group')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tx-witness-deterministic-section')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+  });
+
+  it('toggles highlighted witness, script group, input, and output off on second click', async () => {
+    render(<TransactionDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getTransactionDetail).toHaveBeenCalled();
+    });
+
+    expect(await screen.findByTestId('tx-witness-tab')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('witness=');
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
+    expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+
+    fireEvent.click(screen.getByTestId('tx-script-group-focus-0-type'));
+    expect(screen.getByTestId('tx-witness-focused-group')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
+
+    fireEvent.click(screen.getByTestId('tx-script-group-focus-0-type'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('witness=');
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
+    expect(screen.queryByTestId('tx-witness-focused-group')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
+    fireEvent.click(screen.getByTestId('tx-io-input-0'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('witness=');
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
+    expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
+    fireEvent.click(screen.getByTestId('tx-io-output-0'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('witness=');
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
+    expect(screen.getByTestId('tx-witness-selection-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveClass('io-linked-highlight');
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('io-linked-highlight');
+  });
+
+  it('shows not found message for 404 transaction errors', async () => {
+    vi.mocked(api.getTransactionDetail).mockRejectedValueOnce(new Error('API error: 404'));
+
+    render(<TransactionDetailPage />);
+
+    expect(await screen.findByText('Transaction not found')).toBeInTheDocument();
+    expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
+  });
+
+  it('shows detailed message for non-404 transaction errors', async () => {
+    vi.mocked(api.getTransactionDetail).mockRejectedValueOnce(
+      new Error(
+        'API error: 500 - transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42'
+      )
+    );
+
+    render(<TransactionDetailPage />);
+
+    expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash=0xabc, block_number=42/
+      )
+    ).toBeInTheDocument();
   });
 });

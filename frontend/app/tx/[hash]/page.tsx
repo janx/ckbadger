@@ -125,6 +125,16 @@ function normalizeScriptArgs(args: string | undefined): string {
   return args ?? '0x';
 }
 
+function getErrorMessage(error: unknown): string | null {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message.trim();
+  }
+  if (typeof error === 'string' && error.trim().length > 0) {
+    return error.trim();
+  }
+  return null;
+}
+
 export default function TransactionDetailPage() {
   const params = useParams();
   const pathname = usePathname();
@@ -144,6 +154,8 @@ export default function TransactionDetailPage() {
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
   });
+  const errorMessage = getErrorMessage(error);
+  const isNotFoundError = errorMessage?.startsWith('API error: 404') ?? false;
 
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
@@ -281,6 +293,15 @@ export default function TransactionDetailPage() {
     });
   };
 
+  const clearLinkedWitnessSelection = () => {
+    setLinkedWitnessIndex(null);
+    setLinkedScriptGroupKey(null);
+    updateSearchParams((nextParams) => {
+      nextParams.delete('witness');
+      nextParams.delete('wg');
+    });
+  };
+
   const selectedWitnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
   const selectedScriptGroupFromQuery = searchParams.get('wg');
   const [linkedWitnessIndex, setLinkedWitnessIndex] = useState<number | null>(
@@ -362,7 +383,12 @@ export default function TransactionDetailPage() {
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-xl text-slate-400">Transaction not found</h2>
+              <h2 className="text-xl text-slate-400">
+                {isNotFoundError ? 'Transaction not found' : 'Failed to load transaction'}
+              </h2>
+              {!isNotFoundError && errorMessage && (
+                <p className="mt-3 break-all text-sm text-slate-500">{errorMessage}</p>
+              )}
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -558,6 +584,7 @@ export default function TransactionDetailPage() {
                   scriptLookup={scriptLookup}
                   highlightedInputIndices={ioHighlightState.highlightedInputIndices}
                   highlightedOutputIndices={ioHighlightState.highlightedOutputIndices}
+                  onHighlightedItemClick={clearLinkedWitnessSelection}
                 />
               </TabsContent>
 
@@ -709,10 +736,11 @@ interface TabProps {
 interface InputsOutputsTabProps extends TabProps {
   highlightedInputIndices?: Set<number>;
   highlightedOutputIndices?: Set<number>;
+  onHighlightedItemClick?: () => void;
 }
 
 interface WitnessTabProps extends TabProps {
-  onSelectionChange?: (witnessIndex: number, groupKey: string | null) => void;
+  onSelectionChange?: (witnessIndex: number | null, groupKey: string | null) => void;
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
@@ -774,6 +802,7 @@ function InputsOutputsTab({
   scriptLookup,
   highlightedInputIndices,
   highlightedOutputIndices,
+  onHighlightedItemClick,
 }: InputsOutputsTabProps) {
   return (
     <div className="grid gap-6 p-4 lg:grid-cols-2">
@@ -783,53 +812,62 @@ function InputsOutputsTab({
         </h4>
         {tx.inputs && tx.inputs.length > 0 ? (
           <div className="rounded-lg border border-slate-800 bg-slate-900/50">
-            {tx.inputs.map((input, index) => (
-              <TerminalRow
-                key={index}
-                data-testid={`tx-io-input-${index}`}
-                className={`flex flex-col gap-2 ${
-                  highlightedInputIndices?.has(index)
-                    ? 'io-linked-highlight border-cyan-400/60 bg-cyan-500/10 ring-1 ring-cyan-400/30'
-                    : ''
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-slate-500">#{index}</span>
-                    <ScriptLabel script={input.lock} scriptLookup={scriptLookup} type="lock" />
-                    <ScriptLabel script={input.type} scriptLookup={scriptLookup} type="type" />
-                  </div>
-                  {input.previousOutput && (
-                    <Link
-                      href={`/cell/${input.previousOutput.txHash}-${input.previousOutput.index}`}
-                      className="hover:text-terminal-green group flex items-center gap-1 font-mono text-xs text-slate-400"
-                    >
-                      <HexDisplay
-                        value={input.previousOutput.txHash}
-                        startChars={8}
-                        endChars={6}
-                        color="accent"
-                        size="sm"
-                        copyable={false}
-                      />
-                      <span>:{input.previousOutput.index}</span>
-                    </Link>
-                  )}
-                </div>
-                {(input.address || input.capacity) && (
+            {tx.inputs.map((input, index) => {
+              const isHighlighted = highlightedInputIndices?.has(index) ?? false;
+              return (
+                <TerminalRow
+                  key={index}
+                  data-testid={`tx-io-input-${index}`}
+                  onClick={(event) => {
+                    if (!isHighlighted) return;
+                    const clickedElement = event.target as HTMLElement | null;
+                    if (clickedElement?.closest('a')) return;
+                    onHighlightedItemClick?.();
+                  }}
+                  className={`flex flex-col gap-2 ${
+                    isHighlighted
+                      ? 'io-linked-highlight border-terminal-green/70 bg-terminal-green/10 ring-terminal-green/30 cursor-pointer ring-1'
+                      : ''
+                  }`}
+                >
                   <div className="flex items-center justify-between">
-                    {input.address ? (
-                      <Address address={input.address} />
-                    ) : (
-                      <span className="text-sm text-red-400">Address error</span>
-                    )}
-                    {input.capacity && (
-                      <Capacity value={input.capacity} className="text-sm text-slate-300" />
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-slate-500">#{index}</span>
+                      <ScriptLabel script={input.lock} scriptLookup={scriptLookup} type="lock" />
+                      <ScriptLabel script={input.type} scriptLookup={scriptLookup} type="type" />
+                    </div>
+                    {input.previousOutput && (
+                      <Link
+                        href={`/cell/${input.previousOutput.txHash}-${input.previousOutput.index}`}
+                        className="hover:text-terminal-green group flex items-center gap-1 font-mono text-xs text-slate-400"
+                      >
+                        <HexDisplay
+                          value={input.previousOutput.txHash}
+                          startChars={8}
+                          endChars={6}
+                          color="accent"
+                          size="sm"
+                          copyable={false}
+                        />
+                        <span>:{input.previousOutput.index}</span>
+                      </Link>
                     )}
                   </div>
-                )}
-              </TerminalRow>
-            ))}
+                  {(input.address || input.capacity) && (
+                    <div className="flex items-center justify-between">
+                      {input.address ? (
+                        <Address address={input.address} />
+                      ) : (
+                        <span className="text-sm text-red-400">Address error</span>
+                      )}
+                      {input.capacity && (
+                        <Capacity value={input.capacity} className="text-sm text-slate-300" />
+                      )}
+                    </div>
+                  )}
+                </TerminalRow>
+              );
+            })}
           </div>
         ) : tx.isCellbase ? (
           <p className="text-sm text-slate-500">Cellbase has no inputs</p>
@@ -844,39 +882,48 @@ function InputsOutputsTab({
         </h4>
         {tx.outputs && tx.outputs.length > 0 ? (
           <div className="rounded-lg border border-slate-800 bg-slate-900/50">
-            {tx.outputs.map((output, index) => (
-              <TerminalRow
-                key={index}
-                data-testid={`tx-io-output-${index}`}
-                className={`flex flex-col gap-2 ${
-                  highlightedOutputIndices?.has(index)
-                    ? 'io-linked-highlight border-cyan-400/60 bg-cyan-500/10 ring-1 ring-cyan-400/30'
-                    : ''
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-slate-500">#{index}</span>
-                    <ScriptLabel script={output.lock} scriptLookup={scriptLookup} type="lock" />
-                    <ScriptLabel script={output.type} scriptLookup={scriptLookup} type="type" />
+            {tx.outputs.map((output, index) => {
+              const isHighlighted = highlightedOutputIndices?.has(index) ?? false;
+              return (
+                <TerminalRow
+                  key={index}
+                  data-testid={`tx-io-output-${index}`}
+                  onClick={(event) => {
+                    if (!isHighlighted) return;
+                    const clickedElement = event.target as HTMLElement | null;
+                    if (clickedElement?.closest('a')) return;
+                    onHighlightedItemClick?.();
+                  }}
+                  className={`flex flex-col gap-2 ${
+                    isHighlighted
+                      ? 'io-linked-highlight border-terminal-green/70 bg-terminal-green/10 ring-terminal-green/30 cursor-pointer ring-1'
+                      : ''
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-slate-500">#{index}</span>
+                      <ScriptLabel script={output.lock} scriptLookup={scriptLookup} type="lock" />
+                      <ScriptLabel script={output.type} scriptLookup={scriptLookup} type="type" />
+                    </div>
+                    <Link
+                      href={`/cell/${tx.hash}-${index}`}
+                      className="text-terminal-green font-mono text-xs hover:underline"
+                    >
+                      View Cell
+                    </Link>
                   </div>
-                  <Link
-                    href={`/cell/${tx.hash}-${index}`}
-                    className="text-terminal-green font-mono text-xs hover:underline"
-                  >
-                    View Cell
-                  </Link>
-                </div>
-                <div className="flex items-center justify-between">
-                  {output.address ? (
-                    <Address address={output.address} />
-                  ) : (
-                    <span className="text-sm text-red-400">Address error</span>
-                  )}
-                  <Capacity value={output.capacity} className="text-slate-300" />
-                </div>
-              </TerminalRow>
-            ))}
+                  <div className="flex items-center justify-between">
+                    {output.address ? (
+                      <Address address={output.address} />
+                    ) : (
+                      <span className="text-sm text-red-400">Address error</span>
+                    )}
+                    <Capacity value={output.capacity} className="text-slate-300" />
+                  </div>
+                </TerminalRow>
+              );
+            })}
           </div>
         ) : (
           <p className="text-sm text-slate-500">Loading outputs...</p>
@@ -901,7 +948,9 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   );
   const scriptGroupLens = useMemo(() => buildScriptGroupLens(tx), [tx]);
 
-  const [activeWitnessIndex, setActiveWitnessIndex] = useState(() => witnessFromQuery ?? 0);
+  const [activeWitnessIndex, setActiveWitnessIndex] = useState<number | null>(
+    () => witnessFromQuery
+  );
   const [hoveredSegmentIndex, setHoveredSegmentIndex] = useState<number | null>(null);
   const [pinnedSegmentIndex, setPinnedSegmentIndex] = useState<number | null>(null);
   const [hoveredByteOffset, setHoveredByteOffset] = useState<number | null>(null);
@@ -911,7 +960,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   );
 
   useEffect(() => {
-    setActiveWitnessIndex(witnessFromQuery ?? 0);
+    setActiveWitnessIndex(witnessFromQuery);
     setHoveredSegmentIndex(null);
     setPinnedSegmentIndex(null);
     setHoveredByteOffset(null);
@@ -927,21 +976,14 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   }, [activeWitnessIndex]);
 
   useEffect(() => {
-    if (witnessAnalyses.length === 0) return;
+    if (activeWitnessIndex === null) return;
+    if (witnessAnalyses.length === 0) {
+      setActiveWitnessIndex(null);
+      return;
+    }
     if (activeWitnessIndex < witnessAnalyses.length) return;
     setActiveWitnessIndex(witnessAnalyses.length - 1);
   }, [activeWitnessIndex, witnessAnalyses.length]);
-
-  useEffect(() => {
-    if (witnessFromQuery === null) {
-      if (activeWitnessIndex !== 0) setActiveWitnessIndex(0);
-      return;
-    }
-    const normalizedIndex = Math.min(witnessFromQuery, Math.max(0, witnessAnalyses.length - 1));
-    if (normalizedIndex !== activeWitnessIndex) {
-      setActiveWitnessIndex(normalizedIndex);
-    }
-  }, [activeWitnessIndex, witnessAnalyses.length, witnessFromQuery]);
 
   useEffect(() => {
     const normalizedGroupKey =
@@ -953,20 +995,35 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     }
   }, [activeScriptGroupKey, scriptGroupFromQuery, scriptGroupLens]);
 
-  const activeWitness = witnessAnalyses[activeWitnessIndex] ?? witnessAnalyses[0] ?? null;
+  useEffect(() => {
+    if (activeScriptGroupKey === null) return;
+    const linkedGroup = scriptGroupLens.find((group) => group.key === activeScriptGroupKey);
+    if (!linkedGroup) return;
+    if (linkedGroup.witnessIndex !== activeWitnessIndex) {
+      setActiveWitnessIndex(linkedGroup.witnessIndex);
+    }
+  }, [activeScriptGroupKey, activeWitnessIndex, scriptGroupLens]);
+
+  const activeWitness =
+    activeWitnessIndex !== null ? (witnessAnalyses[activeWitnessIndex] ?? null) : null;
   const activeScriptGroup =
     activeScriptGroupKey !== null
       ? (scriptGroupLens.find((group) => group.key === activeScriptGroupKey) ?? null)
       : null;
   const activeDeterministic = activeWitness?.deterministic ?? null;
 
-  const syncWitnessQuery = (nextWitnessIndex: number, nextGroupKey: string | null) => {
+  const syncWitnessQuery = (nextWitnessIndex: number | null, nextGroupKey: string | null) => {
     const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.set('witness', String(nextWitnessIndex));
-    if (nextGroupKey) {
-      nextParams.set('wg', nextGroupKey);
-    } else {
+    if (nextWitnessIndex === null) {
+      nextParams.delete('witness');
       nextParams.delete('wg');
+    } else {
+      nextParams.set('witness', String(nextWitnessIndex));
+      if (nextGroupKey) {
+        nextParams.set('wg', nextGroupKey);
+      } else {
+        nextParams.delete('wg');
+      }
     }
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
@@ -974,7 +1031,8 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
 
   useEffect(() => {
     if (!activeScriptGroup || !activeDeterministic) return;
-    if (activeScriptGroup.witnessIndex !== activeWitnessIndex) return;
+    if (activeWitnessIndex === null || activeScriptGroup.witnessIndex !== activeWitnessIndex)
+      return;
     const preferredSegmentIndex = findPreferredSegmentIndex(
       activeScriptGroup.kind,
       activeDeterministic.segments
@@ -1005,18 +1063,14 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     );
   }
 
-  if (!activeWitness) {
-    return null;
-  }
-
   const deterministicAnalysis = activeDeterministic;
-  const heuristicGuesses = activeWitness.heuristicGuesses;
+  const heuristicGuesses = activeWitness?.heuristicGuesses ?? [];
   const dataSegments = deterministicAnalysis?.segments ?? [];
-  const segmentOffsetMap = new Array<number>(activeWitness.previewBytes).fill(-1);
+  const segmentOffsetMap = new Array<number>(activeWitness?.previewBytes ?? 0).fill(-1);
 
   dataSegments.forEach((segment, segmentIndex) => {
     const start = Math.max(0, segment.start);
-    const end = Math.min(activeWitness.previewBytes, segment.end);
+    const end = Math.min(activeWitness?.previewBytes ?? 0, segment.end);
     for (let offset = start; offset < end; offset += 1) {
       segmentOffsetMap[offset] = segmentIndex;
     }
@@ -1033,7 +1087,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   const activeSegmentTone =
     focusedSegmentIndex !== null ? getWitnessSegmentTone(focusedSegmentIndex) : null;
   const activeSegmentHex = (() => {
-    if (!activeSegment) return null;
+    if (!activeSegment || !activeWitness) return null;
     const start = Math.max(0, Math.min(activeSegment.start, activeWitness.previewBytes));
     const end = Math.max(start, Math.min(activeSegment.end, activeWitness.previewBytes));
     const hexSlice = activeWitness.previewHex.slice(start * 2, end * 2);
@@ -1052,11 +1106,28 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   })();
 
   const rows = [];
-  for (let i = 0; i < activeWitness.previewHex.length; i += WITNESS_BYTES_PER_ROW * 2) {
-    rows.push(activeWitness.previewHex.slice(i, i + WITNESS_BYTES_PER_ROW * 2));
+  if (activeWitness) {
+    for (let i = 0; i < activeWitness.previewHex.length; i += WITNESS_BYTES_PER_ROW * 2) {
+      rows.push(activeWitness.previewHex.slice(i, i + WITNESS_BYTES_PER_ROW * 2));
+    }
   }
 
+  const clearSelection = () => {
+    setActiveScriptGroupKey(null);
+    setActiveWitnessIndex(null);
+    setHoveredSegmentIndex(null);
+    setPinnedSegmentIndex(null);
+    setHoveredByteOffset(null);
+    setExpandedHeuristicIndex(null);
+    onSelectionChange?.(null, null);
+    syncWitnessQuery(null, null);
+  };
+
   const selectWitness = (witnessIndex: number) => {
+    if (activeWitnessIndex === witnessIndex) {
+      clearSelection();
+      return;
+    }
     setActiveScriptGroupKey(null);
     setActiveWitnessIndex(witnessIndex);
     onSelectionChange?.(witnessIndex, null);
@@ -1064,11 +1135,14 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   };
 
   const toggleScriptGroupFocus = (groupKey: string, witnessIndex: number) => {
-    const nextGroupKey = activeScriptGroupKey === groupKey ? null : groupKey;
-    setActiveScriptGroupKey(nextGroupKey);
+    if (activeScriptGroupKey === groupKey) {
+      clearSelection();
+      return;
+    }
+    setActiveScriptGroupKey(groupKey);
     setActiveWitnessIndex(witnessIndex);
-    onSelectionChange?.(witnessIndex, nextGroupKey);
-    syncWitnessQuery(witnessIndex, nextGroupKey);
+    onSelectionChange?.(witnessIndex, groupKey);
+    syncWitnessQuery(witnessIndex, groupKey);
   };
 
   const inputWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'input').length;
@@ -1083,6 +1157,19 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               Witness Entries
             </div>
             <div className="flex flex-wrap items-center gap-1">
+              <button
+                type="button"
+                data-testid="tx-witness-clear-selection"
+                onClick={clearSelection}
+                disabled={activeWitnessIndex === null && activeScriptGroupKey === null}
+                className={`rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
+                  activeWitnessIndex === null && activeScriptGroupKey === null
+                    ? 'cursor-not-allowed border-slate-800 text-slate-600'
+                    : 'border-slate-700/70 text-slate-300 hover:border-slate-500/80 hover:text-slate-200'
+                }`}
+              >
+                clear
+              </button>
               <span className="rounded border border-slate-700/70 bg-slate-900/80 px-1.5 py-0.5 font-mono text-[11px] text-slate-300">
                 total {witnessAnalyses.length}
               </span>
@@ -1127,7 +1214,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
         {scriptGroupLens.length > 0 && (
           <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
             <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
-              Script Group Lens
+              Script Groups
             </div>
             <div className="grid gap-1.5">
               {scriptGroupLens.map((group) => {
@@ -1217,8 +1304,9 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
             type="button"
             onClick={() => {
               setActiveScriptGroupKey(null);
-              onSelectionChange?.(activeWitness.index, null);
-              syncWitnessQuery(activeWitness.index, null);
+              const nextWitnessIndex = activeWitnessIndex ?? activeScriptGroup.witnessIndex;
+              onSelectionChange?.(nextWitnessIndex, null);
+              syncWitnessQuery(nextWitnessIndex, null);
             }}
             className="rounded border border-cyan-400/50 px-2 py-1 font-mono text-xs text-cyan-200 hover:bg-cyan-500/20"
           >
@@ -1227,380 +1315,409 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
         </div>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-        <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
-          <span className="uppercase tracking-wide text-slate-400">Active</span>
-          <span className="font-mono text-white">#{activeWitness.index}</span>
-          <Badge variant={activeWitness.role === 'input' ? 'green' : 'gray'}>
-            {activeWitness.role}
-          </Badge>
-        </div>
-        <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
-          <span className="uppercase tracking-wide text-slate-400">Size</span>
-          <span className="font-mono text-white">{activeWitness.byteLength.toLocaleString()}B</span>
-        </div>
-        <div
-          className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
-            activeWitness.isPreviewTruncated
-              ? 'border-amber/30 bg-amber/10'
-              : 'border-terminal-green/25 bg-terminal-green/5'
-          }`}
-        >
-          <span className="uppercase tracking-wide text-slate-400">Preview</span>
-          {activeWitness.isPreviewTruncated ? (
-            <span className="text-amber font-mono">
-              Truncated at {activeWitness.previewBytes.toLocaleString()}B
-            </span>
-          ) : (
-            <span className="text-terminal-green">Full witness shown</span>
-          )}
-        </div>
-      </div>
-
-      {deterministicAnalysis && (
-        <div
-          data-testid="tx-witness-deterministic-section"
-          className="rounded border border-slate-800 bg-slate-950/70 p-2"
-        >
-          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
-              Deterministic Decode
-            </span>
-            <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
-            <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
-              {deterministicAnalysis.segments.length} segments
-            </span>
-            {pinnedSegmentIndex !== null && (
-              <span data-testid="tx-witness-segment-pinned">
-                <Badge variant="amber">Pinned</Badge>
+      {activeWitness ? (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+            <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
+              <span className="uppercase tracking-wide text-slate-400">Active</span>
+              <span className="font-mono text-white">#{activeWitness.index}</span>
+              <Badge variant={activeWitness.role === 'input' ? 'green' : 'gray'}>
+                {activeWitness.role}
+              </Badge>
+            </div>
+            <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
+              <span className="uppercase tracking-wide text-slate-400">Size</span>
+              <span className="font-mono text-white">
+                {activeWitness.byteLength.toLocaleString()}B
               </span>
-            )}
+            </div>
+            <div
+              className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
+                activeWitness.isPreviewTruncated
+                  ? 'border-amber/30 bg-amber/10'
+                  : 'border-terminal-green/25 bg-terminal-green/5'
+              }`}
+            >
+              <span className="uppercase tracking-wide text-slate-400">Preview</span>
+              {activeWitness.isPreviewTruncated ? (
+                <span className="text-amber font-mono">
+                  Truncated at {activeWitness.previewBytes.toLocaleString()}B
+                </span>
+              ) : (
+                <span className="text-terminal-green">Full witness shown</span>
+              )}
+            </div>
           </div>
-          <div className="mb-1.5 text-[11px] leading-4 text-slate-300">
-            {deterministicAnalysis.summary}
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            <div className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
-              <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                Parsed Segments
+
+          {deterministicAnalysis && (
+            <div
+              data-testid="tx-witness-deterministic-section"
+              className="rounded border border-slate-800 bg-slate-950/70 p-2"
+            >
+              <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                  Deterministic Decode
+                </span>
+                <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
+                <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                  {deterministicAnalysis.segments.length} segments
+                </span>
+                {pinnedSegmentIndex !== null && (
+                  <span data-testid="tx-witness-segment-pinned">
+                    <Badge variant="amber">Pinned</Badge>
+                  </span>
+                )}
               </div>
-              <div
-                className="flex flex-wrap gap-1"
-                onMouseLeave={() => setHoveredSegmentIndex(null)}
-              >
-                {deterministicAnalysis.segments.map((segment, idx) => {
-                  const inPreview = segment.start < activeWitness.previewBytes && segment.end > 0;
-                  const isActive = idx === focusedSegmentIndex;
-                  const segmentTone = getWitnessSegmentTone(idx);
+              <div className="mb-1.5 text-[11px] leading-4 text-slate-300">
+                {deterministicAnalysis.summary}
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
+                  <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                    Parsed Segments
+                  </div>
+                  <div
+                    className="flex flex-wrap gap-1"
+                    onMouseLeave={() => setHoveredSegmentIndex(null)}
+                  >
+                    {deterministicAnalysis.segments.map((segment, idx) => {
+                      const inPreview =
+                        segment.start < activeWitness.previewBytes && segment.end > 0;
+                      const isActive = idx === focusedSegmentIndex;
+                      const segmentTone = getWitnessSegmentTone(idx);
+                      return (
+                        <button
+                          key={`${segment.label}-${segment.start}-${segment.end}`}
+                          type="button"
+                          data-testid={`tx-witness-segment-item-${idx}`}
+                          onMouseEnter={() => setHoveredSegmentIndex(idx)}
+                          onClick={() =>
+                            setPinnedSegmentIndex((prev) => (prev === idx ? null : idx))
+                          }
+                          title={segment.meaning}
+                          className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
+                            isActive
+                              ? segmentTone.activePill
+                              : inPreview
+                                ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
+                                : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
+                          }`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`}
+                          />
+                          <span className="truncate">{segment.label}</span>
+                          <span className="shrink-0 text-[10px] text-slate-500">
+                            [{segment.start}..{segment.end})
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div
+                  data-testid="tx-witness-active-segment"
+                  className="h-[132px] overflow-y-auto rounded border border-slate-800 bg-slate-950/70 p-2 sm:h-[144px]"
+                >
+                  {activeSegment ? (
+                    <>
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                        Segment Detail
+                      </div>
+                      <div className="mt-1 font-mono text-[11px] text-slate-300">
+                        {activeSegment.label}
+                      </div>
+                      <div className="mt-0.5 text-[10px] leading-4 text-slate-400">
+                        {activeSegment.meaning}
+                      </div>
+                      <div
+                        data-testid="tx-witness-active-segment-value"
+                        className={`mt-1 break-all font-mono text-sm ${activeSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                      >
+                        {activeSegment.humanValue}
+                      </div>
+                      <div className="mt-1.5 font-mono text-[11px] text-slate-300">
+                        [{activeSegment.start}..{activeSegment.end})
+                      </div>
+                      {activeSegmentHex && (
+                        <div
+                          data-testid="tx-witness-active-segment-hex"
+                          className={`mt-1 break-all font-mono text-[11px] ${activeSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                        >
+                          {activeSegmentHex.value}
+                        </div>
+                      )}
+                      {activeSegmentHex?.truncated && (
+                        <div className="mt-1 text-[11px] text-slate-500">
+                          Hex preview truncated for readability.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                        Segment Detail
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        Hover a segment/byte to preview it, or click a segment to pin it.
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {heuristicGuesses.length > 0 && (
+            <div
+              data-testid="tx-witness-heuristics-list"
+              className="rounded border border-slate-800 bg-slate-950/70 p-2"
+            >
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                  Heuristic Guesses
+                </div>
+                <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                  {heuristicGuesses.length}
+                </span>
+              </div>
+              <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
+                {heuristicGuesses.map((guess, idx) => {
+                  const guessTone = getWitnessSegmentTone(idx);
+                  const isExpanded = expandedHeuristicIndex === idx;
                   return (
                     <button
-                      key={`${segment.label}-${segment.start}-${segment.end}`}
+                      key={`${guess.kind}-${idx}`}
                       type="button"
-                      data-testid={`tx-witness-segment-item-${idx}`}
-                      onMouseEnter={() => setHoveredSegmentIndex(idx)}
-                      onClick={() => setPinnedSegmentIndex((prev) => (prev === idx ? null : idx))}
-                      title={segment.meaning}
-                      className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
-                        isActive
-                          ? segmentTone.activePill
-                          : inPreview
-                            ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
-                            : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
+                      data-testid={`tx-witness-heuristic-item-${idx}`}
+                      onClick={() =>
+                        setExpandedHeuristicIndex((prev) => (prev === idx ? null : idx))
+                      }
+                      className={`rounded border p-1 text-left transition ${
+                        isExpanded
+                          ? `${guessTone.activePill} bg-opacity-100`
+                          : 'border-slate-800/80 bg-slate-900/70 hover:border-slate-600/80'
                       }`}
                     >
-                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`} />
-                      <span className="truncate">{segment.label}</span>
-                      <span className="shrink-0 text-[10px] text-slate-500">
-                        [{segment.start}..{segment.end})
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1">
+                            <span
+                              className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`}
+                            />
+                            <span className="font-mono text-[11px] text-slate-200">
+                              {guess.kind}
+                            </span>
+                            <Badge
+                              variant={
+                                guess.confidence === 'high'
+                                  ? 'green'
+                                  : guess.confidence === 'medium'
+                                    ? 'amber'
+                                    : 'gray'
+                              }
+                            >
+                              {guess.confidence}
+                            </Badge>
+                          </div>
+                        </div>
+                        <span className="font-mono text-[10px] text-slate-500">
+                          {isExpanded ? '[-]' : '[+]'}
+                        </span>
+                      </div>
+                      {isExpanded && (
+                        <div
+                          data-testid={`tx-witness-heuristic-detail-${idx}`}
+                          className="mt-1 border-t border-slate-800/80 pt-1"
+                        >
+                          <div className="text-[10px] leading-4 text-slate-400">{guess.reason}</div>
+                          {guess.humanValue && (
+                            <div
+                              className={`mt-0.5 break-all font-mono text-[11px] ${guessTone.valueText}`}
+                            >
+                              {guess.humanValue}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
               </div>
             </div>
+          )}
 
-            <div
-              data-testid="tx-witness-active-segment"
-              className="h-[132px] overflow-y-auto rounded border border-slate-800 bg-slate-950/70 p-2 sm:h-[144px]"
-            >
-              {activeSegment ? (
-                <>
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                    Segment Detail
-                  </div>
-                  <div className="mt-1 font-mono text-[11px] text-slate-300">
-                    {activeSegment.label}
-                  </div>
-                  <div className="mt-0.5 text-[10px] leading-4 text-slate-400">
-                    {activeSegment.meaning}
-                  </div>
-                  <div
-                    data-testid="tx-witness-active-segment-value"
-                    className={`mt-1 break-all font-mono text-sm ${activeSegmentTone?.valueText ?? 'text-terminal-green'}`}
-                  >
-                    {activeSegment.humanValue}
-                  </div>
-                  <div className="mt-1.5 font-mono text-[11px] text-slate-300">
-                    [{activeSegment.start}..{activeSegment.end})
-                  </div>
-                  {activeSegmentHex && (
+          <div className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-4 font-mono text-xs">
+            {activeWitness.previewHex.length === 0 ? (
+              <div className="text-slate-500">No bytes to render for this witness.</div>
+            ) : (
+              <div
+                data-testid="tx-witness-bytes-grid"
+                className="min-w-max"
+                onMouseLeave={() => {
+                  setHoveredSegmentIndex(null);
+                  setHoveredByteOffset(null);
+                }}
+              >
+                {rows.map((rowHex, rowIndex) => {
+                  const offset = (rowIndex * WITNESS_BYTES_PER_ROW).toString(16).padStart(4, '0');
+                  const bytes = [];
+                  for (let i = 0; i < rowHex.length; i += 2) {
+                    bytes.push(rowHex.slice(i, i + 2));
+                  }
+                  const byteEntries = bytes.map((byteHex, colIndex) => {
+                    const absoluteOffset = rowIndex * WITNESS_BYTES_PER_ROW + colIndex;
+                    const segmentIndex =
+                      absoluteOffset < segmentOffsetMap.length
+                        ? segmentOffsetMap[absoluteOffset]
+                        : -1;
+                    const segmentTone =
+                      segmentIndex >= 0 ? getWitnessSegmentTone(segmentIndex) : null;
+                    const isActiveSegment =
+                      segmentIndex >= 0 && segmentIndex === focusedSegmentIndex;
+                    const isHoveredByte = absoluteOffset === hoveredByteOffset;
+                    const hasActiveSegment = focusedSegmentIndex !== null;
+                    const byteClass =
+                      segmentIndex < 0
+                        ? hasActiveSegment
+                          ? 'text-slate-500'
+                          : 'rounded bg-slate-800/70 text-slate-300'
+                        : isActiveSegment
+                          ? (segmentTone?.byteActive ??
+                            'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
+                          : hasActiveSegment
+                            ? 'text-slate-500 opacity-40'
+                            : (segmentTone?.byte ??
+                              'rounded bg-terminal-green/15 text-terminal-dim');
+                    const asciiClass =
+                      segmentIndex < 0
+                        ? hasActiveSegment
+                          ? 'text-slate-500'
+                          : 'text-slate-500'
+                        : isActiveSegment
+                          ? (segmentTone?.asciiActive ??
+                            'rounded-sm bg-terminal-green/20 text-terminal-green')
+                          : hasActiveSegment
+                            ? 'text-slate-500 opacity-40'
+                            : 'text-slate-500';
+                    const asciiHoverClass = isHoveredByte
+                      ? segmentIndex >= 0
+                        ? (segmentTone?.asciiHover ??
+                          'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
+                        : 'rounded-sm bg-slate-700/50 text-slate-200'
+                      : '';
+                    const hoverBreatheClass = isHoveredByte
+                      ? segmentIndex >= 0
+                        ? (segmentTone?.byteHover ??
+                          'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
+                        : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
+                      : '';
+                    const title =
+                      segmentIndex >= 0 && segmentIndex < dataSegments.length
+                        ? dataSegments[segmentIndex].label
+                        : undefined;
+                    const code = parseInt(byteHex, 16);
+                    const asciiChar = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
+
+                    return {
+                      byteHex,
+                      asciiChar,
+                      absoluteOffset,
+                      segmentIndex,
+                      title,
+                      byteClass,
+                      asciiClass,
+                      asciiHoverClass,
+                      hoverBreatheClass,
+                    };
+                  });
+
+                  const padCount = WITNESS_BYTES_PER_ROW - bytes.length;
+                  return (
                     <div
-                      data-testid="tx-witness-active-segment-hex"
-                      className={`mt-1 break-all font-mono text-[11px] ${activeSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                      key={rowIndex}
+                      data-row-index={rowIndex}
+                      className="flex py-0.5 hover:bg-slate-800/50"
                     >
-                      {activeSegmentHex.value}
-                    </div>
-                  )}
-                  {activeSegmentHex?.truncated && (
-                    <div className="mt-1 text-[11px] text-slate-500">
-                      Hex preview truncated for readability.
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                    Segment Detail
-                  </div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Hover a segment/byte to preview it, or click a segment to pin it.
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {heuristicGuesses.length > 0 && (
-        <div
-          data-testid="tx-witness-heuristics-list"
-          className="rounded border border-slate-800 bg-slate-950/70 p-2"
-        >
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
-              Heuristic Guesses
-            </div>
-            <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
-              {heuristicGuesses.length}
-            </span>
-          </div>
-          <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
-            {heuristicGuesses.map((guess, idx) => {
-              const guessTone = getWitnessSegmentTone(idx);
-              const isExpanded = expandedHeuristicIndex === idx;
-              return (
-                <button
-                  key={`${guess.kind}-${idx}`}
-                  type="button"
-                  data-testid={`tx-witness-heuristic-item-${idx}`}
-                  onClick={() => setExpandedHeuristicIndex((prev) => (prev === idx ? null : idx))}
-                  className={`rounded border p-1 text-left transition ${
-                    isExpanded
-                      ? `${guessTone.activePill} bg-opacity-100`
-                      : 'border-slate-800/80 bg-slate-900/70 hover:border-slate-600/80'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-1">
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`} />
-                        <span className="font-mono text-[11px] text-slate-200">{guess.kind}</span>
-                        <Badge
-                          variant={
-                            guess.confidence === 'high'
-                              ? 'green'
-                              : guess.confidence === 'medium'
-                                ? 'amber'
-                                : 'gray'
-                          }
-                        >
-                          {guess.confidence}
-                        </Badge>
+                      <span className="mr-4 select-none text-slate-500">0x{offset}:</span>
+                      <div className="text-terminal-dim mr-6 flex gap-1.5">
+                        {byteEntries.map((entry) => (
+                          <span
+                            key={entry.absoluteOffset}
+                            data-testid={`tx-witness-byte-${entry.absoluteOffset}`}
+                            className={`${entry.byteClass} ${
+                              entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
+                            } ${entry.hoverBreatheClass}`}
+                            title={entry.title}
+                            onMouseEnter={() => {
+                              setHoveredByteOffset(entry.absoluteOffset);
+                              setHoveredSegmentIndex(
+                                entry.segmentIndex >= 0 ? entry.segmentIndex : null
+                              );
+                            }}
+                            onClick={() => {
+                              if (entry.segmentIndex < 0) return;
+                              setPinnedSegmentIndex((prev) =>
+                                prev === entry.segmentIndex ? null : entry.segmentIndex
+                              );
+                            }}
+                          >
+                            {entry.byteHex}
+                          </span>
+                        ))}
+                        {Array.from({ length: padCount }).map((_, i) => (
+                          <span key={`pad-${i}`} className="opacity-0">
+                            00
+                          </span>
+                        ))}
+                      </div>
+                      <div className="border-l border-slate-800 pl-4">
+                        {byteEntries.map((entry) => (
+                          <span
+                            key={`ascii-${entry.absoluteOffset}`}
+                            data-testid={`tx-witness-ascii-byte-${entry.absoluteOffset}`}
+                            className={`inline-flex w-2.5 justify-center rounded-sm transition-colors duration-100 ${
+                              entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
+                            } ${entry.asciiClass} ${entry.asciiHoverClass}`}
+                            title={entry.title}
+                            onMouseEnter={() => {
+                              setHoveredByteOffset(entry.absoluteOffset);
+                              setHoveredSegmentIndex(
+                                entry.segmentIndex >= 0 ? entry.segmentIndex : null
+                              );
+                            }}
+                            onClick={() => {
+                              if (entry.segmentIndex < 0) return;
+                              setPinnedSegmentIndex((prev) =>
+                                prev === entry.segmentIndex ? null : entry.segmentIndex
+                              );
+                            }}
+                          >
+                            {entry.asciiChar}
+                          </span>
+                        ))}
                       </div>
                     </div>
-                    <span className="font-mono text-[10px] text-slate-500">
-                      {isExpanded ? '[-]' : '[+]'}
-                    </span>
+                  );
+                })}
+                {activeWitness.remainingBytes > 0 && (
+                  <div className="mt-2 select-none italic text-slate-500">
+                    ... {activeWitness.remainingBytes.toLocaleString()} more bytes
                   </div>
-                  {isExpanded && (
-                    <div
-                      data-testid={`tx-witness-heuristic-detail-${idx}`}
-                      className="mt-1 border-t border-slate-800/80 pt-1"
-                    >
-                      <div className="text-[10px] leading-4 text-slate-400">{guess.reason}</div>
-                      {guess.humanValue && (
-                        <div
-                          className={`mt-0.5 break-all font-mono text-[11px] ${guessTone.valueText}`}
-                        >
-                          {guess.humanValue}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      <div className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-4 font-mono text-xs">
-        {activeWitness.previewHex.length === 0 ? (
-          <div className="text-slate-500">No bytes to render for this witness.</div>
-        ) : (
-          <div
-            data-testid="tx-witness-bytes-grid"
-            className="min-w-max"
-            onMouseLeave={() => {
-              setHoveredSegmentIndex(null);
-              setHoveredByteOffset(null);
-            }}
-          >
-            {rows.map((rowHex, rowIndex) => {
-              const offset = (rowIndex * WITNESS_BYTES_PER_ROW).toString(16).padStart(4, '0');
-              const bytes = [];
-              for (let i = 0; i < rowHex.length; i += 2) {
-                bytes.push(rowHex.slice(i, i + 2));
-              }
-              const byteEntries = bytes.map((byteHex, colIndex) => {
-                const absoluteOffset = rowIndex * WITNESS_BYTES_PER_ROW + colIndex;
-                const segmentIndex =
-                  absoluteOffset < segmentOffsetMap.length ? segmentOffsetMap[absoluteOffset] : -1;
-                const segmentTone = segmentIndex >= 0 ? getWitnessSegmentTone(segmentIndex) : null;
-                const isActiveSegment = segmentIndex >= 0 && segmentIndex === focusedSegmentIndex;
-                const isHoveredByte = absoluteOffset === hoveredByteOffset;
-                const hasActiveSegment = focusedSegmentIndex !== null;
-                const byteClass =
-                  segmentIndex < 0
-                    ? hasActiveSegment
-                      ? 'text-slate-500'
-                      : 'rounded bg-slate-800/70 text-slate-300'
-                    : isActiveSegment
-                      ? (segmentTone?.byteActive ??
-                        'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
-                      : hasActiveSegment
-                        ? 'text-slate-500 opacity-40'
-                        : (segmentTone?.byte ?? 'rounded bg-terminal-green/15 text-terminal-dim');
-                const asciiClass =
-                  segmentIndex < 0
-                    ? hasActiveSegment
-                      ? 'text-slate-500'
-                      : 'text-slate-500'
-                    : isActiveSegment
-                      ? (segmentTone?.asciiActive ??
-                        'rounded-sm bg-terminal-green/20 text-terminal-green')
-                      : hasActiveSegment
-                        ? 'text-slate-500 opacity-40'
-                        : 'text-slate-500';
-                const asciiHoverClass = isHoveredByte
-                  ? segmentIndex >= 0
-                    ? (segmentTone?.asciiHover ??
-                      'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
-                    : 'rounded-sm bg-slate-700/50 text-slate-200'
-                  : '';
-                const hoverBreatheClass = isHoveredByte
-                  ? segmentIndex >= 0
-                    ? (segmentTone?.byteHover ??
-                      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
-                    : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
-                  : '';
-                const title =
-                  segmentIndex >= 0 && segmentIndex < dataSegments.length
-                    ? dataSegments[segmentIndex].label
-                    : undefined;
-                const code = parseInt(byteHex, 16);
-                const asciiChar = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
-
-                return {
-                  byteHex,
-                  asciiChar,
-                  absoluteOffset,
-                  segmentIndex,
-                  title,
-                  byteClass,
-                  asciiClass,
-                  asciiHoverClass,
-                  hoverBreatheClass,
-                };
-              });
-
-              const padCount = WITNESS_BYTES_PER_ROW - bytes.length;
-              return (
-                <div
-                  key={rowIndex}
-                  data-row-index={rowIndex}
-                  className="flex py-0.5 hover:bg-slate-800/50"
-                >
-                  <span className="mr-4 select-none text-slate-500">0x{offset}:</span>
-                  <div className="text-terminal-dim mr-6 flex gap-1.5">
-                    {byteEntries.map((entry) => (
-                      <span
-                        key={entry.absoluteOffset}
-                        data-testid={`tx-witness-byte-${entry.absoluteOffset}`}
-                        className={`${entry.byteClass} ${
-                          entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
-                        } ${entry.hoverBreatheClass}`}
-                        title={entry.title}
-                        onMouseEnter={() => {
-                          setHoveredByteOffset(entry.absoluteOffset);
-                          setHoveredSegmentIndex(
-                            entry.segmentIndex >= 0 ? entry.segmentIndex : null
-                          );
-                        }}
-                        onClick={() => {
-                          if (entry.segmentIndex < 0) return;
-                          setPinnedSegmentIndex((prev) =>
-                            prev === entry.segmentIndex ? null : entry.segmentIndex
-                          );
-                        }}
-                      >
-                        {entry.byteHex}
-                      </span>
-                    ))}
-                    {Array.from({ length: padCount }).map((_, i) => (
-                      <span key={`pad-${i}`} className="opacity-0">
-                        00
-                      </span>
-                    ))}
-                  </div>
-                  <div className="border-l border-slate-800 pl-4">
-                    {byteEntries.map((entry) => (
-                      <span
-                        key={`ascii-${entry.absoluteOffset}`}
-                        data-testid={`tx-witness-ascii-byte-${entry.absoluteOffset}`}
-                        className={`inline-flex w-2.5 justify-center rounded-sm transition-colors duration-100 ${
-                          entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
-                        } ${entry.asciiClass} ${entry.asciiHoverClass}`}
-                        title={entry.title}
-                        onMouseEnter={() => {
-                          setHoveredByteOffset(entry.absoluteOffset);
-                          setHoveredSegmentIndex(
-                            entry.segmentIndex >= 0 ? entry.segmentIndex : null
-                          );
-                        }}
-                        onClick={() => {
-                          if (entry.segmentIndex < 0) return;
-                          setPinnedSegmentIndex((prev) =>
-                            prev === entry.segmentIndex ? null : entry.segmentIndex
-                          );
-                        }}
-                      >
-                        {entry.asciiChar}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-            {activeWitness.remainingBytes > 0 && (
-              <div className="mt-2 select-none italic text-slate-500">
-                ... {activeWitness.remainingBytes.toLocaleString()} more bytes
+                )}
               </div>
             )}
           </div>
-        )}
-      </div>
+        </>
+      ) : (
+        <div
+          data-testid="tx-witness-selection-empty"
+          className="rounded border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400"
+        >
+          Select a witness entry or script group to inspect deterministic decode and bytes.
+        </div>
+      )}
     </div>
   );
 }

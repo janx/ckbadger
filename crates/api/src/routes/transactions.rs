@@ -34,6 +34,8 @@ type TxIoBundle = (
     Vec<String>,
     bool,
 );
+const DAO_TYPE_CODE_HASH_HEX: &str =
+    "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -335,7 +337,11 @@ async fn get_transaction(
                 timestamp,
             })
         }
-        None => Err(ApiError::not_found("Transaction not found")),
+        None => {
+            let ckb_block_number =
+                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
+            Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number))
+        }
     }
 }
 
@@ -434,6 +440,42 @@ fn parse_hash_type_label_to_i16(hash_type: &str) -> i16 {
         "data2" => 4,
         _ => 0,
     }
+}
+
+fn is_dao_type_code_hash_hex(code_hash: &str) -> bool {
+    code_hash
+        .strip_prefix("0x")
+        .unwrap_or(code_hash)
+        .eq_ignore_ascii_case(DAO_TYPE_CODE_HASH_HEX)
+}
+
+fn compute_tx_fee_from_io(
+    inputs_capacity: u128,
+    outputs_capacity: u128,
+    is_cellbase: bool,
+    has_dao_type_input: bool,
+    block_number: i64,
+    tx_hash: &[u8],
+) -> Result<u128, RouteError> {
+    if is_cellbase {
+        return Ok(0);
+    }
+
+    if let Some(fee) = inputs_capacity.checked_sub(outputs_capacity) {
+        return Ok(fee);
+    }
+
+    if has_dao_type_input {
+        return Ok(0);
+    }
+
+    Err(ApiError::internal(format!(
+        "transaction inputs/outputs invariant broken at block {}: tx_hash=0x{}, inputs_capacity={}, outputs_capacity={}",
+        block_number,
+        hex::encode(tx_hash),
+        inputs_capacity,
+        outputs_capacity
+    )))
 }
 
 fn resolve_stored_input_type_hash_type(
@@ -649,8 +691,14 @@ async fn get_transaction_detail(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (block_number, tx_idx, entry) =
-        tx_result.ok_or_else(|| ApiError::not_found("Transaction not found"))?;
+    let (block_number, tx_idx, entry) = match tx_result {
+        Some(result) => result,
+        None => {
+            let ckb_block_number =
+                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
+            return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
+        }
+    };
 
     let tx_hash_hex = format!("0x{}", hex::encode(&hash_bytes));
     let is_cellbase = entry.is_cellbase;
@@ -807,6 +855,7 @@ fn build_inputs_outputs_from_ckb(
 
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
+    let mut has_dao_type_input = false;
 
     let inputs: Vec<TransactionInputResponse> = rpc_tx
         .inputs
@@ -956,6 +1005,13 @@ fn build_inputs_outputs_from_ckb(
                 (None, None, None, None)
             };
 
+            if type_script
+                .as_ref()
+                .is_some_and(|script| is_dao_type_code_hash_hex(&script.code_hash))
+            {
+                has_dao_type_input = true;
+            }
+
             Ok(TransactionInputResponse {
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
@@ -1061,20 +1117,15 @@ fn build_inputs_outputs_from_ckb(
             == "0x0000000000000000000000000000000000000000000000000000000000000000"
     });
 
-    // Compute fee strictly: non-cellbase tx must satisfy inputs >= outputs.
-    let computed_fee = if is_cellbase {
-        0
-    } else {
-        inputs_capacity.checked_sub(outputs_capacity).ok_or_else(|| {
-            ApiError::internal(format!(
-                "transaction inputs/outputs invariant broken at block {}: tx_hash=0x{}, inputs_capacity={}, outputs_capacity={}",
-                block_number,
-                hex::encode(tx_view.hash().raw_data()),
-                inputs_capacity,
-                outputs_capacity
-            ))
-        })?
-    };
+    // DAO phase-2 withdrawals may legitimately satisfy outputs > inputs due compensation.
+    let computed_fee = compute_tx_fee_from_io(
+        inputs_capacity,
+        outputs_capacity,
+        is_cellbase,
+        has_dao_type_input,
+        block_number,
+        tx_view.hash().raw_data().as_ref(),
+    )?;
 
     Ok((
         inputs,
@@ -1368,6 +1419,33 @@ fn cycles_enqueue_response(enqueue_result: Result<(), String>) -> CyclesStatusRe
             cycles: None,
             error: Some(e),
         },
+    }
+}
+
+fn lookup_tx_block_number_in_ckb_store(
+    ckb_store: Option<&Arc<ckb_store_reader::CkbChainReader>>,
+    hash_bytes: &[u8],
+) -> Option<u64> {
+    if hash_bytes.len() != 32 {
+        return None;
+    }
+
+    let store = ckb_store?;
+    let mut tx_hash = [0u8; 32];
+    tx_hash.copy_from_slice(hash_bytes);
+    store
+        .get_transaction_with_block_number(&tx_hash)
+        .map(|(_, block_number)| block_number)
+}
+
+fn missing_tx_lookup_error(hash_bytes: &[u8], ckb_block_number: Option<u64>) -> RouteError {
+    let tx_hash_hex = format!("0x{}", hex::encode(hash_bytes));
+    match ckb_block_number {
+        Some(block_number) => ApiError::internal(format!(
+            "transaction exists in CKB RocksDB but tx index mapping is missing: tx_hash={}, block_number={}; fix indexer write/read logic, then rebuild ckbadger RocksDB and re-sync from genesis",
+            tx_hash_hex, block_number
+        )),
+        None => ApiError::not_found("Transaction not found"),
     }
 }
 
@@ -1768,5 +1846,57 @@ mod tests {
         assert_eq!(response.status, CyclesStatus::Failed);
         assert_eq!(response.cycles, None);
         assert_eq!(response.error.unwrap_or_default(), "enqueue failed");
+    }
+
+    #[test]
+    fn test_missing_tx_lookup_error_returns_not_found_when_ckb_not_found() {
+        let hash = vec![0xabu8; 32];
+        let (status, body) = missing_tx_lookup_error(&hash, None);
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(body.0.error, "not_found");
+        assert_eq!(body.0.message, "Transaction not found");
+    }
+
+    #[test]
+    fn test_missing_tx_lookup_error_returns_internal_with_context_when_ckb_found() {
+        let hash = vec![0xcdu8; 32];
+        let (status, body) = missing_tx_lookup_error(&hash, Some(42));
+        assert_eq!(status, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0.error, "internal_error");
+        assert!(body.0.message.contains("tx index mapping is missing"));
+        assert!(body.0.message.contains("tx_hash=0x"));
+        assert!(body.0.message.contains("block_number=42"));
+    }
+
+    #[test]
+    fn test_is_dao_type_code_hash_hex() {
+        assert!(is_dao_type_code_hash_hex(
+            "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+        ));
+        assert!(is_dao_type_code_hash_hex(
+            "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+        ));
+        assert!(!is_dao_type_code_hash_hex(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+        ));
+    }
+
+    #[test]
+    fn test_compute_tx_fee_from_io_for_regular_tx() {
+        let fee = compute_tx_fee_from_io(1_000, 950, false, false, 10, &[0x11; 32]).unwrap();
+        assert_eq!(fee, 50);
+    }
+
+    #[test]
+    fn test_compute_tx_fee_from_io_allows_dao_compensation_case() {
+        let fee = compute_tx_fee_from_io(1_000, 1_100, false, true, 10, &[0x22; 32]).unwrap();
+        assert_eq!(fee, 0);
+    }
+
+    #[test]
+    fn test_compute_tx_fee_from_io_errors_when_non_dao_outputs_exceed_inputs() {
+        let err = compute_tx_fee_from_io(1_000, 1_100, false, false, 10, &[0x33; 32]).unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(err.1 .0.message.contains("inputs/outputs invariant broken"));
     }
 }
