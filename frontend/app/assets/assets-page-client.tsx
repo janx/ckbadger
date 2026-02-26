@@ -229,23 +229,28 @@ function AssetTable({
             <div className="flex-1">
               <Link href={getAssetLink(asset)} className="block">
                 <div className="flex items-center gap-2">
-                  {asset.assetType === 'token' && asset.iconUrl && (
-                    <Image
-                      src={asset.iconUrl}
-                      alt=""
-                      className="h-6 w-6 rounded-full"
-                      width={24}
-                      height={24}
-                      unoptimized
-                      onError={(event) => {
-                        event.currentTarget.style.display = 'none';
-                      }}
-                    />
-                  )}
-                  {asset.assetType === 'nft' && asset.standard === 'spore' && (
-                    <span className="flex h-6 w-6 items-center justify-center text-sm">🗂️</span>
-                  )}
-                  <div>
+                  <span
+                    data-testid="asset-icon-slot"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center"
+                  >
+                    {asset.assetType === 'token' && asset.iconUrl && (
+                      <Image
+                        src={asset.iconUrl}
+                        alt=""
+                        className="h-6 w-6 rounded-full"
+                        width={24}
+                        height={24}
+                        unoptimized
+                        onError={(event) => {
+                          event.currentTarget.style.visibility = 'hidden';
+                        }}
+                      />
+                    )}
+                    {asset.assetType === 'nft' && asset.standard === 'spore' && (
+                      <span className="text-sm leading-none">🗂️</span>
+                    )}
+                  </span>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-terminal-green font-medium hover:underline">
                         {getAssetName(asset)}
