@@ -1,23 +1,26 @@
-ckbadger
-========
+# ckbadger
 
 ckbadger is a CKB blockchain explorer.
 
 Primary markdown rule:
+
 - Append `.md` to any page URL to get a markdown representation.
 - Example: `/blocks/123.md`, `/tx/0x....md`, `/charts/hash-rate.md`.
 
 Machine-friendly endpoints:
+
 - API base: `/api/v1`
 - Markdown pages: `/{page}.md`
 - Raw pages: `/{page}.raw`
   - Optional profile: `?profile=default|debugger`
   - Example: `/tx/0x....raw?profile=debugger`
   - `profile=debugger` returns `mockTransaction` for `ckb-debugger --tx-file`
+  - `/tx/{hash}.raw` also includes `data.txWitness` (witness analyses + inference)
   - Raw response headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`
 - Capability descriptor: `/capabilities` (JSON)
 
 Core page groups:
+
 - `/blocks`, `/blocks/{id}`
 - `/transactions`, `/tx/{hash}`
 - `/address/{addr}`, `/cell/{txHash-outputIndex}`

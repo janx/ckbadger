@@ -31,6 +31,8 @@ type TxIoBundle = (
     u128,
     u128,
     u128,
+    Vec<String>,
+    bool,
 );
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -399,6 +401,8 @@ pub struct TransactionDetailResponse {
     pub outputs_occupied_capacity: String,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,
+    pub witnesses: Vec<String>,
+    pub witnesses_available: bool,
 }
 
 fn hash_type_to_string(hash_type: i16) -> String {
@@ -590,6 +594,45 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     Some(size as i32)
 }
 
+async fn fetch_witnesses_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<Vec<String>> {
+    #[derive(serde::Serialize)]
+    struct RpcRequest<'a> {
+        jsonrpc: &'static str,
+        method: &'static str,
+        params: (&'a str,),
+        id: u64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct RpcResponse {
+        result: Option<TxResult>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TxResult {
+        transaction: Option<TxView>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TxView {
+        witnesses: Vec<String>,
+    }
+
+    let client = reqwest::Client::new();
+    let request = RpcRequest {
+        jsonrpc: "2.0",
+        method: "get_transaction",
+        params: (tx_hash,),
+        id: 1,
+    };
+
+    let response = client.post(rpc_url).json(&request).send().await.ok()?;
+    let rpc_response: RpcResponse = response.json().await.ok()?;
+    let tx = rpc_response.result?.transaction?;
+
+    Some(tx.witnesses)
+}
+
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -670,6 +713,8 @@ async fn get_transaction_detail(
         inputs_occupied_capacity,
         outputs_occupied_capacity,
         computed_fee,
+        witnesses,
+        witnesses_available,
     ) = if let Some(ref ckb_store) = state.ckb_store {
         if hash_bytes.len() == 32 {
             let mut tx_hash_arr = [0u8; 32];
@@ -710,6 +755,15 @@ async fn get_transaction_detail(
         }
     });
 
+    let (witnesses, witnesses_available) = if witnesses_available {
+        (witnesses, true)
+    } else {
+        match fetch_witnesses_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await {
+            Some(fetched) => (fetched, true),
+            None => (witnesses, false),
+        }
+    };
+
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         block_number,
@@ -730,19 +784,13 @@ async fn get_transaction_detail(
         outputs_occupied_capacity: outputs_occupied_capacity.to_string(),
         inputs,
         outputs,
+        witnesses,
+        witnesses_available,
     })
 }
 
-fn empty_inputs_outputs() -> (
-    Vec<TransactionInputResponse>,
-    Vec<TransactionOutputResponse>,
-    u128,
-    u128,
-    u128,
-    u128,
-    u128,
-) {
-    (vec![], vec![], 0, 0, 0, 0, 0)
+fn empty_inputs_outputs() -> TxIoBundle {
+    (vec![], vec![], 0, 0, 0, 0, 0, vec![], false)
 }
 
 /// Build inputs/outputs from CKB node's RocksDB transaction view.
@@ -755,6 +803,7 @@ fn build_inputs_outputs_from_ckb(
     block_number: i64,
 ) -> Result<TxIoBundle, RouteError> {
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
+    let witnesses = rpc_tx.witnesses.clone();
 
     let mut inputs_capacity: u128 = 0;
     let mut inputs_occupied_capacity: u128 = 0;
@@ -1035,6 +1084,8 @@ fn build_inputs_outputs_from_ckb(
         inputs_occupied_capacity,
         outputs_occupied_capacity,
         computed_fee,
+        witnesses,
+        true,
     ))
 }
 
@@ -1613,6 +1664,38 @@ mod tests {
         let json = serde_json::to_value(&input).unwrap();
         assert_eq!(json["type"]["codeHash"], "0x03");
         assert_eq!(json["type"]["hashType"], "data1");
+    }
+
+    #[test]
+    fn test_transaction_detail_response_serializes_witness_fields() {
+        let detail = TransactionDetailResponse {
+            hash: "0xabc".to_string(),
+            block_number: 100,
+            block_hash: "0xdef".to_string(),
+            index: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: "42".to_string(),
+            fee_rate: Some("1000".to_string()),
+            tx_size: Some(123),
+            cycles: Some(456),
+            confirmations: 7,
+            is_cellbase: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            inputs_capacity: "100".to_string(),
+            outputs_capacity: "58".to_string(),
+            inputs_occupied_capacity: "10".to_string(),
+            outputs_occupied_capacity: "9".to_string(),
+            inputs: vec![],
+            outputs: vec![],
+            witnesses: vec!["0x".to_string(), "0x1234".to_string()],
+            witnesses_available: true,
+        };
+
+        let json = serde_json::to_value(&detail).unwrap();
+        assert_eq!(json["witnessesAvailable"], true);
+        assert_eq!(json["witnesses"][0], "0x");
+        assert_eq!(json["witnesses"][1], "0x1234");
     }
 
     #[test]

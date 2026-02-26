@@ -1,9 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import {
   TerminalPanel,
@@ -22,14 +22,105 @@ import { CellGraph } from '@/components/cell-graph';
 import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
 import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
+import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
 
 type TxGraphView = 'flow' | 'graph';
+const TX_TAB_VALUES = ['io', 'scripts', 'celldeps', 'witness', 'graph'] as const;
+type TxTab = (typeof TX_TAB_VALUES)[number];
+
+const WITNESS_BYTES_PER_ROW = 24;
+const EMPTY_WITNESSES: string[] = [];
+const WITNESS_SEGMENT_TONES = [
+  {
+    dot: 'bg-terminal-green',
+    activePill: 'border-terminal-green/70 bg-terminal-green/15 text-terminal-green',
+    valueText: 'text-terminal-green',
+    byte: 'rounded bg-terminal-green/15 text-terminal-dim',
+    byteActive: 'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70',
+    byteHover:
+      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]',
+    asciiActive: 'rounded-sm bg-terminal-green/20 text-terminal-green',
+    asciiHover:
+      'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]',
+  },
+  {
+    dot: 'bg-cyan-400',
+    activePill: 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300',
+    valueText: 'text-cyan-300',
+    byte: 'rounded bg-cyan-500/15 text-cyan-300',
+    byteActive: 'rounded bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-400/70',
+    byteHover: 'byte-hover-breathe ring-1 ring-cyan-400/80 shadow-[0_0_10px_rgba(34,211,238,0.35)]',
+    asciiActive: 'rounded-sm bg-cyan-500/20 text-cyan-200',
+    asciiHover:
+      'rounded-sm bg-cyan-500/30 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.5)]',
+  },
+  {
+    dot: 'bg-amber-400',
+    activePill: 'border-amber-400/70 bg-amber-500/15 text-amber-200',
+    valueText: 'text-amber-200',
+    byte: 'rounded bg-amber-500/15 text-amber-200',
+    byteActive: 'rounded bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/70',
+    byteHover:
+      'byte-hover-breathe ring-1 ring-amber-400/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
+    asciiActive: 'rounded-sm bg-amber-500/20 text-amber-100',
+    asciiHover:
+      'rounded-sm bg-amber-500/30 text-amber-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
+  },
+  {
+    dot: 'bg-fuchsia-400',
+    activePill: 'border-fuchsia-400/70 bg-fuchsia-500/15 text-fuchsia-200',
+    valueText: 'text-fuchsia-200',
+    byte: 'rounded bg-fuchsia-500/15 text-fuchsia-200',
+    byteActive: 'rounded bg-fuchsia-500/25 text-fuchsia-100 ring-1 ring-fuchsia-400/70',
+    byteHover:
+      'byte-hover-breathe ring-1 ring-fuchsia-400/80 shadow-[0_0_10px_rgba(232,121,249,0.35)]',
+    asciiActive: 'rounded-sm bg-fuchsia-500/20 text-fuchsia-100',
+    asciiHover:
+      'rounded-sm bg-fuchsia-500/30 text-fuchsia-50 shadow-[inset_0_0_0_1px_rgba(232,121,249,0.5)]',
+  },
+] as const;
+
+function getWitnessSegmentTone(segmentIndex: number) {
+  return WITNESS_SEGMENT_TONES[Math.abs(segmentIndex) % WITNESS_SEGMENT_TONES.length];
+}
+
+function getPreferredSegmentLabelsByScriptGroupKind(kind: 'lock' | 'type'): string[] {
+  return kind === 'lock' ? ['lock'] : ['inputType', 'outputType'];
+}
+
+function findPreferredSegmentIndex(
+  kind: 'lock' | 'type',
+  segments: Array<{ label: string }>
+): number | null {
+  const labels = getPreferredSegmentLabelsByScriptGroupKind(kind);
+  const index = segments.findIndex((segment) =>
+    labels.some((label) => segment.label === label || segment.label.startsWith(`${label}.`))
+  );
+  return index >= 0 ? index : null;
+}
+
+function isTxTabValue(value: string | null): value is TxTab {
+  return value !== null && (TX_TAB_VALUES as readonly string[]).includes(value);
+}
+
+function parseNonNegativeInt(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return null;
+  return parsed;
+}
 
 export default function TransactionDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const hash = params.hash as string;
+  const tabFromQuery = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<TxTab>(() =>
+    isTxTabValue(tabFromQuery) ? tabFromQuery : 'io'
+  );
 
   const {
     data: tx,
@@ -148,6 +239,32 @@ export default function TransactionDetailPage() {
     ) {
       router.push(`/cell/${node.data.txHash}-${node.data.outputIndex}`);
     }
+  };
+
+  useEffect(() => {
+    const nextTab = isTxTabValue(tabFromQuery) ? tabFromQuery : 'io';
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
+    }
+  }, [activeTab, tabFromQuery]);
+
+  const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    mutator(nextParams);
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
+
+  const handleTabChange = (nextValue: string) => {
+    if (!isTxTabValue(nextValue)) return;
+    setActiveTab(nextValue);
+    updateSearchParams((nextParams) => {
+      if (nextValue === 'io') {
+        nextParams.delete('tab');
+      } else {
+        nextParams.set('tab', nextValue);
+      }
+    });
   };
 
   if (isLoading) {
@@ -345,7 +462,7 @@ export default function TransactionDetailPage() {
         </TerminalPanel>
 
         <TerminalPanel>
-          <Tabs defaultValue="io">
+          <Tabs value={activeTab} onValueChange={handleTabChange}>
             <TerminalPanelHeader>
               <TabsList>
                 <TabsTrigger value="io">
@@ -353,6 +470,7 @@ export default function TransactionDetailPage() {
                 </TabsTrigger>
                 <TabsTrigger value="scripts">Scripts</TabsTrigger>
                 <TabsTrigger value="celldeps">Cell Deps</TabsTrigger>
+                <TabsTrigger value="witness">Witness ({tx.witnesses?.length ?? 0})</TabsTrigger>
                 <TabsTrigger value="graph">Graph</TabsTrigger>
               </TabsList>
             </TerminalPanelHeader>
@@ -367,6 +485,10 @@ export default function TransactionDetailPage() {
 
             <TabsContent value="celldeps" className="p-0">
               <CellDepsTab cellDeps={cellDeps} isLoading={cellDepsLoading} />
+            </TabsContent>
+
+            <TabsContent value="witness" className="p-0">
+              <WitnessTab tx={tx} scriptLookup={scriptLookup} />
             </TabsContent>
 
             <TabsContent value="graph" className="p-4">
@@ -630,6 +752,812 @@ function InputsOutputsTab({ tx, scriptLookup }: TabProps) {
           </div>
         ) : (
           <p className="text-sm text-slate-500">Loading outputs...</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WitnessTab({ tx, scriptLookup }: TabProps) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const witnesses = tx.witnesses ?? EMPTY_WITNESSES;
+  const witnessesAvailable = tx.witnessesAvailable ?? witnesses.length > 0;
+  const witnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
+  const scriptGroupFromQuery = searchParams.get('wg');
+
+  const witnessAnalyses = useMemo(
+    () => witnesses.map((witness, index) => analyzeWitness(witness, index, tx.inputsCount)),
+    [tx.inputsCount, witnesses]
+  );
+  const scriptGroupLens = useMemo(() => buildScriptGroupLens(tx), [tx]);
+  const witnessInsights = useMemo(
+    () => inferWitnessInsights(tx, witnessAnalyses, scriptGroupLens),
+    [tx, witnessAnalyses, scriptGroupLens]
+  );
+
+  const [activeWitnessIndex, setActiveWitnessIndex] = useState(() => witnessFromQuery ?? 0);
+  const [hoveredSegmentIndex, setHoveredSegmentIndex] = useState<number | null>(null);
+  const [pinnedSegmentIndex, setPinnedSegmentIndex] = useState<number | null>(null);
+  const [hoveredByteOffset, setHoveredByteOffset] = useState<number | null>(null);
+  const [expandedHeuristicIndex, setExpandedHeuristicIndex] = useState<number | null>(null);
+  const [activeScriptGroupKey, setActiveScriptGroupKey] = useState<string | null>(
+    () => scriptGroupFromQuery
+  );
+
+  useEffect(() => {
+    setActiveWitnessIndex(witnessFromQuery ?? 0);
+    setHoveredSegmentIndex(null);
+    setPinnedSegmentIndex(null);
+    setHoveredByteOffset(null);
+    setExpandedHeuristicIndex(null);
+    setActiveScriptGroupKey(scriptGroupFromQuery);
+  }, [scriptGroupFromQuery, tx.hash, witnessFromQuery]);
+
+  useEffect(() => {
+    setHoveredSegmentIndex(null);
+    setPinnedSegmentIndex(null);
+    setHoveredByteOffset(null);
+    setExpandedHeuristicIndex(null);
+  }, [activeWitnessIndex]);
+
+  useEffect(() => {
+    if (witnessAnalyses.length === 0) return;
+    if (activeWitnessIndex < witnessAnalyses.length) return;
+    setActiveWitnessIndex(witnessAnalyses.length - 1);
+  }, [activeWitnessIndex, witnessAnalyses.length]);
+
+  useEffect(() => {
+    if (witnessFromQuery === null) {
+      if (activeWitnessIndex !== 0) setActiveWitnessIndex(0);
+      return;
+    }
+    const normalizedIndex = Math.min(witnessFromQuery, Math.max(0, witnessAnalyses.length - 1));
+    if (normalizedIndex !== activeWitnessIndex) {
+      setActiveWitnessIndex(normalizedIndex);
+    }
+  }, [activeWitnessIndex, witnessAnalyses.length, witnessFromQuery]);
+
+  useEffect(() => {
+    const normalizedGroupKey =
+      scriptGroupFromQuery && scriptGroupLens.some((group) => group.key === scriptGroupFromQuery)
+        ? scriptGroupFromQuery
+        : null;
+    if (normalizedGroupKey !== activeScriptGroupKey) {
+      setActiveScriptGroupKey(normalizedGroupKey);
+    }
+  }, [activeScriptGroupKey, scriptGroupFromQuery, scriptGroupLens]);
+
+  const activeWitness = witnessAnalyses[activeWitnessIndex] ?? witnessAnalyses[0] ?? null;
+  const activeScriptGroup =
+    activeScriptGroupKey !== null
+      ? (scriptGroupLens.find((group) => group.key === activeScriptGroupKey) ?? null)
+      : null;
+  const activeDeterministic = activeWitness?.deterministic ?? null;
+  const visibleWitnessInsights = useMemo(() => {
+    if (!activeScriptGroup) return witnessInsights;
+    return witnessInsights.filter((insight) => {
+      const related = insight.relatedWitnessIndices ?? [];
+      return related.length === 0 || related.includes(activeScriptGroup.witnessIndex);
+    });
+  }, [activeScriptGroup, witnessInsights]);
+
+  const syncWitnessQuery = (nextWitnessIndex: number, nextGroupKey: string | null) => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set('tab', 'witness');
+    if (nextWitnessIndex > 0) {
+      nextParams.set('witness', String(nextWitnessIndex));
+    } else {
+      nextParams.delete('witness');
+    }
+    if (nextGroupKey) {
+      nextParams.set('wg', nextGroupKey);
+    } else {
+      nextParams.delete('wg');
+    }
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
+
+  useEffect(() => {
+    if (!activeScriptGroup || !activeDeterministic) return;
+    if (activeScriptGroup.witnessIndex !== activeWitnessIndex) return;
+    const preferredSegmentIndex = findPreferredSegmentIndex(
+      activeScriptGroup.kind,
+      activeDeterministic.segments
+    );
+    if (preferredSegmentIndex === null) return;
+    setPinnedSegmentIndex(preferredSegmentIndex);
+    setHoveredSegmentIndex(null);
+  }, [activeScriptGroup, activeDeterministic, activeWitnessIndex]);
+
+  if (!witnessesAvailable && witnessAnalyses.length === 0) {
+    return (
+      <div className="p-4" data-testid="tx-witness-tab">
+        <div className="rounded border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
+          Witness bytes are unavailable in current API mode. Configure `CKB_DATA_PATH` for API to
+          enable witness inspection.
+        </div>
+      </div>
+    );
+  }
+
+  if (witnessAnalyses.length === 0) {
+    return (
+      <div className="p-4" data-testid="tx-witness-tab">
+        <div className="rounded border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
+          This transaction has no witness entries.
+        </div>
+      </div>
+    );
+  }
+
+  if (!activeWitness) {
+    return null;
+  }
+
+  const deterministicAnalysis = activeDeterministic;
+  const heuristicGuesses = activeWitness.heuristicGuesses;
+  const dataSegments = deterministicAnalysis?.segments ?? [];
+  const segmentOffsetMap = new Array<number>(activeWitness.previewBytes).fill(-1);
+
+  dataSegments.forEach((segment, segmentIndex) => {
+    const start = Math.max(0, segment.start);
+    const end = Math.min(activeWitness.previewBytes, segment.end);
+    for (let offset = start; offset < end; offset += 1) {
+      segmentOffsetMap[offset] = segmentIndex;
+    }
+  });
+
+  const focusedSegmentIndex =
+    pinnedSegmentIndex !== null ? pinnedSegmentIndex : hoveredSegmentIndex;
+  const activeSegment =
+    focusedSegmentIndex !== null &&
+    focusedSegmentIndex >= 0 &&
+    focusedSegmentIndex < dataSegments.length
+      ? dataSegments[focusedSegmentIndex]
+      : null;
+  const activeSegmentTone =
+    focusedSegmentIndex !== null ? getWitnessSegmentTone(focusedSegmentIndex) : null;
+  const activeSegmentHex = (() => {
+    if (!activeSegment) return null;
+    const start = Math.max(0, Math.min(activeSegment.start, activeWitness.previewBytes));
+    const end = Math.max(start, Math.min(activeSegment.end, activeWitness.previewBytes));
+    const hexSlice = activeWitness.previewHex.slice(start * 2, end * 2);
+    if (!hexSlice) return null;
+    const maxChars = 256;
+    if (hexSlice.length <= maxChars) {
+      return {
+        value: `0x${hexSlice}`,
+        truncated: false,
+      };
+    }
+    return {
+      value: `0x${hexSlice.slice(0, maxChars)}...`,
+      truncated: true,
+    };
+  })();
+
+  const rows = [];
+  for (let i = 0; i < activeWitness.previewHex.length; i += WITNESS_BYTES_PER_ROW * 2) {
+    rows.push(activeWitness.previewHex.slice(i, i + WITNESS_BYTES_PER_ROW * 2));
+  }
+
+  const selectWitness = (witnessIndex: number) => {
+    setActiveScriptGroupKey(null);
+    setActiveWitnessIndex(witnessIndex);
+    syncWitnessQuery(witnessIndex, null);
+  };
+
+  const toggleScriptGroupFocus = (groupKey: string, witnessIndex: number) => {
+    const nextGroupKey = activeScriptGroupKey === groupKey ? null : groupKey;
+    setActiveScriptGroupKey(nextGroupKey);
+    setActiveWitnessIndex(witnessIndex);
+    syncWitnessQuery(witnessIndex, nextGroupKey);
+  };
+
+  const jumpToWitnessFromInference = (witnessIndex: number) => {
+    setActiveScriptGroupKey(null);
+    setActiveWitnessIndex(witnessIndex);
+    syncWitnessQuery(witnessIndex, null);
+  };
+
+  return (
+    <div className="space-y-4 p-4" data-testid="tx-witness-tab">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Witness Entries</div>
+          <div className="mt-1 font-mono text-lg text-slate-100">{witnessAnalyses.length}</div>
+        </div>
+        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Input Witnesses</div>
+          <div className="text-terminal-green mt-1 font-mono text-lg">
+            {witnessAnalyses.filter((witness) => witness.role === 'input').length}
+          </div>
+        </div>
+        <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Extra Witnesses</div>
+          <div className="mt-1 font-mono text-lg text-cyan-300">
+            {witnessAnalyses.filter((witness) => witness.role === 'extra').length}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
+        <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
+          Witness Entries
+        </div>
+        <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
+          {witnessAnalyses.map((witness) => (
+            <button
+              key={witness.index}
+              type="button"
+              data-testid={`tx-witness-item-${witness.index}`}
+              onClick={() => selectWitness(witness.index)}
+              className={`rounded border px-2 py-1.5 text-left transition ${
+                witness.index === activeWitnessIndex
+                  ? 'border-terminal-green/70 bg-terminal-green/10'
+                  : 'border-slate-700/70 bg-slate-900/70 hover:border-slate-500/70'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-mono text-[11px] text-slate-100">#{witness.index}</div>
+                <Badge variant={witness.role === 'input' ? 'green' : 'gray'}>{witness.role}</Badge>
+              </div>
+              <div className="mt-1 font-mono text-[11px] text-slate-400">
+                {witness.byteLength.toLocaleString()} bytes
+              </div>
+              <div className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
+                {witness.previewHex ? `0x${witness.previewHex.slice(0, 40)}` : '0x'}
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {scriptGroupLens.length > 0 && (
+        <div className="rounded border border-slate-800 bg-slate-900/50 p-3">
+          <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">
+            Script Group Lens
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {scriptGroupLens.map((group) => {
+              const groupScriptName = scriptLookup?.[group.codeHash]?.name ?? null;
+              const isFocused = activeScriptGroup?.key === group.key;
+              return (
+                <div
+                  key={group.key}
+                  className={`rounded border px-2 py-1.5 ${
+                    isFocused
+                      ? 'border-cyan-400/70 bg-cyan-500/10'
+                      : group.witnessIndex === activeWitnessIndex
+                        ? 'border-terminal-green/70 bg-terminal-green/10'
+                        : 'border-slate-700/70 bg-slate-900/70'
+                  }`}
+                >
+                  <div className="mb-1 flex items-center gap-1.5">
+                    <Badge variant="gray">{group.kind}</Badge>
+                    <Badge variant="gray">{getScriptRefBadgeLabel(group.hashType)}</Badge>
+                    <button
+                      type="button"
+                      data-testid={`tx-script-group-focus-${group.witnessIndex}-${group.kind}`}
+                      onClick={() => toggleScriptGroupFocus(group.key, group.witnessIndex)}
+                      className="text-terminal-green font-mono text-xs hover:underline"
+                    >
+                      {isFocused ? 'focused' : `witness #${group.witnessIndex}`}
+                    </button>
+                  </div>
+                  {hasKnownScriptName(groupScriptName) ? (
+                    <Link
+                      href={getScriptHref({
+                        codeHash: group.codeHash,
+                        hashType: group.hashType,
+                        scriptKind: group.kind,
+                        scriptName: groupScriptName,
+                      })}
+                      className="text-terminal-green text-sm hover:underline"
+                    >
+                      {groupScriptName}
+                    </Link>
+                  ) : (
+                    <Link
+                      href={getScriptHref({
+                        codeHash: group.codeHash,
+                        hashType: group.hashType,
+                        scriptKind: group.kind,
+                        scriptName: groupScriptName,
+                      })}
+                      className="group"
+                    >
+                      <HexDisplay
+                        value={group.codeHash}
+                        size="sm"
+                        color="accent"
+                        className="group-hover:underline"
+                      />
+                    </Link>
+                  )}
+                  <div className="mt-1 font-mono text-[11px] text-slate-500">
+                    inputs: [{group.inputIndices.join(', ')}]
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeScriptGroup && (
+        <div
+          data-testid="tx-witness-focused-group"
+          className="flex flex-wrap items-center justify-between gap-2 rounded border border-cyan-400/50 bg-cyan-500/10 px-3 py-2"
+        >
+          <div className="text-xs text-cyan-100">
+            Focused script group: <span className="font-mono">{activeScriptGroup.kind}</span> {'->'}
+            witness #{activeScriptGroup.witnessIndex}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveScriptGroupKey(null);
+              syncWitnessQuery(activeWitness.index, null);
+            }}
+            className="rounded border border-cyan-400/50 px-2 py-1 font-mono text-xs text-cyan-200 hover:bg-cyan-500/20"
+          >
+            Clear focus
+          </button>
+        </div>
+      )}
+
+      {witnessInsights.length > 0 && (
+        <div
+          data-testid="tx-witness-inference-panel"
+          className="rounded border border-slate-800 bg-slate-900/50 p-3"
+        >
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-wider text-slate-500">
+              Execution Inference
+            </span>
+            {activeScriptGroup && (
+              <Badge variant="neutral">focus witness #{activeScriptGroup.witnessIndex}</Badge>
+            )}
+          </div>
+          {visibleWitnessInsights.length === 0 ? (
+            <div className="rounded border border-slate-700/70 bg-slate-900/70 px-2 py-2 text-xs text-slate-500">
+              No inference items matched this script-group focus.
+            </div>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {visibleWitnessInsights.map((insight, idx) => {
+                const relatedWitnessIndices = Array.from(
+                  new Set(
+                    (insight.relatedWitnessIndices ?? []).filter(
+                      (witnessIndex) => witnessIndex >= 0 && witnessIndex < witnessAnalyses.length
+                    )
+                  )
+                ).sort((a, b) => a - b);
+                return (
+                  <div
+                    key={`${insight.kind}-${idx}`}
+                    data-testid={`tx-witness-inference-item-${idx}`}
+                    className="rounded border border-slate-700/70 bg-slate-900/70 px-2 py-1.5"
+                  >
+                    <div className="mb-1 flex items-center gap-1.5">
+                      <Badge
+                        variant={
+                          insight.severity === 'error'
+                            ? 'red'
+                            : insight.severity === 'warning'
+                              ? 'amber'
+                              : 'green'
+                        }
+                      >
+                        {insight.severity}
+                      </Badge>
+                      <span className="font-mono text-[11px] text-slate-300">{insight.kind}</span>
+                    </div>
+                    <div className="text-[11px] leading-4 text-slate-300">{insight.message}</div>
+                    {insight.detail && (
+                      <div className="mt-1 break-all font-mono text-[11px] text-slate-500">
+                        {insight.detail}
+                      </div>
+                    )}
+                    {relatedWitnessIndices.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {relatedWitnessIndices.map((witnessIndex) => (
+                          <button
+                            key={`${insight.kind}-witness-${witnessIndex}`}
+                            type="button"
+                            data-testid={`tx-witness-inference-jump-${idx}-${witnessIndex}`}
+                            onClick={() => jumpToWitnessFromInference(witnessIndex)}
+                            className="hover:border-terminal-green/70 hover:text-terminal-green rounded border border-slate-600/80 px-1.5 py-0.5 font-mono text-[10px] text-slate-300"
+                          >
+                            Go witness #{witnessIndex}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
+          <span className="uppercase tracking-wide text-slate-400">Active</span>
+          <span className="font-mono text-white">#{activeWitness.index}</span>
+          <Badge variant={activeWitness.role === 'input' ? 'green' : 'gray'}>
+            {activeWitness.role}
+          </Badge>
+        </div>
+        <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
+          <span className="uppercase tracking-wide text-slate-400">Size</span>
+          <span className="font-mono text-white">{activeWitness.byteLength.toLocaleString()}B</span>
+        </div>
+        <div
+          className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
+            activeWitness.isPreviewTruncated
+              ? 'border-amber/30 bg-amber/10'
+              : 'border-terminal-green/25 bg-terminal-green/5'
+          }`}
+        >
+          <span className="uppercase tracking-wide text-slate-400">Preview</span>
+          {activeWitness.isPreviewTruncated ? (
+            <span className="text-amber font-mono">
+              Truncated at {activeWitness.previewBytes.toLocaleString()}B
+            </span>
+          ) : (
+            <span className="text-terminal-green">Full witness shown</span>
+          )}
+        </div>
+      </div>
+
+      {deterministicAnalysis && (
+        <div
+          data-testid="tx-witness-deterministic-section"
+          className="rounded border border-slate-800 bg-slate-950/70 p-2"
+        >
+          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              Deterministic Decode
+            </span>
+            <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
+            <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+              {deterministicAnalysis.segments.length} segments
+            </span>
+            {pinnedSegmentIndex !== null && (
+              <span data-testid="tx-witness-segment-pinned">
+                <Badge variant="amber">Pinned</Badge>
+              </span>
+            )}
+          </div>
+          <div className="mb-1.5 text-[11px] leading-4 text-slate-300">
+            {deterministicAnalysis.summary}
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
+              <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                Parsed Segments
+              </div>
+              <div
+                className="flex flex-wrap gap-1"
+                onMouseLeave={() => setHoveredSegmentIndex(null)}
+              >
+                {deterministicAnalysis.segments.map((segment, idx) => {
+                  const inPreview = segment.start < activeWitness.previewBytes && segment.end > 0;
+                  const isActive = idx === focusedSegmentIndex;
+                  const segmentTone = getWitnessSegmentTone(idx);
+                  return (
+                    <button
+                      key={`${segment.label}-${segment.start}-${segment.end}`}
+                      type="button"
+                      data-testid={`tx-witness-segment-item-${idx}`}
+                      onMouseEnter={() => setHoveredSegmentIndex(idx)}
+                      onClick={() => setPinnedSegmentIndex((prev) => (prev === idx ? null : idx))}
+                      title={segment.meaning}
+                      className={`inline-flex max-w-full items-center gap-1.5 rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
+                        isActive
+                          ? segmentTone.activePill
+                          : inPreview
+                            ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
+                            : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`} />
+                      <span className="truncate">{segment.label}</span>
+                      <span className="shrink-0 text-[10px] text-slate-500">
+                        [{segment.start}..{segment.end})
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div
+              data-testid="tx-witness-active-segment"
+              className="h-[132px] overflow-y-auto rounded border border-slate-800 bg-slate-950/70 p-2 sm:h-[144px]"
+            >
+              {activeSegment ? (
+                <>
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                    Segment Detail
+                  </div>
+                  <div className="mt-1 font-mono text-[11px] text-slate-300">
+                    {activeSegment.label}
+                  </div>
+                  <div className="mt-0.5 text-[10px] leading-4 text-slate-400">
+                    {activeSegment.meaning}
+                  </div>
+                  <div
+                    data-testid="tx-witness-active-segment-value"
+                    className={`mt-1 break-all font-mono text-sm ${activeSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                  >
+                    {activeSegment.humanValue}
+                  </div>
+                  <div className="mt-1.5 font-mono text-[11px] text-slate-300">
+                    [{activeSegment.start}..{activeSegment.end})
+                  </div>
+                  {activeSegmentHex && (
+                    <div
+                      data-testid="tx-witness-active-segment-hex"
+                      className={`mt-1 break-all font-mono text-[11px] ${activeSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                    >
+                      {activeSegmentHex.value}
+                    </div>
+                  )}
+                  {activeSegmentHex?.truncated && (
+                    <div className="mt-1 text-[11px] text-slate-500">
+                      Hex preview truncated for readability.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                    Segment Detail
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Hover a segment/byte to preview it, or click a segment to pin it.
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {heuristicGuesses.length > 0 && (
+        <div
+          data-testid="tx-witness-heuristics-list"
+          className="rounded border border-slate-800 bg-slate-950/70 p-2"
+        >
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+              Heuristic Guesses
+            </div>
+            <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+              {heuristicGuesses.length}
+            </span>
+          </div>
+          <div className="grid gap-1 sm:grid-cols-2 xl:grid-cols-3">
+            {heuristicGuesses.map((guess, idx) => {
+              const guessTone = getWitnessSegmentTone(idx);
+              const isExpanded = expandedHeuristicIndex === idx;
+              return (
+                <button
+                  key={`${guess.kind}-${idx}`}
+                  type="button"
+                  data-testid={`tx-witness-heuristic-item-${idx}`}
+                  onClick={() => setExpandedHeuristicIndex((prev) => (prev === idx ? null : idx))}
+                  className={`rounded border p-1 text-left transition ${
+                    isExpanded
+                      ? `${guessTone.activePill} bg-opacity-100`
+                      : 'border-slate-800/80 bg-slate-900/70 hover:border-slate-600/80'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`} />
+                        <span className="font-mono text-[11px] text-slate-200">{guess.kind}</span>
+                        <Badge
+                          variant={
+                            guess.confidence === 'high'
+                              ? 'green'
+                              : guess.confidence === 'medium'
+                                ? 'amber'
+                                : 'gray'
+                          }
+                        >
+                          {guess.confidence}
+                        </Badge>
+                      </div>
+                    </div>
+                    <span className="font-mono text-[10px] text-slate-500">
+                      {isExpanded ? '[-]' : '[+]'}
+                    </span>
+                  </div>
+                  {isExpanded && (
+                    <div
+                      data-testid={`tx-witness-heuristic-detail-${idx}`}
+                      className="mt-1 border-t border-slate-800/80 pt-1"
+                    >
+                      <div className="text-[10px] leading-4 text-slate-400">{guess.reason}</div>
+                      {guess.humanValue && (
+                        <div
+                          className={`mt-0.5 break-all font-mono text-[11px] ${guessTone.valueText}`}
+                        >
+                          {guess.humanValue}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-4 font-mono text-xs">
+        {activeWitness.previewHex.length === 0 ? (
+          <div className="text-slate-500">No bytes to render for this witness.</div>
+        ) : (
+          <div
+            data-testid="tx-witness-bytes-grid"
+            className="min-w-max"
+            onMouseLeave={() => {
+              setHoveredSegmentIndex(null);
+              setHoveredByteOffset(null);
+            }}
+          >
+            {rows.map((rowHex, rowIndex) => {
+              const offset = (rowIndex * WITNESS_BYTES_PER_ROW).toString(16).padStart(4, '0');
+              const bytes = [];
+              for (let i = 0; i < rowHex.length; i += 2) {
+                bytes.push(rowHex.slice(i, i + 2));
+              }
+              const byteEntries = bytes.map((byteHex, colIndex) => {
+                const absoluteOffset = rowIndex * WITNESS_BYTES_PER_ROW + colIndex;
+                const segmentIndex =
+                  absoluteOffset < segmentOffsetMap.length ? segmentOffsetMap[absoluteOffset] : -1;
+                const segmentTone = segmentIndex >= 0 ? getWitnessSegmentTone(segmentIndex) : null;
+                const isActiveSegment = segmentIndex >= 0 && segmentIndex === focusedSegmentIndex;
+                const isHoveredByte = absoluteOffset === hoveredByteOffset;
+                const hasActiveSegment = focusedSegmentIndex !== null;
+                const byteClass =
+                  segmentIndex < 0
+                    ? hasActiveSegment
+                      ? 'text-slate-500'
+                      : 'rounded bg-slate-800/70 text-slate-300'
+                    : isActiveSegment
+                      ? (segmentTone?.byteActive ??
+                        'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
+                      : hasActiveSegment
+                        ? 'text-slate-500 opacity-40'
+                        : (segmentTone?.byte ?? 'rounded bg-terminal-green/15 text-terminal-dim');
+                const asciiClass =
+                  segmentIndex < 0
+                    ? hasActiveSegment
+                      ? 'text-slate-500'
+                      : 'text-slate-500'
+                    : isActiveSegment
+                      ? (segmentTone?.asciiActive ??
+                        'rounded-sm bg-terminal-green/20 text-terminal-green')
+                      : hasActiveSegment
+                        ? 'text-slate-500 opacity-40'
+                        : 'text-slate-500';
+                const asciiHoverClass = isHoveredByte
+                  ? segmentIndex >= 0
+                    ? (segmentTone?.asciiHover ??
+                      'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
+                    : 'rounded-sm bg-slate-700/50 text-slate-200'
+                  : '';
+                const hoverBreatheClass = isHoveredByte
+                  ? segmentIndex >= 0
+                    ? (segmentTone?.byteHover ??
+                      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
+                    : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
+                  : '';
+                const title =
+                  segmentIndex >= 0 && segmentIndex < dataSegments.length
+                    ? dataSegments[segmentIndex].label
+                    : undefined;
+                const code = parseInt(byteHex, 16);
+                const asciiChar = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
+
+                return {
+                  byteHex,
+                  asciiChar,
+                  absoluteOffset,
+                  segmentIndex,
+                  title,
+                  byteClass,
+                  asciiClass,
+                  asciiHoverClass,
+                  hoverBreatheClass,
+                };
+              });
+
+              const padCount = WITNESS_BYTES_PER_ROW - bytes.length;
+              return (
+                <div
+                  key={rowIndex}
+                  data-row-index={rowIndex}
+                  className="flex py-0.5 hover:bg-slate-800/50"
+                >
+                  <span className="mr-4 select-none text-slate-500">0x{offset}:</span>
+                  <div className="text-terminal-dim mr-6 flex gap-1.5">
+                    {byteEntries.map((entry) => (
+                      <span
+                        key={entry.absoluteOffset}
+                        data-testid={`tx-witness-byte-${entry.absoluteOffset}`}
+                        className={`${entry.byteClass} ${
+                          entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
+                        } ${entry.hoverBreatheClass}`}
+                        title={entry.title}
+                        onMouseEnter={() => {
+                          setHoveredByteOffset(entry.absoluteOffset);
+                          setHoveredSegmentIndex(
+                            entry.segmentIndex >= 0 ? entry.segmentIndex : null
+                          );
+                        }}
+                        onClick={() => {
+                          if (entry.segmentIndex < 0) return;
+                          setPinnedSegmentIndex((prev) =>
+                            prev === entry.segmentIndex ? null : entry.segmentIndex
+                          );
+                        }}
+                      >
+                        {entry.byteHex}
+                      </span>
+                    ))}
+                    {Array.from({ length: padCount }).map((_, i) => (
+                      <span key={`pad-${i}`} className="opacity-0">
+                        00
+                      </span>
+                    ))}
+                  </div>
+                  <div className="border-l border-slate-800 pl-4">
+                    {byteEntries.map((entry) => (
+                      <span
+                        key={`ascii-${entry.absoluteOffset}`}
+                        data-testid={`tx-witness-ascii-byte-${entry.absoluteOffset}`}
+                        className={`inline-flex w-2.5 justify-center rounded-sm transition-colors duration-100 ${
+                          entry.segmentIndex >= 0 ? 'cursor-pointer' : 'cursor-default'
+                        } ${entry.asciiClass} ${entry.asciiHoverClass}`}
+                        title={entry.title}
+                        onMouseEnter={() => {
+                          setHoveredByteOffset(entry.absoluteOffset);
+                          setHoveredSegmentIndex(
+                            entry.segmentIndex >= 0 ? entry.segmentIndex : null
+                          );
+                        }}
+                        onClick={() => {
+                          if (entry.segmentIndex < 0) return;
+                          setPinnedSegmentIndex((prev) =>
+                            prev === entry.segmentIndex ? null : entry.segmentIndex
+                          );
+                        }}
+                      >
+                        {entry.asciiChar}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {activeWitness.remainingBytes > 0 && (
+              <div className="mt-2 select-none italic text-slate-500">
+                ... {activeWitness.remainingBytes.toLocaleString()} more bytes
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>

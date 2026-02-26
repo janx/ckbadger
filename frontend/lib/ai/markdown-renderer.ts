@@ -22,6 +22,7 @@ import {
 } from '@/lib/api';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
+import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
@@ -470,6 +471,8 @@ function renderTxSummary(tx: TransactionDetail, lifecycle: TransactionLifecycle 
       ['feeRate', tx.feeRate ?? '-'],
       ['txSize', tx.txSize ?? '-'],
       ['cycles', tx.cycles ?? '-'],
+      ['witnessesCount', tx.witnesses?.length ?? 0],
+      ['witnessesAvailable', tx.witnessesAvailable ?? tx.witnesses?.length !== 0],
       ['lifecyclePhase', lifecycle?.phase ?? '-'],
       ['commitmentDistance', lifecycle?.commitmentDistance ?? '-'],
     ]
@@ -716,6 +719,29 @@ export async function renderMarkdownPage(
         tx.isCellbase ? Promise.resolve(null) : api.getTransactionLifecycle(page.hash),
         api.getTransactionCellDeps(page.hash),
       ]);
+      const witnesses = tx.witnesses ?? [];
+      const witnessAnalyses = witnesses.map((witness, index) =>
+        analyzeWitness(witness, index, tx.inputsCount)
+      );
+      const witnessRows = witnessAnalyses.map((analysis) => {
+        return [
+          analysis.index,
+          analysis.role,
+          analysis.byteLength,
+          analysis.deterministic?.kind ?? '-',
+          analysis.heuristicGuesses.map((guess) => guess.kind).join(', ') || '-',
+        ];
+      });
+      const witnessInferences = inferWitnessInsights(
+        tx,
+        witnessAnalyses,
+        buildScriptGroupLens(tx)
+      ).map((inference) => [
+        inference.severity,
+        inference.kind,
+        inference.message,
+        inference.detail ?? '-',
+      ]);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# Transaction ${hashShort(tx.hash, 12, 12)}`,
         '',
@@ -748,6 +774,23 @@ export async function renderMarkdownPage(
             output.cellType ?? '-',
           ])
         ),
+        '',
+        '## Witnesses',
+        '',
+        tx.witnessesAvailable === false
+          ? 'Witness bytes unavailable (configure `CKB_DATA_PATH` or verify RPC connectivity).'
+          : witnessRows.length === 0
+            ? 'No witness entries.'
+            : markdownTable(
+                ['index', 'role', 'bytes', 'deterministicKind', 'heuristics'],
+                witnessRows
+              ),
+        '',
+        '## Witness Inference',
+        '',
+        witnessInferences.length === 0
+          ? 'No witness inference generated.'
+          : markdownTable(['severity', 'kind', 'message', 'detail'], witnessInferences),
         '',
         '## Cell Deps',
         '',

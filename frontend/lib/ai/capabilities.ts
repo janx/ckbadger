@@ -55,6 +55,11 @@ export interface AiCapabilities {
       payloadPath: 'data.txDebugger.mockTransaction';
       debuggerCommandTemplate: string;
     };
+    txWitnessPayload: {
+      route: '/tx/{hash}';
+      payloadPath: 'data.txWitness';
+      fields: readonly ['available', 'witnessesCount', 'inputCount', 'analyses', 'inference'];
+    };
   };
 }
 
@@ -104,6 +109,11 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
         payloadPath: 'data.txDebugger.mockTransaction',
         debuggerCommandTemplate:
           'curl "<url>.raw?profile=debugger" | jq \'.data.txDebugger.mockTransaction\' > mock_tx.json && ckb-debugger --tx-file mock_tx.json --cell-index 0 --cell-type input --script-group-type lock',
+      },
+      txWitnessPayload: {
+        route: '/tx/{hash}',
+        payloadPath: 'data.txWitness',
+        fields: ['available', 'witnessesCount', 'inputCount', 'analyses', 'inference'],
       },
     },
   };

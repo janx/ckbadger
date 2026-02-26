@@ -6,6 +6,9 @@ import { api } from '@/lib/api';
 vi.mock('@/lib/api', () => ({
   api: {
     getBlocks: vi.fn(),
+    getTransactionDetail: vi.fn(),
+    getTransactionLifecycle: vi.fn(),
+    getTransactionCellDeps: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
     getDotbitItemDetail: vi.fn(),
     getDotbitItemActivities: vi.fn(),
@@ -230,5 +233,59 @@ describe('renderMarkdownPage', () => {
       cursor: undefined,
       action: undefined,
     });
+  });
+
+  it('renders tx detail markdown with witness summary', async () => {
+    const hash = `0x${'1'.repeat(64)}`;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      hash,
+      blockNumber: 100,
+      blockHash: `0x${'2'.repeat(64)}`,
+      index: 0,
+      inputsCount: 1,
+      outputsCount: 1,
+      fee: '1000',
+      feeRate: '500',
+      txSize: 222,
+      cycles: 333,
+      isCellbase: false,
+      timestamp: '2026-02-20T16:46:12Z',
+      confirmations: 4,
+      inputsCapacity: '10000000000',
+      outputsCapacity: '9999999000',
+      inputsOccupiedCapacity: '100',
+      outputsOccupiedCapacity: '90',
+      inputs: [],
+      outputs: [],
+      witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
+      witnessesAvailable: true,
+    } as any);
+    vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
+      hash,
+      phase: 'committed',
+      proposalId: '0x01',
+      proposedIn: null,
+      committedIn: null,
+      commitmentDistance: null,
+      commitmentWindow: { close: 2, far: 10 },
+      isCellbase: false,
+      confirmations: 4,
+    } as any);
+    vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(`/tx/${hash}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Transaction');
+    expect(result.body).toContain('## Witnesses');
+    expect(result.body).toContain('## Witness Inference');
+    expect(result.body).toContain('WitnessArgs');
+    expect(result.body).toContain('DASWitness');
+    expect(result.body).toContain('extra_witnesses');
+    expect(result.body).toContain('| index | role | bytes | deterministicKind | heuristics |');
   });
 });

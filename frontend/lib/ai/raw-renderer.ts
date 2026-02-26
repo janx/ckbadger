@@ -1,8 +1,16 @@
 import type { Cell, CellDep, TransactionDetail, TransactionLifecycle } from '@/lib/api';
 import { api } from '@/lib/api';
 import type { ParsedRawPage } from '@/lib/ai/raw-route';
+import {
+  analyzeWitness,
+  buildScriptGroupLens,
+  inferWitnessInsights,
+  type ScriptGroupLens,
+  type WitnessAnalysis,
+  type WitnessInference,
+} from '@/lib/witness-analysis';
 
-const RAW_SCHEMA_VERSION = '1.0.0';
+const RAW_SCHEMA_VERSION = '1.1.0';
 const RAW_FORMAT = 'raw';
 const DEFAULT_PROFILE = 'default';
 const DEFAULT_CKB_RPC_URL = 'http://127.0.0.1:8114';
@@ -191,11 +199,21 @@ interface TxDebuggerData {
   };
 }
 
+interface TxWitnessData {
+  available: boolean;
+  witnessesCount: number;
+  inputCount: number;
+  analyses: WitnessAnalysis[];
+  scriptGroupLens: ScriptGroupLens[];
+  inference: WitnessInference[];
+}
+
 type RawPayload = {
   block?: unknown;
   cell?: Cell;
   transaction?: TransactionDetail;
   txDebugger?: TxDebuggerData;
+  txWitness?: TxWitnessData;
 };
 
 interface RenderRawOutput {
@@ -621,6 +639,24 @@ async function renderTxDebuggerPayload(hash: string): Promise<TxDebuggerData> {
   };
 }
 
+function buildTxWitnessData(tx: TransactionDetail): TxWitnessData {
+  const witnesses = tx.witnesses ?? [];
+  const analyses = witnesses.map((witness, index) =>
+    analyzeWitness(witness, index, tx.inputsCount)
+  );
+  const scriptGroupLens = buildScriptGroupLens(tx);
+  const inference = inferWitnessInsights(tx, analyses, scriptGroupLens);
+
+  return {
+    available: tx.witnessesAvailable ?? witnesses.length > 0,
+    witnessesCount: witnesses.length,
+    inputCount: tx.inputsCount,
+    analyses,
+    scriptGroupLens,
+    inference,
+  };
+}
+
 export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOutput> {
   const { page, searchParams, origin } = input;
   const profile = parseProfile(searchParams);
@@ -669,15 +705,17 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
       case 'tx_detail': {
         if (profile === 'debugger') {
           const txDebugger = await renderTxDebuggerPayload(page.hash);
+          const txWitness = buildTxWitnessData(txDebugger.transaction);
           return {
             status: 200,
-            body: { meta, data: { txDebugger } },
+            body: { meta, data: { txDebugger, txWitness } },
           };
         }
         const transaction = await api.getTransactionDetail(page.hash);
+        const txWitness = buildTxWitnessData(transaction);
         return {
           status: 200,
-          body: { meta, data: { transaction } },
+          body: { meta, data: { transaction, txWitness } },
         };
       }
     }

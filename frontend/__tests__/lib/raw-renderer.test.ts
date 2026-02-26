@@ -35,8 +35,18 @@ describe('renderRawPage', () => {
       outputsCapacity: '99',
       inputsOccupiedCapacity: '50',
       outputsOccupiedCapacity: '49',
-      inputs: [],
+      inputs: [
+        {
+          lock: {
+            codeHash: `0x${'1'.repeat(64)}`,
+            hashType: 'type',
+            args: '0x01',
+          },
+        },
+      ],
       outputs: [],
+      witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa'],
+      witnessesAvailable: true,
     });
 
     const result = await renderRawPage({
@@ -48,7 +58,14 @@ describe('renderRawPage', () => {
     expect(result.status).toBe(200);
     expect(result.body.meta.format).toBe('raw');
     expect(result.body.meta.profile).toBe('default');
+    expect(result.body.meta.schemaVersion).toBe('1.1.0');
     expect(result.body.data?.transaction?.hash).toBe(`0x${'a'.repeat(64)}`);
+    expect(result.body.data?.txWitness?.available).toBe(true);
+    expect(result.body.data?.txWitness?.witnessesCount).toBe(1);
+    expect(result.body.data?.txWitness?.analyses[0]?.deterministic?.kind).toBe('WitnessArgs');
+    expect(
+      result.body.data?.txWitness?.inference.some((item) => item.kind === 'input_witness_coverage')
+    ).toBe(true);
   });
 
   it('renders tx raw with debugger profile', async () => {
@@ -72,8 +89,18 @@ describe('renderRawPage', () => {
       outputsCapacity: '99',
       inputsOccupiedCapacity: '50',
       outputsOccupiedCapacity: '49',
-      inputs: [],
+      inputs: [
+        {
+          lock: {
+            codeHash: `0x${'1'.repeat(64)}`,
+            hashType: 'type',
+            args: '0x01',
+          },
+        },
+      ],
       outputs: [],
+      witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
+      witnessesAvailable: true,
     });
     vi.mocked(api.getTransactionCellDeps).mockResolvedValue([
       {
@@ -229,6 +256,10 @@ describe('renderRawPage', () => {
     expect(result.body.data?.txDebugger?.mockTransaction.mock_info.inputs).toHaveLength(1);
     expect(result.body.data?.txDebugger?.mockTransaction.mock_info.cell_deps).toHaveLength(1);
     expect(result.body.data?.txDebugger?.debugger.rpcUrl).toContain('8114');
+    expect(result.body.data?.txWitness?.witnessesCount).toBe(2);
+    expect(
+      result.body.data?.txWitness?.inference.some((item) => item.kind === 'extra_witnesses')
+    ).toBe(true);
     expect(rpcFetch).toHaveBeenCalled();
   });
 

@@ -229,6 +229,8 @@ interface TransactionDetail extends Transaction {
     type?: Script;
     address?: string;
   }>;
+  witnesses?: string[];
+  witnessesAvailable?: boolean;
 }
 
 interface DepGroupItem {

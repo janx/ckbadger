@@ -1,10 +1,11 @@
-ckbadger LLM Capability Map
-===========================
+# ckbadger LLM Capability Map
 
 Site purpose:
+
 - CKB-native explorer focused on exact on-chain data.
 
 Markdown output convention:
+
 - Any page URL can be requested as markdown by appending `.md`.
 - Response content-type: `text/markdown`.
 - Examples:
@@ -14,6 +15,7 @@ Markdown output convention:
   - `/charts/transaction-count.md`
 
 Raw output convention:
+
 - Raw format can be requested with:
   - suffix: `.raw`
   - query: `?format=raw`
@@ -25,9 +27,11 @@ Raw output convention:
   - `/cell/{outpoint}.raw` (profile: `default`)
   - `/tx/{hash}.raw` (profiles: `default`, `debugger`)
 - `profile=debugger` includes `data.txDebugger.mockTransaction`, compatible with `ckb-debugger --tx-file`.
+- `/tx/{hash}.raw` includes `data.txWitness` with witness analyses, script-group lens, and inference.
 - Raw responses include headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`.
 
 Known markdown page routes:
+
 - `/`
 - `/address/{addr}`
 - `/assets`
@@ -55,6 +59,7 @@ Known markdown page routes:
 - `/tx/{hash}`
 
 Chart slugs:
+
 - `address-cohort-retention`
 - `average-block-time`
 - `block-time-distribution`
@@ -83,11 +88,13 @@ Chart slugs:
 - `uncle-rate`
 
 API:
+
 - Base URL: `/api/v1`
 - JSON API supports blocks, transactions, cells, scripts, tokens, charts, DAO, forks, hardfork timeline.
 - Capability descriptor: `/capabilities` (formats, profiles, route matrix, and strict error codes).
 
 Notes for agents:
+
 - Prefer markdown pages for narrative + tabular summaries.
 - Prefer `/api/v1` for structured machine extraction and full-fidelity fields.
 - Use markdown page query params for pagination when supported: `limit`, `cursor`.

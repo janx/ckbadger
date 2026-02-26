@@ -28,5 +28,13 @@ describe('buildAiCapabilities', () => {
       'data.txDebugger.mockTransaction'
     );
     expect(capabilities.rawProfiles.txDebuggerProfile.profile).toBe('debugger');
+    expect(capabilities.rawProfiles.txWitnessPayload.payloadPath).toBe('data.txWitness');
+    expect(capabilities.rawProfiles.txWitnessPayload.fields).toEqual([
+      'available',
+      'witnessesCount',
+      'inputCount',
+      'analyses',
+      'inference',
+    ]);
   });
 });

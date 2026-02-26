@@ -7,6 +7,12 @@ import { api } from '@/lib/api';
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const TYPE_CODE_HASH = '0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075';
+let mockSearchParams = new URLSearchParams();
+const mockPush = vi.fn();
+const mockReplace = vi.fn((url: string) => {
+  const query = url.includes('?') ? url.split('?')[1] : '';
+  mockSearchParams = new URLSearchParams(query);
+});
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -37,12 +43,15 @@ vi.mock('@/components/cell-graph', () => ({
 
 vi.mock('next/navigation', () => ({
   useParams: () => ({ hash: TX_HASH }),
-  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => `/tx/${TX_HASH}`,
+  useSearchParams: () => mockSearchParams,
+  useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
 
 describe('TransactionDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSearchParams = new URLSearchParams();
 
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: TX_HASH,
@@ -98,6 +107,8 @@ describe('TransactionDetailPage', () => {
           address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
         },
       ],
+      witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
+      witnessesAvailable: true,
     });
 
     vi.mocked(api.lookupScripts).mockResolvedValue({
@@ -215,5 +226,56 @@ describe('TransactionDetailPage', () => {
       expect(screen.queryByTestId('tx-relationship-flow')).not.toBeInTheDocument();
     });
     expect(screen.getByTestId('mock-cell-graph')).toBeInTheDocument();
+  });
+
+  it('renders witness tab with deterministic decode and byte interaction', async () => {
+    render(<TransactionDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getTransactionDetail).toHaveBeenCalled();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Witness \(2\)/ }));
+    expect(mockReplace).toHaveBeenCalled();
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('tab=witness');
+
+    expect(screen.getByTestId('tx-witness-tab')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-item-1')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-inference-panel')).toBeInTheDocument();
+    expect(screen.getByText('extra_witnesses')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-deterministic-section')).toBeInTheDocument();
+    expect(screen.getByText('WitnessArgs')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-segment-item-1'));
+    expect(screen.getByTestId('tx-witness-active-segment')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-active-segment-value')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-bytes-grid')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-script-group-focus-0-type'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('wg=');
+    expect(screen.getByTestId('tx-witness-focused-group')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-focused-group')).toHaveTextContent(
+      /Focused script group:/
+    );
+    expect(screen.getByTestId('tx-witness-segment-pinned')).toBeInTheDocument();
+    expect(screen.getByTestId('tx-witness-active-segment')).toHaveTextContent(
+      /(inputType|outputType)/
+    );
+    expect(screen.queryByText('extra_witnesses')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear focus' }));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
+    expect(screen.queryByTestId('tx-witness-focused-group')).not.toBeInTheDocument();
+    expect(screen.getByText('extra_witnesses')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go witness #1' }));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=1');
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('wg=');
+    expect(screen.getByText('DASWitness')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('tx-witness-item-1'));
+    fireEvent.click(screen.getByTestId('tx-witness-heuristic-item-0'));
+    expect(screen.getByTestId('tx-witness-heuristic-detail-0')).toBeInTheDocument();
   });
 });
