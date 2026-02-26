@@ -7,6 +7,8 @@ vi.mock('@/lib/api', () => ({
   api: {
     getBlocks: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
+    getDotbitItemDetail: vi.fn(),
+    getDotbitItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
   },
@@ -183,5 +185,50 @@ describe('renderMarkdownPage', () => {
         origin: 'http://localhost:3000',
       })
     ).rejects.toEqual(expect.objectContaining<Partial<MarkdownRenderError>>({ status: 400 }));
+  });
+
+  it('renders dotbit item detail markdown', async () => {
+    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+      nftId: '0xdotbit',
+      name: 'alice.bit',
+      standard: 'dotbit',
+      ownerLockHash: '0xowner',
+      isLive: false,
+      createdAtBlock: 456,
+      expiredAt: 1800000000,
+      txHash: null,
+      outputIndex: null,
+    } as any);
+    vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xtx',
+          blockNumber: 456,
+          txIndex: 0,
+          timestamp: '1700000000',
+          actions: ['transfer'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/nfts/dotbit/0xdotbit'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# .bit alice.bit');
+    expect(result.body).toContain('## Account');
+    expect(result.body).toContain('## Activities');
+    expect(result.body).toContain('transfer');
+    expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xdotbit', {
+      limit: 20,
+      cursor: undefined,
+      action: undefined,
+    });
   });
 });

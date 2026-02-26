@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import Image from 'next/image';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
-import { api } from '@/lib/api';
+import { api, type NftItemStatusFilter } from '@/lib/api';
 import {
   TerminalPanel,
   TerminalPanelHeader,
@@ -34,6 +35,7 @@ export default function SporeDetailPage() {
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [dotbitStatusFilter, setDotbitStatusFilter] = useState<NftItemStatusFilter>('all');
   const collectionItemsPagination = useCursorPagination();
   const { reset: resetCollectionItemsPagination } = collectionItemsPagination;
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
@@ -70,6 +72,7 @@ export default function SporeDetailPage() {
     (!!collection &&
       (isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'));
   const collectionSearchKeyword = isDotbitCollectionView ? searchKeyword : '';
+  const collectionStatusFilter = isDotbitCollectionView ? dotbitStatusFilter : 'all';
 
   const { data: cluster } = useQuery({
     queryKey: ['cluster', spore?.clusterId],
@@ -155,12 +158,14 @@ export default function SporeDetailPage() {
       collectionAssetId,
       collectionItemsPagination.cursor,
       collectionSearchKeyword,
+      collectionStatusFilter,
     ],
     queryFn: () =>
       api.getNftCollectionItems(collectionAssetId, {
         limit: 20,
         cursor: collectionItemsPagination.cursor,
         search: collectionSearchKeyword || undefined,
+        status: isDotbitCollectionView ? collectionStatusFilter : undefined,
       }),
     enabled: !!collection,
     placeholderData: keepPreviousData,
@@ -168,7 +173,12 @@ export default function SporeDetailPage() {
 
   useEffect(() => {
     resetCollectionItemsPagination();
-  }, [collectionAssetId, collectionSearchKeyword, resetCollectionItemsPagination]);
+  }, [
+    collectionAssetId,
+    collectionSearchKeyword,
+    collectionStatusFilter,
+    resetCollectionItemsPagination,
+  ]);
 
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
@@ -343,6 +353,18 @@ export default function SporeDetailPage() {
                 actions={
                   isDotbitCollectionView ? (
                     <div className="flex items-center gap-2">
+                      <select
+                        value={collectionStatusFilter}
+                        onChange={(event) =>
+                          setDotbitStatusFilter(event.target.value as NftItemStatusFilter)
+                        }
+                        aria-label="Status Filter"
+                        className="focus:border-terminal-green rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors"
+                      >
+                        <option value="all">All</option>
+                        <option value="live">Live</option>
+                        <option value="recycled">Recycled</option>
+                      </select>
                       <input
                         type="text"
                         value={searchInput}
@@ -380,24 +402,16 @@ export default function SporeDetailPage() {
                           className="row-scan hover:bg-slate-850/40 border-b border-slate-800 px-3 py-2.5 transition-colors last:border-b-0"
                         >
                           <div className="mb-1 flex items-center justify-between gap-3">
-                            {item.txHash &&
-                            item.outputIndex !== null &&
-                            item.outputIndex !== undefined ? (
-                              <Link
-                                href={`/cell/${item.txHash}-${item.outputIndex}`}
-                                className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
-                              >
-                                {item.name || item.nftId}
-                              </Link>
-                            ) : (
-                              <span className="font-mono text-sm text-white">
-                                {item.name || item.nftId}
-                              </span>
-                            )}
+                            <Link
+                              href={`/nfts/dotbit/${encodeURIComponent(item.nftId)}`}
+                              className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
+                            >
+                              {item.name || item.nftId}
+                            </Link>
                             {item.isLive ? (
                               <Badge variant="green">Live</Badge>
                             ) : (
-                              <Badge variant="red">Burned</Badge>
+                              <Badge variant="red">Recycled</Badge>
                             )}
                           </div>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-slate-400">
@@ -414,28 +428,30 @@ export default function SporeDetailPage() {
                               </span>
                             </span>
                             <span>Block #{formatNumber(item.createdAtBlock)}</span>
-                            <span>
-                              Cell:{' '}
-                              {item.txHash &&
-                              item.outputIndex !== null &&
-                              item.outputIndex !== undefined ? (
-                                <Link
-                                  href={`/cell/${item.txHash}-${item.outputIndex}`}
-                                  className="text-terminal-green hover:underline"
-                                >
-                                  <HexDisplay
-                                    value={item.txHash}
-                                    color="accent"
-                                    size="sm"
-                                    startChars={10}
-                                    endChars={8}
-                                  />
-                                  -{item.outputIndex}
-                                </Link>
-                              ) : (
-                                <span className="text-slate-500">Unavailable</span>
-                              )}
-                            </span>
+                            {item.isLive && (
+                              <span>
+                                Cell:{' '}
+                                {item.txHash &&
+                                item.outputIndex !== null &&
+                                item.outputIndex !== undefined ? (
+                                  <Link
+                                    href={`/cell/${item.txHash}-${item.outputIndex}`}
+                                    className="text-terminal-green hover:underline"
+                                  >
+                                    <HexDisplay
+                                      value={item.txHash}
+                                      color="accent"
+                                      size="sm"
+                                      startChars={10}
+                                      endChars={8}
+                                    />
+                                    -{item.outputIndex}
+                                  </Link>
+                                ) : (
+                                  <span className="text-slate-500">Unavailable</span>
+                                )}
+                              </span>
+                            )}
                             {item.ownerLockHash && (
                               <span>
                                 Owner:{' '}
@@ -585,11 +601,16 @@ export default function SporeDetailPage() {
     if (dobSvgDataUrl) {
       return (
         <div className="h-64 bg-slate-950/60 p-3">
-          <img
-            src={dobSvgDataUrl}
-            alt="DOB rendered preview"
-            className="h-full w-full rounded border border-slate-700 object-contain"
-          />
+          <div className="relative h-full w-full">
+            <Image
+              src={dobSvgDataUrl}
+              alt="DOB rendered preview"
+              fill
+              unoptimized
+              sizes="(max-width: 768px) 100vw, 50vw"
+              className="rounded border border-slate-700 object-contain"
+            />
+          </div>
         </div>
       );
     }
@@ -597,11 +618,16 @@ export default function SporeDetailPage() {
     if (mediaPreviewUrl && previewContentType.startsWith('image/')) {
       return (
         <div className="h-64 bg-slate-950/60 p-3">
-          <img
-            src={mediaPreviewUrl}
-            alt="Spore content preview"
-            className="h-full w-full rounded border border-slate-700 object-contain"
-          />
+          <div className="relative h-full w-full">
+            <Image
+              src={mediaPreviewUrl}
+              alt="Spore content preview"
+              fill
+              unoptimized
+              sizes="(max-width: 768px) 100vw, 50vw"
+              className="rounded border border-slate-700 object-contain"
+            />
+          </div>
         </div>
       );
     }

@@ -21,6 +21,7 @@ describe('buildAiCapabilities', () => {
   it('declares tx debugger profile in raw route matrix', () => {
     const capabilities = buildAiCapabilities();
 
+    expect(capabilities.routes.markdown).toContain('/nfts/dotbit/{nftId}');
     expect(capabilities.routes.raw).toContain('/tx/{hash}');
     expect(capabilities.rawProfiles.routes['/tx/{hash}']).toEqual(['default', 'debugger']);
     expect(capabilities.rawProfiles.txDebuggerProfile.payloadPath).toBe(

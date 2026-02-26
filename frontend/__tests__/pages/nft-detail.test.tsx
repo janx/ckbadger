@@ -392,7 +392,18 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(api.getNftCollectionItems).toHaveBeenCalledWith(
         mockCollection.collectionId,
-        expect.objectContaining({ limit: 20, search: undefined })
+        expect.objectContaining({ limit: 20, search: undefined, status: 'all' })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Status Filter'), {
+      target: { value: 'live' },
+    });
+
+    await waitFor(() => {
+      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+        mockCollection.collectionId,
+        expect.objectContaining({ limit: 20, search: undefined, status: 'live' })
       );
     });
 
@@ -403,9 +414,49 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(api.getNftCollectionItems).toHaveBeenCalledWith(
         mockCollection.collectionId,
-        expect.objectContaining({ limit: 20, search: 'alice' })
+        expect.objectContaining({ limit: 20, search: 'alice', status: 'live' })
       );
     });
+  });
+
+  it('shows recycled status without cell text and links to dotbit detail page', async () => {
+    mockParams = { sporeId: 'dotbit' };
+    vi.mocked(api.getNftCollection).mockResolvedValue({
+      ...mockCollection,
+      standard: 'dotbit',
+      name: '.bit',
+    } as any);
+    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+      data: [
+        {
+          nftId: '0x1111',
+          name: 'bob.bit',
+          standard: 'dotbit',
+          ownerLockHash: '0x2222',
+          isLive: false,
+          createdAtBlock: 100,
+          expiredAt: 1800000000,
+          txHash: null,
+          outputIndex: null,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('bob.bit')).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/Cell:/)).not.toBeInTheDocument();
+
+    const detailLink = screen.getByRole('link', { name: 'bob.bit' });
+    expect(detailLink).toHaveAttribute('href', '/nfts/dotbit/0x1111');
   });
 
   it('normalizes dotbit slug before querying collection API', async () => {

@@ -44,6 +44,7 @@ Known markdown page routes:
 - `/hardforks`
 - `/nfts`
 - `/nfts/{sporeId}`
+- `/nfts/dotbit/{nftId}`
 - `/nfts/mnft/{nftId}`
 - `/script/{codeHash}`
 - `/scripts`

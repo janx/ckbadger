@@ -442,6 +442,7 @@ describe('api', () => {
           expect(url.searchParams.get('limit')).toBe('20');
           expect(url.searchParams.get('cursor')).toBe('abc');
           expect(url.searchParams.get('search')).toBe('alice');
+          expect(url.searchParams.get('status')).toBe('live');
           return HttpResponse.json({
             data: [],
             limit: 20,
@@ -455,8 +456,67 @@ describe('api', () => {
         limit: 20,
         cursor: 'abc',
         search: 'alice',
+        status: 'live',
       });
       expect(result.hasMore).toBe(false);
+    });
+
+    it('fetches dotbit item detail', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/dotbit/items/:nftId', ({ params }) => {
+          expect(params.nftId).toBe('0xabc');
+          return HttpResponse.json({
+            nftId: '0xabc',
+            name: 'alice.bit',
+            standard: 'dotbit',
+            ownerLockHash: '0xowner',
+            isLive: false,
+            createdAtBlock: 123,
+            expiredAt: 1800000000,
+            txHash: null,
+            outputIndex: null,
+          });
+        })
+      );
+
+      const detail = await api.getDotbitItemDetail('0xabc');
+      expect(detail.nftId).toBe('0xabc');
+      expect(detail.name).toBe('alice.bit');
+      expect(detail.isLive).toBe(false);
+    });
+
+    it('fetches dotbit item activities with query params', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/dotbit/items/:nftId/activities', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.nftId).toBe('0xabc');
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('300:0');
+          expect(url.searchParams.get('action')).toBe('transfer');
+          return HttpResponse.json({
+            data: [
+              {
+                txHash: '0xtx',
+                blockNumber: 300,
+                txIndex: 0,
+                timestamp: '1700000300',
+                actions: ['transfer'],
+              },
+            ],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const activities = await api.getDotbitItemActivities('0xabc', {
+        limit: 20,
+        cursor: '300:0',
+        action: 'transfer',
+      });
+      expect(activities.data).toHaveLength(1);
+      expect(activities.data[0].actions[0]).toBe('transfer');
     });
 
     it('fetches mnft item detail', async () => {

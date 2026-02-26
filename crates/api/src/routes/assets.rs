@@ -29,6 +29,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/assets", get(list_assets))
         .route("/assets/nfts/items/{nft_id}", get(get_nft_item_detail))
         .route(
+            "/assets/nfts/dotbit/items/{nft_id}",
+            get(get_dotbit_item_detail),
+        )
+        .route(
+            "/assets/nfts/dotbit/items/{nft_id}/activities",
+            get(list_dotbit_item_activities),
+        )
+        .route(
             "/assets/nfts/items/{nft_id}/activities",
             get(list_mnft_item_activities),
         )
@@ -70,6 +78,7 @@ pub struct NftItemsParams {
     limit: i64,
     cursor: Option<String>,
     search: Option<String>,
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +126,13 @@ enum SortDirection {
 
 fn default_sort_direction() -> SortDirection {
     SortDirection::Desc
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NftItemStatusFilter {
+    All,
+    Live,
+    Recycled,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -592,6 +608,37 @@ fn normalize_nft_items_search(search: Option<&str>) -> Option<String> {
     })
 }
 
+fn normalize_nft_items_status(
+    status: Option<&str>,
+) -> Result<NftItemStatusFilter, (axum::http::StatusCode, Json<ApiError>)> {
+    let Some(raw_status) = status else {
+        return Ok(NftItemStatusFilter::All);
+    };
+    let normalized = raw_status.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(NftItemStatusFilter::All);
+    }
+    match normalized.as_str() {
+        "all" => Ok(NftItemStatusFilter::All),
+        "live" => Ok(NftItemStatusFilter::Live),
+        "recycled" => Ok(NftItemStatusFilter::Recycled),
+        _ => Err(ApiError::bad_request(
+            "Invalid nft item status filter. Expected one of: all, live, recycled",
+        )),
+    }
+}
+
+fn nft_item_matches_status(
+    status_filter: NftItemStatusFilter,
+    entry: &ckbadger_store::types::NftEntry,
+) -> bool {
+    match status_filter {
+        NftItemStatusFilter::All => true,
+        NftItemStatusFilter::Live => entry.is_live,
+        NftItemStatusFilter::Recycled => !entry.is_live,
+    }
+}
+
 fn nft_item_matches_search(
     search_lower: Option<&str>,
     nft_id: &[u8],
@@ -998,41 +1045,16 @@ async fn get_nft_item_detail(
     })
 }
 
-async fn list_mnft_item_activities(
-    State(state): State<Arc<AppState>>,
-    Path(nft_id): Path<String>,
-    Query(params): Query<MnftItemActivitiesParams>,
-) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
-    let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_mnft_activity_action_filter(params.action.as_deref())?;
-    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
-    let entry = state
-        .store
-        .get_nft(&nft_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("NFT item not found"))?;
-    if !matches!(
-        entry.standard,
-        ckbadger_store::types::NftStandard::MnftToken
-    ) {
-        return Err(ApiError::bad_request(
-            "NFT item activities currently support mNFT token only",
-        ));
-    }
-
-    let Some(owner_lock_hash) = entry.owner_lock_hash else {
-        return ok(CursorPaginatedResponse::without_total(
-            Vec::new(),
-            limit,
-            None,
-        ));
-    };
-
-    let mut scan_cursor = params
-        .cursor
-        .as_deref()
-        .map(decode_activity_cursor)
-        .transpose()?;
+fn build_nft_item_activities_response(
+    state: &Arc<AppState>,
+    owner_lock_hash: &[u8],
+    nft_id_bytes: &[u8],
+    expected_standard: &str,
+    limit: i64,
+    cursor: Option<(i64, i32)>,
+    action_filter: Option<&str>,
+) -> Result<CursorPaginatedResponse<MnftItemActivityResponse>, ApiRouteError> {
+    let mut scan_cursor = cursor;
     let scan_batch_size = ((limit as usize) * 4).clamp(64, 400);
     let mut matched: Vec<(i64, i32, ckbadger_store::types::ActivityEntry, Vec<String>)> =
         Vec::with_capacity(limit as usize + 1);
@@ -1040,7 +1062,7 @@ async fn list_mnft_item_activities(
     loop {
         let batch = state
             .store
-            .list_activities(&owner_lock_hash, scan_batch_size, scan_cursor, Some("nft"))
+            .list_activities(owner_lock_hash, scan_batch_size, scan_cursor, Some("nft"))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         if batch.is_empty() {
             break;
@@ -1055,11 +1077,12 @@ async fn list_mnft_item_activities(
                         nft_id,
                         standard,
                         action,
-                    } if nft_id == &nft_id_bytes && standard.eq_ignore_ascii_case("m-nft") => {
+                    } if nft_id == nft_id_bytes
+                        && standard.eq_ignore_ascii_case(expected_standard) =>
+                    {
                         let action_name = asset_action_to_string(action);
                         if action_filter
-                            .as_ref()
-                            .map(|filter| filter != &action_name)
+                            .map(|filter| filter != action_name.as_str())
                             .unwrap_or(false)
                         {
                             None
@@ -1111,11 +1134,100 @@ async fn list_mnft_item_activities(
         )
         .collect();
 
-    ok(CursorPaginatedResponse::without_total(
+    Ok(CursorPaginatedResponse::without_total(
         rows,
         limit,
         next_cursor,
     ))
+}
+
+async fn list_mnft_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_mnft_activity_action_filter(params.action.as_deref())?;
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_nft(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("NFT item not found"))?;
+    if !matches!(
+        entry.standard,
+        ckbadger_store::types::NftStandard::MnftToken
+    ) {
+        return Err(ApiError::bad_request(
+            "NFT item activities currently support mNFT token only",
+        ));
+    }
+
+    let Some(owner_lock_hash) = entry.owner_lock_hash else {
+        return ok(CursorPaginatedResponse::without_total(
+            Vec::new(),
+            limit,
+            None,
+        ));
+    };
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &owner_lock_hash,
+        &nft_id_bytes,
+        "m-nft",
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
+}
+
+async fn list_dotbit_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_mnft_activity_action_filter(params.action.as_deref())?;
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_nft(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(".bit item not found"))?;
+    if !matches!(entry.standard, ckbadger_store::types::NftStandard::DotBit) {
+        return Err(ApiError::bad_request("NFT item is not a .bit account"));
+    }
+
+    let Some(owner_lock_hash) = entry.owner_lock_hash else {
+        return ok(CursorPaginatedResponse::without_total(
+            Vec::new(),
+            limit,
+            None,
+        ));
+    };
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &owner_lock_hash,
+        &nft_id_bytes,
+        "dotbit",
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
 }
 
 async fn get_nft_collection(
@@ -1172,6 +1284,7 @@ async fn list_nft_collection_items(
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
     let search_lower = normalize_nft_items_search(params.search.as_deref());
+    let status_filter = normalize_nft_items_status(params.status.as_deref())?;
     let cursor_bytes = params
         .cursor
         .as_deref()
@@ -1187,7 +1300,7 @@ async fn list_nft_collection_items(
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::NftEntry)> =
         Vec::with_capacity((limit + 1) as usize);
 
-    if search_lower.is_some() {
+    if search_lower.is_some() || !matches!(status_filter, NftItemStatusFilter::All) {
         let scan_batch_size = (limit * 4).clamp(64, 400) as usize;
         let mut scan_cursor = cursor_bytes;
 
@@ -1230,6 +1343,10 @@ async fn list_nft_collection_items(
                             .map(|id| format!("0x{}", hex::encode(id)))
                             .unwrap_or_else(|| "null".to_string())
                     )));
+                }
+
+                if !nft_item_matches_status(status_filter, &entry) {
+                    continue;
                 }
 
                 if !nft_item_matches_search(search_lower.as_deref(), nft_id, &entry) {
@@ -1401,13 +1518,94 @@ async fn list_nft_collection_items(
             next_cursor,
         ))
     } else {
+        let total = match status_filter {
+            NftItemStatusFilter::All => agg.total_count,
+            NftItemStatusFilter::Live => agg.live_count,
+            NftItemStatusFilter::Recycled => {
+                agg.total_count
+                    .checked_sub(agg.live_count)
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "invalid nft collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                            hex::encode(&collection_id_bytes),
+                            agg.total_count,
+                            agg.live_count
+                        ))
+                    })?
+            }
+        };
         ok(CursorPaginatedResponse::new(
             rows,
-            agg.total_count,
+            total,
             limit,
             next_cursor,
         ))
     }
+}
+
+async fn get_dotbit_item_detail(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+) -> ApiResult<NftCollectionItemResponse> {
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_nft(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(".bit item not found"))?;
+
+    if !matches!(entry.standard, ckbadger_store::types::NftStandard::DotBit) {
+        return Err(ApiError::bad_request("NFT item is not a .bit account"));
+    }
+
+    let expired_at = match &entry.extra {
+        ckbadger_store::types::NftExtra::DotBit { expired_at } => *expired_at,
+        _ => {
+            return Err(ApiError::internal(format!(
+                "invalid NFT entry extra type for .bit account: nft_id=0x{}",
+                hex::encode(&nft_id_bytes)
+            )))
+        }
+    };
+
+    let (tx_hash, output_index) = if entry.is_live {
+        let outpoint_map = state
+            .store
+            .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&nft_id_bytes))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        if let Some((tx_hash, output_index)) = outpoint_map.get(&nft_id_bytes) {
+            (
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(*output_index),
+            )
+        } else {
+            let fallback = resolve_dotbit_live_outpoint_by_type_hash(&state, &nft_id_bytes)?;
+            let Some((tx_hash, output_index)) = fallback else {
+                return Err(ApiError::internal(format!(
+                    "live dotbit account missing outpoint index: nft_id=0x{}",
+                    hex::encode(&nft_id_bytes)
+                )));
+            };
+            (Some(tx_hash), Some(output_index))
+        }
+    } else {
+        (None, None)
+    };
+
+    ok(NftCollectionItemResponse {
+        nft_id: format!("0x{}", hex::encode(&nft_id_bytes)),
+        name: entry.name,
+        standard: entry.standard.asset_standard().to_string(),
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        is_live: entry.is_live,
+        created_at_block: entry.created_at_block,
+        expired_at,
+        tx_hash,
+        output_index,
+    })
 }
 
 async fn get_nft_collection_occupation_chart(

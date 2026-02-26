@@ -183,8 +183,11 @@ interface CursorQueryParams {
   cursor?: string;
 }
 
+type NftItemStatusFilter = 'all' | 'live' | 'recycled';
+
 interface NftCollectionItemsParams extends CursorQueryParams {
   search?: string;
+  status?: NftItemStatusFilter;
 }
 
 interface MnftItemActivitiesParams extends CursorQueryParams {
@@ -1100,6 +1103,7 @@ export type {
   SporeNft,
   NftCollection,
   NftCollectionItem,
+  NftItemStatusFilter,
   MnftClassSummary,
   MnftIssuerSummary,
   MnftLifecycleEvent,
@@ -1514,9 +1518,28 @@ export const api = {
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.search) query.set('search', params.search);
+    if (params.status) query.set('status', params.status);
     const suffix = query.toString();
     return fetchApi(
       `/assets/nfts/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getDotbitItemDetail: (nftId: string): Promise<NftCollectionItem> => {
+    return fetchApi(`/assets/nfts/dotbit/items/${encodeURIComponent(nftId)}`);
+  },
+
+  getDotbitItemActivities: (
+    nftId: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/dotbit/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 

@@ -294,7 +294,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -362,7 +362,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
         .body(Body::empty())
         .unwrap();
 
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
@@ -3368,13 +3368,57 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
         .uri("/api/v1/assets/nfts/dotbit/items?limit=20&search=alice")
         .body(Body::empty())
         .unwrap();
-    let response = app.oneshot(request).await.unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["name"], "alice.bit");
     assert!(json.get("total").is_none());
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/items?limit=20&status=live")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "alice.bit");
+    assert_eq!(json["data"][0]["isLive"], true);
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit/items?limit=20&status=recycled")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "bob.bit");
+    assert_eq!(json["data"][0]["isLive"], false);
+    assert_eq!(json["data"][0]["txHash"], serde_json::Value::Null);
+    assert_eq!(json["data"][0]["outputIndex"], serde_json::Value::Null);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}",
+            hex::encode(nft_a)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "alice.bit");
+    assert_eq!(json["isLive"], true);
+    assert_eq!(json["txHash"], format!("0x{}", hex::encode(&nft_a_tx_hash)));
+    assert_eq!(json["outputIndex"], nft_a_output_index);
 }
 
 #[tokio::test]
@@ -3890,6 +3934,160 @@ async fn test_assets_nft_item_activities_mnft() {
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_assets_nft_item_activities_dotbit() {
+    let store = test_store();
+    let account_id = [0x11u8; 20];
+    let other_account_id = [0x22u8; 20];
+    let owner_lock_hash = vec![0x88u8; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft(
+        &account_id,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(account_id.to_vec()),
+            owner_lock_hash: Some(owner_lock_hash.clone()),
+            name: Some("alice.bit".to_string()),
+            is_live: true,
+            created_at_block: 120,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+            },
+        },
+    );
+    batch.put_activity(
+        &owner_lock_hash,
+        320,
+        0,
+        &ActivityEntry {
+            tx_hash: vec![0xa1; 32],
+            block_number: 320,
+            tx_index: 0,
+            timestamp: 1_700_000_320,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![AssetChange::Nft {
+                nft_id: account_id.to_vec(),
+                standard: "dotbit".to_string(),
+                action: AssetAction::Transfer,
+            }],
+            peers: vec![],
+        },
+    );
+    batch.put_activity(
+        &owner_lock_hash,
+        300,
+        0,
+        &ActivityEntry {
+            tx_hash: vec![0xa2; 32],
+            block_number: 300,
+            tx_index: 0,
+            timestamp: 1_700_000_300,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![AssetChange::Nft {
+                nft_id: account_id.to_vec(),
+                standard: "dotbit".to_string(),
+                action: AssetAction::Mint,
+            }],
+            peers: vec![],
+        },
+    );
+    batch.put_activity(
+        &owner_lock_hash,
+        280,
+        0,
+        &ActivityEntry {
+            tx_hash: vec![0xa3; 32],
+            block_number: 280,
+            tx_index: 0,
+            timestamp: 1_700_000_280,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![AssetChange::Nft {
+                nft_id: other_account_id.to_vec(),
+                standard: "dotbit".to_string(),
+                action: AssetAction::Transfer,
+            }],
+            peers: vec![],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=20",
+            hex::encode(account_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"][0]["blockNumber"], 320);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(json["data"][1]["blockNumber"], 300);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=1",
+            hex::encode(account_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["blockNumber"], 320);
+    assert_eq!(json["hasMore"], true);
+    let next_cursor = json["nextCursor"]
+        .as_str()
+        .expect("next cursor for dotbit activities");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=1&cursor={}",
+            hex::encode(account_id),
+            next_cursor
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["blockNumber"], 300);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=20&action=transfer",
+            hex::encode(account_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
 }
 
 #[tokio::test]

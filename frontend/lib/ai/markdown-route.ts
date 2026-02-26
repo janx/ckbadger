@@ -46,6 +46,7 @@ export type ParsedMarkdownPage =
   | { kind: 'hardforks'; pathname: '/hardforks' }
   | { kind: 'nfts_list'; pathname: '/nfts' }
   | { kind: 'nft_detail'; pathname: string; sporeId: string }
+  | { kind: 'dotbit_item_detail'; pathname: string; nftId: string }
   | { kind: 'mnft_item_detail'; pathname: string; nftId: string }
   | { kind: 'script_by_code_hash'; pathname: string; codeHash: string }
   | { kind: 'scripts_list'; pathname: '/scripts' }
@@ -73,6 +74,7 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/hardforks',
   '/nfts',
   '/nfts/{sporeId}',
+  '/nfts/dotbit/{nftId}',
   '/nfts/mnft/{nftId}',
   '/script/{codeHash}',
   '/scripts',
@@ -170,6 +172,15 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
       kind: 'fork_detail',
       pathname: normalized,
       id: decodeParam(forkMatch[1]),
+    };
+  }
+
+  const dotbitItemMatch = normalized.match(/^\/nfts\/dotbit\/([^/]+)$/);
+  if (dotbitItemMatch) {
+    return {
+      kind: 'dotbit_item_detail',
+      pathname: normalized,
+      nftId: decodeParam(dotbitItemMatch[1]),
     };
   }
 
