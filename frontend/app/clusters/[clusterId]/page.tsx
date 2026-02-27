@@ -65,6 +65,12 @@ function formatStorageTierLabel(tier: string): string {
   return 'Unknown';
 }
 
+function getSortIndicator(direction: 'asc' | 'desc' | null): string {
+  if (direction === 'asc') return '↑';
+  if (direction === 'desc') return '↓';
+  return '↕';
+}
+
 export default function ClusterDetailPage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -212,6 +218,10 @@ export default function ClusterDetailPage() {
     : '--';
 
   const normalizedQuery = listQuery.trim().toLowerCase();
+  const sizeSortDirection =
+    listSort === 'sizeAsc' ? 'asc' : listSort === 'sizeDesc' ? 'desc' : null;
+  const blockSortDirection =
+    listSort === 'createdAsc' ? 'asc' : listSort === 'createdDesc' ? 'desc' : null;
 
   useEffect(() => {
     const currentQuery = searchParams.toString();
@@ -641,13 +651,11 @@ export default function ClusterDetailPage() {
                   indicator="active"
                   actions={
                     <div className="flex w-full flex-wrap items-center justify-between gap-3">
-                      <TabsList className="border-b-0">
-                        <TabsTrigger value="activities">Activities</TabsTrigger>
-                        <TabsTrigger value="nfts">NFTs</TabsTrigger>
-                        <TabsTrigger value="holders">Holders</TabsTrigger>
-                      </TabsList>
                       {activeCollectionTab === 'nfts' && (
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div
+                          data-testid="spore-list-controls"
+                          className="flex flex-1 flex-wrap items-center gap-2"
+                        >
                           <label className="sr-only" htmlFor="spore-list-query">
                             Search spores
                           </label>
@@ -689,36 +697,17 @@ export default function ClusterDetailPage() {
                             <option value="other">Other</option>
                           </select>
 
-                          <label className="sr-only" htmlFor="spore-list-sort">
-                            Sort spores
-                          </label>
-                          <select
-                            id="spore-list-sort"
-                            aria-label="Sort spores"
-                            value={listSort}
-                            onChange={(event) =>
-                              setListSort(
-                                event.target.value as
-                                  | 'createdDesc'
-                                  | 'createdAsc'
-                                  | 'sizeDesc'
-                                  | 'sizeAsc'
-                              )
-                            }
-                            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200"
-                          >
-                            <option value="createdDesc">Latest Block</option>
-                            <option value="createdAsc">Earliest Block</option>
-                            <option value="sizeDesc">Largest Payload</option>
-                            <option value="sizeAsc">Smallest Payload</option>
-                          </select>
-
                           <div className="font-mono text-xs text-slate-500">
                             {filteredAndSortedSpores.length} shown /{' '}
                             {formatNumber(cluster.sporesCount)} total
                           </div>
                         </div>
                       )}
+                      <TabsList className="border-b-0">
+                        <TabsTrigger value="activities">Activities</TabsTrigger>
+                        <TabsTrigger value="nfts">NFTs</TabsTrigger>
+                        <TabsTrigger value="holders">Holders</TabsTrigger>
+                      </TabsList>
                     </div>
                   }
                 >
@@ -726,7 +715,7 @@ export default function ClusterDetailPage() {
                     ? 'Activities'
                     : activeCollectionTab === 'holders'
                       ? 'Holders'
-                      : `Spores in this collection (${formatNumber(cluster.sporesCount)})`}
+                      : 'NFTs'}
                 </TerminalPanelHeader>
 
                 <TabsContent value="activities" className="py-0">
@@ -823,10 +812,38 @@ export default function ClusterDetailPage() {
                           <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)_90px_80px_minmax(0,1.2fr)_110px] items-center gap-3">
                             <div>Spore ID</div>
                             <div>Content</div>
-                            <div className="text-right">Size</div>
+                            <div className="text-right">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setListSort((current) =>
+                                    current === 'sizeDesc' ? 'sizeAsc' : 'sizeDesc'
+                                  )
+                                }
+                                aria-label="Sort spores by size"
+                                className="ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider text-slate-500 transition hover:text-slate-300"
+                              >
+                                <span>Size</span>
+                                <span aria-hidden>{getSortIndicator(sizeSortDirection)}</span>
+                              </button>
+                            </div>
                             <div className="text-center">Status</div>
                             <div className="text-right">Owner</div>
-                            <div className="text-right">Block</div>
+                            <div className="text-right">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setListSort((current) =>
+                                    current === 'createdDesc' ? 'createdAsc' : 'createdDesc'
+                                  )
+                                }
+                                aria-label="Sort spores by block"
+                                className="ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider text-slate-500 transition hover:text-slate-300"
+                              >
+                                <span>Block</span>
+                                <span aria-hidden>{getSortIndicator(blockSortDirection)}</span>
+                              </button>
+                            </div>
                           </div>
                         </div>
 

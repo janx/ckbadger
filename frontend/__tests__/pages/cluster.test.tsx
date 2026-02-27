@@ -188,7 +188,7 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
+      expect(screen.queryByText('Spores in this collection (5)')).not.toBeInTheDocument();
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
     });
@@ -232,7 +232,8 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
-      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
+      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
+      expect(screen.queryByText('Spores in this collection (5)')).not.toBeInTheDocument();
     });
   });
 
@@ -261,7 +262,7 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
+      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
       expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
       expect(screen.queryByText('No holders in this collection')).not.toBeInTheDocument();
     });
@@ -436,13 +437,44 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toHaveValue('text');
-      expect(screen.getByLabelText('Sort spores')).toHaveValue('sizeAsc');
       expect(screen.getByLabelText('Search spores')).toHaveValue('text/plain');
       expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
     });
   });
 
-  it('updates URL search params when list controls change', async () => {
+  it('uses sortable column headers instead of sort dropdown', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Sort spores')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort spores by size' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort spores by block' })).toBeInTheDocument();
+    });
+  });
+
+  it('keeps NFT controls to the left of tab names', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('spore-list-controls')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
+    });
+
+    const controls = screen.getByTestId('spore-list-controls');
+    const tabsList = screen.getByRole('button', { name: /^Activities$/ }).parentElement;
+    expect(tabsList).not.toBeNull();
+    expect(controls.compareDocumentPosition(tabsList!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
+  });
+
+  it('updates URL search params when list controls and sortable headers change', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -455,9 +487,7 @@ describe('ClusterDetailPage', () => {
     fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
       target: { value: 'image' },
     });
-    fireEvent.change(screen.getByLabelText('Sort spores'), {
-      target: { value: 'sizeAsc' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sort spores by size' }));
     fireEvent.change(screen.getByLabelText('Search spores'), {
       target: { value: '0x2222' },
     });
@@ -467,7 +497,7 @@ describe('ClusterDetailPage', () => {
         mockReplace.mock.calls.some(
           ([href]) =>
             String(href).includes('content=image') &&
-            String(href).includes('sort=sizeAsc') &&
+            String(href).includes('sort=sizeDesc') &&
             String(href).includes('q=0x2222')
         )
       ).toBe(true);
@@ -500,7 +530,7 @@ describe('ClusterDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
 
     await waitFor(() => {
-      expect(screen.getByText('Spores in this collection (5)')).toBeInTheDocument();
+      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
     });
   });
 
