@@ -3,6 +3,7 @@ import type {
   CellDep,
   CursorPaginatedResponse,
   MnftItemActivity,
+  MnftItemDetail,
   NftCollectionItem,
   TransactionDetail,
   TransactionLifecycle,
@@ -33,7 +34,9 @@ type RouteKind = Exclude<ParsedRawPage['kind'], 'unknown'>;
 const ROUTE_PROFILE_MATRIX: Record<RouteKind, RawProfile[]> = {
   block_detail: ['default'],
   cell_detail: ['default'],
+  dotbit_item_detail: ['default'],
   did_ckb_item_detail: ['default'],
+  mnft_item_detail: ['default'],
   tx_detail: ['default', 'debugger'],
 };
 
@@ -222,8 +225,12 @@ interface TxWitnessData {
 type RawPayload = {
   block?: unknown;
   cell?: Cell;
+  dotbitItem?: NftCollectionItem;
+  dotbitActivities?: CursorPaginatedResponse<MnftItemActivity>;
   didCkbItem?: NftCollectionItem;
   didCkbActivities?: CursorPaginatedResponse<MnftItemActivity>;
+  mnftItem?: MnftItemDetail;
+  mnftActivities?: CursorPaginatedResponse<MnftItemActivity>;
   transaction?: TransactionDetail;
   txDebugger?: TxDebuggerData;
   txWitness?: TxWitnessData;
@@ -760,6 +767,23 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
           body: { meta, data: { transaction, txWitness } },
         };
       }
+      case 'dotbit_item_detail': {
+        const limit = parseLimit(searchParams);
+        const cursor = searchParams.get('cursor') ?? undefined;
+        const action = parseMnftActivityAction(searchParams.get('action'));
+        const [dotbitItem, dotbitActivities] = await Promise.all([
+          api.getDotbitItemDetail(page.nftId),
+          api.getDotbitItemActivities(page.nftId, {
+            limit,
+            cursor,
+            action,
+          }),
+        ]);
+        return {
+          status: 200,
+          body: { meta, data: { dotbitItem, dotbitActivities } },
+        };
+      }
       case 'did_ckb_item_detail': {
         const limit = parseLimit(searchParams);
         const cursor = searchParams.get('cursor') ?? undefined;
@@ -775,6 +799,23 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         return {
           status: 200,
           body: { meta, data: { didCkbItem, didCkbActivities } },
+        };
+      }
+      case 'mnft_item_detail': {
+        const limit = parseLimit(searchParams);
+        const cursor = searchParams.get('cursor') ?? undefined;
+        const action = parseMnftActivityAction(searchParams.get('action'));
+        const [mnftItem, mnftActivities] = await Promise.all([
+          api.getMnftItemDetail(page.nftId),
+          api.getMnftItemActivities(page.nftId, {
+            limit,
+            cursor,
+            action,
+          }),
+        ]);
+        return {
+          status: 200,
+          body: { meta, data: { mnftItem, mnftActivities } },
         };
       }
     }

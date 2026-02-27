@@ -8,7 +8,9 @@ const RAW_DEFAULT_PROFILE = 'default';
 const RAW_ROUTE_PROFILES: Record<string, readonly string[]> = {
   '/blocks/{id}': ['default'],
   '/cell/{outpoint}': ['default'],
+  '/nfts/dotbit/{nftId}': ['default'],
   '/nfts/did/{nftId}': ['default'],
+  '/nfts/mnft/{nftId}': ['default'],
   '/tx/{hash}': ['default', 'debugger'],
 };
 

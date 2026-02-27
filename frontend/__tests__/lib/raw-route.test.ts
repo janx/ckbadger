@@ -20,10 +20,22 @@ describe('parseRawSourcePath', () => {
       outpoint: '0xabc-1',
     });
 
+    expect(parseRawSourcePath('/nfts/dotbit/0xdotbit')).toEqual({
+      kind: 'dotbit_item_detail',
+      pathname: '/nfts/dotbit/0xdotbit',
+      nftId: '0xdotbit',
+    });
+
     expect(parseRawSourcePath('/nfts/did/0xdid')).toEqual({
       kind: 'did_ckb_item_detail',
       pathname: '/nfts/did/0xdid',
       nftId: '0xdid',
+    });
+
+    expect(parseRawSourcePath('/nfts/mnft/0xmnft')).toEqual({
+      kind: 'mnft_item_detail',
+      pathname: '/nfts/mnft/0xmnft',
+      nftId: '0xmnft',
     });
   });
 

@@ -7,8 +7,12 @@ vi.mock('@/lib/api', () => ({
   api: {
     getBlock: vi.fn(),
     getCell: vi.fn(),
+    getDotbitItemActivities: vi.fn(),
+    getDotbitItemDetail: vi.fn(),
     getDidCkbItemActivities: vi.fn(),
     getDidCkbItemDetail: vi.fn(),
+    getMnftItemActivities: vi.fn(),
+    getMnftItemDetail: vi.fn(),
     getTransactionDetail: vi.fn(),
     getTransactionCellDeps: vi.fn(),
     getTransactionLifecycle: vi.fn(),
@@ -305,6 +309,116 @@ describe('renderRawPage', () => {
     expect(api.getDidCkbItemDetail).toHaveBeenCalledWith('0xdid');
     expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xdid', {
       action: undefined,
+      cursor: undefined,
+      limit: 20,
+    });
+  });
+
+  it('renders dotbit item raw with default profile', async () => {
+    vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+      nftId: '0xdotbit',
+      name: 'alice.bit',
+      standard: 'dotbit',
+      ownerLockHash: '0xowner',
+      isLive: true,
+      createdAtBlock: 321,
+      txHash: '0xtx',
+      outputIndex: 1,
+      expiredAt: 1_800_000_000,
+    });
+    vi.mocked(api.getDotbitItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xactdot',
+          blockNumber: 322,
+          txIndex: 0,
+          timestamp: '2026-02-23T00:00:00Z',
+          actions: ['mint'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const result = await renderRawPage({
+      page: parseRawSourcePath('/nfts/dotbit/0xdotbit'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.meta.profile).toBe('default');
+    expect(result.body.data?.dotbitItem?.name).toBe('alice.bit');
+    expect(result.body.data?.dotbitActivities?.data[0]?.actions).toEqual(['mint']);
+    expect(api.getDotbitItemDetail).toHaveBeenCalledWith('0xdotbit');
+    expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xdotbit', {
+      action: undefined,
+      cursor: undefined,
+      limit: 20,
+    });
+  });
+
+  it('renders mnft item raw with default profile', async () => {
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      nftId: '0xmnft',
+      standard: 'm_nft',
+      isLive: true,
+      ownerLockHash: '0xowner',
+      createdAtBlock: 500,
+      tokenIndex: 12,
+      characteristicHex: '0x1234',
+      configure: 1,
+      state: 0,
+      txHash: '0xtx',
+      outputIndex: 2,
+      class: {
+        classId: '0xclass',
+        issuerId: '0xissuer',
+        name: 'Class A',
+        description: null,
+        renderer: null,
+        total: 100,
+        issued: 10,
+        configure: 1,
+      },
+      issuer: {
+        issuerId: '0xissuer',
+        name: 'Issuer A',
+        classCount: 1,
+        setCount: 10,
+        infoHex: null,
+      },
+      lifecycle: [],
+    });
+    vi.mocked(api.getMnftItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xactmnft',
+          blockNumber: 501,
+          txIndex: 1,
+          timestamp: '2026-02-23T00:00:00Z',
+          actions: ['transfer'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const result = await renderRawPage({
+      page: parseRawSourcePath('/nfts/mnft/0xmnft'),
+      searchParams: new URLSearchParams('action=transfer'),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.meta.profile).toBe('default');
+    expect(result.body.data?.mnftItem?.nftId).toBe('0xmnft');
+    expect(result.body.data?.mnftActivities?.data[0]?.actions).toEqual(['transfer']);
+    expect(api.getMnftItemDetail).toHaveBeenCalledWith('0xmnft');
+    expect(api.getMnftItemActivities).toHaveBeenCalledWith('0xmnft', {
+      action: 'transfer',
       cursor: undefined,
       limit: 20,
     });

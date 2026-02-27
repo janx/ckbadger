@@ -25,7 +25,9 @@ Raw output convention:
 - Current raw routes:
   - `/blocks/{id}.raw` (profile: `default`)
   - `/cell/{outpoint}.raw` (profile: `default`)
+  - `/nfts/dotbit/{nftId}.raw` (profile: `default`)
   - `/nfts/did/{nftId}.raw` (profile: `default`)
+  - `/nfts/mnft/{nftId}.raw` (profile: `default`)
   - `/tx/{hash}.raw` (profiles: `default`, `debugger`)
 - `profile=debugger` includes `data.txDebugger.mockTransaction`, compatible with `ckb-debugger --tx-file`.
 - `/tx/{hash}.raw` includes `data.txWitness` with witness analyses, script-group lens, and inference.

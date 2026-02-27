@@ -14,7 +14,9 @@ Machine-friendly endpoints:
 - Raw pages: `/{page}.raw`
   - Optional profile: `?profile=default|debugger`
   - Example: `/tx/0x....raw?profile=debugger`
+  - Example: `/nfts/dotbit/{nftId}.raw`
   - Example: `/nfts/did/{nftId}.raw`
+  - Example: `/nfts/mnft/{nftId}.raw`
   - `profile=debugger` returns `mockTransaction` for `ckb-debugger --tx-file`
   - `/tx/{hash}.raw` also includes `data.txWitness` (witness analyses + inference)
   - Raw response headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`
