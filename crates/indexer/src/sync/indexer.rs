@@ -89,6 +89,7 @@ const ADAPTIVE_REASON_MODERATE_BACKOFF_FLOOR_DOWN: u8 = 7;
 const ADAPTIVE_REASON_THROUGHPUT_BACKOFF: u8 = 8;
 const ADAPTIVE_REASON_ADJUSTED: u8 = 9;
 const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
+const ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF: u8 = 11;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
@@ -136,6 +137,7 @@ fn encode_adaptive_batch_reason(reason: &'static str) -> u8 {
         "throughput_backoff" => ADAPTIVE_REASON_THROUGHPUT_BACKOFF,
         "adjusted" => ADAPTIVE_REASON_ADJUSTED,
         "early_height_boost" => ADAPTIVE_REASON_EARLY_HEIGHT_BOOST,
+        "severe_pressure_backoff" => ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF,
         _ => ADAPTIVE_REASON_UNKNOWN,
     }
 }
@@ -154,6 +156,7 @@ fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static str> {
         ADAPTIVE_REASON_THROUGHPUT_BACKOFF => Some("throughput_backoff"),
         ADAPTIVE_REASON_ADJUSTED => Some("adjusted"),
         ADAPTIVE_REASON_EARLY_HEIGHT_BOOST => Some("early_height_boost"),
+        ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF => Some("severe_pressure_backoff"),
         _ => None,
     }
 }
@@ -2035,27 +2038,36 @@ const ADAPTIVE_BATCH_MAX_BLOCKS: u64 = 5_000;
 const ADAPTIVE_BATCH_TPB_EMA_ALPHA_PCT: u64 = 20; // 0.20
 const ADAPTIVE_BATCH_INITIAL_TPB_MILLI: u64 = 20_000; // 20.0 tx/block
 const ADAPTIVE_BATCH_INITIAL_INFLIGHT: u64 = 3;
-const ADAPTIVE_BATCH_COOLDOWN_STEPS: u64 = 3;
-const ADAPTIVE_BATCH_WRITE_TARGET_MS: f64 = 3_000.0;
+const ADAPTIVE_BATCH_WRITE_TARGET_MS: f64 = 2_500.0;
 const ADAPTIVE_BATCH_WRITE_LO_MS: f64 = 1_500.0;
-const ADAPTIVE_BATCH_WRITE_HI_MS: f64 = 8_000.0;
+const ADAPTIVE_BATCH_WRITE_HI_MS: f64 = 6_000.0;
 const ADAPTIVE_BATCH_WRITE_HEALTHY_US_PER_TX: f64 = 300.0;
 const ADAPTIVE_BATCH_WRITE_TARGET_US_PER_TX: f64 = 450.0;
 const ADAPTIVE_BATCH_WRITE_HI_US_PER_TX: f64 = 900.0;
+const ADAPTIVE_BATCH_SEVERE_WRITE_MS: f64 = 10_000.0;
+const ADAPTIVE_BATCH_SEVERE_COMMIT_MS: f64 = 3_000.0;
+const ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX: f64 = 1_500.0;
+const ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED: u64 = 2;
+const ADAPTIVE_BATCH_SEVERE_COOLDOWN_STEPS: u64 = 2;
 const ADAPTIVE_BATCH_TXPS_EMA_ALPHA_PCT: u64 = 20; // 0.20
 const ADAPTIVE_BATCH_TXPS_STEPUP_MIN_RETAIN_PCT: u64 = 98;
-const ADAPTIVE_BATCH_TXPS_BACKOFF_DROP_PCT: u64 = 93;
+const ADAPTIVE_BATCH_TXPS_BACKOFF_DROP_PCT: u64 = 95;
 const ADAPTIVE_BATCH_PARSE_PRESSURE_PCT: f64 = 95.0;
 const ADAPTIVE_BATCH_WRITER_PRESSURE_PCT: f64 = 90.0;
 const ADAPTIVE_BATCH_PARSE_HEALTHY_PCT: f64 = 60.0;
 const ADAPTIVE_BATCH_WRITER_HEALTHY_PCT: f64 = 60.0;
 const ADAPTIVE_BATCH_MEMORY_PRESSURE_PCT: f64 = 80.0;
 const ADAPTIVE_BATCH_MEMORY_HEALTHY_PCT: f64 = 70.0;
-const ADAPTIVE_BATCH_FLOOR_INFLIGHT_BACKOFF_PCT: f64 = 75.0;
-const ADAPTIVE_BATCH_FLOOR_INFLIGHT_COOLDOWN_STEPS: u64 = 1;
 const ADAPTIVE_BATCH_MIN_FLOOR_STEP_DOWN_PCT: u64 = 80;
 const ADAPTIVE_BATCH_MIN_FLOOR_STEP_UP_PCT: u64 = 110;
 const ADAPTIVE_BATCH_MIN_FLOOR_RECOVER_WRITE_US_PER_TX: f64 = 220.0;
+const ADAPTIVE_BATCH_HEALTHY_STEP_UP_PCT: u64 = 120;
+const ADAPTIVE_BATCH_HEALTHY_BONUS_STEP_UP_PCT: u64 = 110;
+const ADAPTIVE_BATCH_HEALTHY_BONUS_STREAK: u64 = 3;
+const ADAPTIVE_BATCH_HEALTHY_BONUS_COMMIT_MS: f64 = 1_200.0;
+const ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS: u64 = 1_000_000;
+const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS: u64 = 40_000;
+const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT: u64 = 6;
 
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchSnapshot {
@@ -2084,7 +2096,9 @@ pub struct AdaptiveBatchProgressSnapshot {
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchInput {
     write_ms: f64,
+    commit_ms: f64,
     batch_tx_count: usize,
+    blocks_remaining: u64,
     parse_queue_fill_pct: Option<f64>,
     writer_queue_fill_pct: Option<f64>,
     memory_ratio_pct: Option<f64>,
@@ -2112,6 +2126,8 @@ struct AdaptiveBatchController {
     last_reason_code: AtomicU8,
     adjustment_seq: AtomicU64,
     backoff_streak: AtomicU64,
+    severe_pressure_streak: AtomicU64,
+    healthy_streak: AtomicU64,
     last_adjusted_at: AtomicI64,
     max_inflight_limit: u64,
     early_height_boost_applied: std::sync::atomic::AtomicBool,
@@ -2131,6 +2147,8 @@ impl AdaptiveBatchController {
             last_reason_code: AtomicU8::new(ADAPTIVE_REASON_UNKNOWN),
             adjustment_seq: AtomicU64::new(0),
             backoff_streak: AtomicU64::new(0),
+            severe_pressure_streak: AtomicU64::new(0),
+            healthy_streak: AtomicU64::new(0),
             last_adjusted_at: AtomicI64::new(0),
             max_inflight_limit,
             early_height_boost_applied: std::sync::atomic::AtomicBool::new(false),
@@ -2277,6 +2295,7 @@ impl AdaptiveBatchController {
         let mut new_inflight_limit = previous_inflight_limit;
         let mut new_min_target_batch_txs = previous_min_target_batch_txs;
         let reason: Option<&'static str>;
+        let near_tip = input.blocks_remaining <= ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS;
         let write_us_per_tx = if input.batch_tx_count > 0 && input.write_ms > 0.0 {
             Some((input.write_ms * 1000.0) / input.batch_tx_count as f64)
         } else {
@@ -2306,38 +2325,52 @@ impl AdaptiveBatchController {
                 .writer_queue_fill_pct
                 .is_some_and(|pct| pct >= ADAPTIVE_BATCH_WRITER_PRESSURE_PCT);
 
-        let pressure = high_unit_write_cost
+        let severe_pressure_signal = input.write_ms >= ADAPTIVE_BATCH_SEVERE_WRITE_MS
+            || input.commit_ms >= ADAPTIVE_BATCH_SEVERE_COMMIT_MS
+            || write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX);
+        let severe_pressure_streak = if severe_pressure_signal {
+            self.severe_pressure_streak.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            self.severe_pressure_streak.store(0, Ordering::Relaxed);
+            0
+        };
+        let severe_pressure = severe_pressure_streak >= ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED;
+        let moderate_pressure = target_unit_write_cost
             || (input.write_ms > ADAPTIVE_BATCH_WRITE_HI_MS && throughput_drop_under_load)
             || (queue_pressure && throughput_drop_under_load)
             || input
                 .memory_ratio_pct
                 .is_some_and(|pct| pct >= ADAPTIVE_BATCH_MEMORY_PRESSURE_PCT);
 
-        if pressure {
-            new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.6).round() as u64;
+        if severe_pressure {
+            new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.7).round() as u64;
             new_inflight_limit = previous_inflight_limit.saturating_sub(1).max(1);
             self.cooldown_steps
-                .store(ADAPTIVE_BATCH_COOLDOWN_STEPS, Ordering::Relaxed);
+                .store(ADAPTIVE_BATCH_SEVERE_COOLDOWN_STEPS, Ordering::Relaxed);
+            self.healthy_streak.store(0, Ordering::Relaxed);
+
             let at_floor = previous_target_batch_txs <= previous_min_target_batch_txs;
-            if at_floor
-                && previous_inflight_limit <= 2
-                && (high_unit_write_cost || throughput_drop_under_load)
-            {
+            if at_floor && previous_inflight_limit <= 2 && high_unit_write_cost {
                 new_min_target_batch_txs = Self::step_down_min_floor(previous_min_target_batch_txs);
                 reason = Some(
                     if new_min_target_batch_txs < previous_min_target_batch_txs {
                         "pressure_backoff_floor_down"
                     } else {
-                        "pressure_backoff"
+                        "severe_pressure_backoff"
                     },
                 );
             } else {
-                reason = Some("pressure_backoff");
+                reason = Some("severe_pressure_backoff");
             }
+        } else if moderate_pressure {
+            new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.9).round() as u64;
+            self.healthy_streak.store(0, Ordering::Relaxed);
+            reason = Some("moderate_backoff");
         } else {
             let cooldown = self.cooldown_steps.load(Ordering::Relaxed);
             if cooldown > 0 {
                 self.cooldown_steps.fetch_sub(1, Ordering::Relaxed);
+                self.healthy_streak.store(0, Ordering::Relaxed);
                 reason = None;
             } else {
                 let healthy = input.write_ms < ADAPTIVE_BATCH_WRITE_LO_MS
@@ -2352,11 +2385,25 @@ impl AdaptiveBatchController {
                     && input
                         .memory_ratio_pct
                         .is_none_or(|pct| pct < ADAPTIVE_BATCH_MEMORY_HEALTHY_PCT);
-
                 if healthy && throughput_not_worse {
-                    new_target_batch_txs =
-                        ((previous_target_batch_txs as f64) * 1.10).round() as u64;
-                    new_inflight_limit = (previous_inflight_limit + 1).min(self.max_inflight_limit);
+                    let healthy_streak = self.healthy_streak.fetch_add(1, Ordering::Relaxed) + 1;
+                    if previous_inflight_limit < self.max_inflight_limit {
+                        new_inflight_limit = previous_inflight_limit + 1;
+                    } else {
+                        let mut growth_pct = ADAPTIVE_BATCH_HEALTHY_STEP_UP_PCT;
+                        if healthy_streak >= ADAPTIVE_BATCH_HEALTHY_BONUS_STREAK
+                            && input.write_ms < ADAPTIVE_BATCH_WRITE_TARGET_MS
+                            && input.commit_ms < ADAPTIVE_BATCH_HEALTHY_BONUS_COMMIT_MS
+                        {
+                            growth_pct = growth_pct
+                                .saturating_mul(ADAPTIVE_BATCH_HEALTHY_BONUS_STEP_UP_PCT)
+                                / 100;
+                        }
+                        new_target_batch_txs = previous_target_batch_txs
+                            .saturating_mul(growth_pct)
+                            .saturating_add(99)
+                            / 100;
+                    }
                     let should_recover_floor = previous_min_target_batch_txs
                         < ADAPTIVE_BATCH_BASE_MIN_TXS
                         && write_us_per_tx.is_some_and(|us| {
@@ -2378,63 +2425,24 @@ impl AdaptiveBatchController {
                     } else {
                         reason = Some("healthy_step_up");
                     }
-                } else if target_unit_write_cost
-                    || (input.write_ms > ADAPTIVE_BATCH_WRITE_TARGET_MS
-                        && throughput_drop_under_load)
-                    || (input.writer_queue_fill_pct.is_some_and(|pct| pct >= 80.0)
-                        && !throughput_not_worse)
-                    || (input.parse_queue_fill_pct.is_some_and(|pct| pct >= 85.0)
-                        && !throughput_not_worse)
-                    || input.memory_ratio_pct.is_some_and(|pct| pct >= 75.0)
-                    || throughput_drop_under_load
-                {
-                    new_target_batch_txs =
-                        ((previous_target_batch_txs as f64) * 0.85).round() as u64;
-                    let floor_relief = previous_target_batch_txs <= previous_min_target_batch_txs
-                        && ((target_unit_write_cost || throughput_drop_under_load)
-                            && (input.write_ms > ADAPTIVE_BATCH_WRITE_TARGET_MS
-                                || input.writer_queue_fill_pct.is_some_and(|pct| {
-                                    pct >= ADAPTIVE_BATCH_FLOOR_INFLIGHT_BACKOFF_PCT
-                                })
-                                || input.parse_queue_fill_pct.is_some_and(|pct| {
-                                    pct >= ADAPTIVE_BATCH_FLOOR_INFLIGHT_BACKOFF_PCT
-                                })));
-                    if floor_relief {
-                        new_inflight_limit = previous_inflight_limit.saturating_sub(1).max(1);
-                        self.cooldown_steps.store(
-                            ADAPTIVE_BATCH_FLOOR_INFLIGHT_COOLDOWN_STEPS,
-                            Ordering::Relaxed,
-                        );
-                        if previous_inflight_limit == 1
-                            && (target_unit_write_cost || throughput_drop_under_load)
-                        {
-                            new_min_target_batch_txs =
-                                Self::step_down_min_floor(previous_min_target_batch_txs);
-                            reason = Some(
-                                if new_min_target_batch_txs < previous_min_target_batch_txs {
-                                    "moderate_backoff_floor_down"
-                                } else {
-                                    "moderate_backoff_inflight_relief"
-                                },
-                            );
-                        } else {
-                            reason = Some("moderate_backoff_inflight_relief");
-                        }
-                    } else {
-                        reason = Some(if throughput_drop_under_load {
-                            "throughput_backoff"
-                        } else {
-                            "moderate_backoff"
-                        });
-                    }
                 } else {
+                    self.healthy_streak.store(0, Ordering::Relaxed);
                     reason = None;
                 }
             }
         }
 
-        new_min_target_batch_txs = new_min_target_batch_txs
-            .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS);
+        if near_tip {
+            new_min_target_batch_txs = new_min_target_batch_txs
+                .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS);
+        } else {
+            let min_inflight =
+                ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT.min(self.max_inflight_limit);
+            new_inflight_limit = new_inflight_limit.max(min_inflight);
+            new_min_target_batch_txs = new_min_target_batch_txs
+                .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS)
+                .max(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS);
+        }
         new_target_batch_txs =
             new_target_batch_txs.clamp(new_min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS);
         new_inflight_limit = new_inflight_limit.clamp(1, self.max_inflight_limit);
@@ -4827,11 +4835,20 @@ impl Indexer {
                         let writer_queue_fill_pct = parse_queue_fill_pct;
                         let memory_ratio_pct =
                             cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
+                        let blocks_remaining = self.progress.blocks_remaining();
+                        let db_stage_ms = db_elapsed.as_secs_f64() * 1000.0;
+                        let write_us_per_tx = if batch_tx_count > 0 && db_stage_ms > 0.0 {
+                            Some((db_stage_ms * 1000.0) / batch_tx_count as f64)
+                        } else {
+                            None
+                        };
                         if let Some(adjustment) =
                             self.adaptive_batch_controller
                                 .update_after_write(AdaptiveBatchInput {
-                                    write_ms: db_elapsed.as_secs_f64() * 1000.0,
+                                    write_ms: db_stage_ms,
+                                    commit_ms: write_metrics.commit_ms,
                                     batch_tx_count,
+                                    blocks_remaining,
                                     parse_queue_fill_pct,
                                     writer_queue_fill_pct,
                                     memory_ratio_pct,
@@ -4851,7 +4868,10 @@ impl Indexer {
                                 parse_queue_pending_txs,
                                 parse_queue_capacity_txs,
                                 memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
-                                db_stage_ms = format!("{:.1}", db_elapsed.as_secs_f64() * 1000.0),
+                                write_us_per_tx = write_us_per_tx.map(|v| format!("{:.1}", v)),
+                                adaptive_backoff_streak = self.adaptive_batch_controller.snapshot().backoff_streak,
+                                blocks_remaining,
+                                db_stage_ms = format!("{:.1}", db_stage_ms),
                                 db_commit_ms = format!("{:.1}", write_metrics.commit_ms),
                                 "Adaptive batch controller adjusted"
                             );
@@ -4861,7 +4881,7 @@ impl Indexer {
                             "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
                             start_block,
                             end_block,
-                            self.progress.blocks_remaining(),
+                            blocks_remaining,
                             db_elapsed.as_secs_f64(),
                             write_metrics.commit_ms,
                             writer_queue,
@@ -11402,94 +11422,77 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_batch_pressure_backoff_reduces_target_and_inflight() {
+    fn test_adaptive_batch_moderate_backoff_reduces_target_only() {
         let controller = AdaptiveBatchController::new(8);
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 1.0,
+                commit_ms: 0.0,
                 batch_tx_count: 8_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
             })
-            .expect("pressure should adjust target");
-        assert_eq!(adjustment.reason, "pressure_backoff");
-        assert_eq!(
-            adjustment.previous_target_batch_txs,
-            ADAPTIVE_BATCH_INITIAL_TXS
-        );
-        assert_eq!(adjustment.new_target_batch_txs, 24_000);
-        assert_eq!(
-            adjustment.previous_inflight_limit,
-            ADAPTIVE_BATCH_INITIAL_INFLIGHT
-        );
+            .expect("moderate pressure should reduce target");
+        assert_eq!(adjustment.reason, "moderate_backoff");
+        assert_eq!(adjustment.new_target_batch_txs, 36_000);
         assert_eq!(
             adjustment.new_inflight_limit,
-            ADAPTIVE_BATCH_INITIAL_INFLIGHT - 1
-        );
-        assert_eq!(
-            adjustment.previous_min_target_batch_txs,
-            ADAPTIVE_BATCH_BASE_MIN_TXS
-        );
-        assert_eq!(
-            adjustment.new_min_target_batch_txs,
-            ADAPTIVE_BATCH_BASE_MIN_TXS
+            ADAPTIVE_BATCH_INITIAL_INFLIGHT
         );
     }
 
     #[test]
-    fn test_adaptive_batch_healthy_step_up_increases_target_and_inflight() {
+    fn test_adaptive_batch_healthy_step_up_prioritizes_inflight_recovery() {
         let controller = AdaptiveBatchController::new(8);
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+                commit_ms: 0.0,
                 batch_tx_count: 10_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
             })
-            .expect("healthy signal should adjust target");
+            .expect("healthy signal should adjust inflight first");
         assert_eq!(adjustment.reason, "healthy_step_up");
-        assert_eq!(adjustment.new_target_batch_txs, 44_000);
+        assert_eq!(adjustment.new_target_batch_txs, ADAPTIVE_BATCH_INITIAL_TXS);
         assert_eq!(
             adjustment.new_inflight_limit,
             ADAPTIVE_BATCH_INITIAL_INFLIGHT + 1
         );
-        assert_eq!(
-            adjustment.new_min_target_batch_txs,
-            ADAPTIVE_BATCH_BASE_MIN_TXS
-        );
     }
 
     #[test]
-    fn test_adaptive_batch_floor_relief_backoff_reduces_inflight() {
+    fn test_adaptive_batch_bulk_distance_floor_enforced() {
         let controller = AdaptiveBatchController::new(8);
+        controller.target_batch_txs.store(20_000, Ordering::Relaxed);
         controller
-            .target_batch_txs
-            .store(ADAPTIVE_BATCH_BASE_MIN_TXS, Ordering::Relaxed);
-        controller.inflight_limit.store(6, Ordering::Relaxed);
+            .min_target_batch_txs
+            .store(ADAPTIVE_BATCH_HARD_MIN_TXS, Ordering::Relaxed);
+        controller.inflight_limit.store(2, Ordering::Relaxed);
 
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: ADAPTIVE_BATCH_WRITE_TARGET_MS + 10.0,
+                write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+                commit_ms: 0.0,
                 batch_tx_count: 5_000,
-                parse_queue_fill_pct: Some(75.0),
-                writer_queue_fill_pct: Some(87.5),
+                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 1,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
             })
-            .expect("floor relief should reduce inflight");
-
-        assert_eq!(adjustment.reason, "moderate_backoff_inflight_relief");
-        assert_eq!(
-            adjustment.previous_target_batch_txs,
-            ADAPTIVE_BATCH_BASE_MIN_TXS
-        );
-        assert_eq!(adjustment.new_target_batch_txs, ADAPTIVE_BATCH_BASE_MIN_TXS);
-        assert_eq!(adjustment.previous_inflight_limit, 6);
-        assert_eq!(adjustment.new_inflight_limit, 5);
+            .expect("far bulk mode should enforce minimum floors");
         assert_eq!(
             adjustment.new_min_target_batch_txs,
-            ADAPTIVE_BATCH_BASE_MIN_TXS
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS
+        );
+        assert!(adjustment.new_target_batch_txs >= ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS);
+        assert_eq!(
+            adjustment.new_inflight_limit,
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT
         );
     }
 
@@ -11500,28 +11503,36 @@ mod tests {
             .target_batch_txs
             .store(ADAPTIVE_BATCH_BASE_MIN_TXS, Ordering::Relaxed);
 
+        let first = controller.update_after_write(AdaptiveBatchInput {
+            write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 100.0,
+            commit_ms: 0.0,
+            batch_tx_count: 8_000,
+            blocks_remaining: 0,
+            parse_queue_fill_pct: Some(97.0),
+            writer_queue_fill_pct: Some(95.0),
+            memory_ratio_pct: Some(85.0),
+        });
+        assert!(
+            first.is_none(),
+            "first severe sample should not floor-down yet"
+        );
+
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 500.0,
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 100.0,
+                commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
                 batch_tx_count: 8_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(97.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
             })
-            .expect("sustained pressure at floor should lower adaptive min floor");
+            .expect("consecutive severe pressure at floor should lower adaptive min floor");
 
         assert_eq!(adjustment.reason, "pressure_backoff_floor_down");
-        assert_eq!(
-            adjustment.previous_min_target_batch_txs,
-            ADAPTIVE_BATCH_BASE_MIN_TXS
-        );
         assert!(
             adjustment.new_min_target_batch_txs < adjustment.previous_min_target_batch_txs,
             "adaptive min floor should go down under sustained pressure"
-        );
-        assert_eq!(
-            adjustment.new_target_batch_txs,
-            adjustment.new_min_target_batch_txs
         );
     }
 
@@ -11538,7 +11549,9 @@ mod tests {
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: 1_000.0,
+                commit_ms: 0.0,
                 batch_tx_count: 10_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -11546,10 +11559,6 @@ mod tests {
             .expect("healthy throughput should recover adaptive min floor");
 
         assert_eq!(adjustment.reason, "healthy_step_up_floor_recover");
-        assert_eq!(
-            adjustment.previous_min_target_batch_txs,
-            ADAPTIVE_BATCH_HARD_MIN_TXS
-        );
         assert!(
             adjustment.new_min_target_batch_txs > adjustment.previous_min_target_batch_txs,
             "adaptive min floor should recover upward"
@@ -11557,31 +11566,36 @@ mod tests {
     }
 
     #[test]
-    fn test_adaptive_batch_throughput_drop_under_load_triggers_backoff() {
+    fn test_adaptive_batch_severe_pressure_requires_consecutive_batches_before_backoff() {
         let controller = AdaptiveBatchController::new(8);
 
         let first = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: 1_000.0,
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 1_000.0,
+                commit_ms: 0.0,
                 batch_tx_count: 10_000,
-                parse_queue_fill_pct: Some(10.0),
-                writer_queue_fill_pct: Some(10.0),
+                blocks_remaining: 0,
+                parse_queue_fill_pct: Some(98.0),
+                writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
             })
-            .expect("first healthy sample should step up");
-        assert_eq!(first.reason, "healthy_step_up");
+            .expect("first severe sample should only moderate-backoff");
+        assert_eq!(first.reason, "moderate_backoff");
 
         let second = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: 2_000.0,
-                batch_tx_count: 5_000,
-                parse_queue_fill_pct: Some(70.0),
-                writer_queue_fill_pct: Some(70.0),
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 2_000.0,
+                commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
+                batch_tx_count: 10_000,
+                blocks_remaining: 0,
+                parse_queue_fill_pct: Some(98.0),
+                writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
             })
-            .expect("throughput drop under load should back off");
-        assert_eq!(second.reason, "throughput_backoff");
+            .expect("second severe sample should trigger severe backoff");
+        assert_eq!(second.reason, "severe_pressure_backoff");
         assert!(second.new_target_batch_txs < second.previous_target_batch_txs);
+        assert!(second.new_inflight_limit < second.previous_inflight_limit);
     }
 
     #[test]
@@ -11591,7 +11605,9 @@ mod tests {
         let first = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: 1_000.0,
+                commit_ms: 0.0,
                 batch_tx_count: 10_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -11601,7 +11617,9 @@ mod tests {
 
         let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
             write_ms: 150.0,
+            commit_ms: 0.0,
             batch_tx_count: 6_000,
+            blocks_remaining: 0,
             parse_queue_fill_pct: Some(99.0),
             writer_queue_fill_pct: Some(99.0),
             memory_ratio_pct: Some(10.0),
@@ -11621,7 +11639,9 @@ mod tests {
 
         let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
             write_ms: 200.0,
+            commit_ms: 0.0,
             batch_tx_count: 10_000,
+            blocks_remaining: 0,
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(10.0),
@@ -11637,13 +11657,46 @@ mod tests {
     }
 
     #[test]
+    fn test_adaptive_batch_near_tip_can_drop_min_floor_below_bulk_floor() {
+        let controller = AdaptiveBatchController::new(8);
+        controller.min_target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+        controller.target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 50.0,
+                commit_ms: 0.0,
+                batch_tx_count: 10_000,
+                blocks_remaining: 10_000,
+                parse_queue_fill_pct: Some(95.0),
+                writer_queue_fill_pct: Some(95.0),
+                memory_ratio_pct: Some(10.0),
+            })
+            .expect("near-tip path should allow lower min floor");
+
+        assert_eq!(adjustment.reason, "moderate_backoff");
+        assert_eq!(
+            adjustment.new_min_target_batch_txs,
+            ADAPTIVE_BATCH_BASE_MIN_TXS
+        );
+    }
+
+    #[test]
     fn test_adaptive_batch_step_up_requires_throughput_not_worse() {
         let controller = AdaptiveBatchController::new(8);
 
         let first = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: 1_000.0,
+                commit_ms: 0.0,
                 batch_tx_count: 10_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
@@ -11653,7 +11706,9 @@ mod tests {
 
         let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
             write_ms: 1_500.0,
+            commit_ms: 0.0,
             batch_tx_count: 10_000,
+            blocks_remaining: 0,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -11669,18 +11724,33 @@ mod tests {
         let controller = AdaptiveBatchController::new(8);
         let _ = controller
             .update_after_write(AdaptiveBatchInput {
-                write_ms: ADAPTIVE_BATCH_WRITE_HI_MS + 1.0,
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 1_000.0,
+                commit_ms: 0.0,
                 batch_tx_count: 10_000,
+                blocks_remaining: 0,
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
             })
-            .expect("pressure should trigger cooldown");
+            .expect("first pressure sample should adjust");
+        let _ = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 2_000.0,
+                commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
+                batch_tx_count: 10_000,
+                blocks_remaining: 0,
+                parse_queue_fill_pct: Some(95.0),
+                writer_queue_fill_pct: Some(95.0),
+                memory_ratio_pct: Some(85.0),
+            })
+            .expect("second pressure sample should trigger cooldown");
         let snapshot_after_pressure = controller.snapshot();
 
         let no_adjustment = controller.update_after_write(AdaptiveBatchInput {
             write_ms: ADAPTIVE_BATCH_WRITE_LO_MS - 100.0,
+            commit_ms: 0.0,
             batch_tx_count: 10_000,
+            blocks_remaining: 0,
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
@@ -12757,6 +12827,7 @@ mod tests {
         let reasons = [
             "pressure_backoff",
             "pressure_backoff_floor_down",
+            "severe_pressure_backoff",
             "healthy_step_up",
             "healthy_step_up_floor_recover",
             "moderate_backoff",

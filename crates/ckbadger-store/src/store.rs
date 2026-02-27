@@ -250,9 +250,8 @@ impl CkbadgerStore {
         // in the page cache wastes RAM and adds syscall overhead.
         opts.set_use_direct_reads(true);
 
-        // Gradual background sync: flush 1 MB at a time instead of accumulating
-        // all dirty pages until a checkpoint, which prevents I/O burst stalls.
-        opts.set_bytes_per_sync(1024 * 1024);
+        // Favor throughput during bulk sync while still smoothing fsync pressure.
+        opts.set_bytes_per_sync(4 * 1024 * 1024);
 
         // Write buffer: 128 MB per CF (default for high-write CFs), up to 4 buffers
         opts.set_write_buffer_size(128 * 1024 * 1024);
@@ -272,7 +271,7 @@ impl CkbadgerStore {
         // threads for concurrent flush + compaction across all CFs on 24-core machines
         opts.set_max_background_jobs(24);
         // Allow large compaction jobs to use multiple threads
-        opts.set_max_subcompactions(4);
+        opts.set_max_subcompactions(8);
 
         // Bypass OS page cache for flush/compaction to avoid cache pollution
         opts.set_use_direct_io_for_flush_and_compaction(true);
@@ -519,11 +518,11 @@ impl CkbadgerStore {
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
             max_background_jobs = 24,
-            max_subcompactions = 4,
+            max_subcompactions = 8,
             block_cache_gb = 8,
             direct_io_reads = true,
             direct_io_compaction = true,
-            bytes_per_sync_mb = 1,
+            bytes_per_sync_mb = 4,
             dynamic_level_bytes = true,
             target_file_size_base_mb = 64,
             target_file_size_base_bulk_mb = 256,
