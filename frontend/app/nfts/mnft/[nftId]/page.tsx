@@ -139,7 +139,11 @@ export default function MnftItemDetailPage() {
         </div>
 
         <PageHeader
-          title={`mNFT #${formatNumber(detail.tokenIndex)}`}
+          title={
+            detail.class.name
+              ? `${detail.class.name} #${formatNumber(detail.tokenIndex)}`
+              : `mNFT #${formatNumber(detail.tokenIndex)}`
+          }
           badge={
             detail.isLive ? (
               <Badge variant="green">Live</Badge>

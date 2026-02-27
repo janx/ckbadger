@@ -101,7 +101,7 @@ describe('MnftItemDetailPage', () => {
     expect(screen.getByText('Lifecycle Timeline')).toBeInTheDocument();
     expect(screen.getByText('Class A')).toBeInTheDocument();
     expect(screen.getByText('Issuer A')).toBeInTheDocument();
-    expect(screen.getByText('mNFT #99')).toBeInTheDocument();
+    expect(screen.getByText('Class A #99')).toBeInTheDocument();
   });
 
   it('renders not found panel when item is missing', async () => {

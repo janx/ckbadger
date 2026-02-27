@@ -27,6 +27,7 @@ import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-s
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { isDidCkbAlias, isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
+import { truncateHash } from '@/lib/utils';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';
@@ -54,7 +55,7 @@ export default function SporeDetailPage() {
   const [collectionStatusSelection, setCollectionStatusSelection] =
     useState<NftItemStatusFilter>('all');
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>
-    isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'nfts'
+    isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
   const [externalPreviewFailed, setExternalPreviewFailed] = useState(false);
   const collectionItemsPagination = useCursorPagination();
@@ -273,7 +274,7 @@ export default function SporeDetailPage() {
     if (!isCollectionSectionTab(nextValue)) return;
     setActiveCollectionTab(nextValue);
     updateSearchParams((nextParams) => {
-      if (nextValue === 'nfts') {
+      if (nextValue === 'activities') {
         nextParams.delete('tab');
       } else {
         nextParams.set('tab', nextValue);
@@ -1075,7 +1076,11 @@ export default function SporeDetailPage() {
         </div>
 
         <PageHeader
-          title="Spore Asset"
+          title={
+            cluster?.name
+              ? `${cluster.name} (${truncateHash(spore.sporeId, 6, 4)})`
+              : `Spore Asset (${truncateHash(spore.sporeId, 6, 4)})`
+          }
           badge={
             spore.isLive ? <Badge variant="green">Live</Badge> : <Badge variant="red">Burned</Badge>
           }

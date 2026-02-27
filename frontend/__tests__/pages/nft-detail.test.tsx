@@ -218,7 +218,7 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Spore Asset')).toBeInTheDocument();
+      expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
       expect(screen.getByText('Spore Content Preview')).toBeInTheDocument();
       expect(screen.getByText('Spore Details')).toBeInTheDocument();
       expect(screen.getByText('Rendering Pipeline')).toBeInTheDocument();
@@ -427,6 +427,9 @@ describe('SporeDetailPage', () => {
     expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
+
     await waitFor(() => {
       expect(screen.getByText('alice.bit')).toBeInTheDocument();
     });
@@ -454,36 +457,15 @@ describe('SporeDetailPage', () => {
     );
   });
 
-  it('falls back to NFTs tab when tab query is invalid', async () => {
+  it('falls back to Activities tab when tab query is invalid', async () => {
     mockSearchParamsString = 'tab=invalid';
     vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
-    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
-      data: [
-        {
-          nftId: '0x1111',
-          name: 'alice.bit',
-          standard: 'dotbit',
-          ownerLockHash: '0x2222',
-          isLive: true,
-          createdAtBlock: 100,
-          expiredAt: 1800000000,
-          txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          outputIndex: 7,
-        },
-      ],
-      total: 1,
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
 
     render(<SporeDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('alice.bit')).toBeInTheDocument();
-      expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
-      expect(screen.queryByText('No holders in this collection')).not.toBeInTheDocument();
+      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
     });
   });
 
@@ -494,23 +476,22 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Activities$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
 
     await waitFor(() => {
-      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
       expect(
         mockReplace.mock.calls.some(
           ([href]) =>
             String(href).includes(`/nfts/${mockParams.sporeId}`) &&
-            String(href).includes('tab=activities')
+            String(href).includes('tab=nfts')
         )
       ).toBe(true);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Activities$/ }));
 
     await waitFor(() => {
       expect(
@@ -527,6 +508,12 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
 
     await waitFor(() => {
       expect(api.getNftCollectionItems).toHaveBeenCalledWith(
@@ -568,6 +555,12 @@ describe('SporeDetailPage', () => {
     } as any);
 
     render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
 
     await waitFor(() => {
       expect(api.getNftCollectionItems).toHaveBeenCalledWith(
@@ -627,6 +620,12 @@ describe('SporeDetailPage', () => {
     });
 
     render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
 
     await waitFor(() => {
       expect(screen.getByText('bob.bit')).toBeInTheDocument();
@@ -703,6 +702,12 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
+
+    await waitFor(() => {
       const link = screen.getByRole('link', { name: '0x1111' });
       expect(link).toBeInTheDocument();
       expect(link).toHaveAttribute('href', '/nfts/mnft/0x1111');
@@ -735,6 +740,12 @@ describe('SporeDetailPage', () => {
     });
 
     render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
 
     await waitFor(() => {
       const link = screen.getByRole('link', { name: 'did:alice.ckb' });
