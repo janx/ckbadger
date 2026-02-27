@@ -251,7 +251,7 @@ function AssetTable({
   if (isLoading) {
     return (
       <div className="space-y-2 py-4">
-        <div className="px-4 pb-1 text-xs text-slate-600 md:hidden">
+        <div className="px-4 pb-1 text-xs text-slate-500 md:hidden">
           Swipe horizontally to view all columns.
         </div>
         <div className="overflow-x-auto" data-testid="asset-table-scroll">
@@ -297,7 +297,7 @@ function AssetTable({
 
   return (
     <>
-      <div className="px-4 pb-1 pt-3 text-xs text-slate-600 md:hidden">
+      <div className="px-4 pb-1 pt-3 text-xs text-slate-500 md:hidden">
         Swipe horizontally to view all columns.
       </div>
       <div className="overflow-x-auto" data-testid="asset-table-scroll">

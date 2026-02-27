@@ -746,7 +746,7 @@ export default function ClusterDetailPage() {
                                 >
                                   #{formatNumber(activity.blockNumber)}
                                 </Link>
-                                <span className="mx-1 text-slate-600">•</span>
+                                <span className="mx-1 text-slate-500">•</span>
                                 Tx Index {activity.txIndex}
                               </div>
                               <div className="flex flex-wrap gap-1.5">
