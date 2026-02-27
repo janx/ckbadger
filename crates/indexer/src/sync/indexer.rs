@@ -19,6 +19,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys;
 use ckbadger_store::types::{
     AddressBalance, CachedBlockHeader, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
 };
@@ -7433,6 +7434,90 @@ impl Indexer {
             }
         }
 
+        // Pre-compute cell index keys for T1b (parallel cell index writes).
+        // Each op holds the 74-byte encoded keys so T1b can write them without
+        // re-encoding or needing access to ParsedCell / LiveCellInfo.
+        struct CellIndexOp {
+            lock_hash_key: Vec<u8>,
+            lock_code_hash_key: Vec<u8>,
+            type_hash_key: Option<Vec<u8>>,
+            type_code_hash_key: Option<Vec<u8>>,
+        }
+
+        let cell_index_puts: Vec<CellIndexOp> =
+            all_cells
+                .iter()
+                .map(|(tx_hash, output_index, cell, block_number)| CellIndexOp {
+                    lock_hash_key: keys::encode_cell_index_key(
+                        &cell.lock_script_hash,
+                        *block_number,
+                        tx_hash,
+                        *output_index,
+                    ),
+                    lock_code_hash_key: keys::encode_cell_index_key(
+                        &cell.lock_code_hash,
+                        *block_number,
+                        tx_hash,
+                        *output_index,
+                    ),
+                    type_hash_key: cell.type_script_hash.as_ref().map(|h| {
+                        keys::encode_cell_index_key(h, *block_number, tx_hash, *output_index)
+                    }),
+                    type_code_hash_key: cell.type_code_hash.as_ref().map(|h| {
+                        keys::encode_cell_index_key(h, *block_number, tx_hash, *output_index)
+                    }),
+                })
+                .collect();
+
+        let cell_index_deletes: Vec<CellIndexOp> = all_consumptions
+            .iter()
+            .filter_map(
+                |(
+                    tx_hash,
+                    output_index,
+                    _created_at_block,
+                    _consumed_by_tx,
+                    _consumed_at_block,
+                    _input_index,
+                )| {
+                    let key = (tx_hash.to_vec(), *output_index);
+                    let info = input_cell_info
+                        .get(&key)
+                        .or_else(|| batch_cell_infos.get(&key));
+                    info.map(|info| CellIndexOp {
+                        lock_hash_key: keys::encode_cell_index_key(
+                            &info.lock_script_hash,
+                            info.created_at_block,
+                            tx_hash,
+                            *output_index,
+                        ),
+                        lock_code_hash_key: keys::encode_cell_index_key(
+                            &info.lock_code_hash,
+                            info.created_at_block,
+                            tx_hash,
+                            *output_index,
+                        ),
+                        type_hash_key: info.type_script_hash.as_ref().map(|h| {
+                            keys::encode_cell_index_key(
+                                h,
+                                info.created_at_block,
+                                tx_hash,
+                                *output_index,
+                            )
+                        }),
+                        type_code_hash_key: info.type_code_hash.as_ref().map(|h| {
+                            keys::encode_cell_index_key(
+                                h,
+                                info.created_at_block,
+                                tx_hash,
+                                *output_index,
+                            )
+                        }),
+                    })
+                },
+            )
+            .collect();
+
         // Compute per-tx address entries for addr_txs index
         let mut addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)> = Vec::new();
         for tx_data in &all_tx_data {
@@ -7741,7 +7826,7 @@ impl Indexer {
         let t_write = Instant::now();
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 8]> = None;
+        let mut thread_times: Option<[f64; 9]> = None;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
@@ -7754,14 +7839,14 @@ impl Indexer {
 
             let tt;
             (batch_stats, tt, write_commit_ms) = std::thread::scope(
-                |s| -> Result<(BatchStats, [f64; 8], f64)> {
-                    // T1: Cells + Consumption + cell index CFs
-                    // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, etc.
+                |s| -> Result<(BatchStats, [f64; 9], f64)> {
+                    // T1a: Cells + Consumption (live_cells + consumed_cells CFs only)
+                    // CFs: LIVE_CELLS, CONSUMED_CELLS
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         if !all_cells.is_empty() {
-                            writer.insert_cells_batch(&all_cells, &mut batch, false)?;
+                            writer.insert_cells_batch(&all_cells, &mut batch, true)?;
                         }
                         if !all_consumptions.is_empty() {
                             writer.consume_cells_batch_preloaded(
@@ -7769,11 +7854,45 @@ impl Indexer {
                                 &input_cell_info,
                                 &batch_cell_infos,
                                 &mut batch,
-                                false,
+                                true,
                             )?;
                         }
                         let commit_ms =
-                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
+                            commit_phase_no_wal("T1a_cells", first_block, last_block, batch)?;
+                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                    });
+
+                    // T1b: Cell index CFs from pre-computed keys
+                    // CFs: CELL_BY_LOCK, CELL_BY_TYPE, CELL_BY_LOCK_CODE, CELL_BY_TYPE_CODE
+                    let h1b = s.spawn(|| -> Result<(f64, f64)> {
+                        let t = Instant::now();
+                        let mut batch = StoreBatch::new(store);
+                        for op in &cell_index_puts {
+                            batch.put_cell_by_lock_raw(&op.lock_hash_key);
+                            batch.put_cell_by_lock_code_raw(&op.lock_code_hash_key);
+                            if let Some(ref k) = op.type_hash_key {
+                                batch.put_cell_by_type_raw(k);
+                            }
+                            if let Some(ref k) = op.type_code_hash_key {
+                                batch.put_cell_by_type_code_raw(k);
+                            }
+                        }
+                        for op in &cell_index_deletes {
+                            batch.delete_cell_by_lock_raw(&op.lock_hash_key);
+                            batch.delete_cell_by_lock_code_raw(&op.lock_code_hash_key);
+                            if let Some(ref k) = op.type_hash_key {
+                                batch.delete_cell_by_type_raw(k);
+                            }
+                            if let Some(ref k) = op.type_code_hash_key {
+                                batch.delete_cell_by_type_code_raw(k);
+                            }
+                        }
+                        let commit_ms = commit_phase_no_wal(
+                            "T1b_cell_indices",
+                            first_block,
+                            last_block,
+                            batch,
+                        )?;
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     });
 
@@ -8819,7 +8938,8 @@ impl Indexer {
                         None
                     };
 
-                    let (t1_ms, t1_commit_ms) = h1.join().expect("T1 panicked")?;
+                    let (t1_ms, t1_commit_ms) = h1.join().expect("T1a panicked")?;
+                    let (t1b_ms, t1b_commit_ms) = h1b.join().expect("T1b panicked")?;
                     let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
                     let (t4_ms, t4_commit_ms) = h4.join().expect("T4 panicked")?;
                     let (t5_ms, t5_commit_ms) = h5.join().expect("T5 panicked")?;
@@ -8831,6 +8951,7 @@ impl Indexer {
                         None => (0.0, 0.0),
                     };
                     let commit_total_ms = t1_commit_ms
+                        + t1b_commit_ms
                         + t2_commit_ms
                         + t4_commit_ms
                         + t5_commit_ms
@@ -8839,7 +8960,9 @@ impl Indexer {
                         + t_act_commit_ms;
                     Ok((
                         stats,
-                        [t1_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms],
+                        [
+                            t1_ms, t1b_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms,
+                        ],
                         commit_total_ms,
                     ))
                 },
@@ -10260,14 +10383,15 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
+        if let Some([t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
                 write_ms = format!("{:.1}", write_ms),
                 write_commit_ms = format!("{:.1}", write_commit_ms),
                 finalize_ms = format!("{:.1}", finalize_ms),
-                t1_ms = format!("{:.1}", t1),
+                t1a_ms = format!("{:.1}", t1),
+                t1b_ms = format!("{:.1}", t1b),
                 t2_ms = format!("{:.1}", t2),
                 t4_ms = format!("{:.1}", t4),
                 t5_ms = format!("{:.1}", t5),

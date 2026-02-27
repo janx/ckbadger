@@ -181,6 +181,42 @@ impl<'a> StoreBatch<'a> {
             .delete_cf(self.store.cf_cell_by_type_code(), &key);
     }
 
+    // ---- Cell index (raw pre-computed key) ----
+
+    pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {
+        self.batch.put_cf(self.store.cf_cell_by_lock(), key, []);
+    }
+
+    pub fn delete_cell_by_lock_raw(&mut self, key: &[u8]) {
+        self.batch.delete_cf(self.store.cf_cell_by_lock(), key);
+    }
+
+    pub fn put_cell_by_type_raw(&mut self, key: &[u8]) {
+        self.batch.put_cf(self.store.cf_cell_by_type(), key, []);
+    }
+
+    pub fn delete_cell_by_type_raw(&mut self, key: &[u8]) {
+        self.batch.delete_cf(self.store.cf_cell_by_type(), key);
+    }
+
+    pub fn put_cell_by_lock_code_raw(&mut self, key: &[u8]) {
+        self.batch
+            .put_cf(self.store.cf_cell_by_lock_code(), key, []);
+    }
+
+    pub fn delete_cell_by_lock_code_raw(&mut self, key: &[u8]) {
+        self.batch.delete_cf(self.store.cf_cell_by_lock_code(), key);
+    }
+
+    pub fn put_cell_by_type_code_raw(&mut self, key: &[u8]) {
+        self.batch
+            .put_cf(self.store.cf_cell_by_type_code(), key, []);
+    }
+
+    pub fn delete_cell_by_type_code_raw(&mut self, key: &[u8]) {
+        self.batch.delete_cf(self.store.cf_cell_by_type_code(), key);
+    }
+
     // ---- Block headers ----
 
     pub fn put_block_header(&mut self, block_number: i64, header: &CachedBlockHeader) {
