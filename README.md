@@ -12,7 +12,7 @@
 - **CKB Native** - Make CKB concepts tangible instead of just-another-explorer
 - **Unrivaled Speed** - Lightning-fast database rebuilds and ultra-low-latency request processing
 - **Local First** - Optimized for decentralized deployment on localhosts
-- **Agent Friendly** - Designed for AI-assisted development with clear structure and automation-friendly workflows
+- **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
 
 ## Coding Principles
 
@@ -65,15 +65,18 @@ on localhost deployments:
 - **Nervos DAO Tracker** - Deposit/withdrawal lifecycle, compensation calculator
 - **sUDT/xUDT Support** - Token listings, holder rankings, transfer history
 - **Spore NFT Support** - NFT collections, metadata rendering, ownership tracking
+- **.bit / did:ckb NFT Support** - .bit domain NFTs and did:ckb identity NFTs
+- **Script Browser** - Script listings, usage stats, occupation charts
 
 ### Data & Analytics
 
 - **Network Dashboard** - Hash rate, difficulty, epoch progress, TPS metrics
-- **Historical Charts** - Block time, transaction volume, active addresses
+- **Historical Charts** - Block time, transaction volume, active addresses, HODL wave, inflation rate, nominal APC
+- **Activity System** - Unified activity feed for addresses, tokens, NFTs, and clusters
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **AI-Friendly Multi-Format Pages** - Use `.md` for summaries, `.raw` for tool-oriented payloads, plus `/capabilities` for machine discovery
 - **System Status Page** - Monitor sync progress, pipeline health, and integrity checks
-- **Data Integrity Verification** - 28 built-in checks for acceptance testing via API
+- **Data Integrity Verification** - 43 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
@@ -293,23 +296,90 @@ TOKEN_LABELS_PATH=docs/token-labels
 ### REST Endpoints
 
 ```
+# Blocks
 GET  /api/v1/blocks                              # List blocks (paginated)
 GET  /api/v1/blocks/{id}                         # Block details
+GET  /api/v1/blocks/{id}/fee-stats               # Block fee statistics
+GET  /api/v1/blocks/{id}/proposals               # Block proposals
+
+# Transactions
 GET  /api/v1/transactions                        # List transactions (paginated)
 GET  /api/v1/transactions/{hash}                 # Transaction details
 GET  /api/v1/transactions/{hash}/detail          # Transaction with inputs/outputs
-GET  /api/v1/addresses/{addr}                    # Address info & balance
-GET  /api/v1/cells/live                          # Query live cells
-GET  /api/v1/cells/{tx_hash}/{output_index}      # Cell details
-GET  /api/v1/statistics/network                  # Network + sync status
-GET  /api/v1/forks/recent                        # Deep fork / recent reorg status
+GET  /api/v1/transactions/{hash}/cell-deps       # Transaction cell dependencies
+GET  /api/v1/transactions/{hash}/cycles          # Transaction cycles status
+GET  /api/v1/transactions/{hash}/lifecycle       # Transaction lifecycle
+POST /api/v1/transactions/{hash}/calculate-cycles  # Trigger cycles calculation
 
-# Mempool API (Real-time transaction pool)
-GET  /api/v1/mempool/pending-proposals           # Pending proposals with fee/size metadata
+# Addresses & Cells
+GET  /api/v1/addresses/{addr}                    # Address info & balance
+GET  /api/v1/addresses/{addr}/transactions       # Address transaction history
+GET  /api/v1/addresses/{addr}/tokens             # Address token holdings
+GET  /api/v1/addresses/{addr}/activities         # Address activity feed
+GET  /api/v1/addresses/{addr}/stats-history      # Address daily stats history
+GET  /api/v1/addresses/top                       # Top addresses by balance
+GET  /api/v1/addresses/active                    # Recently active addresses
+GET  /api/v1/cells/live                          # Query live cells
+GET  /api/v1/cells/by-script                     # Query cells by script
+GET  /api/v1/cells/{tx_hash}/{output_index}      # Cell details
+
+# Tokens (sUDT/xUDT)
+GET  /api/v1/tokens                              # List tokens
+GET  /api/v1/tokens/{type_hash}                  # Token details
+GET  /api/v1/tokens/{type_hash}/holders          # Token holder rankings
+GET  /api/v1/tokens/{type_hash}/transfers        # Token transfers
+GET  /api/v1/tokens/{type_hash}/activities       # Token activities
+GET  /api/v1/tokens/{type_hash}/charts/occupation  # Token occupation chart
+
+# Spore / NFT
+GET  /api/v1/spore/clusters                      # List Spore clusters
+GET  /api/v1/spore/clusters/{id}                 # Cluster details
+GET  /api/v1/spore/clusters/{id}/spores          # Spores in cluster
+GET  /api/v1/spore/clusters/{id}/holders         # Cluster holders
+GET  /api/v1/spore/clusters/{id}/activities      # Cluster activities
+GET  /api/v1/spore/nfts                          # List Spore NFTs
+GET  /api/v1/assets                              # Unified asset listing
+GET  /api/v1/assets/nfts/items/{nft_id}          # NFT item detail
+GET  /api/v1/assets/nfts/dotbit/items/{nft_id}   # .bit NFT detail
+GET  /api/v1/assets/nfts/did/items/{nft_id}      # did:ckb NFT detail
+
+# DAO
+GET  /api/v1/dao/deposits                        # List DAO deposits
+GET  /api/v1/dao/deposits/{lock_hash}            # Address DAO deposits
+GET  /api/v1/dao/summary/{lock_hash}             # Address DAO summary
+GET  /api/v1/dao/statistics                      # DAO statistics
+GET  /api/v1/dao/calculator                      # Compensation calculator
+GET  /api/v1/dao/charts/total-deposit            # Total deposit chart
+GET  /api/v1/dao/charts/daily-deposit            # Daily deposit chart
+GET  /api/v1/dao/charts/circulation-ratio        # Circulation ratio chart
+
+# Scripts
+GET  /api/v1/scripts                             # List known scripts
+GET  /api/v1/scripts/{name}                      # Script details
+GET  /api/v1/scripts/{name}/usage                # Script usage stats
+POST /api/v1/scripts/lookup                      # Batch script lookup
+GET  /api/v1/scripts/code-cell                   # Script code cell
+GET  /api/v1/scripts/charts/occupation           # Script occupation chart
+
+# Network & Statistics
+GET  /api/v1/statistics/network                  # Network + sync status
+GET  /api/v1/statistics/tx-stats                 # Transaction statistics
+GET  /api/v1/statistics/recent-blocks            # Recent blocks summary
+GET  /api/v1/charts/{chart-name}                 # Various chart endpoints
+GET  /api/v1/hardforks                           # Hardfork timeline
+GET  /api/v1/forks/recent                        # Deep fork / recent reorg status
+GET  /api/v1/search?q=...                        # Universal search
+
+# Mempool
+GET  /api/v1/mempool/info                        # Mempool overview
+GET  /api/v1/mempool/transactions                # Pending transactions
+GET  /api/v1/mempool/blocks                      # Mempool blocks
+GET  /api/v1/mempool/pending-proposals           # Pending proposals
 
 # Graph API (Cell Relationship Visualization)
 GET  /api/v1/graph/cell/{tx_hash}/{output_index}?depth=2  # Cell relationship graph
 GET  /api/v1/graph/transaction/{hash}?depth=2             # Transaction I/O graph
+GET  /api/v1/graph/proposals/{block_number}               # Proposal relationship graph
 ```
 
 ### Graph API Response
@@ -531,16 +601,17 @@ ckbadger/
 │   ├── indexer/            # Blockchain indexer
 │   │   └── src/
 │   │       ├── rpc/        # CKB RPC client
-│   │       ├── parser/     # Block, cell, script parsers
+│   │       ├── parser/     # Block, cell, script, spore, .bit, mNFT, RGB++ parsers
 │   │       ├── db/         # RocksDB write operations
 │   │       ├── sync/       # Synchronization logic
-│   │       └── verify/     # Data integrity verification (28 checks via API)
+│   │       └── verify/     # Data integrity verification (43 checks via API)
 │   ├── api/                # REST API server
 │   │   └── src/
-│   │       ├── routes/     # HTTP handlers (blocks, tx, cells, graph)
+│   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)
 │   │       └── ws/         # WebSocket handlers
-│   ├── ckbadger-store/     # Embedded RocksDB storage engine
-│   └── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine (31 column families)
+│   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
+│   └── tui/                # Terminal monitoring UI (sync/memory/throughput)
 ├── frontend/               # Next.js application
 │   ├── app/                # App router pages
 │   │   ├── ai-md/          # Markdown route handlers for AI-friendly page output
@@ -557,8 +628,14 @@ ckbadger/
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
 │   ├── token-labels/       # [submodule] Known token metadata
+│   ├── ACTIVITY_SYSTEM.md  # Activity system design documentation
+│   ├── ARCHITECTURE_MAP.md # Module ownership and entry points
+│   ├── DAO_CALCULATIONS.md # DAO formula documentation
+│   ├── INDEXER_PIPELINE.md # Pipeline architecture documentation
+│   ├── PERFORMANCE_RESULTS.md # Benchmark snapshots
 │   ├── POSTMORTEM.md       # Historical bugs & lessons learned
-│   └── DAO_CALCULATIONS.md # DAO formula documentation
+│   ├── REORG_HANDLING.md   # Chain reorganization handling
+│   └── WORLD_VIEW.md       # CKB worldview and design philosophy
 ├── docker/                 # Dockerfiles (indexer, api, frontend)
 ├── .github/workflows/      # CI/CD pipelines
 └── docker-compose.yml      # Development setup
@@ -645,15 +722,15 @@ cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1
 # Add CKB RPC spot-checks
 cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114
 
-# List all 28 available checks
+# List all 43 available checks
 cargo run -p ckbadger-indexer -- verify --list-checks
 ```
 
-| Tier         | Checks | What it validates                                                     |
-| ------------ | ------ | --------------------------------------------------------------------- |
-| **Fast**     | 6      | API reachable, sync complete, genesis block, tip block, DAO, forks    |
-| **Sampling** | 7      | Block hash roundtrips, parent chain, balances, charts, RPC spot-check |
-| **Explorer** | 15     | Last 30 days vs official CKB explorer (cached, 24h freshness)         |
+| Tier         | Checks | What it validates                                                                              |
+| ------------ | ------ | ---------------------------------------------------------------------------------------------- |
+| **Fast**     | 6      | API reachable, sync complete, genesis block, tip block, DAO, forks                             |
+| **Sampling** | 21     | Block hash roundtrips, parent chain, balances, charts, supply invariants, tokens, spores, NFTs |
+| **Explorer** | 16     | Last 30 days vs official CKB explorer (cached, 24h freshness)                                  |
 
 Explorer API responses are cached to `.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
 
@@ -706,14 +783,14 @@ GitHub Actions workflow runs on every push:
 
 ### Future Enhancements
 
-| Feature               | Priority | Description                            |
-| --------------------- | -------- | -------------------------------------- |
-| RGB++ Support         | P1       | RGB++ protocol parsing and display     |
-| Multi-language (i18n) | P2       | Chinese, English, Japanese, Korean     |
-| Address Labels        | P2       | Exchange, contract, whale address tags |
-| Address Monitoring    | P3       | Email/webhook notifications            |
-| Transaction Broadcast | P3       | Submit transactions from browser       |
-| GraphQL API           | P3       | Alternative query interface            |
+| Feature               | Priority | Status      | Description                            |
+| --------------------- | -------- | ----------- | -------------------------------------- |
+| RGB++ Support         | P1       | In Progress | RGB++ protocol parsing and display     |
+| Multi-language (i18n) | P2       | Planned     | Chinese, English, Japanese, Korean     |
+| Address Labels        | P2       | Planned     | Exchange, contract, whale address tags |
+| Address Monitoring    | P3       | Planned     | Email/webhook notifications            |
+| Transaction Broadcast | P3       | Planned     | Submit transactions from browser       |
+| GraphQL API           | P3       | Planned     | Alternative query interface            |
 
 ---
 

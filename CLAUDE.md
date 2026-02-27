@@ -142,7 +142,7 @@ curl http://localhost:3000/capabilities
 # Data Integrity Verification (requires running API at localhost:3001)
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
-cargo run -p ckbadger-indexer -- verify --list-checks       # List all 28 checks
+cargo run -p ckbadger-indexer -- verify --list-checks       # List all 43 checks
 cargo run -p ckbadger-indexer -- verify --no-explorer       # Skip explorer HTTP checks
 cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1  # Custom API URL
 cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114         # Add RPC spot-checks
@@ -273,13 +273,18 @@ When adding/changing frontend routes or formats (MANDATORY):
 crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
-    src/verify/   #   Data integrity verification suite (28 checks; fast/sampling depths + explorer comparisons)
-  ckbadger-store/ # Embedded RocksDB storage engine
+    src/verify/   #   Data integrity verification suite (43 checks; fast/sampling depths + explorer comparisons)
+  ckbadger-store/ # Embedded RocksDB storage engine (31 column families)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
+  tui/            # Terminal monitoring UI (sync/memory/throughput)
 frontend/         # Next.js 15 App Router + React 19
+docs/ACTIVITY_SYSTEM.md           # Activity system design - READ BEFORE ACTIVITY CHANGES
+docs/ARCHITECTURE_MAP.md          # Module ownership and entry points
 docs/POSTMORTEM.md                # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
+docs/PERFORMANCE_RESULTS.md       # Benchmark snapshots for perf work
+docs/REORG_HANDLING.md            # Chain reorganization handling
 ```
 
 ## Indexer Pipeline Configuration
@@ -454,19 +459,41 @@ The indexer opens both stores read-write; the API opens both stores in secondary
 | `CKBADGER_DATA_PATH`         | `./data/ckbadger-store`         | Core RocksDB data directory    |
 | `CKBADGER_DERIVED_DATA_PATH` | `./data/ckbadger-store-derived` | Derived RocksDB data directory |
 
-**Key Column Families:**
+**Key Column Families (31 total):**
 
-| Column Family      | Key                          | Value                        | Purpose                                  |
-| ------------------ | ---------------------------- | ---------------------------- | ---------------------------------------- |
-| `live_cells`       | tx_hash + output_index (34B) | LiveCellInfo                 | O(1) lookup for unspent cells            |
-| `consumed_cells`   | tx_hash + output_index (34B) | LiveCellInfo                 | Recently consumed cells                  |
-| `block_headers`    | block_number (8B)            | CachedBlockHeader            | Block header + DAO field cache           |
-| `block_hash_index` | block_hash (32B)             | block_number (8B)            | Reverse lookup: hash → number            |
-| `dao_deposits`     | tx_hash + output_index (34B) | DaoDepositCacheEntry         | DAO deposit lifecycle cache              |
-| `sync_meta`        | fixed keys                   | SyncStatus/ReorgEvent        | Sync progress, deep-fork, reorg metadata |
-| `addr_balance`     | lock_script_hash (32B)       | AddressBalance               | Address balance and cell counts          |
-| `tokens`           | type_script_hash (32B)       | TokenInfo                    | UDT token metadata                       |
-| `stats`            | prefixed keys                | DailyStats + other snapshots | Daily/hourly/chart aggregates            |
+| Column Family               | Key                          | Value                        | Purpose                                  |
+| --------------------------- | ---------------------------- | ---------------------------- | ---------------------------------------- |
+| `live_cells`                | tx_hash + output_index (34B) | LiveCellInfo                 | O(1) lookup for unspent cells            |
+| `consumed_cells`            | tx_hash + output_index (34B) | LiveCellInfo                 | Recently consumed cells                  |
+| `block_headers`             | block_number (8B)            | CachedBlockHeader            | Block header + DAO field cache           |
+| `block_hash_index`          | block_hash (32B)             | block_number (8B)            | Reverse lookup: hash → number            |
+| `cell_by_lock`              | lock_script_hash + outpoint  | empty                        | Cell index by lock script                |
+| `cell_by_type`              | type_script_hash + outpoint  | empty                        | Cell index by type script                |
+| `cell_by_lock_code`         | lock_code_hash + outpoint    | empty                        | Cell index by lock code_hash             |
+| `cell_by_type_code`         | type_code_hash + outpoint    | empty                        | Cell index by type code_hash             |
+| `tx_index`                  | block_number + tx_index      | tx_hash                      | Transaction ordering index               |
+| `tx_hash_map`               | tx_hash (32B)                | block_number + tx_index      | Reverse lookup: tx_hash → position       |
+| `addr_balance`              | lock_script_hash (32B)       | AddressBalance               | Address balance and cell counts          |
+| `addr_txs`                  | lock_hash + block + tx_index | empty                        | Address transaction history index        |
+| `addr_daily_stats`          | lock_hash + date             | AddressDailyStats            | Per-address daily aggregates             |
+| `dao_deposits`              | tx_hash + output_index (34B) | DaoDepositCacheEntry         | DAO deposit lifecycle cache              |
+| `dao_by_withdraw_tx`        | withdraw_tx_hash (32B)       | deposit outpoint             | Reverse lookup: withdraw → deposit       |
+| `dao_stats`                 | prefixed keys                | DaoStats                     | DAO aggregate statistics                 |
+| `block_issuance`            | block_number (8B)            | BlockIssuance                | Per-block issuance data                  |
+| `tokens`                    | type_script_hash (32B)       | TokenInfo                    | UDT token metadata                       |
+| `token_holders`             | type_hash + lock_hash        | balance                      | Token holder balances                    |
+| `token_transfers`           | type_hash + block + tx_index | TransferInfo                 | Token transfer records                   |
+| `spore_data`                | spore_id (32B)               | SporeData                    | Spore NFT metadata                       |
+| `spore_by_cluster`          | cluster_id + spore_id        | empty                        | Spore index by cluster                   |
+| `nft_data`                  | nft_id                       | NftData                      | Unified NFT metadata (.bit, mNFT, etc.)  |
+| `nft_by_collection`         | collection_id + nft_id       | empty                        | NFT index by collection                  |
+| `nft_collection_agg`        | collection_id                | NftCollectionAgg             | NFT collection aggregate stats           |
+| `nft_collection_activities` | collection_id + block + tx   | ActivityRecord               | Pre-computed collection activity feed    |
+| `activities`                | addr/token/entity + block+tx | ActivityRecord               | Unified activity feed                    |
+| `cluster_agg`               | cluster_id                   | ClusterAgg                   | Spore cluster aggregate stats            |
+| `script_info`               | code_hash (32B)              | ScriptInfo                   | Known script metadata                    |
+| `stats`                     | prefixed keys                | DailyStats + other snapshots | Daily/hourly/chart aggregates            |
+| `sync_meta`                 | fixed keys                   | SyncStatus/ReorgEvent        | Sync progress, deep-fork, reorg metadata |
 
 **Key Design:**
 
@@ -520,11 +547,11 @@ cargo run -p ckbadger-indexer -- verify --checks genesis_block,dao_statistics_sa
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                   |
-| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F6)      | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                                                                                                                        |
-| **Sampling** (S1-S7)  | 7      | minutes | Block hash roundtrip, parent chain, address balance spot-check, chart validations (tx count, cells, supply), RPC compare                                                                                            |
-| **Explorer** (X1-X15) | 15     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, daily deposit, circulation ratio, supply, burnt, secondary issuance) |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                           |
+| --------------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F6)      | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                                                                                                                                |
+| **Sampling** (S1-S21) | 21     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs |
+| **Explorer** (X1-X16) | 16     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, daily deposit, circulation ratio, supply, burnt, mining reward, treasury)    |
 
 ### Explorer Response Cache
 
@@ -729,12 +756,16 @@ cd frontend && pnpm test               # All frontend tests
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic            | Document                   | Must Read Before                   |
-| ---------------- | -------------------------- | ---------------------------------- |
-| **Worldview**    | `docs/WORLD_VIEW.md`       | **Any design or implementation**   |
-| CKB protocol     | `docs/rfcs/`               | Understanding CKB internals        |
-| Nervos docs      | `docs/docs.nervos.org/`    | User-facing explanations           |
-| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md` | Any DAO/supply/circulation changes |
+| Topic            | Document                      | Must Read Before                     |
+| ---------------- | ----------------------------- | ------------------------------------ |
+| **Worldview**    | `docs/WORLD_VIEW.md`          | **Any design or implementation**     |
+| CKB protocol     | `docs/rfcs/`                  | Understanding CKB internals          |
+| Nervos docs      | `docs/docs.nervos.org/`       | User-facing explanations             |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`    | Any DAO/supply/circulation changes   |
+| Activity system  | `docs/ACTIVITY_SYSTEM.md`     | Activity feed or activity CF changes |
+| Reorg handling   | `docs/REORG_HANDLING.md`      | Reorg or fork-related changes        |
+| Architecture     | `docs/ARCHITECTURE_MAP.md`    | Module ownership questions           |
+| Performance      | `docs/PERFORMANCE_RESULTS.md` | Performance optimization work        |
 
 ### Common Knowledge (CKB Core Concept)
 
@@ -850,40 +881,46 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## File Locations
 
-| What              | Where                                                            |
-| ----------------- | ---------------------------------------------------------------- |
-| Storage engine    | `crates/ckbadger-store/src/`                                     |
-| Store types       | `crates/ckbadger-store/src/types.rs`                             |
-| Store operations  | `crates/ckbadger-store/src/*_ops.rs`                             |
-| API routes        | `crates/api/src/routes/*.rs`                                     |
-| Response types    | `crates/api/src/response.rs`                                     |
-| WebSocket         | `crates/api/src/ws/`                                             |
-| RPC client        | `crates/indexer/src/rpc/client.rs`                               |
-| Parsers           | `crates/indexer/src/parser/*.rs`                                 |
-| DB writers        | `crates/indexer/src/db/writer/*.rs`                              |
-| Spore writer      | `crates/indexer/src/db/writer/spore.rs`                          |
-| Label import      | `crates/indexer/src/label_import.rs`                             |
-| Verify checks     | `crates/indexer/src/verify/*.rs`                                 |
-| Verify runner     | `crates/indexer/src/verify/mod.rs`                               |
-| Explorer cache    | `{data_path}/.verify-cache/*.json`                               |
-| Frontend API      | `frontend/lib/api.ts`                                            |
-| Markdown route    | `frontend/app/ai-md/[[...slug]]/route.ts`                        |
-| Markdown parser   | `frontend/lib/ai/markdown-route.ts`                              |
-| Markdown renderer | `frontend/lib/ai/markdown-renderer.ts`                           |
-| Raw route         | `frontend/app/ai-raw/[[...slug]]/route.ts`                       |
-| Raw parser        | `frontend/lib/ai/raw-route.ts`                                   |
-| Raw renderer      | `frontend/lib/ai/raw-renderer.ts`                                |
-| Capabilities API  | `frontend/app/capabilities/route.ts`                             |
-| Capabilities spec | `frontend/lib/ai/capabilities.ts`                                |
-| Format rewrite    | `frontend/lib/ai/markdown-request.ts` + `frontend/middleware.ts` |
-| LLM discovery     | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`      |
-| UI components     | `frontend/components/ui/`                                        |
-| Pages             | `frontend/app/`                                                  |
-| Rust tests        | Inline `#[cfg(test)]` in source files                            |
-| API integration   | `crates/api/tests/api_integration.rs`                            |
-| Frontend tests    | `frontend/__tests__/**/*.test.{ts,tsx}`                          |
-| MSW handlers      | `frontend/__tests__/msw/handlers.ts`                             |
-| CI workflow       | `.github/workflows/ci.yml`                                       |
+| What                  | Where                                                                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Storage engine        | `crates/ckbadger-store/src/`                                                                               |
+| Store types           | `crates/ckbadger-store/src/types.rs`                                                                       |
+| Store column families | `crates/ckbadger-store/src/store.rs`                                                                       |
+| Store key encoding    | `crates/ckbadger-store/src/keys.rs`                                                                        |
+| Store operations      | `crates/ckbadger-store/src/*_ops.rs` (15 modules)                                                          |
+| API routes            | `crates/api/src/routes/*.rs` (15 route modules)                                                            |
+| Response types        | `crates/api/src/response.rs`                                                                               |
+| WebSocket             | `crates/api/src/ws/`                                                                                       |
+| RPC client            | `crates/indexer/src/rpc/client.rs`                                                                         |
+| Parsers               | `crates/indexer/src/parser/*.rs` (block, cell, dao, script, spore, dotbit, mnft, udt, rgbpp, media_source) |
+| DB writers            | `crates/indexer/src/db/writer/*.rs` (17 modules)                                                           |
+| Spore writer          | `crates/indexer/src/db/writer/spore.rs`                                                                    |
+| Activity writer       | `crates/indexer/src/db/writer/activities.rs`                                                               |
+| NFT writers           | `crates/indexer/src/db/writer/{dotbit,mnft,nft_activity_acc}.rs`                                           |
+| HODL wave writer      | `crates/indexer/src/db/writer/hodl_wave.rs`                                                                |
+| Label import          | `crates/indexer/src/label_import.rs`                                                                       |
+| Verify checks         | `crates/indexer/src/verify/*.rs`                                                                           |
+| Verify runner         | `crates/indexer/src/verify/mod.rs`                                                                         |
+| Explorer cache        | `{data_path}/.verify-cache/*.json`                                                                         |
+| TUI                   | `crates/tui/src/`                                                                                          |
+| Frontend API          | `frontend/lib/api.ts`                                                                                      |
+| Markdown route        | `frontend/app/ai-md/[[...slug]]/route.ts`                                                                  |
+| Markdown parser       | `frontend/lib/ai/markdown-route.ts`                                                                        |
+| Markdown renderer     | `frontend/lib/ai/markdown-renderer.ts`                                                                     |
+| Raw route             | `frontend/app/ai-raw/[[...slug]]/route.ts`                                                                 |
+| Raw parser            | `frontend/lib/ai/raw-route.ts`                                                                             |
+| Raw renderer          | `frontend/lib/ai/raw-renderer.ts`                                                                          |
+| Capabilities API      | `frontend/app/capabilities/route.ts`                                                                       |
+| Capabilities spec     | `frontend/lib/ai/capabilities.ts`                                                                          |
+| Format rewrite        | `frontend/lib/ai/markdown-request.ts` + `frontend/middleware.ts`                                           |
+| LLM discovery         | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                |
+| UI components         | `frontend/components/ui/`                                                                                  |
+| Pages                 | `frontend/app/`                                                                                            |
+| Rust tests            | Inline `#[cfg(test)]` in source files                                                                      |
+| API integration       | `crates/api/tests/api_integration.rs`                                                                      |
+| Frontend tests        | `frontend/__tests__/**/*.test.{ts,tsx}`                                                                    |
+| MSW handlers          | `frontend/__tests__/msw/handlers.ts`                                                                       |
+| CI workflow           | `.github/workflows/ci.yml`                                                                                 |
 
 ## Dependencies
 
