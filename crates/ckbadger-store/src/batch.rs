@@ -481,6 +481,21 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_activities(), key, &value);
     }
 
+    // ---- NFT collection activities ----
+
+    pub fn put_nft_collection_activity(
+        &mut self,
+        collection_id: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        entry: &NftCollectionActivityEntry,
+    ) {
+        let key = keys::encode_nft_collection_activity_key(collection_id, block_num, tx_idx);
+        let value = bincode::serialize(entry).expect("serialize NftCollectionActivityEntry");
+        self.batch
+            .put_cf(self.store.cf_nft_collection_activities(), key, &value);
+    }
+
     // ---- Address daily stats ----
 
     pub fn put_addr_daily_stats(

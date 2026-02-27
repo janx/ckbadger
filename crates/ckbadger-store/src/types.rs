@@ -913,6 +913,17 @@ pub enum AssetAction {
 }
 
 // ============================================
+// Group I-b: NFT Collection Activities (pre-computed)
+// ============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NftCollectionActivityEntry {
+    pub tx_hash: Vec<u8>,
+    pub timestamp_ms: i64,
+    pub actions: Vec<AssetAction>,
+}
+
+// ============================================
 // Group J: Address Daily Stats
 // ============================================
 

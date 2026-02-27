@@ -176,13 +176,14 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Consume an mNFT token. Returns the collection_id (class_id) if consumed.
     pub fn consume_mnft_token(
         &self,
         token_id: &[u8],
         _block_number: i64,
         _tx_hash: &[u8],
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<Option<Vec<u8>>> {
         if let Some(mut entry) = self.store.get_nft(token_id)? {
             if !entry.is_live {
                 bail!(
@@ -219,8 +220,9 @@ impl BatchWriter {
                     hex::encode(token_id)
                 );
             }
+            return Ok(collection_id);
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn get_mnft_token_id_by_outpoint(

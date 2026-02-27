@@ -616,6 +616,10 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Consume a spore. Returns the effective collection_id:
+    /// - `DID_CKB_SENTINEL_COLLECTION` for did:ckb entries
+    /// - `cluster_id` for regular spores with a cluster
+    /// - `None` if entry not found, already consumed, or clusterless
     pub(crate) fn consume_spore(
         &self,
         spore_id: &[u8],
@@ -623,10 +627,10 @@ impl BatchWriter {
         _tx_hash: &[u8],
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
-    ) -> Result<()> {
+    ) -> Result<Option<Vec<u8>>> {
         if let Some(mut entry) = state.get_spore(self.store.as_ref(), spore_id)? {
             if !entry.is_live {
-                return Ok(());
+                return Ok(None);
             }
 
             let old_owner = entry.owner_lock_hash.clone();
@@ -652,7 +656,7 @@ impl BatchWriter {
                 }
                 agg.live_count -= 1;
                 state.put_did_collection_aggregate(agg, batch);
-                return Ok(());
+                return Ok(Some(DID_CKB_SENTINEL_COLLECTION.to_vec()));
             }
 
             // Update cluster aggregate
@@ -677,8 +681,9 @@ impl BatchWriter {
                 )?;
                 state.put_cluster_aggregate(cid, agg, batch);
             }
+            return Ok(cluster_id);
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn update_spore_type_index_batch(

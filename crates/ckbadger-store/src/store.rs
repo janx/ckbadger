@@ -45,6 +45,7 @@ pub const CF_ACTIVITIES: &str = "activities";
 pub const CF_ADDR_DAILY_STATS: &str = "addr_daily_stats";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
+pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
@@ -78,6 +79,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_ADDR_DAILY_STATS,
     CF_CLUSTER_AGG,
     CF_NFT_COLLECTION_AGG,
+    CF_NFT_COLLECTION_ACTIVITIES,
 ];
 
 fn consumed_cf_storage_bytes(
@@ -217,7 +219,8 @@ impl CkbadgerStore {
     ///
     /// These indexes are primarily append writes during sync and large range scans on reads.
     /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
-    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[CF_ACTIVITIES, CF_ADDR_TXS];
+    const HISTORICAL_APPEND_CFS: &'static [&'static str] =
+        &[CF_ACTIVITIES, CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
 
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
@@ -437,6 +440,9 @@ impl CkbadgerStore {
     }
     pub fn cf_nft_collection_agg(&self) -> &ColumnFamily {
         self.cf(CF_NFT_COLLECTION_AGG)
+    }
+    pub fn cf_nft_collection_activities(&self) -> &ColumnFamily {
+        self.cf(CF_NFT_COLLECTION_ACTIVITIES)
     }
 
     // ---- Raw DB operations ----
@@ -1032,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_historical_append_cfs_expected_members() {
-        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS];
+        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
         for cf in expected {
             assert!(
                 CkbadgerStore::is_historical_append_cf(cf),

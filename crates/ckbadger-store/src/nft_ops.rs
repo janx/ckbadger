@@ -2,7 +2,10 @@
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{NftCollectionAggregate, NftDailyDelta, NftEntry, NftTypeIndex};
+use crate::types::{
+    AssetAction, NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta, NftEntry,
+    NftTypeIndex,
+};
 
 impl CkbadgerStore {
     pub fn get_nft(&self, id: &[u8]) -> anyhow::Result<Option<NftEntry>> {
@@ -199,6 +202,82 @@ impl CkbadgerStore {
 
         Ok(results)
     }
+
+    /// List pre-computed activities for an NFT collection, newest first.
+    ///
+    /// Returns `(block_number, tx_index, entry)` tuples. Simple prefix scan
+    /// on `CF_NFT_COLLECTION_ACTIVITIES` with early termination at `limit`.
+    pub fn list_nft_collection_activities(
+        &self,
+        collection_id: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+        action_filter: Option<&str>,
+    ) -> anyhow::Result<Vec<(i64, i32, NftCollectionActivityEntry)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
+        let start_key = if let Some((cursor_block, cursor_tx_idx)) = cursor {
+            keys::encode_nft_collection_activity_key(collection_id, cursor_block, cursor_tx_idx)
+        } else {
+            // Start from the beginning of this collection (newest first)
+            let mut k = [0u8; keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE];
+            k[..32].copy_from_slice(&prefix);
+            // block_desc = 0 means block_num = i64::MAX (start of descending range)
+            k
+        };
+
+        let iter = self.iterator_cf(
+            self.cf_nft_collection_activities(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+
+        let mut results = Vec::new();
+        let action_filter_parsed = action_filter.map(|s| match s {
+            "mint" => AssetAction::Mint,
+            "transfer" => AssetAction::Transfer,
+            "burn" => AssetAction::Burn,
+            _ => AssetAction::Mint, // unreachable if caller validates
+        });
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                continue;
+            }
+
+            // Skip the cursor row itself
+            if cursor.is_some() && key.as_ref() == start_key.as_slice() {
+                continue;
+            }
+
+            let (_, block_num, tx_idx) = keys::decode_nft_collection_activity_key(&key);
+            let entry: NftCollectionActivityEntry = bincode::deserialize(&value)?;
+
+            // Apply action filter
+            if let Some(ref filter) = action_filter_parsed {
+                let matches = entry
+                    .actions
+                    .iter()
+                    .any(|a| std::mem::discriminant(a) == std::mem::discriminant(filter));
+                if !matches {
+                    continue;
+                }
+            }
+
+            results.push((block_num, tx_idx, entry));
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -356,5 +435,184 @@ mod tests {
             .list_nft_ids_by_collection(&collection_id, Some(&first[1]), 2)
             .unwrap();
         assert_eq!(second, vec![nft_c.to_vec()]);
+    }
+
+    // ---- NFT collection activities ----
+
+    use crate::types::{AssetAction, NftCollectionActivityEntry};
+
+    fn make_activity(
+        tx_hash: &[u8],
+        ts_ms: i64,
+        actions: Vec<AssetAction>,
+    ) -> NftCollectionActivityEntry {
+        NftCollectionActivityEntry {
+            tx_hash: tx_hash.to_vec(),
+            timestamp_ms: ts_ms,
+            actions,
+        }
+    }
+
+    #[test]
+    fn test_list_nft_collection_activities_empty() {
+        let (_dir, store) = test_store();
+        let cid = [0x01u8; 32];
+        let results = store
+            .list_nft_collection_activities(&cid, 10, None, None)
+            .unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_list_nft_collection_activities_basic_pagination() {
+        let (_dir, store) = test_store();
+        let cid = [0x01u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        // Insert 5 activities at different blocks (newest first due to descending key)
+        for block in 100..105 {
+            let tx_hash = [block as u8; 32];
+            batch.put_nft_collection_activity(
+                &cid,
+                block,
+                0,
+                &make_activity(&tx_hash, block * 1000, vec![AssetAction::Mint]),
+            );
+        }
+        batch.commit().unwrap();
+
+        // Request limit=3
+        let page1 = store
+            .list_nft_collection_activities(&cid, 3, None, None)
+            .unwrap();
+        assert_eq!(page1.len(), 3);
+        // Should be newest first: 104, 103, 102
+        assert_eq!(page1[0].0, 104);
+        assert_eq!(page1[1].0, 103);
+        assert_eq!(page1[2].0, 102);
+
+        // Page 2 using cursor
+        let cursor = (page1[2].0, page1[2].1);
+        let page2 = store
+            .list_nft_collection_activities(&cid, 3, Some(cursor), None)
+            .unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].0, 101);
+        assert_eq!(page2[1].0, 100);
+    }
+
+    #[test]
+    fn test_list_nft_collection_activities_action_filter() {
+        let (_dir, store) = test_store();
+        let cid = [0x02u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_activity(
+            &cid,
+            100,
+            0,
+            &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
+        );
+        batch.put_nft_collection_activity(
+            &cid,
+            200,
+            0,
+            &make_activity(&[2u8; 32], 200000, vec![AssetAction::Transfer]),
+        );
+        batch.put_nft_collection_activity(
+            &cid,
+            300,
+            0,
+            &make_activity(&[3u8; 32], 300000, vec![AssetAction::Burn]),
+        );
+        batch.commit().unwrap();
+
+        let mints = store
+            .list_nft_collection_activities(&cid, 10, None, Some("mint"))
+            .unwrap();
+        assert_eq!(mints.len(), 1);
+        assert_eq!(mints[0].0, 100);
+
+        let transfers = store
+            .list_nft_collection_activities(&cid, 10, None, Some("transfer"))
+            .unwrap();
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0].0, 200);
+
+        let burns = store
+            .list_nft_collection_activities(&cid, 10, None, Some("burn"))
+            .unwrap();
+        assert_eq!(burns.len(), 1);
+        assert_eq!(burns[0].0, 300);
+    }
+
+    #[test]
+    fn test_list_nft_collection_activities_multi_action_per_tx() {
+        let (_dir, store) = test_store();
+        let cid = [0x03u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_activity(
+            &cid,
+            500,
+            0,
+            &make_activity(
+                &[5u8; 32],
+                500000,
+                vec![AssetAction::Mint, AssetAction::Burn],
+            ),
+        );
+        batch.commit().unwrap();
+
+        // Should match both mint and burn filters
+        let mints = store
+            .list_nft_collection_activities(&cid, 10, None, Some("mint"))
+            .unwrap();
+        assert_eq!(mints.len(), 1);
+
+        let burns = store
+            .list_nft_collection_activities(&cid, 10, None, Some("burn"))
+            .unwrap();
+        assert_eq!(burns.len(), 1);
+
+        // Transfer filter should not match
+        let transfers = store
+            .list_nft_collection_activities(&cid, 10, None, Some("transfer"))
+            .unwrap();
+        assert!(transfers.is_empty());
+    }
+
+    #[test]
+    fn test_list_nft_collection_activities_isolation_between_collections() {
+        let (_dir, store) = test_store();
+        let cid_a = [0x0Au8; 32];
+        let cid_b = [0x0Bu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_activity(
+            &cid_a,
+            100,
+            0,
+            &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
+        );
+        batch.put_nft_collection_activity(
+            &cid_b,
+            200,
+            0,
+            &make_activity(&[2u8; 32], 200000, vec![AssetAction::Mint]),
+        );
+        batch.commit().unwrap();
+
+        let results_a = store
+            .list_nft_collection_activities(&cid_a, 10, None, None)
+            .unwrap();
+        assert_eq!(results_a.len(), 1);
+        assert_eq!(results_a[0].0, 100);
+
+        let results_b = store
+            .list_nft_collection_activities(&cid_b, 10, None, None)
+            .unwrap();
+        assert_eq!(results_b.len(), 1);
+        assert_eq!(results_b[0].0, 200);
     }
 }

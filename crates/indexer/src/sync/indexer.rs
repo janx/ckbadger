@@ -27,6 +27,7 @@ use ckbadger_store::CkbadgerStore;
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
+use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
 use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
 use crate::parser::{
     analyze_spore_media_profile, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser,
@@ -6988,6 +6989,7 @@ impl Indexer {
         let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
         let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
 
+        let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
             let mut spore_state = self.writer.new_spore_batch_state();
@@ -7028,6 +7030,22 @@ impl Indexer {
                             )?;
                             self.writer
                                 .insert_spore_content(&spore.spore_id, &spore.content)?;
+                            let coll_id = if spore.is_did {
+                                &DID_CKB_SENTINEL_COLLECTION[..]
+                            } else if let Some(ref cid) = spore.cluster_id {
+                                cid.as_slice()
+                            } else {
+                                continue;
+                            };
+                            nft_activity_acc.record(
+                                coll_id,
+                                &tx_data.hash,
+                                &spore.spore_id,
+                                parsed.number,
+                                tx_idx as i32,
+                                parsed.timestamp.timestamp_millis(),
+                                true,
+                            );
                         }
                     }
 
@@ -7074,6 +7092,15 @@ impl Indexer {
                             parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
                         )?;
+                        nft_activity_acc.record(
+                            &token.class_id,
+                            &tx_data.hash,
+                            &token.token_id,
+                            parsed.number,
+                            tx_idx as i32,
+                            parsed.timestamp.timestamp_millis(),
+                            true,
+                        );
                     }
                     for account in DotbitParser::parse_accounts(tx)? {
                         self.writer.insert_dotbit_account_with_state(
@@ -7097,6 +7124,15 @@ impl Indexer {
                                 }
                             })
                             .or_insert(dotbit_create_order);
+                        nft_activity_acc.record(
+                            &DOTBIT_SENTINEL_COLLECTION,
+                            &tx_data.hash,
+                            &account.account.account_id,
+                            parsed.number,
+                            tx_idx as i32,
+                            parsed.timestamp.timestamp_millis(),
+                            true,
+                        );
                     }
                 }
                 block_tx_idx += tx_count_for_block;
@@ -7146,13 +7182,23 @@ impl Indexer {
                             .get_spore_id_by_outpoint(&prev_tx_hash, prev_index)?;
                         if let Some(spore_id) = consumed_spore_id {
                             if !batch_spore_ids.contains(&spore_id) {
-                                self.writer.consume_spore(
+                                if let Some(coll_id) = self.writer.consume_spore(
                                     &spore_id,
                                     parsed.number,
                                     &tx_data.hash,
                                     &mut consume_batch,
                                     &mut spore_state,
-                                )?;
+                                )? {
+                                    nft_activity_acc.record(
+                                        &coll_id,
+                                        &tx_data.hash,
+                                        &spore_id,
+                                        parsed.number,
+                                        tx_idx as i32,
+                                        parsed.timestamp.timestamp_millis(),
+                                        false,
+                                    );
+                                }
                             }
                         }
                     }
@@ -7169,19 +7215,30 @@ impl Indexer {
                             batch_dotbit_latest_create_order.get(&account_id).copied();
                         if should_consume_dotbit_account(latest_create_order, dotbit_consume_order)
                         {
-                            self.writer.consume_dotbit_account_with_state(
+                            if let Some(coll_id) = self.writer.consume_dotbit_account_with_state(
                                 &account_id,
                                 parsed.number,
                                 &tx_data.hash,
                                 &mut consume_batch,
                                 &mut dotbit_state,
-                            )?;
+                            )? {
+                                nft_activity_acc.record(
+                                    &coll_id,
+                                    &tx_data.hash,
+                                    &account_id,
+                                    parsed.number,
+                                    tx_idx as i32,
+                                    parsed.timestamp.timestamp_millis(),
+                                    false,
+                                );
+                            }
                         }
                     }
                 }
             }
             block_tx_idx += tx_count_for_block;
         }
+        nft_activity_acc.flush(&mut consume_batch);
         let commit_started = Instant::now();
         consume_batch.commit()?;
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -8148,6 +8205,7 @@ impl Indexer {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         let mut spore_state = writer.new_spore_batch_state();
+                        let mut spore_activity_acc = NftCollectionActivityAccumulator::new();
                         let mut block_tx_idx = 0usize;
                         for (block_idx, _block_response) in blocks.iter().enumerate() {
                             let parsed = &all_parsed_blocks[block_idx];
@@ -8179,10 +8237,27 @@ impl Indexer {
                                         &mut spore_state,
                                     )?;
                                     writer.insert_spore_content(&spore.spore_id, &spore.content)?;
+                                    let coll_id = if spore.is_did {
+                                        &DID_CKB_SENTINEL_COLLECTION[..]
+                                    } else if let Some(ref cid) = spore.cluster_id {
+                                        cid.as_slice()
+                                    } else {
+                                        continue;
+                                    };
+                                    spore_activity_acc.record(
+                                        coll_id,
+                                        &tx_data.hash,
+                                        &spore.spore_id,
+                                        parsed.number,
+                                        tx_idx as i32,
+                                        ts_ms,
+                                        true,
+                                    );
                                 }
                             }
                             block_tx_idx += tx_count_for_block;
                         }
+                        spore_activity_acc.flush(&mut batch);
                         let commit_ms =
                             commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
@@ -8195,6 +8270,7 @@ impl Indexer {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut dotbit_state = writer.new_dotbit_batch_state();
+                    let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
                     let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
                         HashMap::new();
                     let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
@@ -8256,6 +8332,15 @@ impl Indexer {
                                     ts_ms,
                                     &mut batch,
                                 )?;
+                                nft_activity_acc.record(
+                                    &token.class_id,
+                                    &tx_data.hash,
+                                    &token.token_id,
+                                    parsed.number,
+                                    tx_idx as i32,
+                                    ts_ms,
+                                    true,
+                                );
                             }
                             for account in DotbitParser::parse_accounts(tx)? {
                                 writer.insert_dotbit_account_with_state(
@@ -8279,6 +8364,15 @@ impl Indexer {
                                         }
                                     })
                                     .or_insert(dotbit_create_order);
+                                nft_activity_acc.record(
+                                    &DOTBIT_SENTINEL_COLLECTION,
+                                    &tx_data.hash,
+                                    &account.account.account_id,
+                                    parsed.number,
+                                    tx_idx as i32,
+                                    ts_ms,
+                                    true,
+                                );
                             }
                         }
                         block_tx_idx += tx_count_for_block;
@@ -8328,19 +8422,32 @@ impl Indexer {
                                         latest_create_order,
                                         dotbit_consume_order,
                                     ) {
-                                        writer.consume_dotbit_account_with_state(
-                                            &account_id,
-                                            parsed.number,
-                                            &tx_data.hash,
-                                            &mut batch,
-                                            &mut dotbit_state,
-                                        )?;
+                                        if let Some(coll_id) =
+                                            writer.consume_dotbit_account_with_state(
+                                                &account_id,
+                                                parsed.number,
+                                                &tx_data.hash,
+                                                &mut batch,
+                                                &mut dotbit_state,
+                                            )?
+                                        {
+                                            nft_activity_acc.record(
+                                                &coll_id,
+                                                &tx_data.hash,
+                                                &account_id,
+                                                parsed.number,
+                                                tx_idx as i32,
+                                                parsed.timestamp.timestamp_millis(),
+                                                false,
+                                            );
+                                        }
                                     }
                                 }
                             }
                         }
                         block_tx_idx += tx_count_for_block;
                     }
+                    nft_activity_acc.flush(&mut batch);
                     let commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
@@ -9305,6 +9412,7 @@ impl Indexer {
                 let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
                 let mut spore_state = self.writer.new_spore_batch_state();
                 let mut dotbit_state = self.writer.new_dotbit_batch_state();
+                let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -9340,6 +9448,22 @@ impl Indexer {
                                 )?;
                                 self.writer
                                     .insert_spore_content(&spore.spore_id, &spore.content)?;
+                                let coll_id = if spore.is_did {
+                                    &DID_CKB_SENTINEL_COLLECTION[..]
+                                } else if let Some(ref cid) = spore.cluster_id {
+                                    cid.as_slice()
+                                } else {
+                                    continue;
+                                };
+                                nft_activity_acc.record(
+                                    coll_id,
+                                    &tx_data.hash,
+                                    &spore.spore_id,
+                                    parsed.number,
+                                    tx_idx as i32,
+                                    ts_ms,
+                                    true,
+                                );
                             }
                         }
                         for issuer in MnftParser::parse_issuers(tx) {
@@ -9393,6 +9517,15 @@ impl Indexer {
                                 (tx_data.hash.to_vec(), output_index),
                                 token.token_id.clone(),
                             );
+                            nft_activity_acc.record(
+                                &token.class_id,
+                                &tx_data.hash,
+                                &token.token_id,
+                                parsed.number,
+                                tx_idx as i32,
+                                ts_ms,
+                                true,
+                            );
                         }
                         for account in DotbitParser::parse_accounts(tx)? {
                             self.writer.insert_dotbit_account_with_state(
@@ -9416,6 +9549,15 @@ impl Indexer {
                                     }
                                 })
                                 .or_insert(dotbit_create_order);
+                            nft_activity_acc.record(
+                                &DOTBIT_SENTINEL_COLLECTION,
+                                &tx_data.hash,
+                                &account.account.account_id,
+                                parsed.number,
+                                tx_idx as i32,
+                                ts_ms,
+                                true,
+                            );
                         }
                     }
                     block_tx_idx += tx_count_for_block;
@@ -9425,7 +9567,8 @@ impl Indexer {
                 let bulk_sync_active = self.is_bulk_sync_active();
                 let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
                 let mut all_prev_indices: Vec<i16> = Vec::new();
-                let mut outpoint_context: Vec<(i64, Vec<u8>, u64)> = Vec::new();
+                // (block_number, consuming_tx_hash, dotbit_consume_order, tx_idx, ts_ms)
+                let mut outpoint_context: Vec<(i64, Vec<u8>, u64, i32, i64)> = Vec::new();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -9459,6 +9602,8 @@ impl Indexer {
                                 parsed.number,
                                 tx_data.hash.to_vec(),
                                 dotbit_consume_order,
+                                tx_idx as i32,
+                                parsed.timestamp.timestamp_millis(),
                             ));
                         }
                     }
@@ -9529,29 +9674,57 @@ impl Indexer {
                             .or_insert_with(|| account_id.clone());
                     }
 
-                    for (i, (block_number, consuming_tx_hash, dotbit_consume_order)) in
-                        outpoint_context.iter().enumerate()
+                    for (
+                        i,
+                        (
+                            block_number,
+                            consuming_tx_hash,
+                            dotbit_consume_order,
+                            ctx_tx_idx,
+                            ctx_ts_ms,
+                        ),
+                    ) in outpoint_context.iter().enumerate()
                     {
                         let key = (all_prev_tx_hashes[i].clone(), all_prev_indices[i]);
                         if !bulk_sync_active {
                             if let Some(spore_id) = spore_map.get(&key) {
                                 if !batch_spore_ids.contains(spore_id) {
-                                    self.writer.consume_spore(
+                                    if let Some(coll_id) = self.writer.consume_spore(
                                         spore_id,
                                         *block_number,
                                         consuming_tx_hash,
                                         &mut data_batch,
                                         &mut spore_state,
-                                    )?;
+                                    )? {
+                                        nft_activity_acc.record(
+                                            &coll_id,
+                                            consuming_tx_hash,
+                                            spore_id,
+                                            *block_number,
+                                            *ctx_tx_idx,
+                                            *ctx_ts_ms,
+                                            false,
+                                        );
+                                    }
                                 }
                             }
                             if let Some(token_id) = mnft_map.get(&key) {
-                                self.writer.consume_mnft_token(
+                                if let Some(coll_id) = self.writer.consume_mnft_token(
                                     token_id,
                                     *block_number,
                                     consuming_tx_hash,
                                     &mut data_batch,
-                                )?;
+                                )? {
+                                    nft_activity_acc.record(
+                                        &coll_id,
+                                        consuming_tx_hash,
+                                        token_id,
+                                        *block_number,
+                                        *ctx_tx_idx,
+                                        *ctx_ts_ms,
+                                        false,
+                                    );
+                                }
                             }
                         }
                         if let Some(account_id) = dotbit_map.get(&key) {
@@ -9561,17 +9734,30 @@ impl Indexer {
                                 latest_create_order,
                                 *dotbit_consume_order,
                             ) {
-                                self.writer.consume_dotbit_account_with_state(
-                                    account_id,
-                                    *block_number,
-                                    consuming_tx_hash,
-                                    &mut data_batch,
-                                    &mut dotbit_state,
-                                )?;
+                                if let Some(coll_id) =
+                                    self.writer.consume_dotbit_account_with_state(
+                                        account_id,
+                                        *block_number,
+                                        consuming_tx_hash,
+                                        &mut data_batch,
+                                        &mut dotbit_state,
+                                    )?
+                                {
+                                    nft_activity_acc.record(
+                                        &coll_id,
+                                        consuming_tx_hash,
+                                        account_id,
+                                        *block_number,
+                                        *ctx_tx_idx,
+                                        *ctx_ts_ms,
+                                        false,
+                                    );
+                                }
                             }
                         }
                     }
                 }
+                nft_activity_acc.flush(&mut data_batch);
             }
 
             // Activity writes (live sync)

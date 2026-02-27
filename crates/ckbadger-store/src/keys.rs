@@ -545,6 +545,34 @@ pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
     s.parse::<u32>().unwrap_or(0)
 }
 
+/// NFT collection activity key: collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
+/// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
+pub const NFT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 44;
+
+pub fn encode_nft_collection_activity_key(
+    collection_id: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+) -> [u8; NFT_COLLECTION_ACTIVITY_KEY_SIZE] {
+    let mut key = [0u8; NFT_COLLECTION_ACTIVITY_KEY_SIZE];
+    key[..32].copy_from_slice(&pad_id_32(collection_id));
+    key[32..40].copy_from_slice(&(i64::MAX - block_num).to_be_bytes());
+    key[40..44].copy_from_slice(&(i32::MAX - tx_idx).to_be_bytes());
+    key
+}
+
+pub fn encode_nft_collection_activity_prefix(collection_id: &[u8]) -> [u8; 32] {
+    pad_id_32(collection_id)
+}
+
+pub fn decode_nft_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32) {
+    let mut collection_id = [0u8; 32];
+    collection_id.copy_from_slice(&key[..32]);
+    let block_num = i64::MAX - i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let tx_idx = i32::MAX - i32::from_be_bytes(key[40..44].try_into().unwrap());
+    (collection_id, block_num, tx_idx)
+}
+
 /// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
@@ -1053,5 +1081,66 @@ mod tests {
             encode_token_hourly_key(&hash_a, 100),
             encode_token_hourly_key(&hash_b, 100)
         );
+    }
+
+    // ---- NFT collection activity key ----
+
+    #[test]
+    fn test_nft_collection_activity_key_roundtrip() {
+        let collection_id = [0xAAu8; 32];
+        for (block, idx) in [
+            (0i64, 0i32),
+            (1, 0),
+            (100, 5),
+            (1_000_000, 42),
+            (i64::MAX, i32::MAX),
+        ] {
+            let key = encode_nft_collection_activity_key(&collection_id, block, idx);
+            assert_eq!(key.len(), NFT_COLLECTION_ACTIVITY_KEY_SIZE);
+            let (decoded_cid, decoded_block, decoded_idx) =
+                decode_nft_collection_activity_key(&key);
+            assert_eq!(decoded_cid, collection_id);
+            assert_eq!(decoded_block, block);
+            assert_eq!(decoded_idx, idx);
+        }
+    }
+
+    #[test]
+    fn test_nft_collection_activity_key_descending_sort() {
+        let cid = [0xBBu8; 32];
+        let k1 = encode_nft_collection_activity_key(&cid, 300, 5);
+        let k2 = encode_nft_collection_activity_key(&cid, 200, 5);
+        let k3 = encode_nft_collection_activity_key(&cid, 100, 5);
+        // Higher block_num => smaller key (descending)
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+
+        // Same block, higher tx_idx => smaller key (descending)
+        let k4 = encode_nft_collection_activity_key(&cid, 100, 10);
+        let k5 = encode_nft_collection_activity_key(&cid, 100, 5);
+        assert!(k4 < k5);
+    }
+
+    #[test]
+    fn test_nft_collection_activity_prefix_matching() {
+        let cid = [0xCCu8; 32];
+        let prefix = encode_nft_collection_activity_prefix(&cid);
+        let key = encode_nft_collection_activity_key(&cid, 500, 3);
+        assert!(key.starts_with(&prefix));
+
+        let other_cid = [0xDDu8; 32];
+        let other_key = encode_nft_collection_activity_key(&other_cid, 500, 3);
+        assert!(!other_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_nft_collection_activity_padded_short_id() {
+        let short_id = [0xEEu8; 20];
+        let key = encode_nft_collection_activity_key(&short_id, 100, 0);
+        let (decoded_cid, decoded_block, _) = decode_nft_collection_activity_key(&key);
+        // First 20 bytes match, rest is zero-padded
+        assert_eq!(&decoded_cid[..20], &short_id);
+        assert_eq!(&decoded_cid[20..], &[0u8; 12]);
+        assert_eq!(decoded_block, 100);
     }
 }

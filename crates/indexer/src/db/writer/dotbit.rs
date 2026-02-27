@@ -182,7 +182,7 @@ impl BatchWriter {
         _block_number: i64,
         _tx_hash: &[u8],
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<Option<Vec<u8>>> {
         let mut state = self.new_dotbit_batch_state();
         self.consume_dotbit_account_with_state(
             account_id,
@@ -193,6 +193,7 @@ impl BatchWriter {
         )
     }
 
+    /// Consume a .bit account. Returns `Some(DOTBIT_SENTINEL_COLLECTION)` if consumed.
     pub(crate) fn consume_dotbit_account_with_state(
         &self,
         account_id: &[u8],
@@ -200,7 +201,7 @@ impl BatchWriter {
         _tx_hash: &[u8],
         batch: &mut StoreBatch,
         state: &mut DotbitBatchState,
-    ) -> Result<()> {
+    ) -> Result<Option<Vec<u8>>> {
         if let Some(mut entry) = state.get_account(self.store.as_ref(), account_id)? {
             if !entry.is_live {
                 bail!(
@@ -225,8 +226,9 @@ impl BatchWriter {
             }
             agg.live_count -= 1;
             state.put_collection_aggregate(agg, batch);
+            return Ok(Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn get_dotbit_account_id_by_outpoint(
