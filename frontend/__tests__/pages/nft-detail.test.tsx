@@ -417,10 +417,11 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Collection Details')).toBeInTheDocument();
+      expect(screen.getByText('Collection ID')).toBeInTheDocument();
     });
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
+    expect(screen.getByText('Total NFTs')).toBeInTheDocument();
     expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();

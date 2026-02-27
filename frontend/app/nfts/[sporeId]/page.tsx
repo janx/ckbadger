@@ -26,8 +26,11 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
 import { isDidCkbAlias, isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
-import { truncateHash } from '@/lib/utils';
+import { formatNumber, truncateHash } from '@/lib/utils';
+import { formatStorageTier } from '@/lib/nft-utils';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';
@@ -259,10 +262,6 @@ export default function SporeDetailPage() {
     resetCollectionActivitiesPagination();
   }, [collectionAssetId, resetCollectionActivitiesPagination, resetCollectionHoldersPagination]);
 
-  const formatNumber = (num: number) => {
-    return new Intl.NumberFormat().format(num);
-  };
-
   const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     mutator(nextParams);
@@ -280,15 +279,6 @@ export default function SporeDetailPage() {
         nextParams.set('tab', nextValue);
       }
     });
-  };
-
-  const formatStorageTier = (
-    tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown'
-  ) => {
-    if (tier === 'fully_onchain') return 'Fully On-chain';
-    if (tier === 'decentralized_external') return 'Decentralized External';
-    if (tier === 'centralized_dependent') return 'Centralized Dependency';
-    return 'Unknown';
   };
 
   const getContentTypeIcon = (contentType: string) => {
@@ -453,52 +443,20 @@ export default function SporeDetailPage() {
             badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
           />
 
+          <NftCollectionStatCards
+            totalCount={collection.totalCount}
+            liveCount={collection.liveCount}
+            liveCapacity={collection.liveCapacity}
+            liveOccupiedCapacity={collection.liveOccupiedCapacity}
+            storageTier={collection.storageProfile?.tier}
+            storageOnchainRatio={collection.storageProfile?.fullyOnchainRatio}
+          />
+
           <div className="space-y-6">
             <TerminalPanel>
-              <TerminalPanelHeader indicator="active">Collection Details</TerminalPanelHeader>
+              <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
               <TerminalPanelContent>
-                <DataGrid columns={1}>
-                  <DataField label="Collection ID" layout="vertical" valueClassName="w-full">
-                    <HexDisplay value={collection.collectionId} truncate={false} color="accent" />
-                  </DataField>
-                  <DataField label="Standard">
-                    <span className="font-mono text-slate-300">
-                      {collection.standard.toUpperCase()}
-                    </span>
-                  </DataField>
-                  <DataField label="Live NFTs">
-                    <span className="text-amber font-mono">
-                      {formatNumber(collection.liveCount)}
-                    </span>
-                  </DataField>
-                  <DataField label="Total NFTs">
-                    <span className="text-amber font-mono">
-                      {formatNumber(collection.totalCount)}
-                    </span>
-                  </DataField>
-                  {collection.storageProfile && (
-                    <>
-                      <DataField label="Storage Tier">
-                        <Badge
-                          variant={
-                            collection.storageProfile.tier === 'fully_onchain'
-                              ? 'green'
-                              : collection.storageProfile.tier === 'centralized_dependent'
-                                ? 'red'
-                                : 'neutral'
-                          }
-                        >
-                          {formatStorageTier(collection.storageProfile.tier)}
-                        </Badge>
-                      </DataField>
-                      <DataField label="Fully On-chain Ratio">
-                        <span className="font-mono text-slate-300">
-                          {(Number(collection.storageProfile.fullyOnchainRatio) * 100).toFixed(2)}%
-                        </span>
-                      </DataField>
-                    </>
-                  )}
-                </DataGrid>
+                <HexDisplay value={collection.collectionId} truncate={false} color="accent" />
               </TerminalPanelContent>
             </TerminalPanel>
 
@@ -579,55 +537,15 @@ export default function SporeDetailPage() {
                     ) : (
                       <div className="space-y-2">
                         {collectionActivities.data.map((activity: NftCollectionActivity) => (
-                          <div
+                          <NftActivityCard
                             key={`${activity.txHash}-${activity.txIndex}`}
-                            className="space-y-2 rounded border border-slate-800 bg-slate-900/40 p-3"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="font-mono text-xs text-slate-400">
-                                Block{' '}
-                                <Link
-                                  href={`/blocks/${activity.blockNumber}`}
-                                  className="text-terminal-green hover:underline"
-                                >
-                                  #{formatNumber(activity.blockNumber)}
-                                </Link>
-                                <span className="mx-1 text-slate-500">•</span>
-                                Tx Index {activity.txIndex}
-                              </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                {activity.actions.map((action) => (
-                                  <Badge
-                                    key={`${activity.txHash}-${activity.txIndex}-${action}`}
-                                    variant={
-                                      action === 'mint'
-                                        ? 'green'
-                                        : action === 'burn'
-                                          ? 'red'
-                                          : 'neutral'
-                                    }
-                                  >
-                                    {action}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                            <Link
-                              href={`/tx/${activity.txHash}`}
-                              className="block font-mono text-xs text-slate-300 hover:underline"
-                            >
-                              <HexDisplay
-                                value={activity.txHash}
-                                color="accent"
-                                size="sm"
-                                startChars={14}
-                                endChars={10}
-                              />
-                            </Link>
-                            <div className="font-mono text-xs text-slate-500">
-                              Timestamp: {activity.timestamp}
-                            </div>
-                          </div>
+                            txHash={activity.txHash}
+                            blockNumber={activity.blockNumber}
+                            txIndex={activity.txIndex}
+                            timestamp={activity.timestamp}
+                            actions={activity.actions}
+                            badgeActions
+                          />
                         ))}
                       </div>
                     )}

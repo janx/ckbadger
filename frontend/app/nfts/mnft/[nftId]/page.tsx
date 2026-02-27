@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 
 import { Header } from '@/components/layout/header';
+import { NftActivityCard } from '@/components/nft/nft-activity-card';
 import {
   TerminalPanel,
   TerminalPanelContent,
@@ -16,11 +17,8 @@ import { DataField, DataGrid } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { api } from '@/lib/api';
-
-function normalizeNftId(raw: string): string {
-  const decoded = decodeURIComponent(raw);
-  return decoded.startsWith('0x') ? decoded : `0x${decoded}`;
-}
+import { normalizeNftId } from '@/lib/nft-utils';
+import { formatNumber } from '@/lib/utils';
 
 function decodeTokenState(state: number): string {
   switch (state) {
@@ -42,10 +40,6 @@ function decodeTokenConfigure(configure: number): string {
   if ((configure & 0b00000100) !== 0) flags.push('mutable');
   if ((configure & 0b00001000) !== 0) flags.push('reserved_3');
   return flags.length > 0 ? flags.join(', ') : 'none';
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat().format(value);
 }
 
 export default function MnftItemDetailPage() {
@@ -337,31 +331,13 @@ export default function MnftItemDetailPage() {
                 ))}
 
                 {ownerTimeline.map((activity) => (
-                  <div
+                  <NftActivityCard
                     key={activity.txHash}
-                    className="rounded border border-cyan-900/40 bg-cyan-950/10 p-3"
-                  >
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <span className="font-mono text-xs uppercase tracking-wider text-cyan-300">
-                        owner activity
-                      </span>
-                      <Link
-                        href={`/blocks/${activity.blockNumber}`}
-                        className="text-terminal-green font-mono text-xs hover:underline"
-                      >
-                        #{formatNumber(activity.blockNumber)}
-                      </Link>
-                    </div>
-                    <Link
-                      href={`/tx/${activity.txHash}`}
-                      className="text-terminal-green font-mono text-xs hover:underline"
-                    >
-                      <HexDisplay value={activity.txHash} color="accent" size="sm" />
-                    </Link>
-                    <div className="mt-1 font-mono text-xs text-cyan-100">
-                      {activity.actions.join(', ')}
-                    </div>
-                  </div>
+                    txHash={activity.txHash}
+                    blockNumber={activity.blockNumber}
+                    actions={activity.actions}
+                    badgeActions
+                  />
                 ))}
               </div>
             </TerminalPanelContent>
