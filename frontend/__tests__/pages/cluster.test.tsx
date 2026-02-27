@@ -188,7 +188,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.queryByText('Spores in this collection (5)')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
     });
@@ -217,12 +222,18 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getAllByText('Unknown spore ID').length).toBeGreaterThan(0);
       expect(screen.getAllByText('unknown').length).toBeGreaterThan(0);
     });
   });
 
-  it('renders collection tabs with NFTs active by default', async () => {
+  it('renders collection tabs with Activities active by default', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -232,30 +243,12 @@ describe('ClusterDetailPage', () => {
       expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
-      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-      expect(screen.queryByText('Spores in this collection (5)')).not.toBeInTheDocument();
+      expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
     });
   });
 
   it('hydrates collection tab from query params', async () => {
-    mockSearchParamsString = 'tab=activities';
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
-      expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
-    });
-    expect(api.getSporeClusterActivities).toHaveBeenCalledWith(
-      mockClusterId,
-      expect.objectContaining({ limit: 20 })
-    );
-  });
-
-  it('falls back to NFTs tab when tab query is invalid', async () => {
-    mockSearchParamsString = 'tab=invalid';
+    mockSearchParamsString = 'tab=nfts';
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -264,7 +257,18 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
       expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
-      expect(screen.queryByText('No holders in this collection')).not.toBeInTheDocument();
+    });
+  });
+
+  it('falls back to Activities tab when tab query is invalid', async () => {
+    mockSearchParamsString = 'tab=invalid';
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
     });
   });
 
@@ -273,6 +277,12 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
 
     await waitFor(() => {
       expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
@@ -296,6 +306,12 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
 
     render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
 
     await waitFor(() => {
       expect(screen.getByText('No spores in this collection')).toBeInTheDocument();
@@ -359,6 +375,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getByText('2 shown / 5 total')).toBeInTheDocument();
     });
 
@@ -379,6 +401,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
     });
 
@@ -392,6 +420,12 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
@@ -414,6 +448,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
     });
 
@@ -429,7 +469,7 @@ describe('ClusterDetailPage', () => {
   });
 
   it('hydrates list controls from URL search params', async () => {
-    mockSearchParamsString = 'content=text&sort=sizeAsc&q=text%2Fplain';
+    mockSearchParamsString = 'tab=nfts&content=text&sort=sizeAsc&q=text%2Fplain';
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -449,6 +489,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.queryByLabelText('Sort spores')).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Sort spores by size' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Sort spores by block' })).toBeInTheDocument();
@@ -462,8 +508,13 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getByTestId('spore-list-controls')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
     });
 
     const controls = screen.getByTestId('spore-list-controls');
@@ -479,6 +530,12 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
@@ -511,7 +568,13 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
+      expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=nfts'))).toBe(true);
     });
 
     fireEvent.click(screen.getByRole('button', { name: /^Holders$/ }));
@@ -526,12 +589,6 @@ describe('ClusterDetailPage', () => {
       mockClusterId,
       expect.objectContaining({ limit: 20 })
     );
-
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-    });
   });
 
   it('renders cluster description JSON with metadata blocks', async () => {
@@ -624,6 +681,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(api.getAddress).toHaveBeenCalledWith(mockSpores.data[1].ownerLockHash);
       expect(
         document.querySelector(`a[href="/address/${resolvedSporeOwnerAddress}"]`)
@@ -653,8 +716,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Previous' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getByText('Showing 1-2 of 5 Spores, 20 per page')).toBeInTheDocument();
       expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
     });
@@ -667,6 +734,12 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage />);
 
     await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
+
+    await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
     });
   });
@@ -676,6 +749,12 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^NFTs$/ })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^NFTs$/ }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();

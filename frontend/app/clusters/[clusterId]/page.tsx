@@ -19,11 +19,13 @@ import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
+import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { ClusterDescription } from '@/components/spore/cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { formatCkbCompact } from '@/lib/utils';
+import { formatNumber } from '@/lib/utils';
 
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
@@ -58,13 +60,6 @@ function safeNumber(value: unknown, fallback = 0): number {
   return value;
 }
 
-function formatStorageTierLabel(tier: string): string {
-  if (tier === 'fully_onchain') return 'Fully On-chain';
-  if (tier === 'decentralized_external') return 'Decentralized External';
-  if (tier === 'centralized_dependent') return 'Centralized Dependency';
-  return 'Unknown';
-}
-
 function getSortIndicator(direction: 'asc' | 'desc' | null): string {
   if (direction === 'asc') return '↑';
   if (direction === 'desc') return '↓';
@@ -80,7 +75,7 @@ export default function ClusterDetailPage() {
   const tabFromQuery = searchParams.get('tab');
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>
-    isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'nfts'
+    isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
   const [listContentFilter, setListContentFilter] = useState<ListContentFilter>(() => {
     const value = searchParams.get('content');
@@ -164,22 +159,6 @@ export default function ClusterDetailPage() {
     retry: false,
   });
 
-  const formatNumber = (num: number) => {
-    return new Intl.NumberFormat().format(num);
-  };
-
-  const parseShannons = (value: string | null | undefined): bigint | null => {
-    if (!value) {
-      return null;
-    }
-
-    try {
-      return BigInt(value);
-    } catch {
-      return null;
-    }
-  };
-
   const getContentTypeIcon = (contentType: string | null | undefined) => {
     const normalized = safeString(contentType);
     if (!normalized) return '📦';
@@ -205,17 +184,6 @@ export default function ClusterDetailPage() {
   const isKnownPrimaryType = (primary: string): boolean => {
     return primary === 'image' || primary === 'video' || primary === 'audio' || primary === 'text';
   };
-
-  const liveCapacity = parseShannons(cluster?.liveCapacity ?? null);
-  const occupiedCapacity = parseShannons(cluster?.liveOccupiedCapacity ?? null);
-  const occupationPercent =
-    liveCapacity && occupiedCapacity && liveCapacity > BigInt(0)
-      ? (Number((occupiedCapacity * BigInt(10000)) / liveCapacity) / 100).toFixed(2)
-      : null;
-  const compactLiveCapacity = liveCapacity ? `${formatCkbCompact(liveCapacity).value} CKB` : '--';
-  const compactOccupiedCapacity = occupiedCapacity
-    ? `${formatCkbCompact(occupiedCapacity).value} CKB`
-    : '--';
 
   const normalizedQuery = listQuery.trim().toLowerCase();
   const sizeSortDirection =
@@ -245,7 +213,7 @@ export default function ClusterDetailPage() {
       nextParams.set('q', normalizedQuery);
     }
 
-    if (activeCollectionTab === 'nfts') {
+    if (activeCollectionTab === 'activities') {
       nextParams.delete('tab');
     } else {
       nextParams.set('tab', activeCollectionTab);
@@ -476,73 +444,15 @@ export default function ClusterDetailPage() {
           subtitle="On-chain cluster metadata, capacity footprint, and spore composition."
         />
 
-        <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <TerminalPanel variant="inset">
-            <TerminalPanelContent className="space-y-2">
-              <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
-                Total Spores
-              </div>
-              <div className="text-amber text-2xl font-semibold tabular-nums">
-                {formatNumber(cluster.sporesCount)}
-              </div>
-              <div className="font-mono text-xs text-slate-500">Full collection supply</div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-
-          {cluster.storageProfile && (
-            <TerminalPanel variant="inset">
-              <TerminalPanelContent className="space-y-2">
-                <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
-                  Storage Integrity
-                </div>
-                <div className="text-terminal-green text-base font-semibold">
-                  {formatStorageTierLabel(cluster.storageProfile.tier)}
-                </div>
-                <div className="font-mono text-xs text-slate-400">
-                  On-chain ratio:{' '}
-                  {(Number(cluster.storageProfile.fullyOnchainRatio) * 100).toFixed(2)}%
-                </div>
-              </TerminalPanelContent>
-            </TerminalPanel>
-          )}
-
-          <TerminalPanel variant="inset">
-            <TerminalPanelContent className="space-y-2">
-              <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
-                Live Capacity
-              </div>
-              <div className="font-mono text-lg text-white">{compactLiveCapacity}</div>
-              <div className="font-mono text-xs text-slate-500">Total live CKB in this cluster</div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-
-          <TerminalPanel variant="inset">
-            <TerminalPanelContent className="space-y-2">
-              <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
-                Occupied Capacity
-              </div>
-              <div className="font-mono text-lg text-white">{compactOccupiedCapacity}</div>
-              <div className="font-mono text-xs text-slate-500">
-                Occupied Ratio: {occupationPercent ? `${occupationPercent}%` : '--'}
-              </div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-
-          <TerminalPanel variant="inset">
-            <TerminalPanelContent className="space-y-2">
-              <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
-                Created At
-              </div>
-              <Link
-                href={`/blocks/${cluster.createdAtBlock}`}
-                className="text-terminal-green font-mono text-lg hover:underline"
-              >
-                #{formatNumber(cluster.createdAtBlock)}
-              </Link>
-              <div className="font-mono text-xs text-slate-500">Genesis block of this cluster</div>
-            </TerminalPanelContent>
-          </TerminalPanel>
-        </div>
+        <NftCollectionStatCards
+          totalCount={cluster.sporesCount}
+          totalLabel="Total Spores"
+          liveCapacity={cluster.liveCapacity}
+          liveOccupiedCapacity={cluster.liveOccupiedCapacity}
+          createdAtBlock={cluster.createdAtBlock}
+          storageTier={cluster.storageProfile?.tier}
+          storageOnchainRatio={cluster.storageProfile?.fullyOnchainRatio}
+        />
 
         <div className="grid gap-6 xl:grid-cols-5">
           <div className="space-y-6 xl:col-span-2">
@@ -733,55 +643,15 @@ export default function ClusterDetailPage() {
                     ) : (
                       <div className="space-y-2">
                         {clusterActivities.data.map((activity) => (
-                          <div
+                          <NftActivityCard
                             key={`${activity.txHash}-${activity.txIndex}`}
-                            className="space-y-2 rounded border border-slate-800 bg-slate-900/40 p-3"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="font-mono text-xs text-slate-400">
-                                Block{' '}
-                                <Link
-                                  href={`/blocks/${activity.blockNumber}`}
-                                  className="text-terminal-green hover:underline"
-                                >
-                                  #{formatNumber(activity.blockNumber)}
-                                </Link>
-                                <span className="mx-1 text-slate-500">•</span>
-                                Tx Index {activity.txIndex}
-                              </div>
-                              <div className="flex flex-wrap gap-1.5">
-                                {activity.actions.map((action) => (
-                                  <Badge
-                                    key={`${activity.txHash}-${activity.txIndex}-${action}`}
-                                    variant={
-                                      action === 'mint'
-                                        ? 'green'
-                                        : action === 'burn'
-                                          ? 'red'
-                                          : 'neutral'
-                                    }
-                                  >
-                                    {action}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                            <Link
-                              href={`/tx/${activity.txHash}`}
-                              className="block font-mono text-xs text-slate-300 hover:underline"
-                            >
-                              <HexDisplay
-                                value={activity.txHash}
-                                color="accent"
-                                size="sm"
-                                startChars={14}
-                                endChars={10}
-                              />
-                            </Link>
-                            <div className="font-mono text-xs text-slate-500">
-                              Timestamp: {activity.timestamp}
-                            </div>
-                          </div>
+                            txHash={activity.txHash}
+                            blockNumber={activity.blockNumber}
+                            txIndex={activity.txIndex}
+                            timestamp={activity.timestamp}
+                            actions={activity.actions}
+                            badgeActions
+                          />
                         ))}
                       </div>
                     )}
