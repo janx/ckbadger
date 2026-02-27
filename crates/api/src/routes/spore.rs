@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
@@ -15,8 +15,6 @@ use crate::utils::{
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT};
 use crate::AppState;
-
-type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -138,15 +136,6 @@ fn normalize_cluster_activity_action_filter(
         _ => Err(ApiError::bad_request(
             "Invalid cluster activity action filter. Expected one of: mint, transfer, burn",
         )),
-    }
-}
-
-fn cluster_activity_action_order(action: &str) -> i32 {
-    match action {
-        "mint" => 0,
-        "transfer" => 1,
-        "burn" => 2,
-        _ => 3,
     }
 }
 
@@ -1240,61 +1229,6 @@ fn serve_clusters_from_store(
     ))
 }
 
-fn collect_spore_lifecycle_actions(
-    state: &Arc<AppState>,
-    spore_id: &[u8],
-) -> Result<Vec<(Vec<u8>, String)>, ApiRouteError> {
-    let outpoints = state
-        .store
-        .list_spore_outpoints_by_spore_id(spore_id)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut created_txs: HashSet<Vec<u8>> = HashSet::new();
-    let mut consumed_txs: HashSet<Vec<u8>> = HashSet::new();
-
-    for (tx_hash, output_index) in outpoints {
-        created_txs.insert(tx_hash.clone());
-
-        if let Some(consumed) = state
-            .store
-            .get_consumed_cell_info(&tx_hash, output_index)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        {
-            let consumed_by_tx = consumed.consumed_by_tx.ok_or_else(|| {
-                ApiError::internal(format!(
-                    "consumed spore outpoint missing consumer tx: spore_id=0x{}, tx_hash=0x{}, output_index={}",
-                    hex::encode(spore_id),
-                    hex::encode(&tx_hash),
-                    output_index
-                ))
-            })?;
-            consumed_txs.insert(consumed_by_tx);
-        }
-    }
-
-    let mut lifecycle_txs = created_txs.clone();
-    lifecycle_txs.extend(consumed_txs.iter().cloned());
-    let mut rows = Vec::with_capacity(lifecycle_txs.len());
-    for tx_hash in lifecycle_txs {
-        let action = match (
-            created_txs.contains(&tx_hash),
-            consumed_txs.contains(&tx_hash),
-        ) {
-            (true, true) => "transfer",
-            (true, false) => "mint",
-            (false, true) => "burn",
-            (false, false) => {
-                return Err(ApiError::internal(format!(
-                    "invalid spore lifecycle action state: spore_id=0x{}, tx_hash=0x{}",
-                    hex::encode(spore_id),
-                    hex::encode(&tx_hash)
-                )))
-            }
-        };
-        rows.push((tx_hash, action.to_string()));
-    }
-    Ok(rows)
-}
-
 async fn get_cluster_holders(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
@@ -1382,77 +1316,46 @@ async fn get_cluster_activities(
         .transpose()?;
     let action_filter = normalize_cluster_activity_action_filter(params.action.as_deref())?;
 
-    let cluster_spores = state
+    // Validate cluster exists
+    let cluster_exists = state
         .store
-        .list_spores_by_cluster(&id, 100_000)
+        .get_spore(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .is_some();
+    if !cluster_exists {
+        return Err(ApiError::not_found("Cluster not found"));
+    }
+
+    // Use pre-computed collection activity index — single O(limit) prefix scan
+    let results = state
+        .store
+        .list_nft_collection_activities(&id, (limit as usize) + 1, cursor, action_filter.as_deref())
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    if cluster_spores.is_empty() {
-        let cluster_exists = state
-            .store
-            .get_spore(&id)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .is_some();
-        if !cluster_exists {
-            return Err(ApiError::not_found("Cluster not found"));
-        }
-    }
 
-    let mut tx_actions: HashMap<Vec<u8>, HashSet<String>> = HashMap::new();
-    for (spore_id, _) in cluster_spores {
-        let lifecycle_rows = collect_spore_lifecycle_actions(&state, &spore_id)?;
-        for (tx_hash, action) in lifecycle_rows {
-            tx_actions.entry(tx_hash).or_default().insert(action);
-        }
-    }
+    let has_more = results.len() as i64 > limit;
+    let page: Vec<ClusterActivityResponse> = results
+        .into_iter()
+        .take(limit as usize)
+        .map(|(block_number, tx_index, entry)| {
+            let actions: Vec<String> = entry
+                .actions
+                .iter()
+                .map(|a| match a {
+                    ckbadger_store::AssetAction::Mint => "mint".to_string(),
+                    ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
+                    ckbadger_store::AssetAction::Burn => "burn".to_string(),
+                })
+                .collect();
+            ClusterActivityResponse {
+                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                block_number,
+                tx_index,
+                timestamp: entry.timestamp_ms.to_string(),
+                actions,
+            }
+        })
+        .collect();
 
-    let mut rows = Vec::with_capacity(tx_actions.len());
-    for (tx_hash, actions_set) in tx_actions {
-        let (block_number, tx_index, tx_entry) = state
-            .store
-            .get_tx_by_hash(&tx_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "cluster lifecycle tx not found in tx index: cluster_id=0x{}, tx_hash=0x{}",
-                    hex::encode(&id),
-                    hex::encode(&tx_hash)
-                ))
-            })?;
-
-        let mut actions: Vec<String> = actions_set.into_iter().collect();
-        actions.sort_by_key(|action| cluster_activity_action_order(action));
-        if action_filter
-            .as_deref()
-            .map(|filter| !actions.iter().any(|action| action == filter))
-            .unwrap_or(false)
-        {
-            continue;
-        }
-
-        rows.push(ClusterActivityResponse {
-            tx_hash: format!("0x{}", hex::encode(&tx_hash)),
-            block_number,
-            tx_index,
-            timestamp: tx_entry.timestamp.to_string(),
-            actions,
-        });
-    }
-
-    rows.sort_by(|a, b| {
-        b.block_number
-            .cmp(&a.block_number)
-            .then_with(|| b.tx_index.cmp(&a.tx_index))
-            .then_with(|| b.tx_hash.cmp(&a.tx_hash))
-    });
-    if let Some((cursor_block, cursor_tx_index)) = cursor {
-        rows.retain(|row| {
-            row.block_number < cursor_block
-                || (row.block_number == cursor_block && row.tx_index < cursor_tx_index)
-        });
-    }
-
-    let has_more = rows.len() as i64 > limit;
-    let page: Vec<_> = rows.into_iter().take(limit as usize).collect();
     let next_cursor = if has_more {
         page.last()
             .map(|row| format!("{}:{}", row.block_number, row.tx_index))

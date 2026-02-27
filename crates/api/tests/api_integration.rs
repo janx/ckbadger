@@ -8,10 +8,11 @@ use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ActivityEntry, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta, DailyBlockStats,
-    DailyStats, DobEntry, DobExtra, DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats,
-    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
+    DailyBlockStats, DailyStats, DobEntry, DobExtra, DobStandard, EpochStats, HourlyStats,
+    LiveCellInfo, MinerStats, NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta,
+    NftEntry, NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -3411,11 +3412,11 @@ async fn test_spore_cluster_holders_supports_pagination() {
 async fn test_spore_cluster_activities_supports_action_filter() {
     let store = test_store();
     let cluster_id = [0x62u8; 32];
-    let spore_id = [0x72u8; 32];
     let mint_tx = vec![0x91; 32];
     let transfer_tx = vec![0x92; 32];
     let burn_tx = vec![0x93; 32];
 
+    // Register cluster so existence check passes
     store
         .put_spore_direct(
             &cluster_id,
@@ -3433,117 +3434,44 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         )
         .unwrap();
 
-    store
-        .put_spore_direct(
-            &spore_id,
-            &DobEntry {
-                standard: DobStandard::Spore,
-                collection_id: Some(cluster_id.to_vec()),
-                owner_lock_hash: Some(vec![0x41; 32]),
-                name: Some("SPORE-1".to_string()),
-                description: None,
-                is_live: false,
-                created_at_block: 100,
-                created_at_tx: mint_tx.clone(),
-                extra: DobExtra::Spore {
-                    content_type: "image/png".to_string(),
-                    content_length: 128,
-                    media_profile: SporeMediaProfile::default(),
-                },
-            },
-        )
-        .unwrap();
-
+    // Write pre-computed collection activities (the index the handler now reads)
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_spore_by_cluster(&cluster_id, &spore_id);
-    batch.put_spore_outpoint(&mint_tx, 0, &spore_id);
-    batch.put_spore_outpoint(&transfer_tx, 0, &spore_id);
-    batch.put_consumed_cell_with_consumer(
-        &mint_tx,
-        0,
-        &LiveCellInfo {
-            capacity: 100_00000000,
-            created_at_block: 100,
-            lock_script_hash: vec![0x51; 32],
-            lock_code_hash: vec![0x61; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x62; 20],
-            type_script_hash: Some(vec![0x63; 32]),
-            type_code_hash: Some(vec![0x64; 32]),
-            type_args: Some(spore_id.to_vec()),
-            data_size: 0,
-            occupied_capacity: 61_00000000,
-            udt_amount: None,
-        },
-        200,
-        Some(&transfer_tx),
-    );
-    batch.put_consumed_cell_with_consumer(
-        &transfer_tx,
-        0,
-        &LiveCellInfo {
-            capacity: 100_00000000,
-            created_at_block: 200,
-            lock_script_hash: vec![0x71; 32],
-            lock_code_hash: vec![0x72; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x73; 20],
-            type_script_hash: Some(vec![0x74; 32]),
-            type_code_hash: Some(vec![0x75; 32]),
-            type_args: Some(spore_id.to_vec()),
-            data_size: 0,
-            occupied_capacity: 61_00000000,
-            udt_amount: None,
-        },
-        300,
-        Some(&burn_tx),
-    );
-    batch.put_tx_hash_map(&mint_tx, 100, 0);
-    batch.put_tx_index(
+    batch.put_nft_collection_activity(
+        &cluster_id,
         100,
         0,
-        &TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_100,
-            inputs_count: 0,
-            outputs_count: 1,
-            fee: 0,
-            tx_size: 180,
-            cycles: None,
+        &NftCollectionActivityEntry {
+            tx_hash: mint_tx.clone(),
+            timestamp_ms: 1_700_000_100,
+            actions: vec![AssetAction::Mint],
         },
     );
-    batch.put_tx_hash_map(&transfer_tx, 200, 0);
-    batch.put_tx_index(
+    batch.put_nft_collection_activity(
+        &cluster_id,
         200,
         0,
-        &TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_200,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 0,
-            tx_size: 220,
-            cycles: None,
+        &NftCollectionActivityEntry {
+            tx_hash: transfer_tx.clone(),
+            timestamp_ms: 1_700_000_200,
+            actions: vec![AssetAction::Transfer],
         },
     );
-    batch.put_tx_hash_map(&burn_tx, 300, 0);
-    batch.put_tx_index(
+    batch.put_nft_collection_activity(
+        &cluster_id,
         300,
         0,
-        &TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_300,
-            inputs_count: 1,
-            outputs_count: 0,
-            fee: 0,
-            tx_size: 160,
-            cycles: None,
+        &NftCollectionActivityEntry {
+            tx_hash: burn_tx.clone(),
+            timestamp_ms: 1_700_000_300,
+            actions: vec![AssetAction::Burn],
         },
     );
     batch.commit().unwrap();
 
     let config = test_config(store);
     let app = create_router(config).await;
+
+    // All activities — newest first
     let request = Request::builder()
         .uri(format!(
             "/api/v1/spore/clusters/0x{}/activities?limit=20",
@@ -3563,6 +3491,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
     assert_eq!(json["data"][2]["blockNumber"], 100);
     assert_eq!(json["data"][2]["actions"][0], "mint");
 
+    // Action filter
     let request = Request::builder()
         .uri(format!(
             "/api/v1/spore/clusters/0x{}/activities?limit=20&action=transfer",
@@ -3577,6 +3506,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["actions"][0], "transfer");
 
+    // Invalid action filter
     let request = Request::builder()
         .uri(format!(
             "/api/v1/spore/clusters/0x{}/activities?action=invalid",
