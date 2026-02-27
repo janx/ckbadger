@@ -358,11 +358,17 @@ impl<'a> StoreBatch<'a> {
     pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
         self.batch.put_cf(self.store.cf_stats(), key, spore_id);
+        // Reverse index: spore_id → outpoints
+        let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
+        self.batch
+            .put_cf(self.store.cf_stats(), rev_key, &[] as &[u8]);
     }
 
-    pub fn delete_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+    pub fn delete_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
         self.batch.delete_cf(self.store.cf_stats(), key);
+        let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
+        self.batch.delete_cf(self.store.cf_stats(), rev_key);
     }
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {

@@ -158,37 +158,24 @@ impl CkbadgerStore {
     }
 
     /// List all historical spore outpoints recorded for a spore ID.
+    /// Uses the reverse index (spore_id → outpoints) for O(log N) prefix scan.
     pub fn list_spore_outpoints_by_spore_id(
         &self,
         spore_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
-        let prefix = [keys::STATS_PREFIX_SPORE_OUTPOINT];
+        let prefix = keys::encode_spore_outpoint_by_id_prefix(spore_id);
         let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter.flatten() {
-            let (key, value) = item;
-            if key.first() != Some(&keys::STATS_PREFIX_SPORE_OUTPOINT) {
+            let (key, _value) = item;
+            if key.len() != keys::SPORE_OUTPOINT_BY_ID_KEY_SIZE
+                || key[0] != keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID
+                || &key[1..33] != spore_id
+            {
                 break;
             }
-            if key.len() != keys::SPORE_OUTPOINT_KEY_SIZE {
-                anyhow::bail!(
-                    "invalid spore outpoint key length: expected {}, got {}",
-                    keys::SPORE_OUTPOINT_KEY_SIZE,
-                    key.len()
-                );
-            }
-            if value.len() < 32 {
-                anyhow::bail!(
-                    "invalid spore outpoint value length: expected >= 32, got {}",
-                    value.len()
-                );
-            }
-            if &value[..32] != spore_id {
-                continue;
-            }
-
-            outpoints.push(keys::decode_spore_outpoint_key(&key));
+            outpoints.push(keys::decode_spore_outpoint_by_id_key(&key));
         }
 
         Ok(outpoints)

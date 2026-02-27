@@ -117,6 +117,7 @@ pub mod stats_prefix {
     pub const MNFT_CLASS_OUTPOINT: u8 = 0x17;
     pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
     pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
+    pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
 }
 
 // Flat re-exports for convenience
@@ -145,6 +146,7 @@ pub const STATS_PREFIX_NFT_TYPE_INDEX: u8 = stats_prefix::NFT_TYPE_INDEX;
 pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOINT;
 pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
 pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
+pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -263,6 +265,37 @@ pub fn encode_spore_outpoint_key(
 
 pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
+}
+
+/// Spore outpoint reverse index key: prefix(1B) + spore_id(32B) + outpoint(34B)
+pub const SPORE_OUTPOINT_BY_ID_KEY_SIZE: usize = 67;
+
+/// Prefix for scanning all outpoints of a given spore: prefix(1B) + spore_id(32B)
+pub const SPORE_OUTPOINT_BY_ID_PREFIX_SIZE: usize = 33;
+
+pub fn encode_spore_outpoint_by_id_key(
+    spore_id: &[u8],
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; SPORE_OUTPOINT_BY_ID_KEY_SIZE] {
+    let mut key = [0u8; SPORE_OUTPOINT_BY_ID_KEY_SIZE];
+    key[0] = STATS_PREFIX_SPORE_OUTPOINT_BY_ID;
+    key[1..33].copy_from_slice(&spore_id[..32]);
+    key[33..67].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+pub fn encode_spore_outpoint_by_id_prefix(
+    spore_id: &[u8],
+) -> [u8; SPORE_OUTPOINT_BY_ID_PREFIX_SIZE] {
+    let mut prefix = [0u8; SPORE_OUTPOINT_BY_ID_PREFIX_SIZE];
+    prefix[0] = STATS_PREFIX_SPORE_OUTPOINT_BY_ID;
+    prefix[1..33].copy_from_slice(&spore_id[..32]);
+    prefix
+}
+
+pub fn decode_spore_outpoint_by_id_key(key: &[u8]) -> (Vec<u8>, i16) {
+    decode_outpoint(&key[33..67])
 }
 
 /// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
@@ -732,6 +765,23 @@ mod tests {
         let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 7);
+    }
+
+    #[test]
+    fn test_spore_outpoint_by_id_key_roundtrip() {
+        let spore_id = [0xCCu8; 32];
+        let tx_hash = [0xDDu8; 32];
+        let key = encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, 3);
+        assert_eq!(key.len(), SPORE_OUTPOINT_BY_ID_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_SPORE_OUTPOINT_BY_ID);
+        assert_eq!(&key[1..33], &spore_id);
+        let (decoded_tx_hash, decoded_output_index) = decode_spore_outpoint_by_id_key(&key);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        assert_eq!(decoded_output_index, 3);
+
+        let prefix = encode_spore_outpoint_by_id_prefix(&spore_id);
+        assert_eq!(prefix.len(), SPORE_OUTPOINT_BY_ID_PREFIX_SIZE);
+        assert!(key.starts_with(&prefix));
     }
 
     #[test]
