@@ -12,6 +12,8 @@ vi.mock('@/lib/api', () => ({
     getMinerAddressDistributionChart: vi.fn(),
     getDotbitItemDetail: vi.fn(),
     getDotbitItemActivities: vi.fn(),
+    getDidCkbItemDetail: vi.fn(),
+    getDidCkbItemActivities: vi.fn(),
     getMnftItemDetail: vi.fn(),
     getMnftItemActivities: vi.fn(),
   },
@@ -229,6 +231,50 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('## Activities');
     expect(result.body).toContain('transfer');
     expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xdotbit', {
+      limit: 20,
+      cursor: undefined,
+      action: undefined,
+    });
+  });
+
+  it('renders did:ckb item detail markdown', async () => {
+    vi.mocked(api.getDidCkbItemDetail).mockResolvedValue({
+      nftId: '0xdid',
+      name: 'did:alice.ckb',
+      standard: 'did_ckb',
+      ownerLockHash: '0xowner',
+      isLive: false,
+      createdAtBlock: 456,
+      txHash: null,
+      outputIndex: null,
+    } as any);
+    vi.mocked(api.getDidCkbItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xtx',
+          blockNumber: 456,
+          txIndex: 0,
+          timestamp: '1700000000',
+          actions: ['transfer'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/nfts/did/0xdid'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# did:ckb did:alice.ckb');
+    expect(result.body).toContain('## Identity');
+    expect(result.body).toContain('## Activities');
+    expect(result.body).toContain('transfer');
+    expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xdid', {
       limit: 20,
       cursor: undefined,
       action: undefined,

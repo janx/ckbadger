@@ -124,6 +124,37 @@ const mockDotbitNftAssets = {
   nextCursor: null,
 };
 
+const mockDidCkbNftAssets = {
+  data: [
+    {
+      id: '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
+      assetType: 'nft' as const,
+      standard: 'did_ckb',
+      name: 'did:ckb',
+      symbol: null,
+      iconUrl: null,
+      published: false,
+      famous: false,
+      tags: null,
+      holdersCount: 6400,
+      transfersCount: 32000,
+      transfers24h: 120,
+      decimals: null,
+      totalSupply: '420000',
+      contentType: null,
+      contentSize: null,
+      clusterId: null,
+      clusterName: null,
+      liveCapacity: '8000000000',
+      liveOccupiedCapacity: '5000000000',
+    },
+  ],
+  total: 1,
+  limit: 20,
+  hasMore: false,
+  nextCursor: null,
+};
+
 const mockMixedNftAssets = {
   data: [
     {
@@ -535,6 +566,19 @@ describe('AssetsPage', () => {
       const link = screen.getByRole('link', { name: /\.bit/i });
       expect(link).toHaveAttribute('href', '/nfts/dotbit');
       expect(screen.getAllByText('DOTBIT').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('uses did:ckb slug for did:ckb NFT detail links', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockDidCkbNftAssets);
+
+    render(<AssetsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /NFTs/i }));
+
+    await waitFor(() => {
+      const link = screen.getByRole('link', { name: /did:ckb/i });
+      expect(link).toHaveAttribute('href', '/nfts/did:ckb');
+      expect(screen.getAllByText('did:ckb').length).toBeGreaterThan(0);
     });
   });
 

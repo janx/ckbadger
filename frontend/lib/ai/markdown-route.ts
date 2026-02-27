@@ -47,6 +47,7 @@ export type ParsedMarkdownPage =
   | { kind: 'nfts_list'; pathname: '/nfts' }
   | { kind: 'nft_detail'; pathname: string; sporeId: string }
   | { kind: 'dotbit_item_detail'; pathname: string; nftId: string }
+  | { kind: 'did_ckb_item_detail'; pathname: string; nftId: string }
   | { kind: 'mnft_item_detail'; pathname: string; nftId: string }
   | { kind: 'script_by_code_hash'; pathname: string; codeHash: string }
   | { kind: 'scripts_list'; pathname: '/scripts' }
@@ -75,6 +76,7 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/nfts',
   '/nfts/{sporeId}',
   '/nfts/dotbit/{nftId}',
+  '/nfts/did/{nftId}',
   '/nfts/mnft/{nftId}',
   '/script/{codeHash}',
   '/scripts',
@@ -181,6 +183,15 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
       kind: 'dotbit_item_detail',
       pathname: normalized,
       nftId: decodeParam(dotbitItemMatch[1]),
+    };
+  }
+
+  const didItemMatch = normalized.match(/^\/nfts\/did\/([^/]+)$/);
+  if (didItemMatch) {
+    return {
+      kind: 'did_ckb_item_detail',
+      pathname: normalized,
+      nftId: decodeParam(didItemMatch[1]),
     };
   }
 

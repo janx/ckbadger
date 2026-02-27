@@ -8,8 +8,13 @@ import {
 export function resolveSearchRoute(input: string): string | null {
   const intent = parseSearchIntent(input);
   const body = intent.body.trim();
+  const bodyLower = body.toLowerCase();
 
   if (!body) return null;
+
+  if (bodyLower === 'did:ckb' || bodyLower === 'did_ckb') {
+    return '/nfts/did:ckb';
+  }
 
   if (intent.prefix === 'block') {
     if (/^[0-9]+$/.test(body)) return `/blocks/${body}`;

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DID_CKB_COLLECTION_ID,
   DOTBIT_COLLECTION_ID,
+  isDidCkbAlias,
   isDotbitAlias,
   normalizeNftAssetId,
   toNftDetailSlug,
@@ -25,9 +27,26 @@ describe('nft collection id mapping', () => {
     expect(normalizeNftAssetId(id)).toBe(id);
   });
 
+  it('normalizes did:ckb aliases to the sentinel collection id', () => {
+    expect(normalizeNftAssetId('did:ckb')).toBe(DID_CKB_COLLECTION_ID);
+    expect(normalizeNftAssetId('did_ckb')).toBe(DID_CKB_COLLECTION_ID);
+  });
+
+  it('detects did:ckb aliases and sentinel id', () => {
+    expect(isDidCkbAlias('did:ckb')).toBe(true);
+    expect(isDidCkbAlias('DID_CKB')).toBe(true);
+    expect(isDidCkbAlias(DID_CKB_COLLECTION_ID)).toBe(true);
+    expect(isDidCkbAlias('0x1234')).toBe(false);
+  });
+
   it('maps dotbit assets to dotbit slug', () => {
     expect(toNftDetailSlug(DOTBIT_COLLECTION_ID, 'dotbit')).toBe('dotbit');
     expect(toNftDetailSlug(DOTBIT_COLLECTION_ID)).toBe('dotbit');
+  });
+
+  it('maps did:ckb assets to did:ckb slug', () => {
+    expect(toNftDetailSlug(DID_CKB_COLLECTION_ID, 'did_ckb')).toBe('did:ckb');
+    expect(toNftDetailSlug(DID_CKB_COLLECTION_ID)).toBe('did:ckb');
   });
 
   it('keeps non-dotbit assets as original slug', () => {

@@ -35,8 +35,16 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_dotbit_item_detail),
         )
         .route(
+            "/assets/nfts/did/items/{nft_id}",
+            get(get_did_ckb_item_detail),
+        )
+        .route(
             "/assets/nfts/dotbit/items/{nft_id}/activities",
             get(list_dotbit_item_activities),
+        )
+        .route(
+            "/assets/nfts/did/items/{nft_id}/activities",
+            get(list_did_ckb_item_activities),
         )
         .route(
             "/assets/nfts/items/{nft_id}/activities",
@@ -717,6 +725,9 @@ fn decode_nft_collection_id(
     if normalized == "dotbit" || normalized == ".bit" {
         return Ok(DOTBIT_SENTINEL_COLLECTION.to_vec());
     }
+    if normalized == "did:ckb" || normalized == "did_ckb" {
+        return Ok(DID_CKB_SENTINEL_COLLECTION.to_vec());
+    }
     hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
         .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))
 }
@@ -1332,6 +1343,7 @@ fn build_nft_item_activities_response(
     let lifecycle_standard = match standard {
         ckbadger_store::types::NftStandard::MnftToken => NftLifecycleStandard::MnftToken,
         ckbadger_store::types::NftStandard::DotBit => NftLifecycleStandard::DotBit,
+        ckbadger_store::types::NftStandard::DidCkb => NftLifecycleStandard::DidCkb,
         _ => {
             return Err(ApiError::internal(format!(
                 "unsupported nft standard for item activities: standard={}",
@@ -1465,6 +1477,39 @@ async fn list_dotbit_item_activities(
         &state,
         &nft_id_bytes,
         entry.standard,
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
+}
+
+async fn list_did_ckb_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_spore(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("did:ckb item not found"))?;
+    if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
+        return Err(ApiError::bad_request("NFT item is not a did:ckb identity"));
+    }
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &nft_id_bytes,
+        ckbadger_store::types::NftStandard::DidCkb,
         limit,
         cursor,
         action_filter.as_deref(),
@@ -2387,6 +2432,37 @@ async fn get_dotbit_item_detail(
         expired_at,
         tx_hash,
         output_index,
+    })
+}
+
+async fn get_did_ckb_item_detail(
+    State(state): State<Arc<AppState>>,
+    Path(nft_id): Path<String>,
+) -> ApiResult<NftCollectionItemResponse> {
+    let nft_id_bytes = decode_nft_item_id(&nft_id)?;
+    let entry = state
+        .store
+        .get_spore(&nft_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("did:ckb item not found"))?;
+
+    if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
+        return Err(ApiError::bad_request("NFT item is not a did:ckb identity"));
+    }
+
+    ok(NftCollectionItemResponse {
+        nft_id: format!("0x{}", hex::encode(&nft_id_bytes)),
+        name: entry.name,
+        standard: "did_ckb".to_string(),
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        is_live: entry.is_live,
+        created_at_block: entry.created_at_block,
+        expired_at: None,
+        tx_hash: None,
+        output_index: None,
     })
 }
 

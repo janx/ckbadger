@@ -26,7 +26,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
+import { isDidCkbAlias, isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';
@@ -51,7 +51,8 @@ export default function SporeDetailPage() {
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [dotbitStatusFilter, setDotbitStatusFilter] = useState<NftItemStatusFilter>('all');
+  const [collectionStatusSelection, setCollectionStatusSelection] =
+    useState<NftItemStatusFilter>('all');
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>
     isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'nfts'
   );
@@ -64,6 +65,7 @@ export default function SporeDetailPage() {
   const { reset: resetCollectionActivitiesPagination } = collectionActivitiesPagination;
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
+  const isDidCkbCollection = isDidCkbAlias(rawAssetId);
   const assetId = normalizeNftAssetId(rawAssetId);
 
   useEffect(() => {
@@ -77,11 +79,12 @@ export default function SporeDetailPage() {
   const sporeQuery = useQuery({
     queryKey: ['spore', rawAssetId],
     queryFn: () => api.getSporeNft(assetId),
-    enabled: !isDotbitCollection,
+    enabled: !isDotbitCollection && !isDidCkbCollection,
     retry: false,
   });
   const spore = sporeQuery.data;
-  const shouldQueryCollection = isDotbitCollection || (!spore && isNotFoundError(sporeQuery.error));
+  const shouldQueryCollection =
+    isDotbitCollection || isDidCkbCollection || (!spore && isNotFoundError(sporeQuery.error));
 
   const collectionQuery = useQuery({
     queryKey: ['nft-collection', assetId],
@@ -95,8 +98,18 @@ export default function SporeDetailPage() {
     isDotbitCollection ||
     (!!collection &&
       (isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'));
-  const collectionSearchKeyword = isDotbitCollectionView ? searchKeyword : '';
-  const collectionStatusFilter = isDotbitCollectionView ? dotbitStatusFilter : 'all';
+  const isDidCkbCollectionView =
+    isDidCkbCollection ||
+    (!!collection &&
+      (isDidCkbAlias(collection.collectionId) ||
+        collection.standard.toLowerCase() === 'did_ckb' ||
+        collection.standard.toLowerCase() === 'did:ckb'));
+  const supportsCollectionFilters = isDotbitCollectionView || isDidCkbCollectionView;
+  const collectionSearchKeyword = supportsCollectionFilters ? searchKeyword : '';
+  const collectionStatusFilter = supportsCollectionFilters ? collectionStatusSelection : 'all';
+  const collectionSearchLabel = isDotbitCollectionView ? 'Search .bit' : 'Search did:ckb';
+  const collectionInactiveStatusLabel =
+    isDotbitCollectionView || isDidCkbCollectionView ? 'Recycled' : 'Burned';
 
   const { data: cluster } = useQuery({
     queryKey: ['cluster', spore?.clusterId],
@@ -189,7 +202,7 @@ export default function SporeDetailPage() {
         limit: 20,
         cursor: collectionItemsPagination.cursor,
         search: collectionSearchKeyword || undefined,
-        status: isDotbitCollectionView ? collectionStatusFilter : undefined,
+        status: supportsCollectionFilters ? collectionStatusFilter : undefined,
       }),
     enabled: !!collection,
     placeholderData: keepPreviousData,
@@ -511,26 +524,28 @@ export default function SporeDetailPage() {
                         </TabsTrigger>
                         <TabsTrigger value="holders">Holders</TabsTrigger>
                       </TabsList>
-                      {activeCollectionTab === 'nfts' && isDotbitCollectionView && (
+                      {activeCollectionTab === 'nfts' && supportsCollectionFilters && (
                         <div className="flex items-center gap-2">
                           <select
                             value={collectionStatusFilter}
                             onChange={(event) =>
-                              setDotbitStatusFilter(event.target.value as NftItemStatusFilter)
+                              setCollectionStatusSelection(
+                                event.target.value as NftItemStatusFilter
+                              )
                             }
                             aria-label="Status Filter"
                             className="focus:border-terminal-green rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors"
                           >
                             <option value="all">All</option>
                             <option value="live">Live</option>
-                            <option value="recycled">Recycled</option>
+                            <option value="recycled">{collectionInactiveStatusLabel}</option>
                           </select>
                           <input
                             type="text"
                             value={searchInput}
                             onChange={(event) => setSearchInput(event.target.value)}
-                            placeholder="Search .bit"
-                            aria-label="Search .bit"
+                            placeholder={collectionSearchLabel}
+                            aria-label={collectionSearchLabel}
                             className="focus:border-terminal-green w-44 rounded border border-slate-700 bg-slate-900 px-2.5 py-1.5 font-mono text-xs text-slate-200 outline-none transition-colors placeholder:text-slate-500"
                           />
                           {isCollectionItemsFetching && (
@@ -750,6 +765,14 @@ export default function SporeDetailPage() {
                                 >
                                   {item.name || item.nftId}
                                 </Link>
+                              ) : item.standard.toLowerCase() === 'did_ckb' ||
+                                item.standard.toLowerCase() === 'did:ckb' ? (
+                                <Link
+                                  href={`/nfts/did/${encodeURIComponent(item.nftId)}`}
+                                  className="hover:text-terminal-green font-mono text-sm text-white hover:underline"
+                                >
+                                  {item.name || item.nftId}
+                                </Link>
                               ) : (
                                 <div className="font-mono text-sm text-white">
                                   {item.name || item.nftId}
@@ -758,11 +781,24 @@ export default function SporeDetailPage() {
                               {item.isLive ? (
                                 <Badge variant="green">Live</Badge>
                               ) : (
-                                <Badge variant="red">Burned</Badge>
+                                <Badge variant="red">
+                                  {item.standard.toLowerCase() === 'did_ckb' ||
+                                  item.standard.toLowerCase() === 'did:ckb'
+                                    ? 'Recycled'
+                                    : 'Burned'}
+                                </Badge>
                               )}
                             </div>
                             {item.standard.toLowerCase() === 'm-nft' ? (
                               <Link href={`/nfts/mnft/${item.nftId}`} className="hover:underline">
+                                <HexDisplay value={item.nftId} color="accent" size="sm" />
+                              </Link>
+                            ) : item.standard.toLowerCase() === 'did_ckb' ||
+                              item.standard.toLowerCase() === 'did:ckb' ? (
+                              <Link
+                                href={`/nfts/did/${encodeURIComponent(item.nftId)}`}
+                                className="hover:underline"
+                              >
                                 <HexDisplay value={item.nftId} color="accent" size="sm" />
                               </Link>
                             ) : (

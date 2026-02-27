@@ -28,6 +28,11 @@ describe('resolveSearchRoute', () => {
     expect(resolveSearchRoute(`tx:${hash}`)).toBe(`/tx/${hash}`);
   });
 
+  it('routes did:ckb aliases to did collection detail', () => {
+    expect(resolveSearchRoute('did:ckb')).toBe('/nfts/did:ckb');
+    expect(resolveSearchRoute('DID_CKB')).toBe('/nfts/did:ckb');
+  });
+
   it('returns null for unknown query', () => {
     expect(resolveSearchRoute('hello world')).toBeNull();
   });

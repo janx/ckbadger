@@ -46,6 +46,7 @@ describe('parseMarkdownSourcePath', () => {
     expect(parseMarkdownSourcePath('/tx/0x123').kind).toBe('tx_detail');
     expect(parseMarkdownSourcePath('/charts/hash-rate').kind).toBe('chart_detail');
     expect(parseMarkdownSourcePath('/nfts/dotbit/0x123').kind).toBe('dotbit_item_detail');
+    expect(parseMarkdownSourcePath('/nfts/did/0x123').kind).toBe('did_ckb_item_detail');
     expect(parseMarkdownSourcePath('/nfts/mnft/0x123').kind).toBe('mnft_item_detail');
     expect(parseMarkdownSourcePath('/unknown/path').kind).toBe('unknown');
   });

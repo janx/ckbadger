@@ -1124,6 +1124,48 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+    case 'did_ckb_item_detail': {
+      const limit = parseLimit(searchParams);
+      const cursor = searchParams.get('cursor') ?? undefined;
+      const action = parseMnftActivityAction(searchParams.get('action'));
+      const [item, activities] = await Promise.all([
+        api.getDidCkbItemDetail(page.nftId),
+        api.getDidCkbItemActivities(page.nftId, { limit, cursor, action }),
+      ]);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# did:ckb ${item.name ?? hashShort(item.nftId, 14, 12)}`,
+        '',
+        '## Identity',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['nftId', item.nftId],
+            ['name', item.name ?? '-'],
+            ['standard', item.standard],
+            ['isLive', item.isLive],
+            ['ownerLockHash', item.ownerLockHash ?? '-'],
+            ['createdAtBlock', item.createdAtBlock],
+            ['txHash', item.txHash ?? '-'],
+            ['outputIndex', item.outputIndex ?? '-'],
+          ]
+        ),
+        '',
+        '## Activities',
+        '',
+        markdownTable(
+          ['txHash', 'blockNumber', 'txIndex', 'timestamp', 'actions'],
+          activities.data.map((activity) => [
+            hashShort(activity.txHash),
+            activity.blockNumber,
+            activity.txIndex,
+            activity.timestamp,
+            activity.actions.join(','),
+          ])
+        ),
+      ]);
+      return { status: 200, body };
+    }
     case 'clusters_detail': {
       const limit = parseLimit(searchParams);
       const cursor = searchParams.get('cursor') ?? undefined;

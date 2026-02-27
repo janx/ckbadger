@@ -4587,6 +4587,221 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
 }
 
 #[tokio::test]
+async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
+    let store = test_store();
+    let collection_id = b"did_ckb_collection______________".to_vec();
+    let did_id = [0xA5u8; 32];
+
+    store
+        .put_spore_direct(
+            &did_id,
+            &DobEntry {
+                standard: DobStandard::DidCkb,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0x21; 32]),
+                name: Some("did:alice.ckb".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 888,
+                created_at_tx: vec![0x33; 32],
+                extra: DobExtra::DidCkb,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: None,
+            standard: NftStandard::DidCkb,
+            total_count: 1,
+            live_count: 1,
+        },
+    );
+    batch.put_nft_by_collection(&collection_id, &did_id);
+    batch.commit().unwrap();
+
+    store
+        .put_nft_daily_delta(
+            &collection_id,
+            20240115,
+            &NftDailyDelta {
+                live_capacity_delta: 120,
+                live_occupied_capacity_delta: 70,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/did:ckb")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["standard"], "did_ckb");
+    assert_eq!(json["name"], "did:ckb");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/did_ckb/items?limit=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["name"], "did:alice.ckb");
+    assert_eq!(json["data"][0]["standard"], "did_ckb");
+
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/did%3Ackb/charts/occupation")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["title"], "did:ckb Capacity Occupation");
+    assert_eq!(json["data"][0]["values"]["occupied"], "70");
+    assert_eq!(json["data"][0]["values"]["unoccupied"], "50");
+}
+
+#[tokio::test]
+async fn test_assets_did_ckb_item_detail_and_activities() {
+    let store = test_store();
+    let did_id = [0xB7u8; 32];
+    let mint_tx = vec![0x91; 32];
+    let transfer_tx = vec![0x92; 32];
+
+    store
+        .put_spore_direct(
+            &did_id,
+            &DobEntry {
+                standard: DobStandard::DidCkb,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0x31; 32]),
+                name: Some("did:alice.ckb".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: mint_tx.clone(),
+                extra: DobExtra::DidCkb,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_spore_outpoint(&mint_tx, 0, &did_id);
+    batch.put_spore_outpoint(&transfer_tx, 0, &did_id);
+    batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0x41; 32],
+            lock_code_hash: vec![0x51; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x61; 20],
+            type_script_hash: Some(vec![0x71; 32]),
+            type_code_hash: Some(vec![0x81; 32]),
+            type_args: Some(did_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        200,
+        Some(&transfer_tx),
+    );
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/did/items/0x{}",
+            hex::encode(did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["name"], "did:alice.ckb");
+    assert_eq!(json["standard"], "did_ckb");
+    assert_eq!(json["isLive"], true);
+    assert_eq!(json["txHash"], serde_json::Value::Null);
+    assert_eq!(json["outputIndex"], serde_json::Value::Null);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/did/items/0x{}/activities?limit=20",
+            hex::encode(did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+    assert_eq!(json["data"][0]["blockNumber"], 200);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+    assert_eq!(json["data"][1]["blockNumber"], 100);
+    assert_eq!(json["data"][1]["actions"][0], "mint");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/did/items/0x{}/activities?limit=20&action=transfer",
+            hex::encode(did_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["data"].as_array().unwrap().len(), 1);
+    assert_eq!(json["data"][0]["actions"][0], "transfer");
+}
+
+#[tokio::test]
 async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missing() {
     let store = test_store();
     let collection_id = b"dotbit_collection_______________".to_vec();

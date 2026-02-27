@@ -1695,6 +1695,24 @@ export const api = {
     );
   },
 
+  getDidCkbItemDetail: (nftId: string): Promise<NftCollectionItem> => {
+    return fetchApi(`/assets/nfts/did/items/${encodeURIComponent(nftId)}`);
+  },
+
+  getDidCkbItemActivities: (
+    nftId: string,
+    params: MnftItemActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<MnftItemActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/nfts/did/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
   getMnftItemDetail: (nftId: string): Promise<MnftItemDetail> => {
     return fetchApi(`/assets/nfts/items/${encodeURIComponent(nftId)}`);
   },

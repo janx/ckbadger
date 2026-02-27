@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import SporeDetailPage from '@/app/nfts/[sporeId]/page';
 import { api } from '@/lib/api';
-import { DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
+import { DID_CKB_COLLECTION_ID, DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -558,6 +558,47 @@ describe('SporeDetailPage', () => {
     });
   });
 
+  it('searches did:ckb collection items by keyword and status', async () => {
+    mockParams = { sporeId: 'did:ckb' };
+    vi.mocked(api.getNftCollection).mockResolvedValue({
+      ...mockCollection,
+      collectionId: DID_CKB_COLLECTION_ID,
+      standard: 'did_ckb',
+      name: 'did:ckb',
+    } as any);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+        DID_CKB_COLLECTION_ID,
+        expect.objectContaining({ limit: 20, search: undefined, status: 'all' })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Status Filter'), {
+      target: { value: 'recycled' },
+    });
+
+    await waitFor(() => {
+      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+        DID_CKB_COLLECTION_ID,
+        expect.objectContaining({ limit: 20, search: undefined, status: 'recycled' })
+      );
+    });
+
+    fireEvent.change(screen.getByLabelText('Search did:ckb'), {
+      target: { value: 'alice' },
+    });
+
+    await waitFor(() => {
+      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+        DID_CKB_COLLECTION_ID,
+        expect.objectContaining({ limit: 20, search: 'alice', status: 'recycled' })
+      );
+    });
+  });
+
   it('shows recycled status without cell text and links to dotbit detail page', async () => {
     mockParams = { sporeId: 'dotbit' };
     vi.mocked(api.getNftCollection).mockResolvedValue({
@@ -622,6 +663,23 @@ describe('SporeDetailPage', () => {
     expect(api.getSporeNft).not.toHaveBeenCalled();
   });
 
+  it('normalizes did:ckb slug before querying collection API', async () => {
+    mockParams = { sporeId: 'did:ckb' };
+    vi.mocked(api.getNftCollection).mockResolvedValue({
+      ...mockCollection,
+      collectionId: DID_CKB_COLLECTION_ID,
+      standard: 'did_ckb',
+      name: 'did:ckb',
+    } as any);
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getNftCollection).toHaveBeenCalledWith(DID_CKB_COLLECTION_ID);
+    });
+    expect(api.getSporeNft).not.toHaveBeenCalled();
+  });
+
   it('links mnft collection item to mnft asset detail page', async () => {
     vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
@@ -648,6 +706,41 @@ describe('SporeDetailPage', () => {
       const link = screen.getByRole('link', { name: '0x1111' });
       expect(link).toBeInTheDocument();
       expect(link).toHaveAttribute('href', '/nfts/mnft/0x1111');
+    });
+  });
+
+  it('links did:ckb collection item to did detail page', async () => {
+    mockParams = { sporeId: 'did:ckb' };
+    vi.mocked(api.getNftCollection).mockResolvedValue({
+      ...mockCollection,
+      collectionId: DID_CKB_COLLECTION_ID,
+      standard: 'did_ckb',
+      name: 'did:ckb',
+    } as any);
+    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+      data: [
+        {
+          nftId: '0x1111',
+          name: 'did:alice.ckb',
+          standard: 'did_ckb',
+          ownerLockHash: '0x2222',
+          isLive: false,
+          createdAtBlock: 100,
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<SporeDetailPage />);
+
+    await waitFor(() => {
+      const link = screen.getByRole('link', { name: 'did:alice.ckb' });
+      expect(link).toBeInTheDocument();
+      expect(link).toHaveAttribute('href', '/nfts/did/0x1111');
+      expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { api, resolveApiBase } from '@/lib/api';
-import { DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
+import { DID_CKB_COLLECTION_ID, DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 
@@ -436,6 +436,26 @@ describe('api', () => {
       expect(collection.standard).toBe('dotbit');
     });
 
+    it('normalizes did:ckb alias for nft collection detail requests', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {
+          expect(params.collectionId).toBe(DID_CKB_COLLECTION_ID);
+          return HttpResponse.json({
+            collectionId: DID_CKB_COLLECTION_ID,
+            standard: 'did_ckb',
+            name: 'did:ckb',
+            totalCount: 10,
+            liveCount: 7,
+            liveCapacity: '1000',
+            liveOccupiedCapacity: '600',
+          });
+        })
+      );
+
+      const collection = await api.getNftCollection('did:ckb');
+      expect(collection.standard).toBe('did_ckb');
+    });
+
     it('fetches nft collection occupation chart', async () => {
       server.use(
         http.get('*/api/v1/assets/nfts/:collectionId/charts/occupation', ({ params }) => {
@@ -643,6 +663,64 @@ describe('api', () => {
       );
 
       const activities = await api.getDotbitItemActivities('0xabc', {
+        limit: 20,
+        cursor: '300:0',
+        action: 'transfer',
+      });
+      expect(activities.data).toHaveLength(1);
+      expect(activities.data[0].actions[0]).toBe('transfer');
+    });
+
+    it('fetches did:ckb item detail', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/did/items/:nftId', ({ params }) => {
+          expect(params.nftId).toBe('0xdid');
+          return HttpResponse.json({
+            nftId: '0xdid',
+            name: 'did:alice.ckb',
+            standard: 'did_ckb',
+            ownerLockHash: '0xowner',
+            isLive: true,
+            createdAtBlock: 321,
+            txHash: null,
+            outputIndex: null,
+          });
+        })
+      );
+
+      const detail = await api.getDidCkbItemDetail('0xdid');
+      expect(detail.nftId).toBe('0xdid');
+      expect(detail.name).toBe('did:alice.ckb');
+      expect(detail.standard).toBe('did_ckb');
+      expect(detail.isLive).toBe(true);
+    });
+
+    it('fetches did:ckb item activities with query params', async () => {
+      server.use(
+        http.get('*/api/v1/assets/nfts/did/items/:nftId/activities', ({ request, params }) => {
+          const url = new URL(request.url);
+          expect(params.nftId).toBe('0xdid');
+          expect(url.searchParams.get('limit')).toBe('20');
+          expect(url.searchParams.get('cursor')).toBe('300:0');
+          expect(url.searchParams.get('action')).toBe('transfer');
+          return HttpResponse.json({
+            data: [
+              {
+                txHash: '0xtx',
+                blockNumber: 300,
+                txIndex: 0,
+                timestamp: '1700000300',
+                actions: ['transfer'],
+              },
+            ],
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+
+      const activities = await api.getDidCkbItemActivities('0xdid', {
         limit: 20,
         cursor: '300:0',
         action: 'transfer',

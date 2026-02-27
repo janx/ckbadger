@@ -49,6 +49,7 @@ Known markdown page routes:
 - `/nfts`
 - `/nfts/{sporeId}`
 - `/nfts/dotbit/{nftId}`
+- `/nfts/did/{nftId}`
 - `/nfts/mnft/{nftId}`
 - `/script/{codeHash}`
 - `/scripts`
