@@ -278,6 +278,25 @@ impl CkbadgerStore {
 
         Ok(results)
     }
+
+    /// Count total activities for a collection (prefix scan, no deserialization).
+    pub fn count_nft_collection_activities(&self, collection_id: &[u8]) -> anyhow::Result<i64> {
+        let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
+        let iter = self.iterator_cf(
+            self.cf_nft_collection_activities(),
+            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
+
+        let mut count: i64 = 0;
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
@@ -614,5 +633,29 @@ mod tests {
             .unwrap();
         assert_eq!(results_b.len(), 1);
         assert_eq!(results_b[0].0, 200);
+    }
+
+    #[test]
+    fn test_count_nft_collection_activities() {
+        let (_dir, store) = test_store();
+        let cid = [0x0Cu8; 32];
+        let cid_empty = [0x0Du8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        for block in 100..105 {
+            batch.put_nft_collection_activity(
+                &cid,
+                block,
+                0,
+                &make_activity(&[block as u8; 32], block * 1000, vec![AssetAction::Mint]),
+            );
+        }
+        batch.commit().unwrap();
+
+        assert_eq!(store.count_nft_collection_activities(&cid).unwrap(), 5);
+        assert_eq!(
+            store.count_nft_collection_activities(&cid_empty).unwrap(),
+            0
+        );
     }
 }

@@ -27,7 +27,6 @@ pub const CF_ADDR_BALANCE: &str = "addr_balance";
 pub const CF_ADDR_TXS: &str = "addr_txs";
 pub const CF_DAO_DEPOSITS: &str = "dao_deposits";
 pub const CF_DAO_BY_WITHDRAW_TX: &str = "dao_by_withdraw_tx";
-pub const CF_DAO_STATS: &str = "dao_stats";
 pub const CF_BLOCK_ISSUANCE: &str = "block_issuance";
 pub const CF_TOKENS: &str = "tokens";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
@@ -63,7 +62,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_ADDR_TXS,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
-    CF_DAO_STATS,
     CF_BLOCK_ISSUANCE,
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
@@ -386,9 +384,6 @@ impl CkbadgerStore {
     }
     pub fn cf_dao_by_withdraw_tx(&self) -> &ColumnFamily {
         self.cf(CF_DAO_BY_WITHDRAW_TX)
-    }
-    pub fn cf_dao_stats(&self) -> &ColumnFamily {
-        self.cf(CF_DAO_STATS)
     }
     pub fn cf_block_issuance(&self) -> &ColumnFamily {
         self.cf(CF_BLOCK_ISSUANCE)

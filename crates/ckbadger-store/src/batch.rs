@@ -297,11 +297,6 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_dao_by_withdraw_tx(), tx_hash, outpoint_key);
     }
 
-    pub fn put_dao_stats(&mut self, key: &[u8], stats: &DaoStats) {
-        let value = bincode::serialize(stats).expect("serialize DaoStats");
-        self.batch.put_cf(self.store.cf_dao_stats(), key, &value);
-    }
-
     pub fn put_block_issuance(&mut self, block_num: i64, issuance: &SecondaryIssuance) {
         let key = keys::encode_block_num(block_num);
         let value = bincode::serialize(issuance).expect("serialize SecondaryIssuance");

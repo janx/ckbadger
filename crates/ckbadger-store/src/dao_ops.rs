@@ -6,7 +6,7 @@ use chrono::DateTime;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{CachedBlockHeader, DaoDepositCacheEntry, DaoStats, SecondaryIssuance};
+use crate::types::{CachedBlockHeader, DaoDepositCacheEntry, SecondaryIssuance};
 
 impl CkbadgerStore {
     pub fn get_dao_deposit(
@@ -33,13 +33,6 @@ impl CkbadgerStore {
         tx_hash: &[u8],
     ) -> anyhow::Result<Option<Vec<u8>>> {
         self.get_cf(self.cf_dao_by_withdraw_tx(), tx_hash)
-    }
-
-    pub fn get_dao_stats(&self, key: &[u8]) -> anyhow::Result<Option<DaoStats>> {
-        match self.get_cf(self.cf_dao_stats(), key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
     }
 
     pub fn get_block_issuance(&self, block_num: i64) -> anyhow::Result<Option<SecondaryIssuance>> {

@@ -405,6 +405,8 @@ describe('api', () => {
             name: 'Test Collection',
             totalCount: 10,
             liveCount: 7,
+            holdersCount: 5,
+            activitiesCount: 20,
             liveCapacity: '1000',
             liveOccupiedCapacity: '600',
           });
@@ -426,6 +428,8 @@ describe('api', () => {
             name: '.bit',
             totalCount: 10,
             liveCount: 7,
+            holdersCount: 5,
+            activitiesCount: 20,
             liveCapacity: '1000',
             liveOccupiedCapacity: '600',
           });
@@ -446,6 +450,8 @@ describe('api', () => {
             name: 'did:ckb',
             totalCount: 10,
             liveCount: 7,
+            holdersCount: 5,
+            activitiesCount: 20,
             liveCapacity: '1000',
             liveOccupiedCapacity: '600',
           });

@@ -26,6 +26,7 @@ import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-r
 import { ClusterDescription } from '@/components/spore/cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
+import { formatActivityTimestamp } from '@/lib/nft-utils';
 
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
@@ -648,7 +649,7 @@ export default function ClusterDetailPage() {
                             txHash={activity.txHash}
                             blockNumber={activity.blockNumber}
                             txIndex={activity.txIndex}
-                            timestamp={activity.timestamp}
+                            timestamp={formatActivityTimestamp(activity.timestamp)}
                             actions={activity.actions}
                             badgeActions
                           />

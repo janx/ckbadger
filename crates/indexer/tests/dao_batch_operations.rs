@@ -1,5 +1,5 @@
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{DaoDepositCacheEntry, DaoStats};
+use ckbadger_store::types::DaoDepositCacheEntry;
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 
@@ -248,31 +248,4 @@ fn test_list_active_dao_deposits() {
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].1.capacity, 500_000_000_000);
     assert_eq!(active[0].1.status, 0);
-}
-
-/// Put and get DAO aggregate stats.
-#[test]
-fn test_dao_stats_aggregation() {
-    let store = setup_store();
-
-    let stats = DaoStats {
-        total_deposited: 1_000_000_000_000_000,
-        total_depositors: 42,
-        total_compensation: 50_000_000_000,
-        total_deposits: 100,
-        total_withdrawals: 30,
-    };
-
-    let mut batch = StoreBatch::new(&store);
-    batch.put_dao_stats(b"global", &stats);
-    batch.commit().unwrap();
-
-    let retrieved = store.get_dao_stats(b"global").unwrap();
-    assert!(retrieved.is_some());
-    let retrieved = retrieved.unwrap();
-    assert_eq!(retrieved.total_deposited, 1_000_000_000_000_000);
-    assert_eq!(retrieved.total_depositors, 42);
-    assert_eq!(retrieved.total_compensation, 50_000_000_000);
-    assert_eq!(retrieved.total_deposits, 100);
-    assert_eq!(retrieved.total_withdrawals, 30);
 }

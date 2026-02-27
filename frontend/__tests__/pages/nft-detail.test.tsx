@@ -59,6 +59,8 @@ const mockCollection = {
   name: 'Test Collection',
   totalCount: 500,
   liveCount: 320,
+  holdersCount: 42,
+  activitiesCount: 150,
   liveCapacity: '800000000000',
   liveOccupiedCapacity: '510000000000',
 };
@@ -425,9 +427,9 @@ describe('SporeDetailPage', () => {
     expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Activities$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Holders$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Holders \(42\)$/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
 
@@ -492,7 +494,7 @@ describe('SporeDetailPage', () => {
       ).toBe(true);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Activities$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Activities \(150\)$/ }));
 
     await waitFor(() => {
       expect(

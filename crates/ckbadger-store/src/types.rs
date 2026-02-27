@@ -214,15 +214,6 @@ pub struct DaoDepositCacheEntry {
     pub compensation: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DaoStats {
-    pub total_deposited: i128,
-    pub total_depositors: i64,
-    pub total_compensation: i128,
-    pub total_deposits: i64,
-    pub total_withdrawals: i64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaoDailySnapshot {
     pub date: String,

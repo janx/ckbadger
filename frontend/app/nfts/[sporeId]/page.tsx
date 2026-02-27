@@ -30,7 +30,7 @@ import { NftActivityCard } from '@/components/nft/nft-activity-card';
 import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
 import { isDidCkbAlias, isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
 import { formatNumber, truncateHash } from '@/lib/utils';
-import { formatStorageTier } from '@/lib/nft-utils';
+import { formatActivityTimestamp, formatStorageTier } from '@/lib/nft-utils';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';
@@ -476,17 +476,13 @@ export default function SporeDetailPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <TabsList className="border-b-0">
                         <TabsTrigger value="activities">
-                          Activities
-                          {collectionActivities?.total != null &&
-                            ` (${formatNumber(collectionActivities.total)})`}
+                          Activities ({formatNumber(collection.activitiesCount)})
                         </TabsTrigger>
                         <TabsTrigger value="nfts">
                           NFTs ({formatNumber(collection.totalCount)})
                         </TabsTrigger>
                         <TabsTrigger value="holders">
-                          Holders
-                          {collectionHolders?.total != null &&
-                            ` (${formatNumber(collectionHolders.total)})`}
+                          Holders ({formatNumber(collection.holdersCount)})
                         </TabsTrigger>
                       </TabsList>
                       {activeCollectionTab === 'nfts' && supportsCollectionFilters && (
@@ -548,7 +544,7 @@ export default function SporeDetailPage() {
                             txHash={activity.txHash}
                             blockNumber={activity.blockNumber}
                             txIndex={activity.txIndex}
-                            timestamp={activity.timestamp}
+                            timestamp={formatActivityTimestamp(activity.timestamp)}
                             actions={activity.actions}
                             badgeActions
                           />

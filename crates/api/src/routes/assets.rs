@@ -217,6 +217,8 @@ pub struct NftCollectionDetailResponse {
     pub name: Option<String>,
     pub total_count: i64,
     pub live_count: i64,
+    pub holders_count: i64,
+    pub activities_count: i64,
     pub live_capacity: String,
     pub live_occupied_capacity: String,
     pub storage_profile: CollectionStorageProfileResponse,
@@ -1562,12 +1564,20 @@ async fn get_nft_collection(
         fully_onchain_ratio: format_ratio_4(0, agg.live_count),
     };
 
+    let holders_count = count_nft_collection_holders(&state, &collection_id_bytes, &agg)?;
+    let activities_count = state
+        .store
+        .count_nft_collection_activities(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     ok(NftCollectionDetailResponse {
         collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
         standard,
         name,
         total_count: agg.total_count,
         live_count: agg.live_count,
+        holders_count,
+        activities_count,
         live_capacity,
         live_occupied_capacity,
         storage_profile,
@@ -2026,6 +2036,51 @@ fn list_collection_nft_ids(
     }
 
     Ok(all_ids)
+}
+
+/// Count unique holders (live NFT owners) for a collection.
+fn count_nft_collection_holders(
+    state: &Arc<AppState>,
+    collection_id_bytes: &[u8],
+    agg: &ckbadger_store::types::NftCollectionAggregate,
+) -> Result<i64, ApiRouteError> {
+    let nft_ids = list_collection_nft_ids(state, collection_id_bytes)?;
+    let mut unique_owners: HashSet<Vec<u8>> = HashSet::new();
+
+    match agg.standard {
+        ckbadger_store::types::NftStandard::DidCkb => {
+            for nft_id in &nft_ids {
+                if let Some(entry) = state
+                    .store
+                    .get_spore(nft_id)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                {
+                    if entry.is_live {
+                        if let Some(owner_lock_hash) = entry.owner_lock_hash {
+                            unique_owners.insert(owner_lock_hash);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            for nft_id in &nft_ids {
+                if let Some(entry) = state
+                    .store
+                    .get_nft(nft_id)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                {
+                    if entry.is_live {
+                        if let Some(owner_lock_hash) = entry.owner_lock_hash {
+                            unique_owners.insert(owner_lock_hash);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(unique_owners.len() as i64)
 }
 
 async fn list_nft_collection_holders(

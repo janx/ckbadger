@@ -820,6 +820,8 @@ interface NftCollection {
   name: string | null;
   totalCount: number;
   liveCount: number;
+  holdersCount: number;
+  activitiesCount: number;
   liveCapacity: string;
   liveOccupiedCapacity: string;
   storageProfile?: {
