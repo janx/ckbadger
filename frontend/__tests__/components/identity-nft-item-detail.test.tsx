@@ -1,0 +1,175 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+
+import {
+  IdentityNftItemDetail,
+  type IdentityNftItemDetailConfig,
+} from '@/components/nft/identity-nft-item-detail';
+import { api } from '@/lib/api';
+import { render } from '../utils/test-utils';
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    getAddress: vi.fn(),
+  },
+}));
+
+vi.mock('@/components/layout/header', () => ({
+  Header: () => <div data-testid="header">Header</div>,
+}));
+
+const mockReplace = vi.fn();
+let mockSearchParams = new URLSearchParams();
+
+vi.mock('next/navigation', () => ({
+  useParams: () => ({ nftId: '0xabc' }),
+  usePathname: () => '/nfts/dotbit/0xabc',
+  useRouter: () => ({ replace: mockReplace }),
+  useSearchParams: () => mockSearchParams,
+}));
+
+const mockFetchDetail = vi.fn();
+const mockFetchActivities = vi.fn();
+
+const dotbitConfig: IdentityNftItemDetailConfig = {
+  standard: 'dotbit',
+  fetchDetail: mockFetchDetail,
+  fetchActivities: mockFetchActivities,
+  labels: {
+    standardDisplay: 'DOTBIT',
+    nameLabel: '.bit Name',
+    idLabel: 'Account ID',
+    backLabel: 'Back to .bit Collection',
+    backHref: '/nfts/dotbit',
+    defaultTitle: '.bit account',
+    notFoundMsg: '.bit item not found',
+    recycledMsg: 'Recycled .bit account has no live cell.',
+    showExpiry: true,
+  },
+};
+
+const didCkbConfig: IdentityNftItemDetailConfig = {
+  standard: 'did_ckb',
+  fetchDetail: mockFetchDetail,
+  fetchActivities: mockFetchActivities,
+  labels: {
+    standardDisplay: 'DID:CKB',
+    nameLabel: 'did:ckb Name',
+    idLabel: 'DID ID',
+    backLabel: 'Back to did:ckb Collection',
+    backHref: '/nfts/did:ckb',
+    defaultTitle: 'did:ckb identity',
+    notFoundMsg: 'did:ckb item not found',
+    recycledMsg: 'Recycled did:ckb identity has no live cell.',
+    showExpiry: false,
+  },
+};
+
+describe('IdentityNftItemDetail', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReplace.mockReset();
+    mockSearchParams = new URLSearchParams();
+    vi.mocked(api.getAddress).mockResolvedValue({
+      lockScriptHash: '0xlock',
+      address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
+      balance: '0',
+      occupiedCapacity: '0',
+      liveCellsCount: 0,
+      transactionsCount: 0,
+    } as any);
+    mockFetchActivities.mockResolvedValue({
+      data: [],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+  });
+
+  it('renders dotbit standard labels', async () => {
+    mockFetchDetail.mockResolvedValue({
+      nftId: '0xabc',
+      name: 'alice.bit',
+      standard: 'dotbit',
+      ownerLockHash: '0xlock',
+      isLive: true,
+      createdAtBlock: 123,
+      expiredAt: 1800000000,
+      txHash: '0xtx',
+      outputIndex: 2,
+    });
+
+    render(<IdentityNftItemDetail config={dotbitConfig} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('DOTBIT')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('.bit Name')).toBeInTheDocument();
+    expect(screen.getByText('Account ID')).toBeInTheDocument();
+    expect(screen.getByText('Expires At')).toBeInTheDocument();
+  });
+
+  it('renders did:ckb standard labels without expiry', async () => {
+    mockFetchDetail.mockResolvedValue({
+      nftId: '0xabc',
+      name: 'did:alice.ckb',
+      standard: 'did_ckb',
+      ownerLockHash: '0xlock',
+      isLive: true,
+      createdAtBlock: 123,
+      txHash: null,
+      outputIndex: null,
+    });
+
+    render(<IdentityNftItemDetail config={didCkbConfig} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('DID:CKB')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('did:ckb Name')).toBeInTheDocument();
+    expect(screen.getByText('DID ID')).toBeInTheDocument();
+    expect(screen.queryByText('Expires At')).not.toBeInTheDocument();
+  });
+
+  it('shows not found message for dotbit', async () => {
+    mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
+
+    render(<IdentityNftItemDetail config={dotbitConfig} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('.bit item not found')).toBeInTheDocument();
+    });
+  });
+
+  it('shows not found message for did:ckb', async () => {
+    mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
+
+    render(<IdentityNftItemDetail config={didCkbConfig} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('did:ckb item not found')).toBeInTheDocument();
+    });
+  });
+
+  it('renders recycled status message', async () => {
+    mockFetchDetail.mockResolvedValue({
+      nftId: '0xabc',
+      name: 'alice.bit',
+      standard: 'dotbit',
+      ownerLockHash: '0xlock',
+      isLive: false,
+      createdAtBlock: 123,
+      expiredAt: 1800000000,
+      txHash: null,
+      outputIndex: null,
+    });
+
+    render(<IdentityNftItemDetail config={dotbitConfig} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Recycled .bit account has no live cell.')).toBeInTheDocument();
+    });
+  });
+});
