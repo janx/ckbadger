@@ -21,18 +21,24 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
-import { api, TokenHolder, TokenTransfer } from '@/lib/api';
+import { api, TokenHolder, TokenActivity, TokenTransferDetail } from '@/lib/api';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatTimeAgo, formatNumber } from '@/lib/utils';
+
+function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
+  if (action === 'mint') return 'green';
+  if (action === 'burn') return 'red';
+  return 'neutral';
+}
 
 export default function TokenDetailPage() {
   const params = useParams();
   const typeHash = params.typeHash as string;
-  const [activeTab, setActiveTab] = useState('transfers');
+  const [activeTab, setActiveTab] = useState('activities');
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
 
   const holdersPagination = useCursorPagination();
-  const transfersPagination = useCursorPagination();
+  const activitiesPagination = useCursorPagination();
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
 
   const {
@@ -47,15 +53,15 @@ export default function TokenDetailPage() {
   const { data: holders } = useQuery({
     queryKey: ['token-holders', typeHash, holdersPagination.cursor],
     queryFn: () => api.getTokenHolders(typeHash, { limit: 20, cursor: holdersPagination.cursor }),
-    enabled: !!token,
+    enabled: !!token && activeTab === 'holders',
     placeholderData: keepPreviousData,
   });
 
-  const { data: transfers } = useQuery({
-    queryKey: ['token-transfers', typeHash, transfersPagination.cursor],
+  const { data: activities } = useQuery({
+    queryKey: ['token-activities', typeHash, activitiesPagination.cursor],
     queryFn: () =>
-      api.getTokenTransfers(typeHash, { limit: 20, cursor: transfersPagination.cursor }),
-    enabled: !!token,
+      api.getTokenActivities(typeHash, { limit: 20, cursor: activitiesPagination.cursor }),
+    enabled: !!token && activeTab === 'activities',
     placeholderData: keepPreviousData,
   });
 
@@ -67,10 +73,6 @@ export default function TokenDetailPage() {
         : api.getTokenOccupationChart(typeHash),
     enabled: !!token,
   });
-
-  const formatNumber = (num: number | string) => {
-    return new Intl.NumberFormat().format(Number(num));
-  };
 
   const formatTokenAmount = (amount: string, decimals: number) => {
     const num = BigInt(amount);
@@ -292,17 +294,156 @@ export default function TokenDetailPage() {
             <TerminalPanelHeader
               actions={
                 <TabsList>
+                  <TabsTrigger value="activities">Activities</TabsTrigger>
                   <TabsTrigger value="holders">
                     Holders ({formatNumber(token.holdersCount)})
-                  </TabsTrigger>
-                  <TabsTrigger value="transfers">
-                    Transfers ({formatNumber(token.transfersCount)})
                   </TabsTrigger>
                 </TabsList>
               }
             >
-              {activeTab === 'holders' ? 'Holders' : 'Transfers'}
+              {activeTab === 'activities' ? 'Activities' : 'Holders'}
             </TerminalPanelHeader>
+
+            <TabsContent value="activities">
+              <TerminalPanelContent padding="none">
+                {activities?.data?.length ? (
+                  <div className="space-y-3 p-4">
+                    {activities.data.map((activity: TokenActivity) => (
+                      <div
+                        key={`${activity.txHash}-${activity.txIndex}`}
+                        className="space-y-2 rounded border border-slate-800 bg-slate-900/40 p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="font-mono text-xs text-slate-400">
+                            Block{' '}
+                            <Link
+                              href={`/blocks/${activity.blockNumber}`}
+                              className="text-terminal-green hover:underline"
+                            >
+                              #{formatNumber(activity.blockNumber)}
+                            </Link>
+                            <span className="mx-1 text-slate-500">&bull;</span>
+                            Tx Index {activity.txIndex}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {activity.actions.map((action) => (
+                              <Badge
+                                key={`${activity.txHash}-${action}`}
+                                variant={actionBadgeVariant(action)}
+                              >
+                                {action}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <Link
+                            href={`/tx/${activity.txHash}`}
+                            className="block font-mono text-xs text-slate-300 hover:underline"
+                          >
+                            <HexDisplay
+                              value={activity.txHash}
+                              color="accent"
+                              size="sm"
+                              startChars={14}
+                              endChars={10}
+                            />
+                          </Link>
+                          <span className="font-mono text-xs text-slate-500">
+                            {formatTimeAgo(activity.timestamp)}
+                          </span>
+                        </div>
+                        {activity.transfers.length > 0 && (
+                          <div className="space-y-1 border-t border-slate-800/50 pt-2">
+                            {activity.transfers.map(
+                              (transfer: TokenTransferDetail, idx: number) => (
+                                <div
+                                  key={idx}
+                                  className="flex flex-wrap items-center gap-1.5 font-mono text-xs"
+                                >
+                                  {transfer.isMint ? (
+                                    <span className="text-green-400">Mint</span>
+                                  ) : transfer.fromAddress ? (
+                                    <Address
+                                      address={transfer.fromAddress}
+                                      className="text-slate-400"
+                                    />
+                                  ) : transfer.fromLockHash ? (
+                                    <Link href={`/address/${transfer.fromLockHash}`}>
+                                      <HexDisplay
+                                        value={transfer.fromLockHash}
+                                        color="accent"
+                                        startChars={6}
+                                        endChars={4}
+                                        className="hover:underline"
+                                      />
+                                    </Link>
+                                  ) : (
+                                    <span className="text-slate-500">-</span>
+                                  )}
+                                  <svg
+                                    className="h-3 w-3 flex-shrink-0 text-slate-500"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M13 7l5 5m0 0l-5 5m5-5H6"
+                                    />
+                                  </svg>
+                                  {transfer.isBurn ? (
+                                    <span className="text-red-400">Burn</span>
+                                  ) : transfer.toAddress ? (
+                                    <Address
+                                      address={transfer.toAddress}
+                                      className="text-slate-400"
+                                    />
+                                  ) : (
+                                    <Link href={`/address/${transfer.toLockHash}`}>
+                                      <HexDisplay
+                                        value={transfer.toLockHash}
+                                        color="accent"
+                                        startChars={6}
+                                        endChars={4}
+                                        className="hover:underline"
+                                      />
+                                    </Link>
+                                  )}
+                                  <span className="ml-auto text-white">
+                                    <TokenAmount
+                                      amount={transfer.amount}
+                                      decimals={token.decimals}
+                                    />
+                                  </span>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-8 text-center text-slate-500">No activities</div>
+                )}
+              </TerminalPanelContent>
+              {activities?.data?.length ? (
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    totalLabel="activities"
+                    pageSize={20}
+                    page={activitiesPagination.page}
+                    hasMore={activities.hasMore}
+                    hasPrevious={activitiesPagination.hasPrevious}
+                    onNext={() => activitiesPagination.goToNext(activities.nextCursor)}
+                    onPrevious={activitiesPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              ) : null}
+            </TabsContent>
 
             <TabsContent value="holders">
               <TerminalPanelContent padding="none">
@@ -350,131 +491,6 @@ export default function TokenDetailPage() {
                     hasPrevious={holdersPagination.hasPrevious}
                     onNext={() => holdersPagination.goToNext(holders.nextCursor)}
                     onPrevious={holdersPagination.goToPrevious}
-                  />
-                </TerminalPanelFooter>
-              ) : null}
-            </TabsContent>
-
-            <TabsContent value="transfers">
-              <TerminalPanelContent padding="none">
-                {transfers?.data?.length ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="border-b border-slate-800 bg-slate-900/50 font-mono text-xs uppercase tracking-wider text-slate-500">
-                          <th className="whitespace-nowrap px-4 py-2 text-left font-medium">
-                            Tx Hash
-                          </th>
-                          <th className="whitespace-nowrap px-4 py-2 text-left font-medium">
-                            From
-                          </th>
-                          <th className="w-6 px-0 py-2"></th>
-                          <th className="whitespace-nowrap px-4 py-2 text-left font-medium">To</th>
-                          <th className="whitespace-nowrap px-4 py-2 text-right font-medium">
-                            Amount
-                          </th>
-                          <th className="whitespace-nowrap px-4 py-2 text-right font-medium">
-                            Time
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {transfers.data.map((transfer: TokenTransfer, idx: number) => (
-                          <tr
-                            key={`${transfer.txHash}-${idx}`}
-                            className="border-b border-slate-800/50 transition-colors hover:bg-slate-800/30"
-                          >
-                            <td className="whitespace-nowrap px-4 py-3">
-                              <Link href={`/tx/${transfer.txHash}`}>
-                                <HexDisplay
-                                  value={transfer.txHash}
-                                  color="accent"
-                                  startChars={8}
-                                  endChars={4}
-                                  className="hover:underline"
-                                />
-                              </Link>
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3">
-                              {transfer.isMint ? (
-                                <Badge variant="green">Mint</Badge>
-                              ) : transfer.fromAddress ? (
-                                <Address
-                                  address={transfer.fromAddress}
-                                  className="text-slate-400"
-                                />
-                              ) : transfer.fromLockHash ? (
-                                <Link href={`/address/${transfer.fromLockHash}`}>
-                                  <HexDisplay
-                                    value={transfer.fromLockHash}
-                                    color="accent"
-                                    startChars={6}
-                                    endChars={4}
-                                    className="hover:underline"
-                                  />
-                                </Link>
-                              ) : (
-                                <span className="text-slate-500">-</span>
-                              )}
-                            </td>
-                            <td className="px-0 py-3 text-center text-slate-500">
-                              <svg
-                                className="mx-auto h-3.5 w-3.5"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={2}
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M13 7l5 5m0 0l-5 5m5-5H6"
-                                />
-                              </svg>
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3">
-                              {transfer.isBurn ? (
-                                <Badge variant="red">Burn</Badge>
-                              ) : transfer.toAddress ? (
-                                <Address address={transfer.toAddress} className="text-slate-400" />
-                              ) : (
-                                <Link href={`/address/${transfer.toLockHash}`}>
-                                  <HexDisplay
-                                    value={transfer.toLockHash}
-                                    color="accent"
-                                    startChars={6}
-                                    endChars={4}
-                                    className="hover:underline"
-                                  />
-                                </Link>
-                              )}
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-right text-white">
-                              <TokenAmount amount={transfer.amount} decimals={token.decimals} />
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-right font-mono text-xs text-slate-500">
-                              {formatTimeAgo(transfer.timestamp)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="py-8 text-center text-slate-500">No transfers</div>
-                )}
-              </TerminalPanelContent>
-              {transfers?.data?.length ? (
-                <TerminalPanelFooter>
-                  <CursorPagination
-                    total={transfers.total ?? undefined}
-                    totalLabel="transfers"
-                    pageSize={20}
-                    page={transfersPagination.page}
-                    hasMore={transfers.hasMore}
-                    hasPrevious={transfersPagination.hasPrevious}
-                    onNext={() => transfersPagination.goToNext(transfers.nextCursor)}
-                    onPrevious={transfersPagination.goToPrevious}
                   />
                 </TerminalPanelFooter>
               ) : null}

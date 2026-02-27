@@ -7,7 +7,8 @@ use rocksdb::{IteratorMode, WriteBatch};
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    decode_consumed_cell_info, LiveCellInfo, TokenDailyDelta, TokenInfo, TokenTransferRecord,
+    decode_consumed_cell_info, AssetAction, LiveCellInfo, TokenActivityEntry,
+    TokenActivityTransfer, TokenDailyDelta, TokenInfo, TokenTransferRecord,
 };
 
 const TOKEN_REBUILD_BATCH_SIZE: usize = 20_000;
@@ -875,6 +876,137 @@ impl CkbadgerStore {
             }
         }
         Ok(results)
+    }
+
+    /// List token activities grouped by transaction.
+    ///
+    /// Iterates `cf_token_transfers()` and groups consecutive records sharing the same
+    /// `tx_hash` into a single `TokenActivityEntry`.  Returns `(block_num, entry_idx, entry)`
+    /// where `entry_idx` is the *last* record's key index within the group — suitable as
+    /// the cursor for the next page.
+    pub fn list_token_activities(
+        &self,
+        type_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<(i64, i32, TokenActivityEntry)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let prefix = &type_hash[..32];
+
+        let start_key = match cursor {
+            Some((block_num, tx_idx)) => {
+                keys::encode_token_transfer_key(type_hash, block_num, tx_idx + 1)
+            }
+            None => prefix.to_vec(),
+        };
+
+        let iter = self.iterator_cf(
+            self.cf_token_transfers(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+
+        let mut results: Vec<(i64, i32, TokenActivityEntry)> = Vec::new();
+
+        // Current group state
+        let mut current_tx_hash: Option<Vec<u8>> = None;
+        let mut current_block_number: i64 = 0;
+        let mut current_timestamp_ms: i64 = 0;
+        let mut current_transfers: Vec<TokenActivityTransfer> = Vec::new();
+        let mut current_last_idx: i32 = 0;
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if key.len() != 44 {
+                continue;
+            }
+
+            let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
+            let record: TokenTransferRecord = bincode::deserialize(&value)?;
+
+            if let Some(ref prev_tx_hash) = current_tx_hash {
+                if record.tx_hash != *prev_tx_hash {
+                    // Finalize the previous group
+                    let entry = Self::finalize_activity_group(
+                        current_tx_hash.take().unwrap(),
+                        current_block_number,
+                        current_timestamp_ms,
+                        std::mem::take(&mut current_transfers),
+                    );
+                    results.push((current_block_number, current_last_idx, entry));
+
+                    if results.len() >= limit {
+                        // Don't start a new group; we have enough
+                        return Ok(results);
+                    }
+                }
+            }
+
+            // Add to current group (or start new group)
+            if current_tx_hash.is_none() {
+                current_tx_hash = Some(record.tx_hash.clone());
+                current_block_number = block_num;
+                current_timestamp_ms = record.timestamp;
+            }
+
+            current_transfers.push(TokenActivityTransfer {
+                from_lock_hash: record.from_lock_hash,
+                to_lock_hash: record.to_lock_hash,
+                amount: record.amount,
+                is_mint: record.is_mint,
+                is_burn: record.is_burn,
+            });
+            current_last_idx = tx_idx;
+        }
+
+        // Finalize the last group
+        if let Some(tx_hash) = current_tx_hash.take() {
+            let entry = Self::finalize_activity_group(
+                tx_hash,
+                current_block_number,
+                current_timestamp_ms,
+                std::mem::take(&mut current_transfers),
+            );
+            results.push((current_block_number, current_last_idx, entry));
+        }
+
+        Ok(results)
+    }
+
+    fn finalize_activity_group(
+        tx_hash: Vec<u8>,
+        block_number: i64,
+        timestamp_ms: i64,
+        transfers: Vec<TokenActivityTransfer>,
+    ) -> TokenActivityEntry {
+        let mut actions = Vec::new();
+        let mut has_mint = false;
+        let mut has_burn = false;
+        let mut has_transfer = false;
+        for t in &transfers {
+            if t.is_mint && !has_mint {
+                actions.push(AssetAction::Mint);
+                has_mint = true;
+            } else if t.is_burn && !has_burn {
+                actions.push(AssetAction::Burn);
+                has_burn = true;
+            } else if !t.is_mint && !t.is_burn && !has_transfer {
+                actions.push(AssetAction::Transfer);
+                has_transfer = true;
+            }
+        }
+        TokenActivityEntry {
+            tx_hash,
+            block_number,
+            timestamp_ms,
+            actions,
+            transfers,
+        }
     }
 
     /// Count holders for a token (prefix scan by type_hash).
@@ -1807,5 +1939,189 @@ mod tests {
 
         assert_eq!(store.count_token_holders(&type_a).unwrap(), 2);
         assert_eq!(store.count_token_holders(&type_b).unwrap(), 1);
+    }
+
+    // ---- list_token_activities ----
+
+    fn make_transfer_record(
+        tx_hash: &[u8],
+        block_number: i64,
+        from: Option<&[u8]>,
+        to: &[u8],
+        amount: u128,
+        is_mint: bool,
+        is_burn: bool,
+    ) -> TokenTransferRecord {
+        TokenTransferRecord {
+            tx_hash: tx_hash.to_vec(),
+            block_number,
+            from_lock_hash: from.map(|f| f.to_vec()),
+            to_lock_hash: to.to_vec(),
+            amount,
+            is_mint,
+            is_burn,
+            timestamp: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn test_list_token_activities_empty() {
+        let (_dir, store) = test_store();
+        let type_hash = [0xA1u8; 32];
+        let result = store.list_token_activities(&type_hash, 10, None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_list_token_activities_groups_by_tx_hash() {
+        let (_dir, store) = test_store();
+        let type_hash = [0xA2u8; 32];
+        let tx_hash = [0x01u8; 32];
+        let lock_a = [0x0Au8; 32];
+        let lock_b = [0x0Bu8; 32];
+        let lock_c = [0x0Cu8; 32];
+
+        // 3 records in same block with same tx_hash → should group into 1 activity
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &make_transfer_record(&tx_hash, 100, None, &lock_a, 1000, true, false),
+        );
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            1,
+            &make_transfer_record(&tx_hash, 100, Some(&lock_a), &lock_b, 500, false, false),
+        );
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            2,
+            &make_transfer_record(&tx_hash, 100, Some(&lock_a), &lock_c, 200, false, false),
+        );
+        batch.commit().unwrap();
+
+        let result = store.list_token_activities(&type_hash, 10, None).unwrap();
+        assert_eq!(result.len(), 1);
+
+        let (block_num, last_idx, entry) = &result[0];
+        assert_eq!(*block_num, 100);
+        assert_eq!(*last_idx, 2);
+        assert_eq!(entry.tx_hash, tx_hash.to_vec());
+        assert_eq!(entry.transfers.len(), 3);
+        assert!(entry.transfers[0].is_mint);
+        assert!(!entry.transfers[1].is_mint);
+    }
+
+    #[test]
+    fn test_list_token_activities_pagination() {
+        let (_dir, store) = test_store();
+        let type_hash = [0xA3u8; 32];
+        let tx_1 = [0x01u8; 32];
+        let tx_2 = [0x02u8; 32];
+        let tx_3 = [0x03u8; 32];
+        let lock_a = [0x0Au8; 32];
+
+        // 3 separate transactions across blocks (keys sorted desc by block_num)
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_transfer(
+            &type_hash,
+            300,
+            0,
+            &make_transfer_record(&tx_1, 300, None, &lock_a, 100, true, false),
+        );
+        batch.put_token_transfer(
+            &type_hash,
+            200,
+            0,
+            &make_transfer_record(&tx_2, 200, None, &lock_a, 200, true, false),
+        );
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &make_transfer_record(&tx_3, 100, None, &lock_a, 300, true, false),
+        );
+        batch.commit().unwrap();
+
+        // Page 1: limit=2
+        let page1 = store.list_token_activities(&type_hash, 2, None).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].2.tx_hash, tx_1.to_vec()); // block 300 first (desc)
+        assert_eq!(page1[1].2.tx_hash, tx_2.to_vec()); // block 200
+
+        // Page 2: use cursor from last entry
+        let cursor = (page1[1].0, page1[1].1);
+        let page2 = store
+            .list_token_activities(&type_hash, 2, Some(cursor))
+            .unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].2.tx_hash, tx_3.to_vec()); // block 100
+    }
+
+    #[test]
+    fn test_list_token_activities_mixed_actions() {
+        let (_dir, store) = test_store();
+        let type_hash = [0xA4u8; 32];
+        let tx_hash = [0x01u8; 32];
+        let lock_a = [0x0Au8; 32];
+        let lock_b = [0x0Bu8; 32];
+
+        // mint + transfer in same tx
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &make_transfer_record(&tx_hash, 100, None, &lock_a, 1000, true, false),
+        );
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            1,
+            &make_transfer_record(&tx_hash, 100, Some(&lock_a), &lock_b, 500, false, false),
+        );
+        batch.commit().unwrap();
+
+        let result = store.list_token_activities(&type_hash, 10, None).unwrap();
+        assert_eq!(result.len(), 1);
+        let actions = &result[0].2.actions;
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], AssetAction::Mint));
+        assert!(matches!(actions[1], AssetAction::Transfer));
+    }
+
+    #[test]
+    fn test_list_token_activities_dedup_actions() {
+        let (_dir, store) = test_store();
+        let type_hash = [0xA5u8; 32];
+        let tx_hash = [0x01u8; 32];
+        let lock_a = [0x0Au8; 32];
+        let lock_b = [0x0Bu8; 32];
+        let lock_c = [0x0Cu8; 32];
+
+        // Multiple plain transfers → single Transfer action
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &make_transfer_record(&tx_hash, 100, Some(&lock_a), &lock_b, 500, false, false),
+        );
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            1,
+            &make_transfer_record(&tx_hash, 100, Some(&lock_b), &lock_c, 300, false, false),
+        );
+        batch.commit().unwrap();
+
+        let result = store.list_token_activities(&type_hash, 10, None).unwrap();
+        assert_eq!(result.len(), 1);
+        let actions = &result[0].2.actions;
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], AssetAction::Transfer));
     }
 }

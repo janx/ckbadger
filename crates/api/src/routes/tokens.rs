@@ -21,6 +21,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/tokens/{type_hash}", get(get_token))
         .route("/tokens/{type_hash}/holders", get(get_token_holders))
         .route("/tokens/{type_hash}/transfers", get(get_token_transfers))
+        .route("/tokens/{type_hash}/activities", get(get_token_activities))
         .route(
             "/tokens/{type_hash}/charts/occupation",
             get(get_token_occupation_chart),
@@ -559,6 +560,129 @@ async fn get_token_holders(
     ok(CursorPaginatedResponse::new(
         holders,
         holders_count,
+        limit as i64,
+        next_cursor,
+    ))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenActivityResponse {
+    pub tx_hash: String,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: String,
+    pub actions: Vec<String>,
+    pub transfers: Vec<TokenTransferDetail>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenTransferDetail {
+    pub from_lock_hash: Option<String>,
+    pub from_address: Option<String>,
+    pub to_lock_hash: String,
+    pub to_address: Option<String>,
+    pub amount: String,
+    pub is_mint: bool,
+    pub is_burn: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActivityParams {
+    #[serde(default = "default_limit")]
+    limit: i64,
+    cursor: Option<String>,
+}
+
+async fn get_token_activities(
+    State(state): State<Arc<AppState>>,
+    Path(type_hash): Path<String>,
+    Query(params): Query<ActivityParams>,
+) -> ApiResult<CursorPaginatedResponse<TokenActivityResponse>> {
+    let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
+        .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
+
+    let token_exists = state
+        .store
+        .get_token(&hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .is_some();
+    if !token_exists {
+        return Err(ApiError::not_found("Token not found"));
+    }
+
+    let limit = params.limit.clamp(1, 100) as usize;
+
+    let cursor = params.cursor.as_ref().and_then(|c| {
+        let parts: Vec<&str> = c.split(':').collect();
+        if parts.len() == 2 {
+            let block_num = parts[0].parse::<i64>().ok()?;
+            let tx_idx = parts[1].parse::<i32>().ok()?;
+            Some((block_num, tx_idx))
+        } else {
+            None
+        }
+    });
+
+    let results = state
+        .store
+        .list_token_activities(&hash, limit + 1, cursor)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = results.len() > limit;
+    let page: Vec<_> = results.into_iter().take(limit).collect();
+
+    let next_cursor = if has_more {
+        page.last()
+            .map(|(block_num, tx_idx, _)| format!("{}:{}", block_num, tx_idx))
+    } else {
+        None
+    };
+
+    let activities: Vec<TokenActivityResponse> = page
+        .into_iter()
+        .map(|(_, tx_idx, entry)| {
+            let actions: Vec<String> = entry
+                .actions
+                .iter()
+                .map(|a| match a {
+                    ckbadger_store::AssetAction::Mint => "mint".to_string(),
+                    ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
+                    ckbadger_store::AssetAction::Burn => "burn".to_string(),
+                })
+                .collect();
+
+            let transfers: Vec<TokenTransferDetail> = entry
+                .transfers
+                .into_iter()
+                .map(|t| TokenTransferDetail {
+                    from_lock_hash: t
+                        .from_lock_hash
+                        .as_ref()
+                        .map(|h| format!("0x{}", hex::encode(h))),
+                    from_address: None,
+                    to_lock_hash: format!("0x{}", hex::encode(&t.to_lock_hash)),
+                    to_address: None,
+                    amount: t.amount.to_string(),
+                    is_mint: t.is_mint,
+                    is_burn: t.is_burn,
+                })
+                .collect();
+
+            TokenActivityResponse {
+                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                block_number: entry.block_number,
+                tx_index: tx_idx,
+                timestamp: entry.timestamp_ms.to_string(),
+                actions,
+                transfers,
+            }
+        })
+        .collect();
+
+    ok(CursorPaginatedResponse::without_total(
+        activities,
         limit as i64,
         next_cursor,
     ))

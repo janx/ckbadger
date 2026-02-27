@@ -9,7 +9,7 @@ vi.mock('@/lib/api', () => ({
     getToken: vi.fn(),
     getTokenOccupationChart: vi.fn(),
     getTokenHolders: vi.fn(),
-    getTokenTransfers: vi.fn(),
+    getTokenActivities: vi.fn(),
   },
 }));
 
@@ -62,9 +62,8 @@ const mockHolders = {
   nextCursor: null,
 };
 
-const mockTransfers = {
+const mockActivities = {
   data: [],
-  total: 0,
   limit: 20,
   hasMore: false,
   nextCursor: null,
@@ -87,7 +86,7 @@ describe('TokenDetailPage', () => {
       ],
     });
     vi.mocked(api.getTokenHolders).mockResolvedValue(mockHolders);
-    vi.mocked(api.getTokenTransfers).mockResolvedValue(mockTransfers);
+    vi.mocked(api.getTokenActivities).mockResolvedValue(mockActivities);
   });
 
   it('renders cells count stat', async () => {
@@ -180,6 +179,63 @@ describe('TokenDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+    });
+  });
+
+  it('defaults to activities tab', async () => {
+    vi.mocked(api.getToken).mockResolvedValue(mockToken);
+
+    render(<TokenDetailPage />);
+
+    await waitFor(() => {
+      const elements = screen.getAllByText('Activities');
+      expect(elements.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('renders activities with transfer details', async () => {
+    vi.mocked(api.getToken).mockResolvedValue(mockToken);
+    vi.mocked(api.getTokenActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234',
+          blockNumber: 12345,
+          txIndex: 0,
+          timestamp: '1700000000000',
+          actions: ['mint', 'transfer'],
+          transfers: [
+            {
+              fromLockHash: null,
+              fromAddress: null,
+              toLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+              toAddress: null,
+              amount: '100000000000',
+              isMint: true,
+              isBurn: false,
+            },
+            {
+              fromLockHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
+              fromAddress: null,
+              toLockHash: '0x2222222222222222222222222222222222222222222222222222222222222222',
+              toAddress: null,
+              amount: '50000000000',
+              isMint: false,
+              isBurn: false,
+            },
+          ],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<TokenDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('mint')).toBeInTheDocument();
+      expect(screen.getByText('transfer')).toBeInTheDocument();
+      expect(screen.getByText('Mint')).toBeInTheDocument();
     });
   });
 });

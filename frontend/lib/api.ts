@@ -654,6 +654,30 @@ interface TokenTransferParams {
   cursor?: string;
 }
 
+interface TokenTransferDetail {
+  fromLockHash: string | null;
+  fromAddress: string | null;
+  toLockHash: string;
+  toAddress: string | null;
+  amount: string;
+  isMint: boolean;
+  isBurn: boolean;
+}
+
+interface TokenActivity {
+  txHash: string;
+  blockNumber: number;
+  txIndex: number;
+  timestamp: string;
+  actions: string[];
+  transfers: TokenTransferDetail[];
+}
+
+interface TokenActivityParams {
+  limit?: number;
+  cursor?: string;
+}
+
 interface DaoDeposit {
   txHash: string;
   outputIndex: number;
@@ -1188,6 +1212,8 @@ export type {
   Token,
   TokenHolder,
   TokenTransfer,
+  TokenTransferDetail,
+  TokenActivity,
   DaoDeposit,
   AddressDaoSummary,
   DaoStatistics,
@@ -1505,6 +1531,16 @@ export const api = {
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     return fetchApi(`/tokens/${typeHash}/transfers?${query}`);
+  },
+
+  getTokenActivities: (
+    typeHash: string,
+    params: TokenActivityParams = {}
+  ): Promise<CursorPaginatedResponse<TokenActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    return fetchApi(`/tokens/${typeHash}/activities?${query}`);
   },
 
   getDaoDeposits: (params: DaoQueryParams = {}): Promise<CursorPaginatedResponse<DaoDeposit>> => {

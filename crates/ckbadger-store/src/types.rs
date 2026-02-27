@@ -924,6 +924,30 @@ pub struct NftCollectionActivityEntry {
 }
 
 // ============================================
+// Group I-c: Token Activities (derived at read time from token_transfers CF)
+// ============================================
+
+/// A single token activity: one transaction with aggregated actions and individual transfers.
+/// Derived at read time by grouping token_transfers records by tx_hash — not persisted.
+#[derive(Debug, Clone)]
+pub struct TokenActivityEntry {
+    pub tx_hash: Vec<u8>,
+    pub block_number: i64,
+    pub timestamp_ms: i64,
+    pub actions: Vec<AssetAction>,
+    pub transfers: Vec<TokenActivityTransfer>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenActivityTransfer {
+    pub from_lock_hash: Option<Vec<u8>>,
+    pub to_lock_hash: Vec<u8>,
+    pub amount: u128,
+    pub is_mint: bool,
+    pub is_burn: bool,
+}
+
+// ============================================
 // Group J: Address Daily Stats
 // ============================================
 
