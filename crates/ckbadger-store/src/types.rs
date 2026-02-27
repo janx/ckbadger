@@ -831,6 +831,10 @@ pub struct MemoryStats {
     pub immutable_memtables: u64,
     /// Top column families by estimated live data size: (name, bytes)
     pub top_cf_sizes: Vec<(String, u64)>,
+    /// WriteBufferManager current usage in bytes
+    pub wbm_usage_bytes: usize,
+    /// WriteBufferManager budget (buffer_size) in bytes
+    pub wbm_budget_bytes: usize,
 }
 
 impl MemoryStats {

@@ -284,6 +284,13 @@ pub struct MemoryStatsData {
     #[serde(default)]
     pub top_cf_sizes: Vec<(String, u64)>,
 
+    /// WriteBufferManager current usage in bytes
+    #[serde(default)]
+    pub wbm_usage_bytes: u64,
+    /// WriteBufferManager budget (buffer_size) in bytes
+    #[serde(default)]
+    pub wbm_budget_bytes: u64,
+
     /// Chain-level statistics (from SyncStatusData)
     #[serde(default)]
     pub total_transactions: i64,
@@ -459,6 +466,8 @@ mod tests {
                 ("live_cells".to_string(), 3_000_000_000),
                 ("consumed_cells".to_string(), 2_500_000_000),
             ],
+            wbm_usage_bytes: 4_000_000_000,
+            wbm_budget_bytes: 8_000_000_000,
             total_transactions: 50_000_000,
             total_cells: 100_000_000,
             total_live_cells: 45_000_000,

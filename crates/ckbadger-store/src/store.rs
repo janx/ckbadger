@@ -2,11 +2,12 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tracing::{info, warn};
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBCompressionType, IteratorMode,
-    Options, UniversalCompactOptions, WriteBatch, DB,
+    Options, UniversalCompactOptions, WriteBatch, WriteBufferManager, DB,
 };
 
 use crate::types::MemoryStats;
@@ -102,20 +103,23 @@ fn consumed_cf_storage_bytes(
 pub struct CkbadgerStore {
     db: DB,
     /// Keep block cache alive for the lifetime of the store.
-    #[allow(dead_code)]
-    block_cache: rocksdb::Cache,
+    /// Mutex because `set_capacity()` requires `&mut` (rare mode-transition calls only).
+    block_cache: Mutex<rocksdb::Cache>,
+    /// Global memtable memory budget — controls WHEN flushes happen across all CFs.
+    /// With `atomic_flush=true` + 29 CFs, per-CF triggers cause unpredictable I/O storms.
+    /// WBM replaces that with a single threshold: flush oldest CF when total memtable
+    /// memory exceeds the budget, giving the indexer predictable flush behavior.
+    write_buffer_manager: WriteBufferManager,
     bulk_sync_mode: AtomicBool,
     is_secondary: bool,
 }
 
 impl CkbadgerStore {
-    const PIPELINED_WRITE_ENABLED: bool = false;
-
     /// Open as primary (read-write). Creates all column families.
     /// Also opens any legacy CFs that exist on disk but are no longer in ALL_CFS,
     /// so RocksDB doesn't error on "Column families not opened".
     pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let (opts, block_cache) = Self::default_options();
+        let (opts, block_cache, write_buffer_manager) = Self::default_options();
 
         // Discover any CFs that exist on disk (may include legacy/removed ones)
         let existing_cfs = DB::list_cf(&opts, &path).unwrap_or_default();
@@ -141,7 +145,8 @@ impl CkbadgerStore {
 
         Ok(Self {
             db,
-            block_cache,
+            block_cache: Mutex::new(block_cache),
+            write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             is_secondary: false,
         })
@@ -152,7 +157,7 @@ impl CkbadgerStore {
         primary_path: P,
         secondary_path: P,
     ) -> anyhow::Result<Self> {
-        let (opts, block_cache) = Self::default_options();
+        let (opts, block_cache, write_buffer_manager) = Self::default_options();
 
         let existing_cfs = DB::list_cf(&opts, &primary_path).unwrap_or_default();
         let mut cf_names: Vec<String> = ALL_CFS.iter().map(|s| s.to_string()).collect();
@@ -166,7 +171,8 @@ impl CkbadgerStore {
 
         Ok(Self {
             db,
-            block_cache,
+            block_cache: Mutex::new(block_cache),
+            write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
             is_secondary: true,
         })
@@ -241,7 +247,22 @@ impl CkbadgerStore {
         block_opts
     }
 
-    fn default_options() -> (Options, rocksdb::Cache) {
+    /// Normal (non-bulk-sync) WriteBufferManager budget: 8 GB.
+    const WBM_NORMAL_BYTES: usize = 8 * 1024 * 1024 * 1024;
+    /// Bulk-sync WriteBufferManager budget: 16 GB.
+    /// Larger budget absorbs bursty mega-block writes without triggering
+    /// premature atomic flushes, and compensates for block cache shrinkage
+    /// during bulk sync (Step 5).
+    const WBM_BULK_SYNC_BYTES: usize = 16 * 1024 * 1024 * 1024;
+
+    /// Normal block cache size: 8 GB.
+    const BLOCK_CACHE_NORMAL_BYTES: usize = 8 * 1024 * 1024 * 1024;
+    /// Block cache during bulk sync: 2 GB.
+    /// Bulk sync is write-heavy; parser cell lookups hit in-memory caches.
+    /// Freed 6 GB goes to WBM memtable budget.
+    const BLOCK_CACHE_BULK_SYNC_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+    fn default_options() -> (Options, rocksdb::Cache, WriteBufferManager) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
@@ -249,7 +270,11 @@ impl CkbadgerStore {
         // Bypass OS page cache for reads: block cache already handles hot data,
         // and bulk sync reads (live cell lookups) are not reused — caching them
         // in the page cache wastes RAM and adds syscall overhead.
-        opts.set_use_direct_reads(true);
+        // Set CKBADGER_DIRECT_IO_READS=false to disable for A/B testing.
+        let direct_io_reads = std::env::var("CKBADGER_DIRECT_IO_READS")
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+        opts.set_use_direct_reads(direct_io_reads);
 
         // Favor throughput during bulk sync while still smoothing fsync pressure.
         opts.set_bytes_per_sync(4 * 1024 * 1024);
@@ -287,12 +312,29 @@ impl CkbadgerStore {
         // during bulk sync where WAL is disabled (commit_no_wal).
         opts.set_atomic_flush(true);
 
+        // Unordered write: skip write-group leader serialization overhead.
+        // Safe because the indexer is the sole writer process and the API
+        // uses secondary (read-only) mode. Relaxes snapshot ordering but
+        // maintains read-your-own-write consistency.
+        opts.set_unordered_write(true);
+
         // 8 GB block cache — system has 93 GB RAM; 2 GB only covered ~17% of SST data
-        let block_cache = rocksdb::Cache::new_lru_cache(8 * 1024 * 1024 * 1024);
+        let block_cache = rocksdb::Cache::new_lru_cache(Self::BLOCK_CACHE_NORMAL_BYTES);
         let block_opts = Self::default_block_options(&block_cache);
         opts.set_block_based_table_factory(&block_opts);
 
-        (opts, block_cache)
+        // Global WriteBufferManager: controls total memtable memory across all CFs.
+        // With atomic_flush + 29 CFs, per-CF memtable limits cause unpredictable
+        // I/O storms when a random hot CF triggers a flush of ALL CFs. WBM replaces
+        // that with a global budget — flush only happens when total memtable usage
+        // crosses the threshold, giving predictable, batched flush behavior.
+        // allow_stall=true: stall writes when memtable memory exceeds budget rather
+        // than OOM; the adaptive batch controller will detect stalls and reduce batch size.
+        let write_buffer_manager =
+            WriteBufferManager::new_write_buffer_manager(Self::WBM_NORMAL_BYTES, true);
+        opts.set_write_buffer_manager(&write_buffer_manager);
+
+        (opts, block_cache, write_buffer_manager)
     }
 
     /// Per-CF options with 3 tiers:
@@ -514,20 +556,25 @@ impl CkbadgerStore {
             write_buffer_low_mb = 32,
             max_write_buffers_high = 4,
             max_write_buffers_low = 2,
-            l0_slowdown = 12,
-            l0_stop = 24,
+            l0_slowdown = 20,
+            l0_stop = 48,
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
             max_background_jobs = 24,
             max_subcompactions = 8,
-            block_cache_gb = 8,
-            direct_io_reads = true,
+            block_cache_normal_gb = Self::BLOCK_CACHE_NORMAL_BYTES / (1024 * 1024 * 1024),
+            block_cache_bulk_gb = Self::BLOCK_CACHE_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
+            wbm_normal_gb = Self::WBM_NORMAL_BYTES / (1024 * 1024 * 1024),
+            wbm_bulk_gb = Self::WBM_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
+            unordered_write = true,
+            direct_io_reads = std::env::var("CKBADGER_DIRECT_IO_READS")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true),
             direct_io_compaction = true,
             bytes_per_sync_mb = 4,
             dynamic_level_bytes = true,
             target_file_size_base_mb = 64,
             target_file_size_base_bulk_mb = 256,
-            pipelined_write = Self::PIPELINED_WRITE_ENABLED,
             mega_write_cfs = Self::MEGA_WRITE_CFS.len(),
             high_write_cfs = Self::HIGH_WRITE_CFS.len(),
             historical_append_cfs = Self::HISTORICAL_APPEND_CFS.len(),
@@ -542,22 +589,37 @@ impl CkbadgerStore {
 
     /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
     ///
-    /// During bulk sync, 5 parallel writer threads (T1-T7) each commit large
-    /// WriteBatches. The default per-CF `max_write_buffer_number=4` can cause
-    /// flush stalls when memtables fill faster than background flush can drain.
-    /// Increasing to 8 (mega) / 6 (high) gives more headroom before stalling.
+    /// During bulk sync, parallel writer threads each commit large WriteBatches.
+    /// The default per-CF `max_write_buffer_number=4` can cause flush stalls when
+    /// memtables fill faster than background flush can drain. Increasing to
+    /// 12 (mega) / 8 (high) / 6 (low) gives more headroom before stalling.
+    ///
+    /// Also expands the global WriteBufferManager budget and shrinks block cache
+    /// to shift memory from reads to writes during the write-heavy bulk phase.
     pub fn set_bulk_sync_compaction_options(&self) {
+        // Expand WBM budget: more memtable headroom before triggering atomic flush
+        self.write_buffer_manager
+            .set_buffer_size(Self::WBM_BULK_SYNC_BYTES);
+
+        // Shrink block cache: bulk sync is write-heavy, parser cell lookups hit
+        // in-memory caches. Freed memory goes to WBM memtable budget.
+        self.block_cache
+            .lock()
+            .expect("block_cache lock poisoned")
+            .set_capacity(Self::BLOCK_CACHE_BULK_SYNC_BYTES);
+
         let mut ok = 0u32;
         let mut fail = 0u32;
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                // More write buffers = more memtable headroom before flush stall
+                // More write buffers = more memtable headroom before flush stall.
+                // With WBM controlling global budget, per-CF limits are a safety net.
                 let max_wb = if Self::is_mega_write_cf(cf_name) {
-                    "8"
+                    "12"
                 } else if Self::is_high_write_cf(cf_name) {
-                    "6"
+                    "8"
                 } else {
-                    "4"
+                    "6"
                 };
                 let result = self.db.set_options_cf(
                     cf,
@@ -586,16 +648,29 @@ impl CkbadgerStore {
         info!(
             ok,
             fail,
+            wbm_budget_gb = Self::WBM_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
+            block_cache_gb = Self::BLOCK_CACHE_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
             "Bulk sync compaction options set: l0_slowdown=64, l0_stop=128, \
-             write_buffers mega=8/high=6/low=4"
+             write_buffers mega=12/high=8/low=6"
         );
     }
 
     /// Restore normal L0 thresholds and write buffer counts after bulk sync.
     ///
     /// Reverts L0 slowdown/stop triggers to 12/24, write buffers to 4 (mega/high)
-    /// or 2 (low), and `max_bytes_for_level_base` to 512 MB.
+    /// or 2 (low), `max_bytes_for_level_base` to 512 MB, and restores WBM budget
+    /// and block cache to normal sizes.
     pub fn restore_normal_compaction_options(&self) {
+        // Restore WBM to normal budget
+        self.write_buffer_manager
+            .set_buffer_size(Self::WBM_NORMAL_BYTES);
+
+        // Restore block cache to full size for read-heavy tip-following
+        self.block_cache
+            .lock()
+            .expect("block_cache lock poisoned")
+            .set_capacity(Self::BLOCK_CACHE_NORMAL_BYTES);
+
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
                 let max_wb = if Self::is_mega_write_cf(cf_name) || Self::is_high_write_cf(cf_name) {
@@ -615,7 +690,11 @@ impl CkbadgerStore {
                 );
             }
         }
-        info!("Normal compaction options restored: l0_slowdown=12, l0_stop=24");
+        info!(
+            wbm_budget_gb = Self::WBM_NORMAL_BYTES / (1024 * 1024 * 1024),
+            block_cache_gb = Self::BLOCK_CACHE_NORMAL_BYTES / (1024 * 1024 * 1024),
+            "Normal compaction options restored: l0_slowdown=12, l0_stop=24"
+        );
     }
 
     /// Disable auto-compactions on all column families.
@@ -662,6 +741,38 @@ impl CkbadgerStore {
     }
 
     // ---- Memory stats ----
+
+    /// Lightweight compaction pressure snapshot for the adaptive batch controller.
+    /// Only collects the 3 RocksDB properties needed for backpressure decisions,
+    /// avoiding the full CF iteration of `memory_stats()`.
+    pub fn compaction_pressure(&self) -> (u64, u64, u64) {
+        let mut compaction_pending_bytes = 0u64;
+        let mut l0_files_max: u64 = 0;
+        let mut immutable_memtables = 0u64;
+        for &cf_name in ALL_CFS {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.estimate-pending-compaction-bytes")
+                {
+                    compaction_pending_bytes += v;
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
+                {
+                    l0_files_max = l0_files_max.max(v);
+                }
+                if let Ok(Some(v)) = self
+                    .db
+                    .property_int_value_cf(cf, "rocksdb.num-immutable-mem-table")
+                {
+                    immutable_memtables += v;
+                }
+            }
+        }
+        (l0_files_max, compaction_pending_bytes, immutable_memtables)
+    }
 
     pub fn memory_stats(&self) -> MemoryStats {
         let mut memtable_bytes = 0usize;
@@ -775,7 +886,11 @@ impl CkbadgerStore {
             consumed_cf_memtable_bytes,
         );
 
-        let block_cache_bytes = self.block_cache.get_usage();
+        let block_cache_bytes = self
+            .block_cache
+            .lock()
+            .expect("block_cache lock poisoned")
+            .get_usage();
         let memory_bytes = memtable_bytes + block_cache_bytes + table_readers_bytes;
         let num_running_compactions = self
             .db
@@ -804,6 +919,8 @@ impl CkbadgerStore {
             l0_worst_cf,
             immutable_memtables,
             top_cf_sizes: cf_sizes,
+            wbm_usage_bytes: self.write_buffer_manager.get_usage(),
+            wbm_budget_bytes: self.write_buffer_manager.get_buffer_size(),
         }
     }
 }

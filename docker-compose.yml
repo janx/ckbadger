@@ -50,6 +50,7 @@ services:
     environment:
       CKBADGER_DATA_PATH: /data/ckbadger-store
       CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
+      CKBADGER_DIRECT_IO_READS: 'false'
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db

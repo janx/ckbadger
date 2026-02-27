@@ -2105,6 +2105,12 @@ struct AdaptiveBatchInput {
     parse_queue_fill_pct: Option<f64>,
     writer_queue_fill_pct: Option<f64>,
     memory_ratio_pct: Option<f64>,
+    /// Max L0 file count across all CFs (from memory_stats)
+    l0_files_max: Option<u64>,
+    /// Pending compaction bytes (from memory_stats)
+    compaction_pending_bytes: Option<u64>,
+    /// Total immutable memtables across all CFs (from memory_stats)
+    immutable_memtables: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2328,9 +2334,23 @@ impl AdaptiveBatchController {
                 .writer_queue_fill_pct
                 .is_some_and(|pct| pct >= ADAPTIVE_BATCH_WRITER_PRESSURE_PCT);
 
+        // RocksDB internal pressure signals: detect compaction backlog, L0 pile-up,
+        // and immutable memtable accumulation BEFORE they cause write stalls.
+        let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 40)
+            || input
+                .compaction_pending_bytes
+                .is_some_and(|b| b >= 8 * 1024 * 1024 * 1024)
+            || input.immutable_memtables.is_some_and(|imm| imm >= 60);
+        let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 20)
+            || input
+                .compaction_pending_bytes
+                .is_some_and(|b| b >= 4 * 1024 * 1024 * 1024)
+            || input.immutable_memtables.is_some_and(|imm| imm >= 30);
+
         let severe_pressure_signal = input.write_ms >= ADAPTIVE_BATCH_SEVERE_WRITE_MS
             || input.commit_ms >= ADAPTIVE_BATCH_SEVERE_COMMIT_MS
-            || write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX);
+            || write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX)
+            || rocksdb_severe_pressure;
         let severe_pressure_streak = if severe_pressure_signal {
             self.severe_pressure_streak.fetch_add(1, Ordering::Relaxed) + 1
         } else {
@@ -2343,7 +2363,8 @@ impl AdaptiveBatchController {
             || (queue_pressure && throughput_drop_under_load)
             || input
                 .memory_ratio_pct
-                .is_some_and(|pct| pct >= ADAPTIVE_BATCH_MEMORY_PRESSURE_PCT);
+                .is_some_and(|pct| pct >= ADAPTIVE_BATCH_MEMORY_PRESSURE_PCT)
+            || rocksdb_moderate_pressure;
 
         if severe_pressure {
             new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.7).round() as u64;
@@ -2387,7 +2408,8 @@ impl AdaptiveBatchController {
                         .is_some_and(|pct| pct < ADAPTIVE_BATCH_WRITER_HEALTHY_PCT)
                     && input
                         .memory_ratio_pct
-                        .is_none_or(|pct| pct < ADAPTIVE_BATCH_MEMORY_HEALTHY_PCT);
+                        .is_none_or(|pct| pct < ADAPTIVE_BATCH_MEMORY_HEALTHY_PCT)
+                    && !rocksdb_moderate_pressure;
                 if healthy && throughput_not_worse {
                     let healthy_streak = self.healthy_streak.fetch_add(1, Ordering::Relaxed) + 1;
                     if previous_inflight_limit < self.max_inflight_limit {
@@ -3114,6 +3136,8 @@ impl Indexer {
             l0_worst_cf: stats.l0_worst_cf,
             immutable_memtables: stats.immutable_memtables,
             top_cf_sizes: stats.top_cf_sizes,
+            wbm_usage_bytes: stats.wbm_usage_bytes as u64,
+            wbm_budget_bytes: stats.wbm_budget_bytes as u64,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
             total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
@@ -4923,6 +4947,8 @@ impl Indexer {
                         let writer_queue_fill_pct = parse_queue_fill_pct;
                         let memory_ratio_pct =
                             cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
+                        let (l0_files_max, compaction_pending_bytes, immutable_memtables) =
+                            self.writer.store().compaction_pressure();
                         let blocks_remaining = self.progress.blocks_remaining();
                         let db_stage_ms = db_elapsed.as_secs_f64() * 1000.0;
                         let write_us_per_tx = if batch_tx_count > 0 && db_stage_ms > 0.0 {
@@ -4940,6 +4966,9 @@ impl Indexer {
                                     parse_queue_fill_pct,
                                     writer_queue_fill_pct,
                                     memory_ratio_pct,
+                                    l0_files_max: Some(l0_files_max),
+                                    compaction_pending_bytes: Some(compaction_pending_bytes),
+                                    immutable_memtables: Some(immutable_memtables),
                                 })
                         {
                             info!(
@@ -7826,7 +7855,7 @@ impl Indexer {
         let t_write = Instant::now();
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 9]> = None;
+        let mut thread_times: Option<[f64; 8]> = None;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
@@ -7839,9 +7868,11 @@ impl Indexer {
 
             let tt;
             (batch_stats, tt, write_commit_ms) = std::thread::scope(
-                |s| -> Result<(BatchStats, [f64; 9], f64)> {
-                    // T1a: Cells + Consumption (live_cells + consumed_cells CFs only)
-                    // CFs: LIVE_CELLS, CONSUMED_CELLS
+                |s| -> Result<(BatchStats, [f64; 8], f64)> {
+                    // T1: Cells + Consumption + Cell Indexes (merged T1a+T1b)
+                    // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE,
+                    //       CELL_BY_LOCK_CODE, CELL_BY_TYPE_CODE
+                    // Single batch + single commit reduces atomic flush trigger frequency.
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
@@ -7857,16 +7888,6 @@ impl Indexer {
                                 true,
                             )?;
                         }
-                        let commit_ms =
-                            commit_phase_no_wal("T1a_cells", first_block, last_block, batch)?;
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
-                    });
-
-                    // T1b: Cell index CFs from pre-computed keys
-                    // CFs: CELL_BY_LOCK, CELL_BY_TYPE, CELL_BY_LOCK_CODE, CELL_BY_TYPE_CODE
-                    let h1b = s.spawn(|| -> Result<(f64, f64)> {
-                        let t = Instant::now();
-                        let mut batch = StoreBatch::new(store);
                         for op in &cell_index_puts {
                             batch.put_cell_by_lock_raw(&op.lock_hash_key);
                             batch.put_cell_by_lock_code_raw(&op.lock_code_hash_key);
@@ -7887,12 +7908,8 @@ impl Indexer {
                                 batch.delete_cell_by_type_code_raw(k);
                             }
                         }
-                        let commit_ms = commit_phase_no_wal(
-                            "T1b_cell_indices",
-                            first_block,
-                            last_block,
-                            batch,
-                        )?;
+                        let commit_ms =
+                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     });
 
@@ -8938,8 +8955,7 @@ impl Indexer {
                         None
                     };
 
-                    let (t1_ms, t1_commit_ms) = h1.join().expect("T1a panicked")?;
-                    let (t1b_ms, t1b_commit_ms) = h1b.join().expect("T1b panicked")?;
+                    let (t1_ms, t1_commit_ms) = h1.join().expect("T1 panicked")?;
                     let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
                     let (t4_ms, t4_commit_ms) = h4.join().expect("T4 panicked")?;
                     let (t5_ms, t5_commit_ms) = h5.join().expect("T5 panicked")?;
@@ -8951,7 +8967,6 @@ impl Indexer {
                         None => (0.0, 0.0),
                     };
                     let commit_total_ms = t1_commit_ms
-                        + t1b_commit_ms
                         + t2_commit_ms
                         + t4_commit_ms
                         + t5_commit_ms
@@ -8960,9 +8975,7 @@ impl Indexer {
                         + t_act_commit_ms;
                     Ok((
                         stats,
-                        [
-                            t1_ms, t1b_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms,
-                        ],
+                        [t1_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms],
                         commit_total_ms,
                     ))
                 },
@@ -10383,15 +10396,14 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        if let Some([t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
+        if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
                 write_ms = format!("{:.1}", write_ms),
                 write_commit_ms = format!("{:.1}", write_commit_ms),
                 finalize_ms = format!("{:.1}", finalize_ms),
-                t1a_ms = format!("{:.1}", t1),
-                t1b_ms = format!("{:.1}", t1b),
+                t1_ms = format!("{:.1}", t1),
                 t2_ms = format!("{:.1}", t2),
                 t4_ms = format!("{:.1}", t4),
                 t5_ms = format!("{:.1}", t5),
@@ -11858,6 +11870,9 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("moderate pressure should reduce target");
         assert_eq!(adjustment.reason, "moderate_backoff");
@@ -11880,6 +11895,9 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("healthy signal should adjust inflight first");
         assert_eq!(adjustment.reason, "healthy_step_up");
@@ -11908,6 +11926,9 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("far bulk mode should enforce minimum floors");
         assert_eq!(
@@ -11936,6 +11957,9 @@ mod tests {
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(85.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
         });
         assert!(
             first.is_none(),
@@ -11951,6 +11975,9 @@ mod tests {
                 parse_queue_fill_pct: Some(97.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("consecutive severe pressure at floor should lower adaptive min floor");
 
@@ -11980,6 +12007,9 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("healthy throughput should recover adaptive min floor");
 
@@ -12003,6 +12033,9 @@ mod tests {
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("first severe sample should only moderate-backoff");
         assert_eq!(first.reason, "moderate_backoff");
@@ -12016,6 +12049,9 @@ mod tests {
                 parse_queue_fill_pct: Some(98.0),
                 writer_queue_fill_pct: Some(98.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("second severe sample should trigger severe backoff");
         assert_eq!(second.reason, "severe_pressure_backoff");
@@ -12036,6 +12072,9 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("first healthy sample should step up");
         assert_eq!(first.reason, "healthy_step_up");
@@ -12048,6 +12087,9 @@ mod tests {
             parse_queue_fill_pct: Some(99.0),
             writer_queue_fill_pct: Some(99.0),
             memory_ratio_pct: Some(10.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
         });
         assert!(
             no_adjustment.is_none(),
@@ -12070,6 +12112,9 @@ mod tests {
             parse_queue_fill_pct: Some(97.0),
             writer_queue_fill_pct: Some(95.0),
             memory_ratio_pct: Some(10.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
         });
         assert!(
             no_adjustment.is_none(),
@@ -12102,6 +12147,9 @@ mod tests {
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("near-tip path should allow lower min floor");
 
@@ -12125,6 +12173,9 @@ mod tests {
                 parse_queue_fill_pct: Some(10.0),
                 writer_queue_fill_pct: Some(10.0),
                 memory_ratio_pct: Some(10.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("first healthy sample should step up");
         assert_eq!(first.reason, "healthy_step_up");
@@ -12137,6 +12188,9 @@ mod tests {
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
         });
         assert!(
             no_adjustment.is_none(),
@@ -12156,6 +12210,9 @@ mod tests {
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("first pressure sample should adjust");
         let _ = controller
@@ -12167,6 +12224,9 @@ mod tests {
                 parse_queue_fill_pct: Some(95.0),
                 writer_queue_fill_pct: Some(95.0),
                 memory_ratio_pct: Some(85.0),
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
             })
             .expect("second pressure sample should trigger cooldown");
         let snapshot_after_pressure = controller.snapshot();
@@ -12179,6 +12239,9 @@ mod tests {
             parse_queue_fill_pct: Some(10.0),
             writer_queue_fill_pct: Some(10.0),
             memory_ratio_pct: Some(10.0),
+            l0_files_max: None,
+            compaction_pending_bytes: None,
+            immutable_memtables: None,
         });
         assert!(no_adjustment.is_none());
         let snapshot_after_healthy = controller.snapshot();
