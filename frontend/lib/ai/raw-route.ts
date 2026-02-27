@@ -1,10 +1,16 @@
 export type ParsedRawPage =
   | { kind: 'block_detail'; pathname: string; id: string }
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
+  | { kind: 'did_ckb_item_detail'; pathname: string; nftId: string }
   | { kind: 'tx_detail'; pathname: string; hash: string }
   | { kind: 'unknown'; pathname: string };
 
-export const RAW_ROUTE_PATTERNS = ['/blocks/{id}', '/cell/{outpoint}', '/tx/{hash}'] as const;
+export const RAW_ROUTE_PATTERNS = [
+  '/blocks/{id}',
+  '/cell/{outpoint}',
+  '/nfts/did/{nftId}',
+  '/tx/{hash}',
+] as const;
 
 function normalizePathname(pathname: string): string {
   if (!pathname.startsWith('/')) {
@@ -51,6 +57,15 @@ export function parseRawSourcePath(pathname: string): ParsedRawPage {
       kind: 'tx_detail',
       pathname: normalized,
       hash: decodeParam(txMatch[1]),
+    };
+  }
+
+  const didMatch = normalized.match(/^\/nfts\/did\/([^/]+)$/);
+  if (didMatch) {
+    return {
+      kind: 'did_ckb_item_detail',
+      pathname: normalized,
+      nftId: decodeParam(didMatch[1]),
     };
   }
 

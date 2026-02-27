@@ -19,6 +19,12 @@ describe('parseRawSourcePath', () => {
       pathname: '/cell/0xabc-1',
       outpoint: '0xabc-1',
     });
+
+    expect(parseRawSourcePath('/nfts/did/0xdid')).toEqual({
+      kind: 'did_ckb_item_detail',
+      pathname: '/nfts/did/0xdid',
+      nftId: '0xdid',
+    });
   });
 
   it('returns unknown for unsupported raw route', () => {

@@ -7,6 +7,8 @@ vi.mock('@/lib/api', () => ({
   api: {
     getBlock: vi.fn(),
     getCell: vi.fn(),
+    getDidCkbItemActivities: vi.fn(),
+    getDidCkbItemDetail: vi.fn(),
     getTransactionDetail: vi.fn(),
     getTransactionCellDeps: vi.fn(),
     getTransactionLifecycle: vi.fn(),
@@ -261,6 +263,51 @@ describe('renderRawPage', () => {
       result.body.data?.txWitness?.inference.some((item) => item.kind === 'extra_witnesses')
     ).toBe(true);
     expect(rpcFetch).toHaveBeenCalled();
+  });
+
+  it('renders did:ckb item raw with default profile', async () => {
+    vi.mocked(api.getDidCkbItemDetail).mockResolvedValue({
+      nftId: '0xdid',
+      name: 'alice.did',
+      standard: 'did_ckb',
+      ownerLockHash: '0xowner',
+      isLive: true,
+      createdAtBlock: 123,
+      txHash: '0xtx',
+      outputIndex: 0,
+      expiredAt: null,
+    });
+    vi.mocked(api.getDidCkbItemActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xact',
+          blockNumber: 124,
+          txIndex: 0,
+          timestamp: '2026-02-23T00:00:00Z',
+          actions: ['transfer'],
+        },
+      ],
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    const result = await renderRawPage({
+      page: parseRawSourcePath('/nfts/did/0xdid'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.meta.profile).toBe('default');
+    expect(result.body.data?.didCkbItem?.nftId).toBe('0xdid');
+    expect(result.body.data?.didCkbActivities?.data[0]?.actions).toEqual(['transfer']);
+    expect(api.getDidCkbItemDetail).toHaveBeenCalledWith('0xdid');
+    expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xdid', {
+      action: undefined,
+      cursor: undefined,
+      limit: 20,
+    });
   });
 
   it('fails fast on unsupported profile', async () => {

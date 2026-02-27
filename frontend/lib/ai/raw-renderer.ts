@@ -1,4 +1,12 @@
-import type { Cell, CellDep, TransactionDetail, TransactionLifecycle } from '@/lib/api';
+import type {
+  Cell,
+  CellDep,
+  CursorPaginatedResponse,
+  MnftItemActivity,
+  NftCollectionItem,
+  TransactionDetail,
+  TransactionLifecycle,
+} from '@/lib/api';
 import { api } from '@/lib/api';
 import type { ParsedRawPage } from '@/lib/ai/raw-route';
 import {
@@ -14,6 +22,8 @@ const RAW_SCHEMA_VERSION = '1.1.0';
 const RAW_FORMAT = 'raw';
 const DEFAULT_PROFILE = 'default';
 const DEFAULT_CKB_RPC_URL = 'http://127.0.0.1:8114';
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 200;
 
 const RAW_PROFILES = ['default', 'debugger'] as const;
 type RawProfile = (typeof RAW_PROFILES)[number];
@@ -23,6 +33,7 @@ type RouteKind = Exclude<ParsedRawPage['kind'], 'unknown'>;
 const ROUTE_PROFILE_MATRIX: Record<RouteKind, RawProfile[]> = {
   block_detail: ['default'],
   cell_detail: ['default'],
+  did_ckb_item_detail: ['default'],
   tx_detail: ['default', 'debugger'],
 };
 
@@ -211,6 +222,8 @@ interface TxWitnessData {
 type RawPayload = {
   block?: unknown;
   cell?: Cell;
+  didCkbItem?: NftCollectionItem;
+  didCkbActivities?: CursorPaginatedResponse<MnftItemActivity>;
   transaction?: TransactionDetail;
   txDebugger?: TxDebuggerData;
   txWitness?: TxWitnessData;
@@ -250,6 +263,35 @@ function parseProfile(searchParams: URLSearchParams): RawProfile {
   throw new RawRenderError(400, 'invalid_profile', `Invalid query param "profile": ${raw}`, {
     allowedProfiles: RAW_PROFILES,
   });
+}
+
+function parseLimit(searchParams: URLSearchParams): number {
+  const raw = searchParams.get('limit');
+  if (raw === null) return DEFAULT_LIMIT;
+  if (!/^\d+$/.test(raw)) {
+    throw new RawRenderError(400, 'invalid_limit', `Invalid query param "limit": ${raw}`);
+  }
+  const limit = Number(raw);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+    throw new RawRenderError(
+      400,
+      'invalid_limit',
+      `Invalid query param "limit": ${raw}. Expected integer in [1, ${MAX_LIMIT}]`
+    );
+  }
+  return limit;
+}
+
+function parseMnftActivityAction(raw: string | null): 'mint' | 'transfer' | 'burn' | undefined {
+  if (raw === null) return undefined;
+  if (raw === 'mint' || raw === 'transfer' || raw === 'burn') {
+    return raw;
+  }
+  throw new RawRenderError(
+    400,
+    'invalid_action',
+    `Invalid query param "action": ${raw}. Expected one of mint,transfer,burn`
+  );
 }
 
 function parseOutpoint(outpoint: string): { txHash: string; outputIndex: number } {
@@ -716,6 +758,23 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         return {
           status: 200,
           body: { meta, data: { transaction, txWitness } },
+        };
+      }
+      case 'did_ckb_item_detail': {
+        const limit = parseLimit(searchParams);
+        const cursor = searchParams.get('cursor') ?? undefined;
+        const action = parseMnftActivityAction(searchParams.get('action'));
+        const [didCkbItem, didCkbActivities] = await Promise.all([
+          api.getDidCkbItemDetail(page.nftId),
+          api.getDidCkbItemActivities(page.nftId, {
+            limit,
+            cursor,
+            action,
+          }),
+        ]);
+        return {
+          status: 200,
+          body: { meta, data: { didCkbItem, didCkbActivities } },
         };
       }
     }

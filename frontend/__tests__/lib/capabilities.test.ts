@@ -24,6 +24,8 @@ describe('buildAiCapabilities', () => {
     expect(capabilities.routes.markdown).toContain('/nfts/dotbit/{nftId}');
     expect(capabilities.routes.markdown).toContain('/nfts/did/{nftId}');
     expect(capabilities.routes.raw).toContain('/tx/{hash}');
+    expect(capabilities.routes.raw).toContain('/nfts/did/{nftId}');
+    expect(capabilities.rawProfiles.routes['/nfts/did/{nftId}']).toEqual(['default']);
     expect(capabilities.rawProfiles.routes['/tx/{hash}']).toEqual(['default', 'debugger']);
     expect(capabilities.rawProfiles.txDebuggerProfile.payloadPath).toBe(
       'data.txDebugger.mockTransaction'
