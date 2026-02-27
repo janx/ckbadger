@@ -149,23 +149,35 @@ pub async fn create_router(config: AppConfig) -> Router {
         });
     }
 
-    // Spawn periodic store refresh for secondary instances
+    // Spawn periodic store refresh for secondary instances.
+    // Uses spawn_blocking because try_catch_up_with_primary() is a synchronous
+    // RocksDB call that can block for extended periods during heavy indexer writes,
+    // which would starve the tokio async runtime if run on a worker thread.
     let refresh_store = state.store.clone();
     let refresh_derived_store = state.derived_store.clone();
     let refresh_ckb_store = state.ckb_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            if let Err(e) = refresh_store.refresh() {
-                tracing::warn!("Store refresh failed: {}", e);
-            }
-            if let Err(e) = refresh_derived_store.refresh() {
-                tracing::warn!("Derived store refresh failed: {}", e);
-            }
-            if let Some(ref ckb_store) = refresh_ckb_store {
-                if let Err(e) = ckb_store.refresh() {
-                    tracing::warn!("CKB store refresh failed: {}", e);
+            let store = refresh_store.clone();
+            let derived = refresh_derived_store.clone();
+            let ckb = refresh_ckb_store.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                if let Err(e) = store.refresh() {
+                    tracing::warn!("Store refresh failed: {}", e);
                 }
+                if let Err(e) = derived.refresh() {
+                    tracing::warn!("Derived store refresh failed: {}", e);
+                }
+                if let Some(ref ckb_store) = ckb {
+                    if let Err(e) = ckb_store.refresh() {
+                        tracing::warn!("CKB store refresh failed: {}", e);
+                    }
+                }
+            })
+            .await;
+            if let Err(e) = result {
+                tracing::warn!("Store refresh task panicked: {}", e);
             }
         }
     });
