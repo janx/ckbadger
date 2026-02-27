@@ -830,7 +830,19 @@ impl CkbadgerStore {
 
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
         match self.get_cf(self.cf_script_info(), code_hash)? {
-            Some(value) => Ok(bincode::deserialize(&value).ok()),
+            Some(value) => {
+                let info = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize script info: code_hash=0x{}, error={}",
+                        code_hash
+                            .iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<String>(),
+                        e
+                    )
+                })?;
+                Ok(Some(info))
+            }
             None => Ok(None),
         }
     }

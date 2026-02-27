@@ -87,8 +87,21 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(lock_hashes.len());
         for (res, lock_hash) in results.into_iter().zip(lock_hashes.iter()) {
             let existing: Option<AddressBalance> = match res {
-                Ok(Some(value)) => bincode::deserialize(&value).ok(),
-                _ => None,
+                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize address balance: lock_hash=0x{}, error={}",
+                        hex::encode(lock_hash),
+                        e
+                    )
+                })?),
+                Ok(None) => None,
+                Err(e) => {
+                    bail!(
+                        "failed to read address balance: lock_hash=0x{}, error={}",
+                        hex::encode(lock_hash),
+                        e
+                    );
+                }
             };
             map.insert((*lock_hash).clone(), existing);
         }
@@ -238,8 +251,21 @@ impl BatchWriter {
         let mut map = HashMap::with_capacity(code_hashes.len());
         for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
             let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
-                Ok(Some(value)) => bincode::deserialize(&value).ok(),
-                _ => None,
+                Ok(Some(value)) => Some(bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize script info: code_hash=0x{}, error={}",
+                        hex::encode(code_hash),
+                        e
+                    )
+                })?),
+                Ok(None) => None,
+                Err(e) => {
+                    bail!(
+                        "failed to read script info: code_hash=0x{}, error={}",
+                        hex::encode(code_hash),
+                        e
+                    );
+                }
             };
             map.insert((*code_hash).clone(), existing);
         }
@@ -272,14 +298,33 @@ impl BatchWriter {
             ),
         ) in changes
         {
+            let existing_info = existing.get(code_hash).and_then(|o| o.clone());
+            if existing_info.is_none()
+                && (*cells_delta < 0
+                    || *live_delta < 0
+                    || *cap_delta < 0
+                    || *live_cap_delta < 0
+                    || *occupied_delta < 0
+                    || *live_occupied_delta < 0)
+            {
+                bail!(
+                    "script delta underflow for unseen code_hash: code_hash=0x{}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, live_capacity_delta={}, occupied_delta={}, live_occupied_delta={}",
+                    hex::encode(code_hash),
+                    is_type,
+                    cells_delta,
+                    live_delta,
+                    cap_delta,
+                    live_cap_delta,
+                    occupied_delta,
+                    live_occupied_delta
+                );
+            }
+
             let info = updated_map.entry(code_hash).or_insert_with(|| {
-                existing
-                    .get(code_hash)
-                    .and_then(|o| o.clone())
-                    .unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
-                        code_hash: code_hash.clone(),
-                        ..Default::default()
-                    })
+                existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    ..Default::default()
+                })
             });
 
             if *is_type {
@@ -490,8 +535,21 @@ impl BatchWriter {
             keyed_changes.into_iter().zip(existing_results.into_iter())
         {
             let mut existing: ScriptDailyDelta = match existing_res {
-                Ok(Some(value)) => bincode::deserialize(&value).unwrap_or_default(),
-                _ => ScriptDailyDelta::default(),
+                Ok(Some(value)) => bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize script daily delta: key=0x{}, error={}",
+                        hex::encode(&key),
+                        e
+                    )
+                })?,
+                Ok(None) => ScriptDailyDelta::default(),
+                Err(e) => {
+                    bail!(
+                        "failed to read script daily delta: key=0x{}, error={}",
+                        hex::encode(&key),
+                        e
+                    );
+                }
             };
             existing.live_capacity_delta = existing
                 .live_capacity_delta
@@ -722,5 +780,61 @@ mod tests {
         let updated = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(updated.lock_capacity_sum, huge_delta);
         assert_eq!(updated.lock_live_capacity_sum, huge_delta);
+    }
+
+    #[test]
+    fn test_read_script_info_errors_on_deserialize_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let code_hash = vec![0xEE; 32];
+
+        store
+            .put_cf(store.cf_script_info(), &code_hash, &[0xFF, 0x00])
+            .unwrap();
+
+        let refs = vec![&code_hash];
+        let err = writer.read_script_info(&refs).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize script info"));
+    }
+
+    #[test]
+    fn test_read_address_balances_errors_on_deserialize_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let lock_hash = vec![0xEF; 32];
+
+        store
+            .put_cf(store.cf_addr_balance(), &lock_hash, &[0xFF, 0x00])
+            .unwrap();
+
+        let refs = vec![&lock_hash];
+        let err = writer.read_address_balances(&refs).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize address balance"));
+    }
+
+    #[test]
+    fn test_apply_script_usage_deltas_rejects_negative_delta_for_unseen_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let code_hash = vec![0xAB; 32];
+        let existing = HashMap::new();
+        let mut changes = HashMap::new();
+        changes.insert((code_hash.clone(), false), (0, -1, 0, -1, 0, -1));
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("script delta underflow for unseen code_hash"));
     }
 }
