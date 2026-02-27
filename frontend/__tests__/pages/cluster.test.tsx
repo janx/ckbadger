@@ -194,6 +194,34 @@ describe('ClusterDetailPage', () => {
     });
   });
 
+  it('handles malformed spore payload without crashing', async () => {
+    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
+    vi.mocked(api.getSporesByCluster).mockResolvedValue({
+      data: [
+        {
+          ...mockSpores.data[0],
+          sporeId: '',
+          contentType: undefined,
+          ownerLockHash: undefined,
+          ownerAddress: undefined,
+          contentSize: undefined,
+          createdAtBlock: undefined,
+        } as any,
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<ClusterDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Unknown spore ID').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('unknown').length).toBeGreaterThan(0);
+    });
+  });
+
   it('renders collection tabs with NFTs active by default', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);

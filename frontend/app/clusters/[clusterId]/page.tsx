@@ -44,6 +44,20 @@ function isCollectionSectionTab(value: string | null): value is CollectionSectio
   return value === 'activities' || value === 'nfts' || value === 'holders';
 }
 
+function safeString(value: unknown, fallback = ''): string {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  return value;
+}
+
+function safeNumber(value: unknown, fallback = 0): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return value;
+}
+
 function formatStorageTierLabel(tier: string): string {
   if (tier === 'fully_onchain') return 'Fully On-chain';
   if (tier === 'decentralized_external') return 'Decentralized External';
@@ -160,19 +174,22 @@ export default function ClusterDetailPage() {
     }
   };
 
-  const getContentTypeIcon = (contentType: string) => {
-    if (contentType.startsWith('image/')) return '🖼️';
-    if (contentType.startsWith('video/')) return '🎬';
-    if (contentType.startsWith('audio/')) return '🎵';
-    if (contentType.startsWith('text/')) return '📄';
+  const getContentTypeIcon = (contentType: string | null | undefined) => {
+    const normalized = safeString(contentType);
+    if (!normalized) return '📦';
+    if (normalized.startsWith('image/')) return '🖼️';
+    if (normalized.startsWith('video/')) return '🎬';
+    if (normalized.startsWith('audio/')) return '🎵';
+    if (normalized.startsWith('text/')) return '📄';
     return '📦';
   };
 
-  const summarizeContentType = (contentType: string): string => {
-    if (!contentType) {
+  const summarizeContentType = (contentType: string | null | undefined): string => {
+    const normalized = safeString(contentType);
+    if (!normalized) {
       return 'unknown';
     }
-    const [primary] = contentType.toLowerCase().split('/');
+    const [primary] = normalized.toLowerCase().split('/');
     if (!primary) {
       return 'unknown';
     }
@@ -265,28 +282,36 @@ export default function ClusterDetailPage() {
 
     const queryFiltered = normalizedQuery
       ? filtered.filter((spore) => {
+          const sporeId = safeString(spore.sporeId);
+          const contentType = safeString(spore.contentType);
+          const ownerLockHash = safeString(spore.ownerLockHash);
+          const ownerAddress = safeString(spore.ownerAddress);
           return (
-            spore.sporeId.toLowerCase().includes(normalizedQuery) ||
-            spore.contentType.toLowerCase().includes(normalizedQuery) ||
-            spore.ownerLockHash.toLowerCase().includes(normalizedQuery) ||
-            (spore.ownerAddress?.toLowerCase().includes(normalizedQuery) ?? false)
+            sporeId.toLowerCase().includes(normalizedQuery) ||
+            contentType.toLowerCase().includes(normalizedQuery) ||
+            ownerLockHash.toLowerCase().includes(normalizedQuery) ||
+            ownerAddress.toLowerCase().includes(normalizedQuery)
           );
         })
       : filtered;
 
     const sorted = [...queryFiltered];
     sorted.sort((a, b) => {
+      const createdAtA = safeNumber(a.createdAtBlock);
+      const createdAtB = safeNumber(b.createdAtBlock);
+      const contentSizeA = safeNumber(a.contentSize);
+      const contentSizeB = safeNumber(b.contentSize);
       if (listSort === 'createdDesc') {
-        return b.createdAtBlock - a.createdAtBlock;
+        return createdAtB - createdAtA;
       }
       if (listSort === 'createdAsc') {
-        return a.createdAtBlock - b.createdAtBlock;
+        return createdAtA - createdAtB;
       }
       if (listSort === 'sizeDesc') {
-        return b.contentSize - a.contentSize;
+        return contentSizeB - contentSizeA;
       }
       if (listSort === 'sizeAsc') {
-        return a.contentSize - b.contentSize;
+        return contentSizeA - contentSizeB;
       }
       return 0;
     });
@@ -300,12 +325,14 @@ export default function ClusterDetailPage() {
 
     const unique = new Map<string, string>();
     for (const spore of filteredAndSortedSpores) {
-      if (spore.ownerAddress || !spore.ownerLockHash) {
+      const ownerAddress = safeString(spore.ownerAddress);
+      const ownerLockHash = safeString(spore.ownerLockHash);
+      if (ownerAddress || !ownerLockHash) {
         continue;
       }
-      const normalized = spore.ownerLockHash.toLowerCase();
+      const normalized = ownerLockHash.toLowerCase();
       if (!unique.has(normalized)) {
-        unique.set(normalized, spore.ownerLockHash);
+        unique.set(normalized, ownerLockHash);
       }
     }
     return Array.from(unique.values());
@@ -330,11 +357,19 @@ export default function ClusterDetailPage() {
     return map;
   }, [missingSporeOwnerLockHashes, sporeOwnerAddressQueries]);
 
-  const resolveSporeOwnerAddress = (ownerLockHash: string, ownerAddress?: string) => {
-    if (ownerAddress) {
-      return ownerAddress;
+  const resolveSporeOwnerAddress = (
+    ownerLockHash: string | null | undefined,
+    ownerAddress?: string | null
+  ) => {
+    const normalizedOwnerAddress = safeString(ownerAddress);
+    if (normalizedOwnerAddress) {
+      return normalizedOwnerAddress;
     }
-    return sporeOwnerAddressByLockHash.get(ownerLockHash.toLowerCase()) ?? null;
+    const normalizedOwnerLockHash = safeString(ownerLockHash);
+    if (!normalizedOwnerLockHash) {
+      return null;
+    }
+    return sporeOwnerAddressByLockHash.get(normalizedOwnerLockHash.toLowerCase()) ?? null;
   };
 
   const pageContentBreakdown = useMemo(() => {
@@ -361,7 +396,10 @@ export default function ClusterDetailPage() {
     if (!filteredAndSortedSpores.length) {
       return null;
     }
-    const sum = filteredAndSortedSpores.reduce((acc, item) => acc + item.contentSize, 0);
+    const sum = filteredAndSortedSpores.reduce(
+      (acc, item) => acc + safeNumber(item.contentSize),
+      0
+    );
     return Math.round(sum / filteredAndSortedSpores.length);
   }, [filteredAndSortedSpores]);
 
@@ -793,29 +831,45 @@ export default function ClusterDetailPage() {
                         </div>
 
                         {filteredAndSortedSpores.map((spore) => {
+                          const sporeId = safeString(spore.sporeId);
+                          const contentType = safeString(spore.contentType, 'unknown');
+                          const contentSize = safeNumber(spore.contentSize);
+                          const createdAtBlock = safeNumber(spore.createdAtBlock);
+                          const ownerLockHash = safeString(spore.ownerLockHash);
+                          const ownerAddress = safeString(spore.ownerAddress);
                           const resolvedOwnerAddress = resolveSporeOwnerAddress(
-                            spore.ownerLockHash,
-                            spore.ownerAddress
+                            ownerLockHash,
+                            ownerAddress
                           );
+                          const rowKey =
+                            sporeId ||
+                            `${safeString(spore.txHash, 'unknown-tx')}:${safeNumber(spore.outputIndex)}`;
+                          const isLive = spore.isLive !== false;
                           return (
-                            <TerminalRow key={spore.sporeId}>
+                            <TerminalRow key={rowKey}>
                               <div className="hidden md:grid md:grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)_90px_80px_minmax(0,1.2fr)_110px] md:items-center md:gap-3">
                                 <div className="flex items-center gap-2">
                                   <span className="text-base">
-                                    {getContentTypeIcon(spore.contentType)}
+                                    {getContentTypeIcon(contentType)}
                                   </span>
-                                  <Link href={`/nfts/${spore.sporeId}`} className="hover:underline">
-                                    <HexDisplay value={spore.sporeId} color="accent" size="sm" />
-                                  </Link>
+                                  {sporeId ? (
+                                    <Link href={`/nfts/${sporeId}`} className="hover:underline">
+                                      <HexDisplay value={sporeId} color="accent" size="sm" />
+                                    </Link>
+                                  ) : (
+                                    <span className="font-mono text-xs text-slate-500">
+                                      Unknown spore ID
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="font-mono text-xs text-slate-300">
-                                  {spore.contentType}
+                                  {contentType}
                                 </div>
                                 <div className="text-right font-mono text-xs text-slate-300">
-                                  {formatNumber(spore.contentSize)} B
+                                  {formatNumber(contentSize)} B
                                 </div>
                                 <div className="text-center">
-                                  {spore.isLive ? (
+                                  {isLive ? (
                                     <Badge variant="green">Live</Badge>
                                   ) : (
                                     <Badge variant="red">Burned</Badge>
@@ -832,10 +886,10 @@ export default function ClusterDetailPage() {
                                 </div>
                                 <div className="text-right">
                                   <Link
-                                    href={`/blocks/${spore.createdAtBlock}`}
+                                    href={`/blocks/${createdAtBlock}`}
                                     className="text-terminal-green font-mono text-xs hover:underline"
                                   >
-                                    #{formatNumber(spore.createdAtBlock)}
+                                    #{formatNumber(createdAtBlock)}
                                   </Link>
                                 </div>
                               </div>
@@ -844,32 +898,33 @@ export default function ClusterDetailPage() {
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="flex items-center gap-2">
                                     <span className="text-base">
-                                      {getContentTypeIcon(spore.contentType)}
+                                      {getContentTypeIcon(contentType)}
                                     </span>
-                                    <Link
-                                      href={`/nfts/${spore.sporeId}`}
-                                      className="hover:underline"
-                                    >
-                                      <HexDisplay value={spore.sporeId} color="accent" size="sm" />
-                                    </Link>
+                                    {sporeId ? (
+                                      <Link href={`/nfts/${sporeId}`} className="hover:underline">
+                                        <HexDisplay value={sporeId} color="accent" size="sm" />
+                                      </Link>
+                                    ) : (
+                                      <span className="font-mono text-xs text-slate-500">
+                                        Unknown spore ID
+                                      </span>
+                                    )}
                                   </div>
-                                  {spore.isLive ? (
+                                  {isLive ? (
                                     <Badge variant="green">Live</Badge>
                                   ) : (
                                     <Badge variant="red">Burned</Badge>
                                   )}
                                 </div>
                                 <div className="flex items-center justify-between gap-3 text-xs">
-                                  <span className="font-mono text-slate-500">
-                                    {spore.contentType}
-                                  </span>
+                                  <span className="font-mono text-slate-500">{contentType}</span>
                                   <span className="font-mono text-slate-300">
-                                    {formatNumber(spore.contentSize)} B
+                                    {formatNumber(contentSize)} B
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-3 text-xs">
                                   <span className="font-mono text-slate-500">
-                                    Block #{formatNumber(spore.createdAtBlock)}
+                                    Block #{formatNumber(createdAtBlock)}
                                   </span>
                                   {resolvedOwnerAddress ? (
                                     <Address address={resolvedOwnerAddress} truncate />
