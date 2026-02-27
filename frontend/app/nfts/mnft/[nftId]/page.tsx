@@ -1,15 +1,17 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { Header } from '@/components/layout/header';
 import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
 import {
   TerminalPanel,
   TerminalPanelContent,
+  TerminalPanelFooter,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
 import { PageHeader, Badge } from '@/components/ui/page-header';
@@ -17,7 +19,7 @@ import { DataField, DataGrid } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { api } from '@/lib/api';
-import { normalizeNftId } from '@/lib/nft-utils';
+import { normalizeNftId, parseActivityCursor } from '@/lib/nft-utils';
 import { formatNumber } from '@/lib/utils';
 
 function decodeTokenState(state: number): string {
@@ -44,8 +46,15 @@ function decodeTokenConfigure(configure: number): string {
 
 export default function MnftItemDetailPage() {
   const params = useParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const rawNftId = params.nftId as string;
   const nftId = normalizeNftId(rawNftId);
+  const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
+    parseActivityCursor(searchParams.get('activity_cursor'))
+  );
+  const [activityCursorHistory, setActivityCursorHistory] = useState<string[]>([]);
 
   const detailQuery = useQuery({
     queryKey: ['mnft-item-detail', nftId],
@@ -62,24 +71,48 @@ export default function MnftItemDetailPage() {
     retry: false,
   });
 
-  const { data: itemActivities } = useQuery({
-    queryKey: ['mnft-item-activities', detail?.nftId],
-    queryFn: () => api.getMnftItemActivities(detail!.nftId, { limit: 20 }),
+  const { data: itemActivities, isLoading: isActivitiesLoading } = useQuery({
+    queryKey: ['mnft-item-activities', detail?.nftId, activityCursor],
+    queryFn: () => {
+      const queryParams: { limit: number; cursor?: string } = { limit: 20 };
+      if (activityCursor) {
+        queryParams.cursor = activityCursor;
+      }
+      return api.getMnftItemActivities(detail!.nftId, queryParams);
+    },
     enabled: !!detail?.nftId,
     retry: false,
+    placeholderData: keepPreviousData,
   });
 
-  const ownerTimeline = useMemo(() => {
-    if (!itemActivities?.data?.length) {
-      return [] as Array<{ txHash: string; blockNumber: number; actions: string[] }>;
-    }
+  const goToNextActivityPage = useCallback(
+    (nextCursor: string | null | undefined) => {
+      if (!nextCursor) return;
+      setActivityCursorHistory((prev) => [...prev, activityCursor || '']);
+      setActivityCursor(nextCursor);
+    },
+    [activityCursor]
+  );
 
-    return itemActivities.data.map((activity) => ({
-      txHash: activity.txHash,
-      blockNumber: activity.blockNumber,
-      actions: activity.actions,
-    }));
-  }, [itemActivities?.data]);
+  const goToPreviousActivityPage = useCallback(() => {
+    if (activityCursorHistory.length === 0) return;
+    const prev = activityCursorHistory[activityCursorHistory.length - 1];
+    setActivityCursorHistory((history) => history.slice(0, -1));
+    setActivityCursor(prev || undefined);
+  }, [activityCursorHistory]);
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    if (activityCursor) {
+      nextParams.set('activity_cursor', activityCursor);
+    } else {
+      nextParams.delete('activity_cursor');
+    }
+    const current = searchParams.toString();
+    const next = nextParams.toString();
+    if (next === current) return;
+    router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+  }, [activityCursor, pathname, router, searchParams]);
 
   if (detailQuery.isLoading) {
     return (
@@ -296,7 +329,7 @@ export default function MnftItemDetailPage() {
           </TerminalPanel>
 
           <TerminalPanel>
-            <TerminalPanelHeader indicator="active">Lifecycle Timeline</TerminalPanelHeader>
+            <TerminalPanelHeader indicator="active">Lifecycle</TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="space-y-2">
                 {detail.lifecycle.map((event, index) => (
@@ -329,18 +362,44 @@ export default function MnftItemDetailPage() {
                     {event.note && <div className="mt-1 text-xs text-slate-400">{event.note}</div>}
                   </div>
                 ))}
-
-                {ownerTimeline.map((activity) => (
-                  <NftActivityCard
-                    key={activity.txHash}
-                    txHash={activity.txHash}
-                    blockNumber={activity.blockNumber}
-                    actions={activity.actions}
-                    badgeActions
-                  />
-                ))}
               </div>
             </TerminalPanelContent>
+          </TerminalPanel>
+
+          <TerminalPanel>
+            <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
+            <TerminalPanelContent>
+              {isActivitiesLoading ? (
+                <div className="py-2 text-sm text-slate-500">Loading activities...</div>
+              ) : !itemActivities?.data?.length ? (
+                <div className="py-2 text-sm text-slate-500">No related activities found.</div>
+              ) : (
+                <div className="space-y-2">
+                  {itemActivities.data.map((activity) => (
+                    <NftActivityCard
+                      key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
+                      txHash={activity.txHash}
+                      blockNumber={activity.blockNumber}
+                      txIndex={activity.txIndex}
+                      actions={activity.actions}
+                      badgeActions
+                    />
+                  ))}
+                </div>
+              )}
+            </TerminalPanelContent>
+            <TerminalPanelFooter>
+              <CursorPagination
+                total={itemActivities?.total ?? undefined}
+                totalLabel="activities"
+                pageSize={20}
+                page={activityCursorHistory.length + 1}
+                hasMore={itemActivities?.hasMore ?? false}
+                hasPrevious={activityCursorHistory.length > 0}
+                onNext={() => goToNextActivityPage(itemActivities?.nextCursor)}
+                onPrevious={goToPreviousActivityPage}
+              />
+            </TerminalPanelFooter>
           </TerminalPanel>
         </div>
       </main>

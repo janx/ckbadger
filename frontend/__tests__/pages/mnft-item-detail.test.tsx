@@ -17,13 +17,21 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+const mockReplace = vi.fn();
+let mockSearchParams = new URLSearchParams();
+
 vi.mock('next/navigation', () => ({
   useParams: () => ({ nftId: '0xmnft' }),
+  usePathname: () => '/nfts/mnft/0xmnft',
+  useRouter: () => ({ replace: mockReplace }),
+  useSearchParams: () => mockSearchParams,
 }));
 
 describe('MnftItemDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReplace.mockReset();
+    mockSearchParams = new URLSearchParams();
     vi.mocked(api.getAddress).mockResolvedValue({
       lockScriptHash: '0xlock',
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
@@ -98,7 +106,8 @@ describe('MnftItemDetailPage', () => {
     expect(screen.getByText('On-chain State')).toBeInTheDocument();
     expect(screen.getByText('Ownership & Live Cell')).toBeInTheDocument();
     expect(screen.getByText('Class Context')).toBeInTheDocument();
-    expect(screen.getByText('Lifecycle Timeline')).toBeInTheDocument();
+    expect(screen.getByText('Lifecycle')).toBeInTheDocument();
+    expect(screen.getByText('Activities')).toBeInTheDocument();
     expect(screen.getByText('Class A')).toBeInTheDocument();
     expect(screen.getByText('Issuer A')).toBeInTheDocument();
     expect(screen.getByText('Class A #99')).toBeInTheDocument();
