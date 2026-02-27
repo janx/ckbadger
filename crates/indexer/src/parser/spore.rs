@@ -1,3 +1,5 @@
+use ckbadger_store::types::SporeMediaProfile;
+
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::bytes_to_pg_string;
@@ -39,6 +41,9 @@ pub struct ParsedSporeCell {
     pub content: Vec<u8>,
     pub cluster_id: Option<Vec<u8>>,
     pub owner_lock_hash: Vec<u8>,
+    /// Pre-computed media profile from parser stage (bulk sync).
+    /// `None` means the writer should compute it on the fly (live sync).
+    pub media_profile: Option<SporeMediaProfile>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +106,7 @@ impl SporeParser {
                 content: Vec::new(),
                 cluster_id: None,
                 owner_lock_hash,
+                media_profile: None,
             });
         }
 
@@ -115,6 +121,7 @@ impl SporeParser {
             content: spore_data.content,
             cluster_id: spore_data.cluster_id,
             owner_lock_hash,
+            media_profile: None,
         })
     }
 

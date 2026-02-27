@@ -29,8 +29,8 @@ use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
 use crate::parser::{
-    BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ScriptParser, SporeParser,
-    TransactionParser, UdtParser,
+    analyze_spore_media_profile, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser,
+    ParsedClusterCell, ParsedSporeCell, ScriptParser, SporeParser, TransactionParser, UdtParser,
 };
 use ckb_store_reader::CkbChainReader;
 
@@ -1272,9 +1272,10 @@ fn load_activity_token_info_cache(
         }
     }
 
+    let type_hash_vec: Vec<Vec<u8>> = type_hashes.into_iter().collect();
     let mut token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> = HashMap::new();
-    for type_hash in type_hashes {
-        let Some(info) = store.get_token(&type_hash)? else {
+    for (type_hash, info) in store.get_tokens_batch(&type_hash_vec) {
+        let Some(info) = info else {
             continue;
         };
         let decimals = match info.decimals {
@@ -3349,6 +3350,11 @@ impl Indexer {
         use tokio::sync::mpsc;
 
         type FetchedBatch = (u64, u64, u64, u64, Arc<Vec<BlockResponseWithCycles>>);
+        /// Pre-parsed spore/cluster data per-tx (flattened across all blocks).
+        /// Each entry corresponds to one tx in all_tx_data, containing
+        /// (parsed_spores, parsed_clusters) for that transaction.
+        type PreParsedSporeData = Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>;
+
         type ParsedBatch = (
             u64,
             u64,
@@ -3370,6 +3376,7 @@ impl Indexer {
             HashMap<(Vec<u8>, u32), (i128, i128)>, // cluster_daily_changes
             HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
             HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
+            PreParsedSporeData,                    // pre-parsed spore/cluster data
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -4403,6 +4410,82 @@ impl Indexer {
                     );
                 }
 
+                // Spore precompute: parse all spores/clusters and compute media
+                // profiles in the parser stage to offload T6 writer thread.
+                let pre_parsed_spore_data: PreParsedSporeData = {
+                    // Pass 1: Parse all clusters and spores per-tx.
+                    let mut per_tx: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)> =
+                        Vec::with_capacity(all_tx_data.len());
+                    let mut batch_cluster_descriptions: HashMap<Vec<u8>, Option<String>> =
+                        HashMap::new();
+                    let mut missing_cluster_ids: Vec<Vec<u8>> = Vec::new();
+                    for block_response in blocks.iter() {
+                        for tx in &block_response.block.transactions {
+                            let clusters = SporeParser::parse_clusters(tx);
+                            let spores = SporeParser::parse_spores(tx);
+
+                            // Record cluster descriptions from this batch.
+                            for cluster in &clusters {
+                                batch_cluster_descriptions.insert(
+                                    cluster.cluster_id.clone(),
+                                    cluster.description.clone(),
+                                );
+                            }
+
+                            // Collect cluster IDs referenced by spores that aren't
+                            // in this batch yet — we'll fetch them from DB.
+                            for spore in &spores {
+                                if let Some(ref cid) = spore.cluster_id {
+                                    if !batch_cluster_descriptions.contains_key(cid) {
+                                        missing_cluster_ids.push(cid.clone());
+                                    }
+                                }
+                            }
+                            per_tx.push((spores, clusters));
+                        }
+                    }
+
+                    // Batch-fetch missing cluster descriptions from DB.
+                    if !missing_cluster_ids.is_empty() {
+                        missing_cluster_ids.sort();
+                        missing_cluster_ids.dedup();
+                        for (id, entry) in writer_for_parser
+                            .store()
+                            .get_spores_batch(&missing_cluster_ids)
+                        {
+                            let desc = entry.and_then(|e| {
+                                if e.standard == ckbadger_store::types::DobStandard::SporeCluster {
+                                    e.description
+                                } else {
+                                    None
+                                }
+                            });
+                            batch_cluster_descriptions.insert(id, desc);
+                        }
+                    }
+
+                    // Pass 2: Compute media profiles with cluster descriptions.
+                    for (spores, _clusters) in &mut per_tx {
+                        for spore in spores.iter_mut() {
+                            if spore.is_did {
+                                continue;
+                            }
+                            let cluster_desc = spore
+                                .cluster_id
+                                .as_ref()
+                                .and_then(|cid| batch_cluster_descriptions.get(cid))
+                                .and_then(|d| d.as_deref());
+                            spore.media_profile = Some(analyze_spore_media_profile(
+                                &spore.content_type,
+                                &spore.content,
+                                cluster_desc,
+                            ));
+                        }
+                    }
+
+                    per_tx
+                };
+
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
                 let tx_count: usize = all_tx_data.len();
@@ -4477,6 +4560,7 @@ impl Indexer {
                         cluster_daily_changes,
                         nft_type_index_changes,
                         nft_daily_changes,
+                        pre_parsed_spore_data,
                     ))
                     .await
                     .is_err()
@@ -4535,6 +4619,7 @@ impl Indexer {
                     cluster_daily_changes,
                     nft_type_index_changes,
                     nft_daily_changes,
+                    pre_parsed_spore_data,
                 ))) => {
                     consecutive_idle_timeouts = 0;
                     atomic_saturating_sub_u64(
@@ -4694,6 +4779,7 @@ impl Indexer {
                             cluster_daily_changes,
                             nft_type_index_changes,
                             nft_daily_changes,
+                            pre_parsed_spore_data,
                             chain_tip,
                         )
                         .await
@@ -7180,6 +7266,7 @@ impl Indexer {
         cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
         nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        pre_parsed_spore_data: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
@@ -7597,7 +7684,7 @@ impl Indexer {
         let t_write = Instant::now();
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 7]> = None;
+        let mut thread_times: Option<[f64; 8]> = None;
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
@@ -7610,7 +7697,7 @@ impl Indexer {
 
             let tt;
             (batch_stats, tt, write_commit_ms) = std::thread::scope(
-                |s| -> Result<(BatchStats, [f64; 7], f64)> {
+                |s| -> Result<(BatchStats, [f64; 8], f64)> {
                     // T1: Cells + Consumption + cell index CFs
                     // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE, etc.
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
@@ -8051,12 +8138,62 @@ impl Indexer {
                             Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                         });
 
-                    // T6: Spore + mNFT/DotBit writes and DotBit consumption in bulk mode.
-                    // CFs: SPORE_DATA, SPORE_CONTENT, NFT_DATA
-                    let h6 = s.spawn(|| -> Result<(f64, f64)> {
+                    // T6a: Spore writes (clusters + cells + content).
+                    // CFs: SPORE_DATA, SPORE_BY_CLUSTER, CLUSTER_AGG, STATS (spore keys only)
+                    // Runs in parallel with T6b — writes to independent CFs.
+                    let h6a = s.spawn(|| -> Result<(f64, f64)> {
+                        if skip_spore {
+                            return Ok((0.0, 0.0));
+                        }
+                        let t = Instant::now();
+                        let mut batch = StoreBatch::new(store);
+                        let mut spore_state = writer.new_spore_batch_state();
+                        let mut block_tx_idx = 0usize;
+                        for (block_idx, _block_response) in blocks.iter().enumerate() {
+                            let parsed = &all_parsed_blocks[block_idx];
+                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let tx_slice =
+                                &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                            let ts_ms = parsed.timestamp.timestamp_millis();
+                            for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                                let tx_global_index = block_tx_idx + tx_idx;
+                                let (ref pre_spores, ref pre_clusters) =
+                                    pre_parsed_spore_data[tx_global_index];
+                                for cluster in pre_clusters {
+                                    writer.insert_spore_cluster(
+                                        cluster,
+                                        parsed.number,
+                                        &tx_data.hash,
+                                        &mut batch,
+                                        &mut spore_state,
+                                    )?;
+                                }
+                                for (output_index, spore) in pre_spores.iter().enumerate() {
+                                    writer.insert_spore_cell(
+                                        spore,
+                                        &tx_data.hash,
+                                        output_index as i16,
+                                        parsed.number,
+                                        ts_ms,
+                                        &mut batch,
+                                        &mut spore_state,
+                                    )?;
+                                    writer.insert_spore_content(&spore.spore_id, &spore.content)?;
+                                }
+                            }
+                            block_tx_idx += tx_count_for_block;
+                        }
+                        let commit_ms =
+                            commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
+                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                    });
+
+                    // T6b: mNFT + DotBit writes and DotBit consumption.
+                    // CFs: NFT_DATA, NFT_COLLECTION_AGG, NFT_BY_COLLECTION, STATS (nft keys)
+                    // Runs in parallel with T6a — mNFT/DotBit use independent CFs from Spore.
+                    let h6b = s.spawn(|| -> Result<(f64, f64)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
-                    let mut spore_state = writer.new_spore_batch_state();
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
                         HashMap::new();
@@ -8072,31 +8209,6 @@ impl Indexer {
                             let tx_global_index = block_tx_idx + tx_idx;
                             let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
                             let tx = &block_response.block.transactions[tx_idx];
-                            if !skip_spore {
-                                for cluster in SporeParser::parse_clusters(tx) {
-                                    writer.insert_spore_cluster(
-                                        &cluster,
-                                        parsed.number,
-                                        &tx_data.hash,
-                                        &mut batch,
-                                        &mut spore_state,
-                                    )?;
-                                }
-                                for (output_index, spore) in
-                                    SporeParser::parse_spores(tx).iter().enumerate()
-                                {
-                                    writer.insert_spore_cell(
-                                        spore,
-                                        &tx_data.hash,
-                                        output_index as i16,
-                                        parsed.number,
-                                        ts_ms,
-                                        &mut batch,
-                                        &mut spore_state,
-                                    )?;
-                                    writer.insert_spore_content(&spore.spore_id, &spore.content)?;
-                                }
-                            }
                             for issuer in MnftParser::parse_issuers(tx) {
                                 writer.insert_mnft_issuer(
                                     &issuer,
@@ -8230,7 +8342,7 @@ impl Indexer {
                         block_tx_idx += tx_count_for_block;
                     }
                     let commit_ms =
-                        commit_phase_no_wal("T6_spore_nft", first_block, last_block, batch)?;
+                        commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                 });
 
@@ -8604,7 +8716,8 @@ impl Indexer {
                     let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
                     let (t4_ms, t4_commit_ms) = h4.join().expect("T4 panicked")?;
                     let (t5_ms, t5_commit_ms) = h5.join().expect("T5 panicked")?;
-                    let (t6_ms, t6_commit_ms) = h6.join().expect("T6 panicked")?;
+                    let (t6a_ms, t6a_commit_ms) = h6a.join().expect("T6a panicked")?;
+                    let (t6b_ms, t6b_commit_ms) = h6b.join().expect("T6b panicked")?;
                     let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
                     let (t_act_ms, t_act_commit_ms) = match h_act {
                         Some(h) => h.join().expect("T_ACT panicked")?,
@@ -8614,11 +8727,12 @@ impl Indexer {
                         + t2_commit_ms
                         + t4_commit_ms
                         + t5_commit_ms
-                        + t6_commit_ms
+                        + t6a_commit_ms
+                        + t6b_commit_ms
                         + t_act_commit_ms;
                     Ok((
                         stats,
-                        [t1_ms, t2_ms, t4_ms, t5_ms, t6_ms, t7_ms, t_act_ms],
+                        [t1_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms],
                         commit_total_ms,
                     ))
                 },
@@ -9960,7 +10074,7 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        if let Some([t1, t2, t4, t5, t6, t7, t_act]) = thread_times {
+        if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
@@ -9971,7 +10085,8 @@ impl Indexer {
                 t2_ms = format!("{:.1}", t2),
                 t4_ms = format!("{:.1}", t4),
                 t5_ms = format!("{:.1}", t5),
-                t6_ms = format!("{:.1}", t6),
+                t6a_ms = format!("{:.1}", t6a),
+                t6b_ms = format!("{:.1}", t6b),
                 t7_ms = format!("{:.1}", t7),
                 t_act_ms = format!("{:.1}", t_act),
                 txs = batch_tx_count,

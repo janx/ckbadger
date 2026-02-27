@@ -180,6 +180,28 @@ impl CkbadgerStore {
         }
     }
 
+    /// Batch-fetch multiple tokens by type_script_hash in a single RocksDB multi_get.
+    pub fn get_tokens_batch(&self, type_hashes: &[Vec<u8>]) -> Vec<(Vec<u8>, Option<TokenInfo>)> {
+        if type_hashes.is_empty() {
+            return Vec::new();
+        }
+        let cf = self.cf_tokens();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            type_hashes.iter().map(|h| (cf, h.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+        type_hashes
+            .iter()
+            .zip(values)
+            .map(|(hash, result)| {
+                let info = result
+                    .ok()
+                    .flatten()
+                    .and_then(|v| bincode::deserialize::<TokenInfo>(&v).ok());
+                (hash.clone(), info)
+            })
+            .collect()
+    }
+
     pub fn put_token_direct(&self, type_hash: &[u8], info: &TokenInfo) -> anyhow::Result<()> {
         let value = bincode::serialize(info)?;
         self.put_cf(self.cf_tokens(), type_hash, &value)

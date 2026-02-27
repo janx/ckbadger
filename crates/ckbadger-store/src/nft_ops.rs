@@ -23,6 +23,27 @@ impl CkbadgerStore {
         }
     }
 
+    /// Batch-fetch multiple spore/DOB entries by ID in a single RocksDB multi_get.
+    pub fn get_spores_batch(&self, ids: &[Vec<u8>]) -> Vec<(Vec<u8>, Option<SporeEntry>)> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let cf = self.cf_spore_data();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            ids.iter().map(|id| (cf, id.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+        ids.iter()
+            .zip(values)
+            .map(|(id, result)| {
+                let entry = result
+                    .ok()
+                    .flatten()
+                    .and_then(|v| bincode::deserialize::<SporeEntry>(&v).ok());
+                (id.clone(), entry)
+            })
+            .collect()
+    }
+
     pub fn put_spore_direct(&self, id: &[u8], entry: &SporeEntry) -> anyhow::Result<()> {
         let value = bincode::serialize(entry)?;
         self.put_cf(self.cf_spore_data(), id, &value)

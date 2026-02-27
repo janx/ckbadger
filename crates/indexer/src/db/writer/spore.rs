@@ -377,24 +377,28 @@ impl BatchWriter {
         } else {
             spore.cluster_id.clone()
         };
-        let cluster_description = if let Some(cluster_id) = new_cluster.as_ref() {
-            state
-                .get_spore(self.store.as_ref(), cluster_id)?
-                .and_then(|entry| {
-                    if entry.standard == DobStandard::SporeCluster {
-                        entry.description
-                    } else {
-                        None
-                    }
-                })
+        let media_profile = if let Some(precomputed) = &spore.media_profile {
+            precomputed.clone()
         } else {
-            None
+            let cluster_description = if let Some(cluster_id) = new_cluster.as_ref() {
+                state
+                    .get_spore(self.store.as_ref(), cluster_id)?
+                    .and_then(|entry| {
+                        if entry.standard == DobStandard::SporeCluster {
+                            entry.description
+                        } else {
+                            None
+                        }
+                    })
+            } else {
+                None
+            };
+            analyze_spore_media_profile(
+                &spore.content_type,
+                &spore.content,
+                cluster_description.as_deref(),
+            )
         };
-        let media_profile = analyze_spore_media_profile(
-            &spore.content_type,
-            &spore.content,
-            cluster_description.as_deref(),
-        );
         let new_live_tier = if new_is_did {
             StorageDependencyTier::Unknown
         } else {
@@ -844,6 +848,7 @@ mod tests {
             content: vec![0x89, 0x50, 0x4e, 0x47],
             cluster_id: Some(cluster_id.to_vec()),
             owner_lock_hash: owner_lock.to_vec(),
+            media_profile: None,
         }
     }
 
@@ -856,6 +861,7 @@ mod tests {
             content: br#"{"name":"did"}"#.to_vec(),
             cluster_id: None,
             owner_lock_hash: owner_lock.to_vec(),
+            media_profile: None,
         }
     }
 
