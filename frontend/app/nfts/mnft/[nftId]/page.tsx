@@ -394,6 +394,7 @@ export default function MnftItemDetailPage() {
                 totalLabel="activities"
                 pageSize={20}
                 page={activityCursorHistory.length + 1}
+                currentCount={itemActivities?.data?.length ?? 0}
                 hasMore={itemActivities?.hasMore ?? false}
                 hasPrevious={activityCursorHistory.length > 0}
                 onNext={() => goToNextActivityPage(itemActivities?.nextCursor)}

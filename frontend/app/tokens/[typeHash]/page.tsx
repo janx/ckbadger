@@ -294,7 +294,9 @@ export default function TokenDetailPage() {
             <TerminalPanelHeader
               actions={
                 <TabsList>
-                  <TabsTrigger value="activities">Activities</TabsTrigger>
+                  <TabsTrigger value="activities">
+                    Activities ({formatNumber(token.transfersCount)})
+                  </TabsTrigger>
                   <TabsTrigger value="holders">
                     Holders ({formatNumber(token.holdersCount)})
                   </TabsTrigger>
@@ -433,9 +435,11 @@ export default function TokenDetailPage() {
               {activities?.data?.length ? (
                 <TerminalPanelFooter>
                   <CursorPagination
+                    total={activities.total ?? undefined}
                     totalLabel="activities"
                     pageSize={20}
                     page={activitiesPagination.page}
+                    currentCount={activities.data?.length ?? 0}
                     hasMore={activities.hasMore}
                     hasPrevious={activitiesPagination.hasPrevious}
                     onNext={() => activitiesPagination.goToNext(activities.nextCursor)}

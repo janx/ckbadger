@@ -215,7 +215,6 @@ export default function SporeDetailPage() {
   const {
     data: collectionHolders,
     isLoading: isCollectionHoldersLoading,
-    isFetching: isCollectionHoldersFetching,
     isError: isCollectionHoldersError,
   } = useQuery({
     queryKey: ['nft-collection-holders', collectionAssetId, collectionHoldersPagination.cursor],
@@ -231,7 +230,6 @@ export default function SporeDetailPage() {
   const {
     data: collectionActivities,
     isLoading: isCollectionActivitiesLoading,
-    isFetching: isCollectionActivitiesFetching,
     isError: isCollectionActivitiesError,
   } = useQuery({
     queryKey: [
@@ -477,11 +475,19 @@ export default function SporeDetailPage() {
                   actions={
                     <div className="flex flex-wrap items-center gap-3">
                       <TabsList className="border-b-0">
-                        <TabsTrigger value="activities">Activities</TabsTrigger>
+                        <TabsTrigger value="activities">
+                          Activities
+                          {collectionActivities?.total != null &&
+                            ` (${formatNumber(collectionActivities.total)})`}
+                        </TabsTrigger>
                         <TabsTrigger value="nfts">
                           NFTs ({formatNumber(collection.totalCount)})
                         </TabsTrigger>
-                        <TabsTrigger value="holders">Holders</TabsTrigger>
+                        <TabsTrigger value="holders">
+                          Holders
+                          {collectionHolders?.total != null &&
+                            ` (${formatNumber(collectionHolders.total)})`}
+                        </TabsTrigger>
                       </TabsList>
                       {activeCollectionTab === 'nfts' && supportsCollectionFilters && (
                         <div className="flex items-center gap-2">
@@ -524,7 +530,7 @@ export default function SporeDetailPage() {
 
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
-                    {isCollectionActivitiesLoading || isCollectionActivitiesFetching ? (
+                    {isCollectionActivitiesLoading ? (
                       <div className="py-8 text-center text-slate-500">Loading activities...</div>
                     ) : isCollectionActivitiesError ? (
                       <div className="py-8 text-center text-rose-400">
@@ -552,6 +558,7 @@ export default function SporeDetailPage() {
                   </TerminalPanelContent>
                   <TerminalPanelFooter>
                     <CursorPagination
+                      total={collectionActivities?.total ?? undefined}
                       totalLabel="Activities"
                       pageSize={20}
                       page={collectionActivitiesPagination.page}
@@ -764,7 +771,7 @@ export default function SporeDetailPage() {
 
                 <TabsContent value="holders" className="py-0">
                   <TerminalPanelContent>
-                    {isCollectionHoldersLoading || isCollectionHoldersFetching ? (
+                    {isCollectionHoldersLoading ? (
                       <div className="py-8 text-center text-slate-500">Loading holders...</div>
                     ) : isCollectionHoldersError ? (
                       <div className="py-8 text-center text-rose-400">
