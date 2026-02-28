@@ -322,18 +322,17 @@ impl CkbadgerStore {
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
-        // 1. Delete block headers > rollback_to
-        let mut stage = RollbackStageProgress::new("delete_block_headers");
+        // 1. Delete block index entries > rollback_to (append store data stays)
+        let mut stage = RollbackStageProgress::new("delete_block_index");
         let start_key = keys::encode_block_num(rollback_to + 1);
         let iter = self.iterator_cf(
-            self.cf_block_headers(),
+            self.cf_block_index(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         for item in iter.flatten() {
-            let (key, value) = item;
-            if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
-                batch.delete_cf(self.cf_block_headers(), &key);
-                batch.delete_cf(self.cf_block_hash_index(), &header.hash);
+            let (key, _hash) = item;
+            if key.len() == 8 {
+                batch.delete_cf(self.cf_block_index(), &key);
                 blocks_removed += 1;
             }
             stage.tick(blocks_removed);
@@ -363,51 +362,66 @@ impl CkbadgerStore {
         stage.finish(txs_removed);
 
         // 3. Delete live cells created after rollback_to, restore consumed cells
+        // cf_live_cells() stores empty liveness markers; cell data is in cf_cells() (append store).
         let mut stage = RollbackStageProgress::new("delete_live_cells_after_tip");
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                if info.created_at_block > rollback_to {
-                    batch.delete_cf(self.cf_live_cells(), &key);
-                    cells_removed += 1;
-
-                    // Clean up indexes
-                    if key.len() == 34 {
-                        let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                        let idx_key = keys::encode_cell_index_key(
-                            &info.lock_script_hash,
-                            info.created_at_block,
-                            &tx_hash,
-                            output_index,
-                        );
-                        batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
-                        let idx_key = keys::encode_cell_index_key(
-                            &info.lock_code_hash,
-                            info.created_at_block,
-                            &tx_hash,
-                            output_index,
-                        );
-                        batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
-                        if let Some(ref type_hash) = info.type_script_hash {
-                            let idx_key = keys::encode_cell_index_key(
-                                type_hash,
-                                info.created_at_block,
-                                &tx_hash,
-                                output_index,
-                            );
-                            batch.delete_cf(self.cf_cell_by_type(), &idx_key);
-                        }
-                        if let Some(ref type_code_hash) = info.type_code_hash {
-                            let idx_key = keys::encode_cell_index_key(
-                                type_code_hash,
-                                info.created_at_block,
-                                &tx_hash,
-                                output_index,
-                            );
-                            batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
-                        }
+            let (key, _marker) = item;
+            if key.len() != keys::OUTPOINT_KEY_SIZE {
+                stage.tick(cells_removed);
+                continue;
+            }
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?;
+            let info = match cell_data {
+                Some(ref bytes) => match bincode::deserialize::<LiveCellInfo>(bytes) {
+                    Ok(info) => info,
+                    Err(_) => {
+                        stage.tick(cells_removed);
+                        continue;
                     }
+                },
+                None => {
+                    stage.tick(cells_removed);
+                    continue;
+                }
+            };
+            if info.created_at_block > rollback_to {
+                batch.delete_cf(self.cf_live_cells(), &key);
+                cells_removed += 1;
+
+                // Clean up indexes
+                let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                let idx_key = keys::encode_cell_index_key(
+                    &info.lock_script_hash,
+                    info.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
+                let idx_key = keys::encode_cell_index_key(
+                    &info.lock_code_hash,
+                    info.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
+                if let Some(ref type_hash) = info.type_script_hash {
+                    let idx_key = keys::encode_cell_index_key(
+                        type_hash,
+                        info.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
+                    batch.delete_cf(self.cf_cell_by_type(), &idx_key);
+                }
+                if let Some(ref type_code_hash) = info.type_code_hash {
+                    let idx_key = keys::encode_cell_index_key(
+                        type_code_hash,
+                        info.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
+                    batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
                 }
             }
             stage.tick(cells_removed);
@@ -416,8 +430,8 @@ impl CkbadgerStore {
 
         // 4. Restore consumed cells that were consumed after rollback_to.
         //
-        // New schema stores `consumed_at_block` in consumed_cells so rollback can
-        // recover precise state without in-memory history.
+        // cf_consumed_cells() stores 40-byte metadata (consumed_at_block + consumed_by_tx).
+        // Full cell data lives in cf_cells() (append store).
         let mut stage = RollbackStageProgress::new("restore_consumed_cells");
         let iter = self.iterator_cf(self.cf_consumed_cells(), IteratorMode::Start);
         for item in iter.flatten() {
@@ -426,11 +440,12 @@ impl CkbadgerStore {
                 stage.tick(cells_restored);
                 continue;
             }
-            let Some(consumed) = crate::types::decode_consumed_cell_info(&value) else {
+            if value.len() < keys::CONSUMED_CELL_VALUE_SIZE {
                 stage.tick(cells_restored);
                 continue;
-            };
-            if consumed.consumed_at_block <= rollback_to {
+            }
+            let (consumed_at_block, _consumed_by_tx) = keys::decode_consumed_cell_value(&value);
+            if consumed_at_block <= rollback_to {
                 stage.tick(cells_restored);
                 continue;
             }
@@ -438,40 +453,56 @@ impl CkbadgerStore {
             // Remove stale consumed record from rolled-back blocks.
             batch.delete_cf(self.cf_consumed_cells(), &key);
 
+            // Get the cell data from append store to check created_at_block and rebuild indexes.
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?;
+            let cell = match cell_data {
+                Some(ref bytes) => match bincode::deserialize::<LiveCellInfo>(bytes) {
+                    Ok(info) => info,
+                    Err(_) => {
+                        stage.tick(cells_restored);
+                        continue;
+                    }
+                },
+                None => {
+                    stage.tick(cells_restored);
+                    continue;
+                }
+            };
+
             // If the cell itself existed before rollback point, restore it to live_cells.
-            if consumed.cell.created_at_block <= rollback_to {
-                let encoded = bincode::serialize(&consumed.cell)?;
-                batch.put_cf(self.cf_live_cells(), &key, &encoded);
+            if cell.created_at_block <= rollback_to {
+                // Restore liveness marker (empty value).
+                batch.put_cf(self.cf_live_cells(), &key, &[] as &[u8]);
                 cells_restored += 1;
 
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
                 let idx_key = keys::encode_cell_index_key(
-                    &consumed.cell.lock_script_hash,
-                    consumed.cell.created_at_block,
+                    &cell.lock_script_hash,
+                    cell.created_at_block,
                     &tx_hash,
                     output_index,
                 );
                 batch.put_cf(self.cf_cell_by_lock(), &idx_key, []);
                 let idx_key = keys::encode_cell_index_key(
-                    &consumed.cell.lock_code_hash,
-                    consumed.cell.created_at_block,
+                    &cell.lock_code_hash,
+                    cell.created_at_block,
                     &tx_hash,
                     output_index,
                 );
                 batch.put_cf(self.cf_cell_by_lock_code(), &idx_key, []);
-                if let Some(ref type_hash) = consumed.cell.type_script_hash {
+                if let Some(ref type_hash) = cell.type_script_hash {
                     let idx_key = keys::encode_cell_index_key(
                         type_hash,
-                        consumed.cell.created_at_block,
+                        cell.created_at_block,
                         &tx_hash,
                         output_index,
                     );
                     batch.put_cf(self.cf_cell_by_type(), &idx_key, []);
                 }
-                if let Some(ref type_code_hash) = consumed.cell.type_code_hash {
+                if let Some(ref type_code_hash) = cell.type_code_hash {
                     let idx_key = keys::encode_cell_index_key(
                         type_code_hash,
-                        consumed.cell.created_at_block,
+                        cell.created_at_block,
                         &tx_hash,
                         output_index,
                     );
@@ -625,17 +656,18 @@ impl CkbadgerStore {
         }
         stage.finish(addr_txs_removed);
 
-        // 10. Delete activities entries > rollback_to
+        // 10. Delete addr_activities entries > rollback_to
         // Key: lock_hash(32) + block_num_desc(8) + tx_idx(4) = 44
+        // Activities data in append store (cf_activities) is immutable; only clean the index.
         let mut activities_removed = 0u64;
-        let mut stage = RollbackStageProgress::new("delete_activities");
-        let iter = self.iterator_cf(self.cf_activities(), IteratorMode::Start);
+        let mut stage = RollbackStageProgress::new("delete_addr_activities");
+        let iter = self.iterator_cf(self.cf_addr_activities(), IteratorMode::Start);
         for item in iter.flatten() {
             let (key, _) = item;
             if key.len() == 44 {
                 let (_, block_num, _) = keys::decode_activity_key(&key);
                 if block_num > rollback_to {
-                    batch.delete_cf(self.cf_activities(), &key);
+                    batch.delete_cf(self.cf_addr_activities(), &key);
                     activities_removed += 1;
                 }
             }

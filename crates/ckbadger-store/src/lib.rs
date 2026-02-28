@@ -9,8 +9,11 @@
 //! ```no_run
 //! use ckbadger_store::CkbadgerStore;
 //!
-//! // Primary (read-write) — used by indexer
-//! let store = CkbadgerStore::open(
+//! // Primary (read-write) — used by indexer (auto-derives append path)
+//! let store = CkbadgerStore::open("./data/ckbadger-store").unwrap();
+//!
+//! // Or explicit split paths:
+//! let store = CkbadgerStore::open_split(
 //!     "./data/ckbadger-store",
 //!     "./data/ckbadger-store-append",
 //! ).unwrap();
@@ -19,8 +22,6 @@
 //! let reader = CkbadgerStore::open_secondary(
 //!     "./data/ckbadger-store",
 //!     "./data/ckbadger-store-secondary",
-//!     "./data/ckbadger-store-append",
-//!     "./data/ckbadger-store-append-secondary",
 //! ).unwrap();
 //! reader.refresh().unwrap();
 //! ```

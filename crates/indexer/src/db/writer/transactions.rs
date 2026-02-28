@@ -46,8 +46,7 @@ impl BatchWriter {
                 tx_size: tx.13.unwrap_or(0),
                 cycles: tx.14,
             };
-            batch.put_tx_index(tx.1, tx.3, &entry);
-            batch.put_tx_hash_map(tx.0, tx.1, tx.3);
+            batch.put_tx_index(tx.1, tx.3, tx.0, &entry);
         }
 
         Ok(())

@@ -8,7 +8,7 @@ use crate::types::{AddressBalance, LiveCellInfo};
 
 impl CkbadgerStore {
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
-        match self.get_cf(self.cf_addr_balance(), lock_hash)? {
+        match self.get_cf(self.cf_addr_stats(), lock_hash)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -20,7 +20,7 @@ impl CkbadgerStore {
         balance: &AddressBalance,
     ) -> anyhow::Result<()> {
         let value = bincode::serialize(balance)?;
-        self.put_cf(self.cf_addr_balance(), lock_hash, &value)
+        self.put_cf(self.cf_addr_stats(), lock_hash, &value)
     }
 
     /// Update address balance with read-modify-write.
@@ -35,7 +35,7 @@ impl CkbadgerStore {
 
     /// List top addresses by balance (full scan, sorted).
     pub fn top_addresses(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, AddressBalance)>> {
-        let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_addr_stats(), IteratorMode::Start);
 
         let mut all: Vec<(Vec<u8>, AddressBalance)> = Vec::new();
         for item in iter.flatten() {
@@ -138,8 +138,6 @@ impl CkbadgerStore {
     /// This indexes the creation-side of transactions (cells created for each address).
     /// Returns the number of index entries written.
     pub fn backfill_addr_txs(&self) -> anyhow::Result<u64> {
-        use crate::keys;
-        use crate::types::{decode_consumed_cell_info, LiveCellInfo};
         use std::collections::{HashMap, HashSet};
 
         let mut count = 0u64;
@@ -151,36 +149,38 @@ impl CkbadgerStore {
         let mut tx_addresses: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
         let mut tx_blocks: HashMap<Vec<u8>, i64> = HashMap::new();
 
-        // Phase 1: Scan live cells
+        // Phase 1: Scan live cells (cf_live_cells has liveness markers only; cell data in cf_cells)
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _value) = item;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                    let tx_hash = key[..32].to_vec();
-                    tx_addresses
-                        .entry(tx_hash.clone())
-                        .or_default()
-                        .insert(info.lock_script_hash);
-                    tx_blocks.entry(tx_hash).or_insert(info.created_at_block);
+                if let Ok(Some(cell_bytes)) = self.append_get_cf(self.cf_cells(), &key) {
+                    if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&cell_bytes) {
+                        let tx_hash = key[..32].to_vec();
+                        tx_addresses
+                            .entry(tx_hash.clone())
+                            .or_default()
+                            .insert(info.lock_script_hash);
+                        tx_blocks.entry(tx_hash).or_insert(info.created_at_block);
+                    }
                 }
             }
         }
 
-        // Phase 2: Scan consumed cells
+        // Phase 2: Scan consumed cells (cf_consumed_cells has 40-byte metadata; cell data in cf_cells)
         let iter = self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _value) = item;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                let lock_hash = decode_consumed_cell_info(&value)
-                    .map(|c| (c.cell.lock_script_hash, c.cell.created_at_block));
-                if let Some((lock_hash, created_at_block)) = lock_hash {
-                    let tx_hash = key[..32].to_vec();
-                    tx_addresses
-                        .entry(tx_hash.clone())
-                        .or_default()
-                        .insert(lock_hash);
-                    tx_blocks.entry(tx_hash).or_insert(created_at_block);
+                if let Ok(Some(cell_bytes)) = self.append_get_cf(self.cf_cells(), &key) {
+                    if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&cell_bytes) {
+                        let tx_hash = key[..32].to_vec();
+                        tx_addresses
+                            .entry(tx_hash.clone())
+                            .or_default()
+                            .insert(info.lock_script_hash);
+                        tx_blocks.entry(tx_hash).or_insert(info.created_at_block);
+                    }
                 }
             }
         }
@@ -253,13 +253,18 @@ impl CkbadgerStore {
         }
 
         let mut agg_by_lock: HashMap<Vec<u8>, Agg> = HashMap::new();
+        // cf_live_cells has liveness markers only; cell data lives in cf_cells (append store)
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _value) = item;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = match bincode::deserialize(&value) {
+            let cell_bytes = match self.append_get_cf(self.cf_cells(), &key)? {
+                Some(v) => v,
+                None => continue,
+            };
+            let info: LiveCellInfo = match bincode::deserialize(&cell_bytes) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
@@ -306,13 +311,13 @@ impl CkbadgerStore {
             }
         }
 
-        // Clear existing addr_balance CF
+        // Clear existing addr_stats CF
         let mut clear_batch = rocksdb::WriteBatch::default();
         let mut cleared = 0usize;
-        let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_addr_stats(), IteratorMode::Start);
         for item in iter.flatten() {
             let (key, _) = item;
-            clear_batch.delete_cf(self.cf_addr_balance(), &key);
+            clear_batch.delete_cf(self.cf_addr_stats(), &key);
             cleared += 1;
             #[allow(clippy::manual_is_multiple_of)]
             if cleared % 20_000 == 0 {

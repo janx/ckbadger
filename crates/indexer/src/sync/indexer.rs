@@ -11020,9 +11020,9 @@ impl Indexer {
 
         let mut transitions: Vec<(i64, NaiveDate)> = Vec::new();
         let mut headers_scanned = 0u64;
-        let header_iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
+        let header_iter = store.iterator_cf(store.cf_block_index(), rocksdb::IteratorMode::Start);
         for item in header_iter.flatten() {
-            let (key, value) = item;
+            let (key, block_hash) = item;
             if key.len() < 8 {
                 continue;
             }
@@ -11030,9 +11030,21 @@ impl Indexer {
             if block_number > tip_block {
                 break;
             }
-            let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
+            let meta_value = store
+                .append_get_cf(store.cf_block_meta(), &block_hash)
+                .map_err(|e| {
+                    anyhow!(
+                    "failed to read block meta while rebuilding HODL tracker: block={}, error={}",
+                    block_number,
+                    e
+                )
+                })?;
+            let Some(meta_value) = meta_value else {
+                continue;
+            };
+            let header: CachedBlockHeader = bincode::deserialize(&meta_value).map_err(|e| {
                 anyhow!(
-                    "failed to deserialize block header while rebuilding HODL tracker: block={}, error={}",
+                    "failed to deserialize block meta while rebuilding HODL tracker: block={}, error={}",
                     block_number,
                     e
                 )
@@ -11064,10 +11076,21 @@ impl Indexer {
         let mut live_cells_scanned = 0u64;
         let live_iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in live_iter.flatten() {
-            let (_key, value) = item;
-            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+            let (key, _) = item;
+            // Cell data lives in cf_cells (append store)
+            let cell_data = match store.append_get_cf(store.cf_cells(), &key) {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(e) => {
+                    return Err(anyhow!(
+                        "failed to read cell data while rebuilding HODL tracker: error={}",
+                        e
+                    ));
+                }
+            };
+            let info: LiveCellInfo = bincode::deserialize(&cell_data).map_err(|e| {
                 anyhow!(
-                    "failed to deserialize live cell while rebuilding HODL tracker: error={}",
+                    "failed to deserialize cell while rebuilding HODL tracker: error={}",
                     e
                 )
             })?;
@@ -12095,7 +12118,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         batch.put_tx_hash_map(&tx_hash, 42, 0);
-        batch.put_tx_index(42, 0, &dummy_tx_index_entry());
+        batch.put_tx_index(42, 0, &tx_hash, &dummy_tx_index_entry());
         batch.commit().unwrap();
 
         let unresolved = vec![(tx_hash, 1i16)];

@@ -53,24 +53,25 @@ fn insert_complete_block(store: &CkbadgerStore, block_num: i64) {
 
     let mut batch = StoreBatch::new(store);
     batch.put_block_header(block_num, &header);
-    batch.put_tx_index(block_num, 0, &cellbase);
-    batch.put_tx_index(block_num, 1, &tx1);
-    batch.put_tx_index(block_num, 2, &tx2);
-
     // Also store tx hash mappings so they can be looked up
     let mut cb_hash = vec![0u8; 32];
     cb_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     cb_hash[8] = 0xC0;
-    batch.put_tx_hash_map(&cb_hash, block_num, 0);
 
     let mut tx1_hash = vec![0u8; 32];
     tx1_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     tx1_hash[8] = 0x01;
-    batch.put_tx_hash_map(&tx1_hash, block_num, 1);
 
     let mut tx2_hash = vec![0u8; 32];
     tx2_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     tx2_hash[8] = 0x02;
+
+    batch.put_tx_index(block_num, 0, &cb_hash, &cellbase);
+    batch.put_tx_index(block_num, 1, &tx1_hash, &tx1);
+    batch.put_tx_index(block_num, 2, &tx2_hash, &tx2);
+
+    batch.put_tx_hash_map(&cb_hash, block_num, 0);
+    batch.put_tx_hash_map(&tx1_hash, block_num, 1);
     batch.put_tx_hash_map(&tx2_hash, block_num, 2);
 
     batch.commit().unwrap();

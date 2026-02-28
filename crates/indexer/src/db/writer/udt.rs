@@ -106,15 +106,23 @@ impl BatchWriter {
             let outpoint_key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
 
             // UDT transfer inputs must come from pre-batch live state.
-            // Do not fall back to consumed_cells here: historical consumed entries
-            // can reintroduce already-spent cells and produce false negative deltas.
-            let cell_info = if let Some(val) = self
+            // Check liveness first (cf_live_cells marker), then read data from cf_cells.
+            // Do not read consumed cells: replaying historical spends produces false deltas.
+            let is_live = self
                 .store
                 .get_cf(self.store.cf_live_cells(), &outpoint_key)?
-            {
-                Some(bincode::deserialize::<ckbadger_store::types::LiveCellInfo>(
-                    &val,
-                )?)
+                .is_some();
+            let cell_info = if is_live {
+                if let Some(val) = self
+                    .store
+                    .append_get_cf(self.store.cf_cells(), &outpoint_key)?
+                {
+                    Some(bincode::deserialize::<ckbadger_store::types::LiveCellInfo>(
+                        &val,
+                    )?)
+                } else {
+                    None
+                }
             } else {
                 None
             };

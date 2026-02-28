@@ -288,9 +288,12 @@ impl CkbadgerStore {
         let mut daily_times: BTreeMap<chrono::NaiveDate, (i64, i64)> = BTreeMap::new(); // (sum_ms, count)
         let mut prev_timestamp: Option<i64> = None;
 
-        let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_block_index(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (_, value) = item;
+            let (_, block_hash) = item;
+            let Some(value) = self.append_get_cf(self.cf_block_meta(), &block_hash)? else {
+                continue;
+            };
             if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
                 if let Some(prev_ts) = prev_timestamp {
                     let block_time_ms = header.timestamp - prev_ts;
@@ -503,10 +506,13 @@ impl CkbadgerStore {
         // S_delta = non-miner = dao + treasury
         let mut daily_secondary: BTreeMap<chrono::NaiveDate, (i128, i128)> = BTreeMap::new();
         {
-            let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
+            let iter = self.iterator_cf(self.cf_block_index(), rocksdb::IteratorMode::Start);
             let mut prev_s: Option<i128> = None;
             for item in iter.flatten() {
-                let (_, value) = item;
+                let (_, block_hash) = item;
+                let Some(value) = self.append_get_cf(self.cf_block_meta(), &block_hash)? else {
+                    continue;
+                };
                 if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
                     let ts_secs = header.timestamp / 1000;
                     if let Some(dt) = chrono::DateTime::from_timestamp(ts_secs, 0) {
@@ -1147,8 +1153,14 @@ impl CkbadgerStore {
         let mut seen_consumed_outpoints: HashSet<Vec<u8>> = HashSet::new();
         let live_iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in live_iter.flatten() {
-            let (key, value) = item;
-            let cell: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+            let (key, _value) = item;
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing cell data in append store while rebuilding script info: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let cell: LiveCellInfo = bincode::deserialize(&cell_data).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize live cell while rebuilding script info: outpoint=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -1191,17 +1203,23 @@ impl CkbadgerStore {
         let consumed_iter =
             self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
         for item in consumed_iter.flatten() {
-            let (key, value) = item;
+            let (key, _value) = item;
             if !seen_consumed_outpoints.insert(key.to_vec()) {
                 continue;
             }
-            let consumed = decode_consumed_cell_info(&value).ok_or_else(|| {
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "failed to decode consumed cell while rebuilding script info: outpoint=0x{}",
+                    "missing cell data in append store while rebuilding script info: outpoint=0x{}",
                     bytes_to_hex(&key)
                 )
             })?;
-            let cell = consumed.cell;
+            let cell: LiveCellInfo = bincode::deserialize(&cell_data).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize consumed cell while rebuilding script info: outpoint=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
 
             let lock_code_hash = cell.lock_code_hash.clone();
             let lock_info = info_by_code_hash

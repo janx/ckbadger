@@ -297,7 +297,7 @@ impl BatchWriter {
         let start_key = keys::encode_block_num(start_block + 1);
 
         let header_iter = self.store.iterator_cf(
-            self.store.cf_block_headers(),
+            self.store.cf_block_index(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         if header_iter.flatten().next().is_some() {
@@ -480,7 +480,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         for block in 0..=2 {
             batch.put_block_header(block, &make_header(0x40 + block as u8, 1_700_000_000_000));
-            batch.put_tx_index(block, 0, &make_tx_index_entry());
+            batch.put_tx_index(block, 0, &[0u8; 32], &make_tx_index_entry());
         }
         batch.commit().unwrap();
 
@@ -501,7 +501,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(0, &make_header(0x50, 1_700_000_000_000));
         batch.put_block_header(2, &make_header(0x52, 1_700_000_020_000));
-        batch.put_tx_index(0, 0, &make_tx_index_entry());
+        batch.put_tx_index(0, 0, &[0u8; 32], &make_tx_index_entry());
         batch.commit().unwrap();
 
         let probe = writer.probe_startup_continuity(2, 32, true).unwrap();

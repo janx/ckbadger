@@ -220,12 +220,12 @@ impl BatchWriter {
             return Ok(());
         }
 
-        // Collect all outpoint keys for a single batch read
+        // Collect all outpoint keys for a single batch read from cf_cells (append store, SSOT)
         let encoded_keys: Vec<_> = consumptions
             .iter()
             .map(|(tx_hash, output_index, ..)| {
                 let key = keys::encode_outpoint(tx_hash, *output_index);
-                (self.store.cf_live_cells(), key)
+                (self.store.cf_cells(), key)
             })
             .collect();
 
@@ -233,7 +233,7 @@ impl BatchWriter {
             .iter()
             .map(|(cf, k)| (*cf, k.as_slice()))
             .collect();
-        let results = self.store.multi_get_cf(key_refs);
+        let results = self.store.append_multi_get_cf(key_refs);
 
         // Zip results with consumptions and process writes
         for (
@@ -296,30 +296,16 @@ impl BatchWriter {
     ) -> Result<Option<(i64, i64, Vec<u8>)>> {
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
 
-        // Check live cells first
+        // Cell data lives in cf_cells (append store, SSOT for all cells)
         if let Some(value) = self
             .store
-            .get_cf(self.store.cf_live_cells(), &outpoint_key)?
+            .append_get_cf(self.store.cf_cells(), &outpoint_key)?
         {
             if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
                 return Ok(Some((
                     info.capacity,
                     info.created_at_block,
                     info.lock_script_hash,
-                )));
-            }
-        }
-
-        // Check consumed cells
-        if let Some(value) = self
-            .store
-            .get_cf(self.store.cf_consumed_cells(), &outpoint_key)?
-        {
-            if let Some(info) = ckbadger_store::types::decode_consumed_cell_info(&value) {
-                return Ok(Some((
-                    info.cell.capacity,
-                    info.cell.created_at_block,
-                    info.cell.lock_script_hash,
                 )));
             }
         }
@@ -338,17 +324,17 @@ impl BatchWriter {
 
         let mut result = HashMap::with_capacity(outpoints.len());
 
-        // Batch get from live cells
+        // Batch get from cf_cells (append store, SSOT for all cell data)
         let keys: Vec<_> = outpoints
             .iter()
             .map(|(h, i)| {
                 let key = keys::encode_outpoint(h, *i);
-                (self.store.cf_live_cells(), key)
+                (self.store.cf_cells(), key)
             })
             .collect();
 
         let key_refs: Vec<_> = keys.iter().map(|(cf, k)| (*cf, k.as_slice())).collect();
-        let results = self.store.multi_get_cf(key_refs);
+        let results = self.store.append_multi_get_cf(key_refs);
 
         for (idx, res) in results.into_iter().enumerate() {
             if let Ok(Some(value)) = res {
@@ -367,45 +353,6 @@ impl BatchWriter {
             }
         }
 
-        // Check consumed cells for missing entries
-        let missing: Vec<_> = outpoints
-            .iter()
-            .filter(|(h, i)| !result.contains_key(&(h.to_vec(), *i)))
-            .collect();
-
-        if !missing.is_empty() {
-            let consumed_keys: Vec<_> = missing
-                .iter()
-                .map(|(h, i)| {
-                    let key = keys::encode_outpoint(h, *i);
-                    (self.store.cf_consumed_cells(), key)
-                })
-                .collect();
-
-            let consumed_refs: Vec<_> = consumed_keys
-                .iter()
-                .map(|(cf, k)| (*cf, k.as_slice()))
-                .collect();
-            let consumed_results = self.store.multi_get_cf(consumed_refs);
-
-            for (idx, res) in consumed_results.into_iter().enumerate() {
-                if let Ok(Some(value)) = res {
-                    if let Some(info) = ckbadger_store::types::decode_consumed_cell_info(&value) {
-                        let (tx_hash, output_index) = missing[idx];
-                        result.insert(
-                            (tx_hash.to_vec(), *output_index),
-                            (
-                                info.cell.capacity,
-                                info.cell.created_at_block,
-                                info.cell.lock_script_hash,
-                                info.cell.data_size,
-                            ),
-                        );
-                    }
-                }
-            }
-        }
-
         Ok(result)
     }
 
@@ -420,17 +367,17 @@ impl BatchWriter {
 
         let mut result = HashMap::with_capacity(outpoints.len());
 
-        // Batch get from live cells
+        // Batch get from cf_cells (append store, SSOT for all cell data)
         let keys: Vec<_> = outpoints
             .iter()
             .map(|(h, i)| {
                 let key = keys::encode_outpoint(h, *i);
-                (self.store.cf_live_cells(), key)
+                (self.store.cf_cells(), key)
             })
             .collect();
 
         let key_refs: Vec<_> = keys.iter().map(|(cf, k)| (*cf, k.as_slice())).collect();
-        let results = self.store.multi_get_cf(key_refs);
+        let results = self.store.append_multi_get_cf(key_refs);
 
         for (idx, res) in results.into_iter().enumerate() {
             let (tx_hash, output_index) = outpoints[idx];
@@ -438,78 +385,23 @@ impl BatchWriter {
                 Ok(Some(value)) => {
                     let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
                         anyhow!(
-                            "failed to decode live cell info: outpoint=0x{}:{}, error={}",
+                            "failed to decode cell info: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),
                             output_index,
                             e
                         )
                     })?;
-                    validate_input_cell_occupied_capacity(&info, tx_hash, output_index, "live")?;
+                    validate_input_cell_occupied_capacity(&info, tx_hash, output_index, "cells")?;
                     result.insert((tx_hash.to_vec(), output_index), info);
                 }
                 Ok(None) => {}
                 Err(e) => {
                     bail!(
-                        "failed to read live cell info: outpoint=0x{}:{}, error={}",
+                        "failed to read cell info: outpoint=0x{}:{}, error={}",
                         hex::encode(tx_hash),
                         output_index,
                         e
                     );
-                }
-            }
-        }
-
-        // Check consumed cells for missing entries
-        let missing: Vec<_> = outpoints
-            .iter()
-            .filter(|(h, i)| !result.contains_key(&(h.to_vec(), *i)))
-            .collect();
-
-        if !missing.is_empty() {
-            let consumed_keys: Vec<_> = missing
-                .iter()
-                .map(|(h, i)| {
-                    let key = keys::encode_outpoint(h, *i);
-                    (self.store.cf_consumed_cells(), key)
-                })
-                .collect();
-
-            let consumed_refs: Vec<_> = consumed_keys
-                .iter()
-                .map(|(cf, k)| (*cf, k.as_slice()))
-                .collect();
-            let consumed_results = self.store.multi_get_cf(consumed_refs);
-
-            for (idx, res) in consumed_results.into_iter().enumerate() {
-                let (tx_hash, output_index) = missing[idx];
-                match res {
-                    Ok(Some(value)) => {
-                        let info = ckbadger_store::types::decode_consumed_cell_info(&value)
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "failed to decode consumed cell info: outpoint=0x{}:{}",
-                                    hex::encode(tx_hash),
-                                    output_index
-                                )
-                            })?;
-                        let live = info.to_live_cell_info();
-                        validate_input_cell_occupied_capacity(
-                            &live,
-                            tx_hash,
-                            *output_index,
-                            "consumed",
-                        )?;
-                        result.insert((tx_hash.to_vec(), *output_index), live);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        bail!(
-                            "failed to read consumed cell info: outpoint=0x{}:{}, error={}",
-                            hex::encode(tx_hash),
-                            output_index,
-                            e
-                        );
-                    }
                 }
             }
         }
@@ -602,7 +494,7 @@ pub fn rebuild_cell_indices(store: &CkbadgerStore) {
     let start = std::time::Instant::now();
 
     for item in store.iterator_cf(cf, rocksdb::IteratorMode::Start) {
-        let (key, value) = match item {
+        let (key, _) = match item {
             Ok(kv) => kv,
             Err(e) => {
                 tracing::warn!("Cell index rebuild: iterator error: {}", e);
@@ -611,7 +503,23 @@ pub fn rebuild_cell_indices(store: &CkbadgerStore) {
         };
 
         let (tx_hash, output_index) = keys::decode_outpoint(&key);
-        let info: LiveCellInfo = match bincode::deserialize(&value) {
+        // Cell data lives in cf_cells (append store)
+        let cell_data = match store.append_get_cf(store.cf_cells(), &key) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                tracing::warn!(
+                    "Cell index rebuild: missing cell data for outpoint 0x{}:{}",
+                    hex::encode(&tx_hash),
+                    output_index
+                );
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!("Cell index rebuild: append read error: {}", e);
+                continue;
+            }
+        };
+        let info: LiveCellInfo = match bincode::deserialize(&cell_data) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!("Cell index rebuild: deserialize error: {}", e);

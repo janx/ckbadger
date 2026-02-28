@@ -827,6 +827,10 @@ impl CkbadgerStore {
         Ok(self.append_db.get_cf(cf, key)?)
     }
 
+    pub fn append_put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        Ok(self.append_db.put_cf(cf, key, value)?)
+    }
+
     pub fn append_multi_get_cf(
         &self,
         keys: Vec<(&ColumnFamily, &[u8])>,

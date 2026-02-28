@@ -85,8 +85,8 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
 
     let mut batch = StoreBatch::new(store);
     batch.put_block_header(block_num, &header);
-    batch.put_tx_index(block_num, 0, &cellbase);
-    batch.put_tx_index(block_num, 1, &normal_tx);
+    batch.put_tx_index(block_num, 0, &cellbase_hash, &cellbase);
+    batch.put_tx_index(block_num, 1, &tx_hash, &normal_tx);
     batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
     batch.put_tx_hash_map(&tx_hash, block_num, 1);
     batch.put_cell(&tx_hash, 0, &cell);

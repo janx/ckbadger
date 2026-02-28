@@ -57,14 +57,20 @@ impl<'a> StoreBatch<'a> {
         self.batch.size_in_bytes() + self.append_batch.size_in_bytes()
     }
 
-    // ---- Live cells ----
+    // ---- Cells ----
 
+    /// Write cell data to append store (SSOT) and liveness marker to default store.
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.batch.put_cf(self.store.cf_live_cells(), key, &value);
+        let value = bincode::serialize(info).expect("serialize CellInfo");
+        // Append: outpoint → CellInfo (SSOT, never deleted)
+        self.append_batch.put_cf(self.store.cf_cells(), key, value);
+        // Default: outpoint → empty (liveness marker)
+        self.batch
+            .put_cf(self.store.cf_live_cells(), key, &[] as &[u8]);
     }
 
+    /// Remove liveness marker. Cell data stays in append store.
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         self.batch.delete_cf(self.store.cf_live_cells(), key);
@@ -80,6 +86,7 @@ impl<'a> StoreBatch<'a> {
         self.put_consumed_cell_with_consumer(tx_hash, output_index, info, consumed_at_block, None);
     }
 
+    /// Record consumption metadata (40 bytes) and ensure cell data is in append store.
     pub fn put_consumed_cell_with_consumer(
         &mut self,
         tx_hash: &[u8],
@@ -89,14 +96,17 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        let consumed = ConsumedCellInfo::from_live_cell_info_with_consumer(
-            info,
+        // Append: cell data (idempotent — may already exist from put_cell)
+        let cell_value = bincode::serialize(info).expect("serialize CellInfo");
+        self.append_batch
+            .put_cf(self.store.cf_cells(), key, cell_value);
+        // Default: consumption metadata (40 bytes)
+        let value = keys::encode_consumed_cell_value(
             consumed_at_block,
-            consumed_by_tx,
+            consumed_by_tx.unwrap_or(&[0u8; 32]),
         );
-        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellInfo");
         self.batch
-            .put_cf(self.store.cf_consumed_cells(), key, &value);
+            .put_cf(self.store.cf_consumed_cells(), key, value);
     }
 
     // ---- Cell indexes ----
@@ -229,50 +239,52 @@ impl<'a> StoreBatch<'a> {
         self.batch.delete_cf(self.store.cf_cell_by_type_code(), key);
     }
 
-    // ---- Block headers ----
+    // ---- Block entries ----
 
+    /// Write block metadata to append store (SSOT) and block index to default store.
     pub fn put_block_header(&mut self, block_number: i64, header: &CachedBlockHeader) {
+        // Append: block_hash → BlockMeta (immutable, keyed by hash for reorg safety)
+        let value = bincode::serialize(header).expect("serialize BlockMeta");
+        self.append_batch
+            .put_cf(self.store.cf_block_meta(), &header.hash, &value);
+        // Default: block_number → block_hash (thin index, range-deletable on reorg)
         let key = keys::encode_block_num(block_number);
-        let value = bincode::serialize(header).expect("serialize CachedBlockHeader");
-        // Legacy: write to old CFs in default store
-        // TODO(data-refactor): switch to block_meta (append) + block_index (default)
         self.batch
-            .put_cf(self.store.cf_block_headers(), key, &value);
-        self.batch.put_cf(
-            self.store.cf_block_hash_index(),
-            &header.hash,
-            block_number.to_le_bytes(),
-        );
+            .put_cf(self.store.cf_block_index(), key, &header.hash);
     }
 
-    pub fn delete_block_header(&mut self, block_number: i64, hash: &[u8]) {
+    /// Remove block from index. Append store data stays (uncle block history).
+    pub fn delete_block_header(&mut self, block_number: i64, _hash: &[u8]) {
         let key = keys::encode_block_num(block_number);
-        self.batch.delete_cf(self.store.cf_block_headers(), key);
-        self.batch.delete_cf(self.store.cf_block_hash_index(), hash);
+        self.batch.delete_cf(self.store.cf_block_index(), key);
     }
 
-    // ---- Transaction index ----
+    // ---- Transaction entries ----
 
-    pub fn put_tx_index(&mut self, block_num: i64, tx_idx: i32, entry: &TxIndexEntry) {
+    /// Write tx metadata to append store and thin index to default store.
+    pub fn put_tx_index(
+        &mut self,
+        block_num: i64,
+        tx_idx: i32,
+        tx_hash: &[u8],
+        entry: &TxIndexEntry,
+    ) {
+        // Append: tx_hash → TxMeta (immutable, keyed by hash)
+        let value = bincode::serialize(entry).expect("serialize TxMeta");
+        self.append_batch
+            .put_cf(self.store.cf_tx_meta(), tx_hash, &value);
+        // Default: (block_num, tx_idx) → tx_hash (thin index)
         let key = keys::encode_composite(&[
             &keys::encode_block_num(block_num),
             &keys::encode_tx_idx(tx_idx),
         ]);
-        let value = bincode::serialize(entry).expect("serialize TxIndexEntry");
-        self.batch.put_cf(self.store.cf_tx_index(), &key, &value);
+        self.batch.put_cf(self.store.cf_tx_index(), &key, tx_hash);
     }
 
-    pub fn put_tx_hash_map(&mut self, tx_hash: &[u8], block_num: i64, tx_idx: i32) {
-        let value = keys::encode_composite(&[
-            &keys::encode_block_num(block_num),
-            &keys::encode_tx_idx(tx_idx),
-        ]);
-        // Legacy: write to old CF in default store
-        // TODO(data-refactor): switch to tx_meta (append) + tx_index (default)
-        self.batch
-            .put_cf(self.store.cf_tx_hash_map(), tx_hash, &value);
-    }
+    /// No-op: superseded by `put_tx_index` which handles both append + default writes.
+    pub fn put_tx_hash_map(&mut self, _tx_hash: &[u8], _block_num: i64, _tx_idx: i32) {}
 
+    /// Remove tx from block index. Append store data stays.
     pub fn delete_tx_index(&mut self, block_num: i64, tx_idx: i32) {
         let key = keys::encode_composite(&[
             &keys::encode_block_num(block_num),
@@ -281,9 +293,8 @@ impl<'a> StoreBatch<'a> {
         self.batch.delete_cf(self.store.cf_tx_index(), &key);
     }
 
-    pub fn delete_tx_hash_map(&mut self, tx_hash: &[u8]) {
-        self.batch.delete_cf(self.store.cf_tx_hash_map(), tx_hash);
-    }
+    /// No-op: tx_meta in append store is never deleted.
+    pub fn delete_tx_hash_map(&mut self, _tx_hash: &[u8]) {}
 
     // ---- Address balance ----
 
@@ -622,13 +633,17 @@ mod tests {
         assert!(!batch.is_empty());
         batch.commit().unwrap();
 
-        // block_headers is in default store (legacy), keyed by block_number
-        let cf = store.cf_block_headers();
+        // block_index (default): block_number → block_hash
         let key = keys::encode_block_num(0);
-        let val = store.get_cf(cf, &key).unwrap();
-        assert!(val.is_some());
+        let hash = store.get_cf(store.cf_block_index(), &key).unwrap().unwrap();
+        assert_eq!(hash, vec![1u8; 32]);
 
-        let decoded: CachedBlockHeader = bincode::deserialize(&val.unwrap()).unwrap();
+        // block_meta (append): block_hash → BlockMeta
+        let val = store
+            .append_get_cf(store.cf_block_meta(), &hash)
+            .unwrap()
+            .unwrap();
+        let decoded: CachedBlockHeader = bincode::deserialize(&val).unwrap();
         assert_eq!(decoded.timestamp, 1000);
         assert_eq!(decoded.transactions_count, 5);
     }
@@ -676,13 +691,25 @@ mod tests {
         batch.commit().unwrap();
 
         let key = keys::encode_outpoint(&tx_hash, 0);
+        // Liveness marker in default store (empty value)
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_some());
+        // Cell data in append store
+        assert!(store
+            .append_get_cf(store.cf_cells(), &key)
+            .unwrap()
+            .is_some());
 
         let mut batch = StoreBatch::new(&store);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
+        // Liveness marker gone
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_none());
+        // Cell data still in append store
+        assert!(store
+            .append_get_cf(store.cf_cells(), &key)
+            .unwrap()
+            .is_some());
     }
 
     #[test]

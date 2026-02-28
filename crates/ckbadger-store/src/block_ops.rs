@@ -1,4 +1,8 @@
 //! Block header operations.
+//!
+//! Data lives in two CFs across two physical stores:
+//! - `block_meta` (append): block_hash → BlockMeta (SSOT, immutable)
+//! - `block_index` (default): block_number → block_hash (thin index, reorg-safe)
 
 use rocksdb::IteratorMode;
 
@@ -8,32 +12,42 @@ use crate::types::CachedBlockHeader;
 
 impl CkbadgerStore {
     pub fn get_block_header(&self, block_number: i64) -> anyhow::Result<Option<CachedBlockHeader>> {
+        // block_index (default): block_number → block_hash
         let key = keys::encode_block_num(block_number);
-        match self.get_cf(self.cf_block_headers(), &key)? {
+        let block_hash = match self.get_cf(self.cf_block_index(), &key)? {
+            Some(hash) => hash,
+            None => return Ok(None),
+        };
+        // block_meta (append): block_hash → BlockMeta
+        match self.append_get_cf(self.cf_block_meta(), &block_hash)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
     pub fn get_block_number_by_hash(&self, hash: &[u8]) -> anyhow::Result<Option<i64>> {
-        match self.get_cf(self.cf_block_hash_index(), hash)? {
-            Some(value) if value.len() == 8 => {
-                Ok(Some(i64::from_le_bytes(value[..8].try_into().unwrap())))
+        // block_meta (append): block_hash → BlockMeta → block_number
+        match self.append_get_cf(self.cf_block_meta(), hash)? {
+            Some(value) => {
+                let meta: CachedBlockHeader = bincode::deserialize(&value)?;
+                Ok(Some(meta.block_number))
             }
-            _ => Ok(None),
+            None => Ok(None),
         }
     }
 
     /// Get the latest block number (sync tip).
     pub fn get_sync_tip_block(&self) -> anyhow::Result<Option<(i64, CachedBlockHeader)>> {
-        let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::End);
+        let iter = self.iterator_cf(self.cf_block_index(), IteratorMode::End);
 
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, hash) = item;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
-                return Ok(Some((block_num, header)));
+                if let Some(value) = self.append_get_cf(self.cf_block_meta(), &hash)? {
+                    let header: CachedBlockHeader = bincode::deserialize(&value)?;
+                    return Ok(Some((block_num, header)));
+                }
             }
         }
         Ok(None)
@@ -51,19 +65,21 @@ impl CkbadgerStore {
         };
 
         let iter = self.iterator_cf(
-            self.cf_block_headers(),
+            self.cf_block_index(),
             IteratorMode::From(&start_key, rocksdb::Direction::Reverse),
         );
 
         let mut results = Vec::with_capacity(limit);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, hash) = item;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
-                let header: CachedBlockHeader = bincode::deserialize(&value)?;
-                results.push((block_num, header));
-                if results.len() >= limit {
-                    break;
+                if let Some(value) = self.append_get_cf(self.cf_block_meta(), &hash)? {
+                    let header: CachedBlockHeader = bincode::deserialize(&value)?;
+                    results.push((block_num, header));
+                    if results.len() >= limit {
+                        break;
+                    }
                 }
             }
         }
@@ -81,22 +97,9 @@ impl CkbadgerStore {
         block_numbers: &[i64],
     ) -> anyhow::Result<std::collections::HashMap<i64, Vec<u8>>> {
         let mut result = std::collections::HashMap::with_capacity(block_numbers.len());
-        let cf = self.cf_block_headers();
-
-        let keys: Vec<[u8; 8]> = block_numbers
-            .iter()
-            .map(|n| keys::encode_block_num(*n))
-            .collect();
-
-        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
-            keys.iter().map(|k| (cf, k.as_slice())).collect();
-        let values = self.multi_get_cf(cf_keys);
-
-        for (i, value_result) in values.into_iter().enumerate() {
-            if let Ok(Some(value)) = value_result {
-                if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
-                    result.insert(block_numbers[i], header.dao);
-                }
+        for &bn in block_numbers {
+            if let Some(header) = self.get_block_header(bn)? {
+                result.insert(bn, header.dao);
             }
         }
         Ok(result)
@@ -104,20 +107,16 @@ impl CkbadgerStore {
 
     pub fn block_headers_count(&self) -> usize {
         let mut count = 0;
-        let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_block_index(), IteratorMode::Start);
         for _ in iter.flatten() {
             count += 1;
         }
         count
     }
 
-    /// Find the first missing block number in `block_headers` if there is an internal gap.
-    ///
-    /// Returns:
-    /// - `Some(n)` when block `n` is missing while later blocks exist.
-    /// - `None` when headers are contiguous from 0..tip, or there are no headers.
+    /// Find the first missing block number in `block_index` if there is an internal gap.
     pub fn find_first_block_header_gap(&self) -> anyhow::Result<Option<i64>> {
-        let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_block_index(), IteratorMode::Start);
         let mut expected: Option<i64> = None;
 
         for item in iter.flatten() {
@@ -267,5 +266,55 @@ mod tests {
         assert_eq!(store.find_day_start_block(2).unwrap(), Some(0));
         assert_eq!(store.find_day_start_block(3).unwrap(), Some(3));
         assert_eq!(store.find_day_start_block(999).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_block_header_roundtrip() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header = make_header(42);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(42, &header);
+        batch.commit().unwrap();
+
+        let result = store.get_block_header(42).unwrap().unwrap();
+        assert_eq!(result.block_number, 42);
+        assert_eq!(result.hash, header.hash);
+    }
+
+    #[test]
+    fn test_get_block_number_by_hash() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header = make_header(99);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(99, &header);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store.get_block_number_by_hash(&header.hash).unwrap(),
+            Some(99)
+        );
+        assert_eq!(store.get_block_number_by_hash(&[0xFF; 32]).unwrap(), None);
+    }
+
+    #[test]
+    fn test_list_blocks_desc() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        for n in 0..5 {
+            batch.put_block_header(n, &make_header(n));
+        }
+        batch.commit().unwrap();
+
+        let blocks = store.list_blocks_desc(None, 3).unwrap();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].0, 4);
+        assert_eq!(blocks[1].0, 3);
+        assert_eq!(blocks[2].0, 2);
     }
 }

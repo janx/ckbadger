@@ -7,8 +7,8 @@ use rocksdb::{IteratorMode, WriteBatch};
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    decode_consumed_cell_info, AssetAction, LiveCellInfo, TokenActivityEntry,
-    TokenActivityTransfer, TokenDailyDelta, TokenInfo, TokenTransferRecord,
+    AssetAction, LiveCellInfo, TokenActivityEntry, TokenActivityTransfer, TokenDailyDelta,
+    TokenInfo, TokenTransferRecord,
 };
 
 const TOKEN_REBUILD_BATCH_SIZE: usize = 20_000;
@@ -175,7 +175,7 @@ fn effective_occupied_capacity(
 
 impl CkbadgerStore {
     pub fn get_token(&self, type_hash: &[u8]) -> anyhow::Result<Option<TokenInfo>> {
-        match self.get_cf(self.cf_tokens(), type_hash)? {
+        match self.get_cf(self.cf_asset_meta(), type_hash)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -186,7 +186,7 @@ impl CkbadgerStore {
         if type_hashes.is_empty() {
             return Vec::new();
         }
-        let cf = self.cf_tokens();
+        let cf = self.cf_asset_meta();
         let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             type_hashes.iter().map(|h| (cf, h.as_slice())).collect();
         let values = self.multi_get_cf(cf_keys);
@@ -205,12 +205,12 @@ impl CkbadgerStore {
 
     pub fn put_token_direct(&self, type_hash: &[u8], info: &TokenInfo) -> anyhow::Result<()> {
         let value = bincode::serialize(info)?;
-        self.put_cf(self.cf_tokens(), type_hash, &value)
+        self.put_cf(self.cf_asset_meta(), type_hash, &value)
     }
 
     /// List all tokens.
     pub fn list_tokens(&self) -> anyhow::Result<Vec<(Vec<u8>, TokenInfo)>> {
-        let iter = self.iterator_cf(self.cf_tokens(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_asset_meta(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -229,7 +229,7 @@ impl CkbadgerStore {
         lock_hash: &[u8],
     ) -> anyhow::Result<Option<i128>> {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
-        match self.get_cf(self.cf_token_holders(), &key)? {
+        match self.get_cf(self.cf_ft_holders(), &key)? {
             Some(value) if value.len() == 16 => {
                 Ok(Some(i128::from_le_bytes(value[..16].try_into().unwrap())))
             }
@@ -457,14 +457,20 @@ impl CkbadgerStore {
         // 1) Aggregate live cells: +created
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _value) = item;
             result.live_cells_scanned += 1;
 
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
 
-            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing cell data in append store while rebuilding token daily deltas: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let info: LiveCellInfo = bincode::deserialize(&cell_data).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize live cell while rebuilding token daily deltas: outpoint=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -514,19 +520,26 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let consumed = decode_consumed_cell_info(&value).ok_or_else(|| {
+            let (consumed_at_block, _consumed_by_tx) = keys::decode_consumed_cell_value(&value);
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "failed to decode consumed cell while rebuilding token daily deltas: outpoint=0x{}",
+                    "missing cell data in append store while rebuilding token daily deltas: outpoint=0x{}",
                     bytes_to_hex(&key)
                 )
             })?;
-            let info = consumed.cell;
+            let info: LiveCellInfo = bincode::deserialize(&cell_data).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize consumed cell while rebuilding token daily deltas: outpoint=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
             let Some(type_hash) = info.type_script_hash.as_ref() else {
                 continue;
             };
 
             let created_date = resolve_date(info.created_at_block)?;
-            let consumed_date = resolve_date(consumed.consumed_at_block)?;
+            let consumed_date = resolve_date(consumed_at_block)?;
             let occupied = effective_occupied_capacity(&info, &key, "consumed")?;
 
             let created = daily
@@ -1013,7 +1026,7 @@ impl CkbadgerStore {
     ///
     /// Counts entries with balance > 0 without collecting them.
     pub fn count_token_holders(&self, type_hash: &[u8]) -> anyhow::Result<i64> {
-        let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
+        let iter = self.prefix_iterator_cf(self.cf_ft_holders(), type_hash);
         let mut count: i64 = 0;
 
         for item in iter.flatten() {
@@ -1039,7 +1052,7 @@ impl CkbadgerStore {
         type_hash: &[u8],
         limit: usize,
     ) -> anyhow::Result<Vec<(Vec<u8>, i128)>> {
-        let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
+        let iter = self.prefix_iterator_cf(self.cf_ft_holders(), type_hash);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -1069,7 +1082,7 @@ impl CkbadgerStore {
         let mut result = TokenStateRebuildResult::default();
 
         let mut existing_tokens: HashMap<Vec<u8>, TokenInfo> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_tokens(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_asset_meta(), IteratorMode::Start);
         for item in iter.flatten() {
             let (key, value) = item;
             let info: TokenInfo = bincode::deserialize(&value).map_err(|e| {
@@ -1086,11 +1099,17 @@ impl CkbadgerStore {
         let mut live_aggs: HashMap<Vec<u8>, LiveTokenAgg> = HashMap::new();
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _value) = item;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+            let cell_data = self.append_get_cf(self.cf_cells(), &key)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing cell data in append store during token rebuild: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let info: LiveCellInfo = bincode::deserialize(&cell_data).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize live cell during token rebuild: outpoint=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -1191,10 +1210,10 @@ impl CkbadgerStore {
 
         // 3) Clear token_holders.
         let mut clear_batch = WriteBatch::default();
-        let iter = self.iterator_cf(self.cf_token_holders(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_ft_holders(), IteratorMode::Start);
         for item in iter.flatten() {
             let (key, _) = item;
-            clear_batch.delete_cf(self.cf_token_holders(), &key);
+            clear_batch.delete_cf(self.cf_ft_holders(), &key);
             result.token_holders_cleared += 1;
             if result
                 .token_holders_cleared
@@ -1252,7 +1271,7 @@ impl CkbadgerStore {
             // Stale token: no live state and no transfer history left after rollback.
             if live.is_none() && transfer.is_none() {
                 if existing_tokens.remove(&type_hash).is_some() {
-                    write_batch.delete_cf(self.cf_tokens(), &type_hash);
+                    write_batch.delete_cf(self.cf_asset_meta(), &type_hash);
                     pending_writes += 1;
                     result.tokens_deleted += 1;
                     flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
@@ -1313,7 +1332,7 @@ impl CkbadgerStore {
             info.first_seen_block = first_seen.unwrap_or(0);
 
             let token_value = bincode::serialize(&info)?;
-            write_batch.put_cf(self.cf_tokens(), &type_hash, &token_value);
+            write_batch.put_cf(self.cf_asset_meta(), &type_hash, &token_value);
             pending_writes += 1;
             result.tokens_written += 1;
             flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
@@ -1348,7 +1367,7 @@ impl CkbadgerStore {
                     );
                 }
                 let holder_key = keys::encode_token_holder_key(&type_hash, &lock_hash);
-                write_batch.put_cf(self.cf_token_holders(), holder_key, balance.to_le_bytes());
+                write_batch.put_cf(self.cf_ft_holders(), holder_key, balance.to_le_bytes());
                 pending_writes += 1;
                 result.token_holders_written += 1;
                 flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;

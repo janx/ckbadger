@@ -938,7 +938,22 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         Some(&consumed_by_tx),
     );
     // graph route requires creating tx location to exist
-    batch.put_tx_hash_map(&tx_hash, 123, 0);
+    batch.put_tx_index(
+        123,
+        0,
+        &tx_hash,
+        &TxIndexEntry {
+            block_number: 123,
+            tx_index: 0,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -1052,7 +1067,22 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
             transactions_count: 1,
         },
     );
-    batch.put_tx_hash_map(&hash, 123, 0);
+    batch.put_tx_index(
+        123,
+        0,
+        &hash,
+        &TxIndexEntry {
+            block_number: 123,
+            tx_index: 0,
+            is_cellbase: true,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -3343,7 +3373,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
     assert_eq!(json["liveOccupiedCapacity"], "50");
-    assert_eq!(json["mediaProfile"]["tier"], "unknown");
+    assert_eq!(json["storageProfile"]["tier"], "unknown");
 }
 
 #[tokio::test]
@@ -4663,6 +4693,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     batch.put_tx_index(
         100,
         0,
+        &mint_tx,
         &TxIndexEntry {
             block_number: 100,
             tx_index: 0,
@@ -4679,6 +4710,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     batch.put_tx_index(
         200,
         0,
+        &transfer_tx,
         &TxIndexEntry {
             block_number: 200,
             tx_index: 0,
@@ -5410,10 +5442,41 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         Some(&burn_tx),
     );
-    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    // Write pre-computed collection activities (the handler reads from this index)
+    batch.put_nft_collection_activity(
+        &collection_id,
+        100,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: mint_tx.clone(),
+            timestamp_ms: 1_700_000_100,
+            actions: vec![AssetAction::Mint],
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        200,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: transfer_tx.clone(),
+            timestamp_ms: 1_700_000_200,
+            actions: vec![AssetAction::Transfer],
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        300,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: burn_tx.clone(),
+            timestamp_ms: 1_700_000_300,
+            actions: vec![AssetAction::Burn],
+        },
+    );
     batch.put_tx_index(
         100,
         0,
+        &mint_tx,
         &TxIndexEntry {
             block_number: 100,
             tx_index: 0,
@@ -5426,10 +5489,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_tx_hash_map(&transfer_tx, 200, 0);
     batch.put_tx_index(
         200,
         0,
+        &transfer_tx,
         &TxIndexEntry {
             block_number: 200,
             tx_index: 0,
@@ -5442,10 +5505,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_tx_hash_map(&burn_tx, 300, 0);
     batch.put_tx_index(
         300,
         0,
+        &burn_tx,
         &TxIndexEntry {
             block_number: 300,
             tx_index: 0,
@@ -5664,6 +5727,7 @@ async fn test_assets_nft_item_activities_mnft() {
     batch.put_tx_index(
         100,
         0,
+        &mint_tx,
         &TxIndexEntry {
             block_number: 100,
             tx_index: 0,
@@ -5680,6 +5744,7 @@ async fn test_assets_nft_item_activities_mnft() {
     batch.put_tx_index(
         300,
         0,
+        &transfer_tx,
         &TxIndexEntry {
             block_number: 300,
             tx_index: 0,
@@ -5849,6 +5914,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     batch.put_tx_index(
         300,
         0,
+        &mint_tx,
         &TxIndexEntry {
             block_number: 300,
             tx_index: 0,
@@ -5865,6 +5931,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     batch.put_tx_index(
         320,
         0,
+        &transfer_tx_1,
         &TxIndexEntry {
             block_number: 320,
             tx_index: 0,
@@ -5881,6 +5948,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     batch.put_tx_index(
         340,
         0,
+        &transfer_tx_2,
         &TxIndexEntry {
             block_number: 340,
             tx_index: 0,
@@ -6040,6 +6108,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     batch.put_tx_index(
         100,
         0,
+        &mint_tx,
         &TxIndexEntry {
             block_number: 100,
             tx_index: 0,
@@ -6056,6 +6125,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     batch.put_tx_index(
         200,
         0,
+        &transfer_tx,
         &TxIndexEntry {
             block_number: 200,
             tx_index: 0,
@@ -6072,6 +6142,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     batch.put_tx_index(
         260,
         0,
+        &burn_tx,
         &TxIndexEntry {
             block_number: 260,
             tx_index: 0,
