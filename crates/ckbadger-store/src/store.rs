@@ -597,6 +597,12 @@ impl CkbadgerStore {
     /// Also expands the global WriteBufferManager budget and shrinks block cache
     /// to shift memory from reads to writes during the write-heavy bulk phase.
     pub fn set_bulk_sync_compaction_options(&self) {
+        // Idempotent: skip if already in bulk mode
+        if self.bulk_sync_mode.load(Ordering::Relaxed) {
+            return;
+        }
+        self.bulk_sync_mode.store(true, Ordering::Relaxed);
+
         // Expand WBM budget: more memtable headroom before triggering atomic flush
         self.write_buffer_manager
             .set_buffer_size(Self::WBM_BULK_SYNC_BYTES);
@@ -661,6 +667,12 @@ impl CkbadgerStore {
     /// or 2 (low), `max_bytes_for_level_base` to 512 MB, and restores WBM budget
     /// and block cache to normal sizes.
     pub fn restore_normal_compaction_options(&self) {
+        // Idempotent: skip if already in normal mode
+        if !self.bulk_sync_mode.load(Ordering::Relaxed) {
+            return;
+        }
+        self.bulk_sync_mode.store(false, Ordering::Relaxed);
+
         // Restore WBM to normal budget
         self.write_buffer_manager
             .set_buffer_size(Self::WBM_NORMAL_BYTES);
@@ -1192,6 +1204,62 @@ mod tests {
         store.put_cf(cf, b"test", b"value").unwrap();
         let val = store.get_cf(cf, b"test").unwrap();
         assert_eq!(val.as_deref(), Some(b"value".as_slice()));
+    }
+
+    #[test]
+    fn test_set_bulk_compaction_is_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        assert!(!store.is_bulk_sync_mode());
+
+        // First call sets mode
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+
+        // Second call is a no-op (idempotent)
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+    }
+
+    #[test]
+    fn test_restore_normal_compaction_is_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        // Restore on fresh store (already normal) is a no-op
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
+
+        // Enter bulk, then restore
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
+
+        // Second restore is a no-op
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
+    }
+
+    #[test]
+    fn test_compaction_mode_tracks_bulk_sync_mode_flag() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        // Initial state
+        assert!(!store.is_bulk_sync_mode());
+
+        // Enter bulk → flag true
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+
+        // Restore normal → flag false
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
+
+        // Re-enter bulk → flag true again
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
     }
 
     #[test]

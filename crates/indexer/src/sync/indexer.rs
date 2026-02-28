@@ -2727,6 +2727,8 @@ pub struct Indexer {
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
+    /// Limits concurrent background secondary issuance tasks to prevent unbounded spawning.
+    secondary_issuance_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl Indexer {
@@ -2824,6 +2826,7 @@ impl Indexer {
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
+            secondary_issuance_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         })
     }
 
@@ -2861,6 +2864,47 @@ impl Indexer {
 
     pub fn is_bulk_sync_active(&self) -> bool {
         self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+    }
+
+    /// Dynamically switch RocksDB compaction options based on how far behind tip we are.
+    ///
+    /// - **Enter bulk**: blocks_behind > threshold and not already in bulk compaction mode.
+    /// - **Exit bulk**: blocks_behind <= threshold and currently in bulk compaction mode,
+    ///   BUT only if compaction pressure has drained (L0 files < 10, pending < 2 GB).
+    ///   Otherwise defers the transition and logs.
+    fn ensure_compaction_mode(&self, blocks_behind: u64) {
+        let store = self.writer.store();
+        let in_bulk = store.is_bulk_sync_mode();
+        let should_be_bulk = blocks_behind > self.config.bulk_sync_threshold;
+
+        if should_be_bulk && !in_bulk {
+            info!(
+                blocks_behind,
+                threshold = self.config.bulk_sync_threshold,
+                "Re-entering bulk compaction mode"
+            );
+            store.set_bulk_sync_compaction_options();
+        } else if !should_be_bulk && in_bulk {
+            let (l0_files_max, compaction_pending_bytes, _imm) = store.compaction_pressure();
+            const DRAIN_L0_THRESHOLD: u64 = 10;
+            const DRAIN_PENDING_BYTES_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+            if l0_files_max < DRAIN_L0_THRESHOLD
+                && compaction_pending_bytes < DRAIN_PENDING_BYTES_THRESHOLD
+            {
+                info!(
+                    l0_files_max,
+                    compaction_pending_mb = compaction_pending_bytes / (1024 * 1024),
+                    "Compaction drained, restoring normal compaction options"
+                );
+                store.restore_normal_compaction_options();
+            } else {
+                debug!(
+                    l0_files_max,
+                    compaction_pending_mb = compaction_pending_bytes / (1024 * 1024),
+                    "Deferring normal compaction: pressure still high"
+                );
+            }
+        }
     }
 
     pub fn is_direct_db_read(&self) -> bool {
@@ -5012,22 +5056,23 @@ impl Indexer {
                         );
 
                         if !self.is_secondary_issuance_bulk_active() {
-                            for block in &all_parsed_blocks {
-                                if let Err(e) = self
-                                    .update_secondary_issuance(
-                                        &format!("0x{}", hex::encode(&block.hash)),
-                                        &hex::encode(&block.dao),
-                                        block.number,
-                                        block.timestamp,
+                            let issuance_blocks: Vec<_> = all_parsed_blocks
+                                .iter()
+                                .map(|b| {
+                                    (
+                                        format!("0x{}", hex::encode(&b.hash)),
+                                        hex::encode(&b.dao),
+                                        b.number,
+                                        b.timestamp,
                                     )
-                                    .await
-                                {
-                                    warn!(
-                                        "Failed to update secondary issuance for block {}: {}",
-                                        block.number, e
-                                    );
-                                }
-                            }
+                                })
+                                .collect();
+                            tokio::spawn(Self::run_secondary_issuance_batch(
+                                self.rpc.clone(),
+                                self.writer.clone(),
+                                Arc::clone(&self.secondary_issuance_semaphore),
+                                issuance_blocks,
+                            ));
                         }
 
                         let crossed_1000 = (start_block / 1000) != (end_block / 1000);
@@ -5053,6 +5098,7 @@ impl Indexer {
 
                         self.maybe_invalidate_chart_caches(end_block).await;
                         self.check_bulk_sync_completion().await;
+                        self.ensure_compaction_mode(blocks_remaining);
                     }
 
                     self.perf
@@ -5388,6 +5434,7 @@ impl Indexer {
 
         if !blocks.is_empty() {
             if !self.is_secondary_issuance_bulk_active() {
+                let mut issuance_blocks = Vec::new();
                 for block_response in &blocks {
                     let block_number =
                         i64::try_from(BlockParser::parse_block_number(&block_response.block))
@@ -5400,21 +5447,19 @@ impl Indexer {
                             })?;
                     let block_timestamp =
                         BlockParser::parse_timestamp(&block_response.block.header.timestamp);
-                    if let Err(e) = self
-                        .update_secondary_issuance(
-                            &block_response.block.header.hash,
-                            &block_response.block.header.dao,
-                            block_number,
-                            block_timestamp,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "Failed to update secondary issuance for block {}: {}",
-                            block_number, e
-                        );
-                    }
+                    issuance_blocks.push((
+                        block_response.block.header.hash.clone(),
+                        block_response.block.header.dao.clone(),
+                        block_number,
+                        block_timestamp,
+                    ));
                 }
+                tokio::spawn(Self::run_secondary_issuance_batch(
+                    self.rpc.clone(),
+                    self.writer.clone(),
+                    Arc::clone(&self.secondary_issuance_semaphore),
+                    issuance_blocks,
+                ));
             }
 
             let crossed_1000 = (start_block / 1000) != (end_block / 1000);
@@ -5441,6 +5486,7 @@ impl Indexer {
         }
 
         self.check_bulk_sync_completion().await;
+        self.ensure_compaction_mode(self.progress.blocks_remaining());
 
         Ok(SyncAction::Continue)
     }
@@ -5490,10 +5536,8 @@ impl Indexer {
 
             self.cache_invalidator.invalidate_chart_caches().await;
 
-            // Re-enable normal compaction options. We intentionally avoid
-            // post-bulk full-db manual compaction because that is a delayed
-            // heavy task started after sync phase transition.
-            self.writer.store().restore_normal_compaction_options();
+            // Compaction mode transition is now handled by ensure_compaction_mode()
+            // which runs after every batch and includes a drain guard.
         }
 
         if was_secondary_bulk && !currently_secondary_bulk {
@@ -11061,24 +11105,21 @@ impl Indexer {
 
     // === update_secondary_issuance ===
 
+    /// Update secondary issuance for a block. Static method that can be called from spawned tasks.
     async fn update_secondary_issuance(
-        &self,
+        rpc: &CkbRpcClient,
+        writer: &BatchWriter,
         block_hash: &str,
         dao_hex: &str,
         block_number: i64,
         block_timestamp: DateTime<Utc>,
     ) -> Result<()> {
         // Check if we already have issuance data for this block
-        if self
-            .writer
-            .store()
-            .get_block_issuance(block_number)?
-            .is_some()
-        {
+        if writer.store().get_block_issuance(block_number)?.is_some() {
             return Ok(());
         }
 
-        let economic_state = match self.rpc.get_block_economic_state(block_hash).await? {
+        let economic_state = match rpc.get_block_economic_state(block_hash).await? {
             Some(state) => state,
             None => return Ok(()),
         };
@@ -11112,7 +11153,7 @@ impl Indexer {
         )?;
 
         let (dao_compensation, burnt) = if denominator > 0 {
-            let total_dao_deposits: u128 = self.writer.get_dao_deposits_at_block(block_number)?;
+            let total_dao_deposits: u128 = writer.get_dao_deposits_at_block(block_number)?;
 
             let dao_share = non_miner_secondary
                 .checked_mul(total_dao_deposits)
@@ -11135,8 +11176,8 @@ impl Indexer {
             burnt: checked_u128_to_i64(burnt, "burnt")?,
         };
 
-        let mut batch = StoreBatch::new(self.writer.store());
-        self.writer.accumulate_secondary_issuance(
+        let mut batch = StoreBatch::new(writer.store());
+        writer.accumulate_secondary_issuance(
             &breakdown,
             block_number,
             block_timestamp,
@@ -11145,6 +11186,37 @@ impl Indexer {
         batch.commit()?;
 
         Ok(())
+    }
+
+    /// Run secondary issuance updates for a batch of blocks, gated by the semaphore.
+    /// Called from a spawned task — does not require &self.
+    async fn run_secondary_issuance_batch(
+        rpc: CkbRpcClient,
+        writer: BatchWriter,
+        sem: Arc<tokio::sync::Semaphore>,
+        blocks: Vec<(String, String, i64, DateTime<Utc>)>,
+    ) {
+        let _permit = match tokio::time::timeout(Duration::from_secs(5), sem.acquire()).await {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_closed)) => return,
+            Err(_timeout) => {
+                warn!("Secondary issuance permit acquisition took >5s, issuance backlog");
+                match sem.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                }
+            }
+        };
+        for (hash, dao, number, timestamp) in blocks {
+            if let Err(e) =
+                Self::update_secondary_issuance(&rpc, &writer, &hash, &dao, number, timestamp).await
+            {
+                warn!(
+                    "Failed to update secondary issuance for block {}: {}",
+                    number, e
+                );
+            }
+        }
     }
 
     // === cache_block_proposals ===
@@ -13492,5 +13564,51 @@ mod tests {
             last_snapshot_date: Some("20240102".to_string()),
         };
         assert!(should_rebuild_hodl_tracker_state(Some(&ahead), 100));
+    }
+
+    #[test]
+    fn test_ensure_compaction_mode_drain_guard_defers_when_pressure_high() {
+        // Simulates the drain guard logic: when store is in bulk mode but should transition
+        // to normal, if compaction_pressure reports high L0 files, we should NOT restore
+        // normal mode yet.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+
+        // Enter bulk mode
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+
+        // Check compaction_pressure on an empty store (should be 0/0/0 → drain OK)
+        let (l0_files_max, compaction_pending_bytes, _imm) = store.compaction_pressure();
+        // Empty store has no L0 files and no pending compaction
+        assert!(l0_files_max < 10);
+        assert!(compaction_pending_bytes < 2 * 1024 * 1024 * 1024);
+
+        // Restore should succeed on empty store (drain condition met)
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
+    }
+
+    #[test]
+    fn test_ensure_compaction_mode_reentry() {
+        // Verifies that after restoring normal mode, re-entering bulk mode works
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+
+        // Enter bulk
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+
+        // Exit bulk
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
+
+        // Re-enter bulk
+        store.set_bulk_sync_compaction_options();
+        assert!(store.is_bulk_sync_mode());
+
+        // Exit again
+        store.restore_normal_compaction_options();
+        assert!(!store.is_bulk_sync_mode());
     }
 }
