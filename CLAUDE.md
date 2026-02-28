@@ -20,32 +20,22 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 ## Principle Alignment
 
-- CKB Native:
-- Unrivaled Speed:
-- Local First:
-- Agent Friendly:
+- CKB Native: / Unrivaled Speed: / Local First: / Agent Friendly:
 
 ## Scope
 
-- Files changed and why
-- Any storage/schema impact
+- Files changed and why / Any storage/schema impact
 
 ## Validation
 
-- Commands run:
-- Tests added/updated:
-- Verify checks:
+- Commands run: / Tests added/updated: / Verify checks:
 
 ## Result
 
-- Behavior change summary
-- Re-sync required: yes/no
-- Follow-up items (if any)
+- Behavior change summary / Re-sync required: yes/no / Follow-up items (if any)
 ```
 
-**Principle Sync Rule**:
-
-- If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
+**Principle Sync Rule**: If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
 
 ## Coding Principles (MANDATORY)
 
@@ -59,38 +49,17 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
 - If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
 
-## Development Status (IMPORTANT)
+## Development Status & Sync Policies (IMPORTANT)
 
-**This is a project under active development, NOT running in production.**
+**This is a project under active development, NOT running in production.** Database can be cleared and rebuilt at any time. Schema changes are cheap.
 
-- Database can be cleared and rebuilt at any time
-- Data can be re-synced from scratch whenever needed
-- Schema changes are cheap — no migration compatibility concerns
+**Design implications**: Prefer optimal data design over backward compatibility. Feel free to restructure column families. Breaking changes are acceptable — just update `crates/ckbadger-store/`. Re-sync is always an option.
 
-**Design Implications:**
+**Sync Bug Policy (MANDATORY):** No rebuild task/workflow as primary fix for sync bugs. Fix indexer logic first, then delete RocksDB and re-sync from genesis. Prefer dropping and rebuilding DB over complex compatibility/backfill paths.
 
-When solving problems or designing features:
+**Bulk Sync Failure Policy (MANDATORY):** Bulk sync is single-shot: finish successfully or fail fast. No auto-cleanup partial state. No defer + refill/rebuild patterns; write derived data inline. If it fails: fix bug, delete RocksDB, restart from genesis.
 
-1. **Prefer optimal data design** over backward compatibility
-2. **Feel free to restructure column families** if it produces a cleaner solution
-3. **Breaking changes are acceptable** — just update the store types/ops in `crates/ckbadger-store/`
-4. **If a bug fix requires storage change**, do it properly rather than working around bad structure
-5. **Re-sync is always an option** — don't let existing data constrain the right solution
-6. **Do not add rebuild tasks for sync bugs** — fix the indexer write/read logic directly and require a DB rebuild + re-sync
-
-**Sync Bug Policy (MANDATORY):**
-
-- No rebuild task/workflow should be introduced as the primary fix for sync correctness issues
-- For any sync/data inconsistency bug: fix indexer logic first, then instruct users to delete RocksDB and re-sync from genesis
-- If existing data is wrong, prefer dropping and rebuilding DB over adding complex compatibility/backfill paths
-
-**Bulk Sync Failure Policy (MANDATORY):**
-
-- Bulk sync is single-shot: either finish successfully, or fail fast and stop
-- During bulk sync, do not auto-cleanup partial state and continue in-place
-- During bulk sync, do not use defer + refill/rebuild design patterns; write required derived data inline on the canonical sync path
-- If bulk sync fails: fix the bug, delete RocksDB, and restart sync from genesis
-- Keep bulk sync implementation simple; avoid introducing mid-run recovery branches
+**Bulk Sync Write Policy:** Required user-facing derived data must be written inline with block processing. Any correctness bug should be fixed in the write/read logic with a full DB rebuild + re-sync from genesis.
 
 ```bash
 # Typical workflow after storage changes:
@@ -107,165 +76,47 @@ When solving problems or designing features:
 cargo check                              # Type check all crates
 cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
-
-# Rust Testing
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)
 cargo test -p ckbadger-indexer           # Tests in one crate
 cargo test -- --nocapture                # With stdout
 
-# Indexer with Redis cache invalidation (optional feature)
-cargo build -p ckbadger-indexer --features redis-cache  # Enable cache feature
+# Indexer with Redis cache invalidation
+cargo build -p ckbadger-indexer --features redis-cache
 REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-indexer --features redis-cache
 
-# Frontend (from root OR frontend/)
+# Frontend
 pnpm dev                                 # Dev server (:3000)
 pnpm build                               # Production build
 pnpm lint                                # ESLint
 cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
-
-# Frontend Testing
-cd frontend && pnpm test                 # Run Vitest
-cd frontend && pnpm test:coverage        # With coverage report
+cd frontend && pnpm test                 # Vitest
 cd frontend && npx vitest run            # Non-interactive
 
-# AI-friendly pages (frontend: markdown + raw)
-curl http://localhost:3000/blocks.md
-curl "http://localhost:3000/blocks?format=md&limit=20"
-curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
-curl http://localhost:3000/blocks/123.raw
-curl "http://localhost:3000/tx/0x...hash....raw?profile=debugger" | jq '.data.txDebugger.mockTransaction'
-curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:3000/tx/0x...hash...
-curl http://localhost:3000/capabilities
+# Verify (requires running API at localhost:3001)
+cargo run -p ckbadger-indexer -- verify --depth fast
+cargo run -p ckbadger-indexer -- verify --depth sampling
 
-# Data Integrity Verification (requires running API at localhost:3001)
-cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
-cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
-cargo run -p ckbadger-indexer -- verify --list-checks       # List all 43 checks
-cargo run -p ckbadger-indexer -- verify --no-explorer       # Skip explorer HTTP checks
-cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1  # Custom API URL
-cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114         # Add RPC spot-checks
-
-# Pre-commit verification
+# Pre-commit
 cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 
 # Formatting
 pnpm format                              # Prettier (all files)
 
-# Local-first shortcuts
-make up                                  # Start local stack (redis/indexer/api/frontend; ckb-node only in internal mode)
-make rebuild SERVICES=api                # Rebuild + restart one compose service
-make rebuild SERVICES="api frontend"     # Rebuild + restart multiple services
+# Make shortcuts
+make up                                  # Start local stack
+make rebuild SERVICES=api                # Rebuild + restart service(s)
 make tui                                 # Run monitoring TUI
-make reset CONFIRM=1                     # Delete local RocksDB + redis cache data
-make verify                              # Run verify --depth fast against local API
-make up CKB_NODE_MODE=internal           # Force internal mode for one run
-make up CKB_NODE_MODE=external           # Force external mode for one run
+make reset CONFIRM=1                     # Delete local RocksDB + redis data
+make verify                              # Run verify --depth fast
 ```
 
-`up` default mode comes from `.env`:
+`up` default mode from `.env`: `COMPOSE_PROFILES=internal` => internal CKB node, unset => external CKB.
 
-- `COMPOSE_PROFILES=internal` => internal CKB (`redis + ckb-node + indexer + api + frontend`)
-- `COMPOSE_PROFILES` unset => external CKB (`redis + indexer + api + frontend`)
+## AI-Friendly Page Output
 
-`reset CONFIRM=1` removes:
-
-- local `CKBADGER_DATA_PATH` / `CKBADGER_DERIVED_DATA_PATH` (+ both api secondary paths)
-- Docker volumes `ckbadger-data` and `redis-data`
-- keeps `ckb-data` untouched
-
-`rebuild SERVICES="<name> [name ...]"`:
-
-- allowed services: `redis`, `ckb-node`, `indexer`, `api`, `frontend`
-- recreates only listed target services (`--no-deps` for non-`ckb-node`)
-- including `ckb-node` requires internal mode
-
-`tui`:
-
-- runs `ckbadger-tui` for sync/memory/throughput monitoring
-- pass extra args with `TUI_ARGS`, for example: `make tui TUI_ARGS="--refresh-ms 500"`
-
-## AI-Friendly Page Output (Frontend)
-
-Frontend pages support two machine-oriented formats:
-
-- `md` for summary-style markdown
-- `raw` for structured automation payloads
-
-Format negotiation priority (strict):
-
-1. `query.format`
-2. URL suffix (`.md` / `.raw`)
-3. `Accept` header
-
-Markdown output supports:
-
-1. URL suffix `.md` (e.g. `/blocks/123.md`)
-2. Query parameter `?format=md`
-3. Header `Accept: text/markdown`
-
-Raw output supports:
-
-1. URL suffix `.raw` (e.g. `/blocks/123.raw`)
-2. Query parameter `?format=raw`
-3. Header `Accept: application/vnd.ckbadger.raw+json`
-
-Raw profile:
-
-- `profile` query selects a raw variant (`default` when absent)
-- `profile=debugger` is supported on `/tx/{hash}` and includes `data.txDebugger.mockTransaction`
-- Unknown/unsupported profiles fail fast with `invalid_profile` / `profile_not_supported`
-
-End-to-end debugger workflow:
-
-```bash
-TX_HASH=0x...replace_with_real_tx_hash...
-curl "http://localhost:3000/tx/${TX_HASH}.raw?profile=debugger" \
-  | jq '.data.txDebugger.mockTransaction' > /tmp/mock_tx.json
-
-ckb-debugger \
-  --tx-file /tmp/mock_tx.json \
-  --cell-index 0 \
-  --cell-type input \
-  --script-group-type lock
-```
-
-Troubleshooting:
-
-- `invalid_profile` / `profile_not_supported`: check route support via `/capabilities`
-- `rpc_http_error` / `rpc_error`: verify `CKB_RPC_URL` (default `http://127.0.0.1:8114`)
-- `tx_not_found`: confirm tx hash and network alignment
-
-Matrix run helper (recommended for exhaustive checks):
-
-```bash
-# Full matrix: script-group-type (lock/type) x cell-type (input/output) x all indices
-scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
-
-# Focused iteration
-SCRIPT_GROUP_TYPES="lock" CELL_TYPES="input" \
-  scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
-
-# Keep running after a failing combination
-CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
-```
-
-Implementation boundary:
-
-- Markdown/raw output is handled in frontend only (`Next.js` route + middleware)
-- API JSON endpoints under `/api/v1` are not rewritten to markdown/raw
-- Static files and `/_next/*` are not rewritten
-- Raw responses include `x-ckbadger-format`, `x-ckbadger-profile`, and `x-ckbadger-schema`
-
-When adding/changing frontend routes or formats (MANDATORY):
-
-1. Update markdown route parsing in `frontend/lib/ai/markdown-route.ts` if markdown coverage changes
-2. Update raw route parsing in `frontend/lib/ai/raw-route.ts` if raw coverage changes
-3. Update renderer(s): `frontend/lib/ai/markdown-renderer.ts` and/or `frontend/lib/ai/raw-renderer.ts`
-4. Update rewrite negotiation in `frontend/lib/ai/markdown-request.ts` if format rules change
-5. Update capability/discovery files: `frontend/lib/ai/capabilities.ts`, `frontend/public/llms.txt`, and `frontend/public/llms-full.txt`
-6. Add/adjust tests in `frontend/__tests__/lib/markdown-*.test.ts`, `frontend/__tests__/lib/raw-*.test.ts`, and `frontend/__tests__/lib/capabilities.test.ts`
+Frontend pages support `md` (markdown) and `raw` (structured JSON) formats. Format negotiation: `query.format` > URL suffix (`.md`/`.raw`) > `Accept` header. When adding/changing routes or formats, see `docs/AI_FORMATS.md` for the full checklist (MANDATORY).
 
 ## Project Structure
 
@@ -273,23 +124,26 @@ When adding/changing frontend routes or formats (MANDATORY):
 crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
-    src/verify/   #   Data integrity verification suite (43 checks; fast/sampling depths + explorer comparisons)
+    src/verify/   #   Data integrity verification suite (43 checks)
   ckbadger-store/ # Embedded RocksDB storage engine (31 column families)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI (sync/memory/throughput)
 frontend/         # Next.js 15 App Router + React 19
-docs/ACTIVITY_SYSTEM.md           # Activity system design - READ BEFORE ACTIVITY CHANGES
-docs/ARCHITECTURE_MAP.md          # Module ownership and entry points
-docs/POSTMORTEM.md                # Historical bugs - READ BEFORE CKB/DAO WORK
-docs/INDEXER_PIPELINE.md          # Pipeline architecture documentation
-docs/PERFORMANCE_RESULTS.md       # Benchmark snapshots for perf work
-docs/REORG_HANDLING.md            # Chain reorganization handling
+docs/AI_FORMATS.md           # AI-friendly page output details
+docs/ACTIVITY_SYSTEM.md      # Activity system design - READ BEFORE ACTIVITY CHANGES
+docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
+docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
+docs/INDEXER_PIPELINE.md     # Pipeline architecture + Redis sync data
+docs/PERFORMANCE_RESULTS.md  # Benchmark snapshots for perf work
+docs/REORG_HANDLING.md       # Chain reorganization handling
+docs/STORE_SCHEMA.md         # Column families reference (31 CFs)
+docs/VERIFY.md               # Data integrity verification details
 ```
 
 ## Indexer Pipeline Configuration
 
-The indexer uses a three-stage pipeline: **Fetcher** (RPC I/O) → **Parser** (CPU + DB prefetch) → **Writer** (DB I/O).
+Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) -> **Writer** (DB I/O). See `docs/INDEXER_PIPELINE.md` for architecture details, Redis sync data structs, and progress tracking.
 
 | Parameter             | Default | Description                             |
 | --------------------- | ------- | --------------------------------------- |
@@ -299,355 +153,39 @@ The indexer uses a three-stage pipeline: **Fetcher** (RPC I/O) → **Parser** (C
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests                 |
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
 
-```bash
-# CLI arguments
-cargo run -p ckbadger-indexer -- \
-  --pipeline-enabled \
-  --pipeline-buffer 4 \
-  --batch-size 10000 \
-  --bulk-sync-threshold 1000
+Redis keys: `sync:status` (60s TTL), `sync:progress` (30s), `memory:stats` (30s). Fallback: RocksDB `get_sync_tip()`/`get_sync_status()`. Requires `redis-cache` feature + `REDIS_URL`.
 
-# Environment variables (common)
-CKBADGER_DATA_PATH=./data/ckbadger-store
-CKBADGER_DERIVED_DATA_PATH=./data/ckbadger-store-derived
-CKB_RPC_URL=http://localhost:8114
-REDIS_URL=redis://localhost:6379
-```
+## Label Import
 
-Note: `pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
-`bulk_sync_threshold` are configured via CLI flags in current builds.
-
-See `docs/INDEXER_PIPELINE.md` for architecture details.
-
-## Progress Tracking
-
-The indexer uses two complementary log lines:
-
-1. **Batch log** (per batch): `Wrote blocks X to Y (N remaining, 2.34s)`
-   - Shows DB write duration for the batch
-   - Useful for identifying slow batches
-
-2. **Progress log** (every 10s): `Progress: 33.96% (6279999/18491045) - 3465.00 blocks/sec (EMA: 3200.00)`
-   - Shows overall sync percentage and throughput
-   - `blocks/sec`: 10-second sliding window (real-time, volatile)
-   - `EMA`: Exponential Moving Average with α=0.1 (smoothed, stable)
-   - ETA: `remaining_blocks / EMA` (simple calculation)
-
-### Redis Sync Data
-
-The indexer publishes sync data to Redis for API/WebSocket consumption:
-
-| Key             | TTL | Contents                        |
-| --------------- | --- | ------------------------------- |
-| `sync:status`   | 60s | JSON: `SyncStatusData` struct   |
-| `sync:progress` | 30s | JSON: `SyncProgressData` struct |
-| `memory:stats`  | 30s | JSON: `MemoryStatsData` struct  |
-
-**`sync:status`** - Core sync state (`crates/common/src/sync.rs`):
-
-```rust
-pub struct SyncStatusData {
-    pub tip_block_number: i64,
-    pub tip_block_hash: String,
-    pub total_transactions: i64,
-    pub total_cells: i64,
-    pub total_live_cells: i64,
-    pub total_addresses: i64,
-    pub last_synced_at: i64,
-    pub sync_ema_rate: Option<f64>,
-    pub sync_started_at: Option<i64>,
-    pub bulk_sync_completed_at: Option<i64>,
-    // ... other fields
-}
-```
-
-**`sync:progress`** - Real-time progress with ETA:
-
-```rust
-pub struct SyncProgressData {
-    pub current_block: u64,
-    pub target_block: u64,
-    pub blocks_per_second: f64,
-    pub ema_blocks_per_second: f64,
-    pub eta_seconds: Option<f64>,
-    pub eta_formatted: String,
-    pub progress_percentage: f64,
-    pub updated_at: i64,
-}
-```
-
-**`memory:stats`** - RocksDB and cell store memory usage:
-
-```rust
-pub struct MemoryStatsData {
-    pub live_cells_count: u64,           // Live cells in RocksDB
-    pub consumed_cells_count: u64,       // Consumed cells cache count
-    pub consumed_cells_bytes: u64,       // Consumed cells cache size
-    pub rocksdb_memtable_bytes: u64,     // RocksDB memtable usage
-    pub rocksdb_block_cache_bytes: u64,  // RocksDB block cache usage
-    pub rocksdb_table_readers_bytes: u64,// RocksDB table readers
-    pub rocksdb_total_bytes: u64,        // Total RocksDB memory
-    pub block_headers_count: u64,        // Cached block headers
-    pub bulk_sync_cell_cache_enabled: bool, // Bulk sync cache flag
-    pub bulk_sync_mode: bool,            // Currently in bulk sync
-    pub updated_at: i64,                 // Unix timestamp
-}
-```
-
-**Data Flow**:
-
-1. Indexer updates `sync:status` after each batch write
-2. Indexer updates `sync:progress` every 10 seconds with ETA
-3. Indexer updates `memory:stats` every 10 seconds with RocksDB memory usage
-4. API reads `sync:status` for totals (blocks, transactions, cells)
-5. API reads `sync:progress` for real-time progress display
-6. Operational tools can read `memory:stats` for memory monitoring
-7. WebSocket broadcaster uses both for `new_block` messages
-
-**Fallback** (when Redis unavailable):
-
-| Data                 | Fallback Source                        |
-| -------------------- | -------------------------------------- |
-| `tip_block_number`   | `store.get_sync_tip()` from RocksDB    |
-| `total_transactions` | `store.get_sync_status()` from RocksDB |
-| `total_live_cells`   | `store.get_sync_status()` from RocksDB |
-| `sync_ema_rate`      | None (ETA not displayed)               |
-
-**Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
-
-## Bulk Sync Write Policy
-
-Bulk sync must not rely on deferred writes plus later refill/rebuild. Required user-facing derived data must be written inline with block processing, and any correctness bug should be fixed in the write/read logic with a full DB rebuild + re-sync from genesis.
-
-**Label Import (No Task System):**
-
-Task system has been removed. `label_import` is retained as direct indexer logic.
-
-**Auto-trigger behavior:**
-
-`label_import` runs in a background blocking worker when indexer starts, if:
-
-1. Token labels directory exists (checks `$TOKEN_LABELS_PATH/information/` or `docs/token-labels/information/`)
-2. It has not already started in the current indexer process
-
-The path is determined by `TOKEN_LABELS_PATH` environment variable, defaulting to `docs/token-labels` for local development. In Docker, this is set to `/app/token-labels` with a volume mount.
-
-**Manual trigger (CLI):**
-
-```bash
-cargo run -p ckbadger-indexer -- label-import
-```
-
-Optional flags:
-
-- `--token-labels-path <path>`
-- `--network <mainnet|testnet>`
-- `--import-udt <true|false>`
-- `--import-scripts <true|false>`
+`label_import` auto-runs on indexer start if `$TOKEN_LABELS_PATH/information/` exists (default: `docs/token-labels`). Manual: `cargo run -p ckbadger-indexer -- label-import`. Flags: `--token-labels-path`, `--network`, `--import-udt`, `--import-scripts`.
 
 ## ckbadger-store (Embedded Storage Engine)
 
-ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
+Two logical RocksDB stores: core (`CKBADGER_DATA_PATH`, default `./data/ckbadger-store`) and derived (`CKBADGER_DERIVED_DATA_PATH`, default `./data/ckbadger-store-derived`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (31 CFs).
 
-- core store (`CKBADGER_DATA_PATH`) for canonical chain state
-- derived store (`CKBADGER_DERIVED_DATA_PATH`) for derived/query-optimized datasets
+Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
-The indexer opens both stores read-write; the API opens both stores in secondary (read-only) mode.
+## Data Integrity Verification
 
-| Parameter                    | Default                         | Description                    |
-| ---------------------------- | ------------------------------- | ------------------------------ |
-| `CKBADGER_DATA_PATH`         | `./data/ckbadger-store`         | Core RocksDB data directory    |
-| `CKBADGER_DERIVED_DATA_PATH` | `./data/ckbadger-store-derived` | Derived RocksDB data directory |
-
-**Key Column Families (31 total):**
-
-| Column Family               | Key                          | Value                        | Purpose                                  |
-| --------------------------- | ---------------------------- | ---------------------------- | ---------------------------------------- |
-| `live_cells`                | tx_hash + output_index (34B) | LiveCellInfo                 | O(1) lookup for unspent cells            |
-| `consumed_cells`            | tx_hash + output_index (34B) | LiveCellInfo                 | Recently consumed cells                  |
-| `block_headers`             | block_number (8B)            | CachedBlockHeader            | Block header + DAO field cache           |
-| `block_hash_index`          | block_hash (32B)             | block_number (8B)            | Reverse lookup: hash → number            |
-| `cell_by_lock`              | lock_script_hash + outpoint  | empty                        | Cell index by lock script                |
-| `cell_by_type`              | type_script_hash + outpoint  | empty                        | Cell index by type script                |
-| `cell_by_lock_code`         | lock_code_hash + outpoint    | empty                        | Cell index by lock code_hash             |
-| `cell_by_type_code`         | type_code_hash + outpoint    | empty                        | Cell index by type code_hash             |
-| `tx_index`                  | block_number + tx_index      | tx_hash                      | Transaction ordering index               |
-| `tx_hash_map`               | tx_hash (32B)                | block_number + tx_index      | Reverse lookup: tx_hash → position       |
-| `addr_balance`              | lock_script_hash (32B)       | AddressBalance               | Address balance and cell counts          |
-| `addr_txs`                  | lock_hash + block + tx_index | empty                        | Address transaction history index        |
-| `addr_daily_stats`          | lock_hash + date             | AddressDailyStats            | Per-address daily aggregates             |
-| `dao_deposits`              | tx_hash + output_index (34B) | DaoDepositCacheEntry         | DAO deposit lifecycle cache              |
-| `dao_by_withdraw_tx`        | withdraw_tx_hash (32B)       | deposit outpoint             | Reverse lookup: withdraw → deposit       |
-| `dao_stats`                 | prefixed keys                | DaoStats                     | DAO aggregate statistics                 |
-| `block_issuance`            | block_number (8B)            | BlockIssuance                | Per-block issuance data                  |
-| `tokens`                    | type_script_hash (32B)       | TokenInfo                    | UDT token metadata                       |
-| `token_holders`             | type_hash + lock_hash        | balance                      | Token holder balances                    |
-| `token_transfers`           | type_hash + block + tx_index | TransferInfo                 | Token transfer records                   |
-| `spore_data`                | spore_id (32B)               | SporeData                    | Spore NFT metadata                       |
-| `spore_by_cluster`          | cluster_id + spore_id        | empty                        | Spore index by cluster                   |
-| `nft_data`                  | nft_id                       | NftData                      | Unified NFT metadata (.bit, mNFT, etc.)  |
-| `nft_by_collection`         | collection_id + nft_id       | empty                        | NFT index by collection                  |
-| `nft_collection_agg`        | collection_id                | NftCollectionAgg             | NFT collection aggregate stats           |
-| `nft_collection_activities` | collection_id + block + tx   | ActivityRecord               | Pre-computed collection activity feed    |
-| `activities`                | addr/token/entity + block+tx | ActivityRecord               | Unified activity feed                    |
-| `cluster_agg`               | cluster_id                   | ClusterAgg                   | Spore cluster aggregate stats            |
-| `script_info`               | code_hash (32B)              | ScriptInfo                   | Known script metadata                    |
-| `stats`                     | prefixed keys                | DailyStats + other snapshots | Daily/hourly/chart aggregates            |
-| `sync_meta`                 | fixed keys                   | SyncStatus/ReorgEvent        | Sync progress, deep-fork, reorg metadata |
-
-**Key Design:**
-
-- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands (core + derived)
-- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API (core + derived)
-- All store operations are synchronous (RocksDB reads are fast)
-
-**Memory Considerations:**
-
-| Machine RAM | Expected Usage |
-| ----------- | -------------- |
-| ≥32GB       | ~22GB peak     |
-| <32GB       | ~8GB peak      |
+43 checks across 3 tiers: Fast (6, seconds), Sampling (21, minutes), Explorer (16, minutes). See `docs/VERIFY.md` for full details.
 
 ```bash
-# Default: uses ./data/ckbadger-store
-cargo run -p ckbadger-indexer
-
-# Custom paths
-CKBADGER_DATA_PATH=/ssd/ckbadger-store \
-CKBADGER_DERIVED_DATA_PATH=/ssd/ckbadger-store-derived \
-cargo run -p ckbadger-indexer
+cargo run -p ckbadger-indexer -- verify --depth fast      # Quick sanity
+cargo run -p ckbadger-indexer -- verify --depth sampling   # Full validation
+cargo run -p ckbadger-indexer -- verify --list-checks      # List all checks
 ```
-
-## Data Integrity Verification (`verify` subcommand)
-
-The indexer includes a `verify` subcommand for acceptance testing data integrity. It calls the ckbadger REST API (no direct store access needed) and can run from anywhere the API is reachable.
-
-```bash
-# Quick sanity checks (seconds)
-cargo run -p ckbadger-indexer -- verify --depth fast
-
-# Sampling + chart validation + explorer comparison (minutes)
-cargo run -p ckbadger-indexer -- verify --depth sampling
-
-# Skip explorer HTTP calls
-cargo run -p ckbadger-indexer -- verify --depth sampling --no-explorer
-
-# Custom API URL
-cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1
-
-# With CKB RPC spot-checks
-cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114
-
-# List all available checks
-cargo run -p ckbadger-indexer -- verify --list-checks
-
-# Run specific checks
-cargo run -p ckbadger-indexer -- verify --checks genesis_block,dao_statistics_sane
-```
-
-### Check Tiers
-
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                           |
-| --------------------- | ------ | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F6)      | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                                                                                                                                |
-| **Sampling** (S1-S21) | 21     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs |
-| **Explorer** (X1-X16) | 16     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, daily deposit, circulation ratio, supply, burnt, mining reward, treasury)    |
-
-### Explorer Response Cache
-
-Explorer checks cache HTTP responses to `.verify-cache/{indicator}.json` (override with `--cache-dir`).
-
-- **Fresh cache** (< 24h): used immediately, no HTTP request
-- **Stale cache**: re-fetched from API; on HTTP failure, stale data used with warning
-- **Cache format**: JSON with `fetched_at` timestamp, `indicator` name, `data` map (date→value)
-
-### Adding a New Verify Check
-
-1. Choose tier: `api_checks.rs` (fast or sampling), `explorer.rs` (external API comparison)
-2. Create struct implementing `Check` trait (name, description, tier, run)
-3. Register in the module's `*_checks()` function
-4. Convention: `F{N}` / `S{N}` / `X{N}` prefix in doc comment
-
-### Verify File Locations
-
-| What                | Where                                     |
-| ------------------- | ----------------------------------------- |
-| CLI args & runner   | `crates/indexer/src/verify/mod.rs`        |
-| Check trait & types | `crates/indexer/src/verify/checks.rs`     |
-| API checks (F+S)    | `crates/indexer/src/verify/api_checks.rs` |
-| Explorer checks     | `crates/indexer/src/verify/explorer.rs`   |
-| Report rendering    | `crates/indexer/src/verify/report.rs`     |
-| LCG sampler         | `crates/indexer/src/verify/sampling.rs`   |
 
 ## Rust Style
 
-**Imports**: External → internal → stdlib inline:
+**Imports**: External -> internal -> stdlib inline. **Naming**: `PascalCase` types, `snake_case` functions, `SCREAMING_SNAKE_CASE` constants. **Serde**: Always `#[serde(rename_all = "camelCase")]` for response structs. **Routes**: Axum 0.8 uses `{id}` not `:id`.
 
-```rust
-use axum::{extract::State, routing::get, Router};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+**Error Handling**: Indexer uses `anyhow::Result`; API uses `ApiResult<T>` with `ApiError::{not_found, bad_request, internal}()`.
 
-use crate::response::{ok, ApiError, ApiResult};
-```
-
-**Naming**: `PascalCase` types, `snake_case` functions, `SCREAMING_SNAKE_CASE` constants
-
-**Error Handling**: Indexer uses `anyhow::Result`; API uses `ApiResult<T>` with `ApiError::{not_found, bad_request, internal}()`
-
-**Serde**: Always `#[serde(rename_all = "camelCase")]` for response structs
-
-**API Handler Pattern**:
-
-```rust
-async fn get_block(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> ApiResult<BlockResponse> {
-    let block = state.store.get_block_header(block_num)
-        .ok_or_else(|| ApiError::not_found("Block not found"))?;
-    ok(BlockResponse { ... })
-}
-```
-
-**Routes** (Axum 0.8 uses `{id}` not `:id`):
-
-```rust
-pub fn routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/blocks", get(list_blocks))
-        .route("/blocks/{id}", get(get_block))
-}
-```
+**API Handler Pattern**: `async fn handler(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> ApiResult<T>`
 
 ## TypeScript/React Style
 
-**Prettier**: semi, singleQuote, tabWidth 2, printWidth 100, trailingComma es5
-
-**Imports**: Always `@/` path alias (not relative):
-
-```typescript
-import { cn } from '@/lib/utils';
-import { api } from '@/lib/api';
-```
-
-**Components**: `'use client'` for interactivity, named exports, Props interface:
-
-```typescript
-'use client';
-
-interface HashProps { hash: string; truncate?: boolean; }
-export function Hash({ hash, truncate = true }: HashProps) { ... }
-```
-
-**Data Fetching**: TanStack Query v5:
-
-```typescript
-const { data, isLoading } = useQuery({
-  queryKey: ['blocks', page],
-  queryFn: () => api.getBlocks({ page }),
-});
-```
+**Prettier**: semi, singleQuote, tabWidth 2, printWidth 100, trailingComma es5. **Imports**: Always `@/` path alias (not relative). **Components**: `'use client'` for interactivity, named exports, Props interface. **Data Fetching**: TanStack Query v5.
 
 ## Key Workflows
 
@@ -667,8 +205,6 @@ const { data, isLoading } = useQuery({
 
 **Every code change MUST include appropriate test coverage. No exceptions.**
 
-### When to Add/Modify Tests
-
 | Change Type            | Required Action                                                      |
 | ---------------------- | -------------------------------------------------------------------- |
 | New parser function    | Add unit test in same file's `#[cfg(test)]` module                   |
@@ -678,79 +214,9 @@ const { data, isLoading } = useQuery({
 | Bug fix                | Add regression test that reproduces the bug FIRST, then fix          |
 | Refactoring            | Run existing tests BEFORE and AFTER to ensure no regression          |
 
-### Test Patterns by Layer
+**Verification**: New code passes `cargo test`/`pnpm test`. Bug fixes have regression tests. New functions have at least one happy-path test.
 
-**Rust Parsers** (inline `#[cfg(test)]`):
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_something() {
-        let input = "...";
-        let result = parse_something(input);
-        assert_eq!(result.field, expected_value);
-    }
-}
-```
-
-**API Integration** (`crates/api/tests/`):
-
-```rust
-#[tokio::test]
-async fn test_get_block_by_hash() {
-    let store = CkbadgerStore::open_temp().unwrap();
-    // Setup test data in store
-    // Call endpoint
-    // Assert response
-}
-```
-
-**Frontend Components** (Vitest + React Testing Library):
-
-```typescript
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
-import { MyComponent } from '@/components/my-component';
-
-describe('MyComponent', () => {
-  it('renders correctly', () => {
-    render(<MyComponent prop="value" />);
-    expect(screen.getByText('expected')).toBeInTheDocument();
-  });
-});
-```
-
-### Verification Checklist (Before Marking Task Complete)
-
-1. **New code**: `cargo test` / `pnpm test` passes
-2. **Modified code**: Related tests still pass
-3. **Bug fix**: Regression test added and passes
-4. **Coverage**: New functions have at least one test covering happy path
-
-### Test Commands Quick Reference
-
-```bash
-# Run tests for changed code only
-cargo test test_name_pattern           # Rust - partial match
-cd frontend && npx vitest run -t "pattern"  # Frontend - pattern match
-
-# Verify no regressions
-cargo test -p ckbadger-indexer         # Test specific crate
-cd frontend && pnpm test               # All frontend tests
-```
-
-### Anti-Patterns (FORBIDDEN)
-
-| Violation                                           | Why It's Bad                         |
-| --------------------------------------------------- | ------------------------------------ |
-| Skipping tests for "simple" changes                 | Simple bugs cause production outages |
-| Deleting/modifying tests to make them pass          | Hides real bugs                      |
-| Writing tests that don't assert anything meaningful | False confidence                     |
-| Ignoring test failures with `#[ignore]` / `.skip()` | Technical debt accumulates           |
-| Mocking everything (no integration tests)           | Misses interface contract bugs       |
+**FORBIDDEN**: Skipping tests for "simple" changes. Deleting/modifying tests to make them pass. Writing tests that don't assert anything meaningful. Ignoring failures with `#[ignore]`/`.skip()`.
 
 ## CKB Domain (CRITICAL)
 
@@ -769,20 +235,7 @@ cd frontend && pnpm test               # All frontend tests
 
 ### Common Knowledge (CKB Core Concept)
 
-**Common Knowledge** refers to state verified by global consensus and accepted by all in the network. The set of all live cells represents the current common knowledge on CKB.
-
-**Common Knowledge Size** = Total occupied capacity of all live cells (NOT just cell data bytes).
-
-A cell's **occupied capacity** includes ALL storage requirements:
-
-| Component      | Size                                  |
-| -------------- | ------------------------------------- |
-| Capacity field | 8 bytes                               |
-| Lock script    | 32 (code_hash) + 1 (hash_type) + args |
-| Type script    | 32 (code_hash) + 1 (hash_type) + args |
-| Data           | Actual data bytes                     |
-
-**Source**: The `U` field in the DAO header (`dao[24..32]`) stores the cumulative occupied capacity in shannons.
+**Common Knowledge Size** = Total occupied capacity of all live cells (NOT just cell data bytes). A cell's occupied capacity includes: capacity field (8B) + lock script (33B + args) + type script (33B + args) + data bytes. Source: DAO header `U` field (`dao[24..32]`).
 
 ```rust
 // DAO field structure (32 bytes, little-endian u64s):
@@ -792,50 +245,18 @@ A cell's **occupied capacity** includes ALL storage requirements:
 // [24..32] U = total occupied capacity  <-- Common Knowledge Size
 ```
 
-**Official Explorer Formula** (for reference):
+**Do NOT confuse**: `cell.data.len()` (data only) vs `occupied_capacity` (full storage cost) vs `U` field (protocol-level cumulative).
 
-```ruby
-knowledge_size = dao.U - (BURN_QUOTA * 0.6)
-# Where BURN_QUOTA = 8,400,000,000 CKB (genesis burnt tokens)
-```
-
-**IMPORTANT**: Do NOT confuse:
-
-- `cell.data.len()` = Only the data field bytes
-- `occupied_capacity` = Full storage cost (capacity + scripts + data)
-- `U` field = Protocol-level cumulative occupied capacity
-
-**Key domain knowledge in `docs/DAO_CALCULATIONS.md`:**
-
-- Genesis issued 33.6B but only 25.2B circulating (8.4B burnt)
-- `total_issuance` (dao field) ≠ `circulating` (subtract burnt)
-- APC formula: `secondary_issuance_per_year / circulating_supply * 100`
-- When to use `total_issuance` vs `circulating` for different calculations
+**Key domain knowledge** (`docs/DAO_CALCULATIONS.md`): Genesis issued 33.6B, only 25.2B circulating (8.4B burnt). `total_issuance` (dao field) != `circulating` (subtract burnt). APC = `secondary_issuance_per_year / circulating_supply * 100`.
 
 ### Numerical Precision (MANDATORY)
 
-**All numerical calculations MUST be exact. NO estimation, interpolation, or sampling-based approximations.**
+**All numerical calculations MUST be exact. NO estimation, interpolation, or sampling-based approximations.** Blockchain data is deterministic. Sampling errors compound over millions of blocks.
 
-| Approach                     | Status       | Example                                   |
-| ---------------------------- | ------------ | ----------------------------------------- |
-| Exact per-block calculation  | ✅ REQUIRED  | Track every block's secondary issuance    |
-| Sampling with multiplication | ❌ FORBIDDEN | Sample every N blocks, multiply by N      |
-| Interpolation between points | ❌ FORBIDDEN | Estimate values between known data points |
-| Average-based estimation     | ❌ FORBIDDEN | Use average rate × time period            |
-
-**Why this matters:**
-
-- Blockchain data is deterministic - there's always an exact value
-- Sampling errors compound over millions of blocks
-- Users expect explorer data to match on-chain reality exactly
-- Small per-block errors become massive cumulative errors (e.g., 50x under-reporting)
-
-**If exact calculation is expensive (e.g., RPC calls for every block):**
-
-1. Prefer exact incremental calculation during bulk sync (no post-bulk rebuild dependency for core aggregates)
-2. Use cumulative on-chain values (e.g., DAO field differences) instead of sampling
-3. Do not defer data and refill/rebuild later in bulk sync paths; keep aggregates exact on first write
-4. Do **NOT** write approximate values into persistent user-facing aggregates (`daily_stats`, DAO snapshots, supply/issuance charts)
+- Exact per-block calculation: REQUIRED
+- Sampling with multiplication / interpolation / average-based estimation: FORBIDDEN
+- Use cumulative on-chain values (DAO field differences) instead of sampling
+- Do NOT write approximate values into persistent user-facing aggregates
 
 ### Script Identification
 
@@ -847,19 +268,16 @@ DaoParser::is_dao_code_hash(&code_hash)
 // WRONG: Computing full script_hash then comparing to code_hash
 ```
 
-### DAO Constants
+### DAO Constants & Lifecycle
 
 ```rust
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
-// DAO field: bytes 8-15 = AR (accumulated rate, u64 LE)
 // Compensation: free_capacity * ar_withdraw / ar_deposit - free_capacity
 ```
 
-### DAO Lifecycle
-
-1. **Deposit**: Creates DAO cell → `dao_deposits(tx_hash=deposit_tx)`
-2. **Withdraw Request**: Consumes deposit → set `withdraw_request_tx`
+1. **Deposit**: Creates DAO cell -> `dao_deposits(tx_hash=deposit_tx)`
+2. **Withdraw Request**: Consumes deposit -> set `withdraw_request_tx`
 3. **Withdraw Completion**: Lookup by `withdraw_request_tx` (NOT request cell's tx_hash)
 
 ## Gotchas
@@ -881,46 +299,27 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 ## File Locations
 
-| What                  | Where                                                                                                      |
-| --------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Storage engine        | `crates/ckbadger-store/src/`                                                                               |
-| Store types           | `crates/ckbadger-store/src/types.rs`                                                                       |
-| Store column families | `crates/ckbadger-store/src/store.rs`                                                                       |
-| Store key encoding    | `crates/ckbadger-store/src/keys.rs`                                                                        |
-| Store operations      | `crates/ckbadger-store/src/*_ops.rs` (15 modules)                                                          |
-| API routes            | `crates/api/src/routes/*.rs` (15 route modules)                                                            |
-| Response types        | `crates/api/src/response.rs`                                                                               |
-| WebSocket             | `crates/api/src/ws/`                                                                                       |
-| RPC client            | `crates/indexer/src/rpc/client.rs`                                                                         |
-| Parsers               | `crates/indexer/src/parser/*.rs` (block, cell, dao, script, spore, dotbit, mnft, udt, rgbpp, media_source) |
-| DB writers            | `crates/indexer/src/db/writer/*.rs` (17 modules)                                                           |
-| Spore writer          | `crates/indexer/src/db/writer/spore.rs`                                                                    |
-| Activity writer       | `crates/indexer/src/db/writer/activities.rs`                                                               |
-| NFT writers           | `crates/indexer/src/db/writer/{dotbit,mnft,nft_activity_acc}.rs`                                           |
-| HODL wave writer      | `crates/indexer/src/db/writer/hodl_wave.rs`                                                                |
-| Label import          | `crates/indexer/src/label_import.rs`                                                                       |
-| Verify checks         | `crates/indexer/src/verify/*.rs`                                                                           |
-| Verify runner         | `crates/indexer/src/verify/mod.rs`                                                                         |
-| Explorer cache        | `{data_path}/.verify-cache/*.json`                                                                         |
-| TUI                   | `crates/tui/src/`                                                                                          |
-| Frontend API          | `frontend/lib/api.ts`                                                                                      |
-| Markdown route        | `frontend/app/ai-md/[[...slug]]/route.ts`                                                                  |
-| Markdown parser       | `frontend/lib/ai/markdown-route.ts`                                                                        |
-| Markdown renderer     | `frontend/lib/ai/markdown-renderer.ts`                                                                     |
-| Raw route             | `frontend/app/ai-raw/[[...slug]]/route.ts`                                                                 |
-| Raw parser            | `frontend/lib/ai/raw-route.ts`                                                                             |
-| Raw renderer          | `frontend/lib/ai/raw-renderer.ts`                                                                          |
-| Capabilities API      | `frontend/app/capabilities/route.ts`                                                                       |
-| Capabilities spec     | `frontend/lib/ai/capabilities.ts`                                                                          |
-| Format rewrite        | `frontend/lib/ai/markdown-request.ts` + `frontend/middleware.ts`                                           |
-| LLM discovery         | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                |
-| UI components         | `frontend/components/ui/`                                                                                  |
-| Pages                 | `frontend/app/`                                                                                            |
-| Rust tests            | Inline `#[cfg(test)]` in source files                                                                      |
-| API integration       | `crates/api/tests/api_integration.rs`                                                                      |
-| Frontend tests        | `frontend/__tests__/**/*.test.{ts,tsx}`                                                                    |
-| MSW handlers          | `frontend/__tests__/msw/handlers.ts`                                                                       |
-| CI workflow           | `.github/workflows/ci.yml`                                                                                 |
+| What             | Where                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                              |
+| API routes       | `crates/api/src/routes/*.rs` (15 modules)                                                                  |
+| Response types   | `crates/api/src/response.rs`                                                                               |
+| WebSocket        | `crates/api/src/ws/`                                                                                       |
+| RPC client       | `crates/indexer/src/rpc/client.rs`                                                                         |
+| Parsers          | `crates/indexer/src/parser/*.rs` (block, cell, dao, script, spore, dotbit, mnft, udt, rgbpp, media_source) |
+| DB writers       | `crates/indexer/src/db/writer/*.rs` (17 modules)                                                           |
+| Label import     | `crates/indexer/src/label_import.rs`                                                                       |
+| Verify checks    | `crates/indexer/src/verify/*.rs`                                                                           |
+| TUI              | `crates/tui/src/`                                                                                          |
+| Frontend API     | `frontend/lib/api.ts`                                                                                      |
+| AI format routes | `frontend/app/ai-md/`, `frontend/app/ai-raw/`, `frontend/lib/ai/`                                          |
+| Capabilities     | `frontend/app/capabilities/route.ts`, `frontend/lib/ai/capabilities.ts`                                    |
+| LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                |
+| UI components    | `frontend/components/ui/`                                                                                  |
+| Pages            | `frontend/app/`                                                                                            |
+| Tests (Rust)     | Inline `#[cfg(test)]`, `crates/api/tests/api_integration.rs`                                               |
+| Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                              |
+| CI               | `.github/workflows/ci.yml`                                                                                 |
 
 ## Dependencies
 

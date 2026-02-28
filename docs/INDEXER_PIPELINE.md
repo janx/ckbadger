@@ -440,6 +440,102 @@ On startup, `find_last_consistent_block()` validates store consistency by compar
                     └─────────────────┘
 ```
 
+## Progress Tracking
+
+The indexer uses two complementary log lines:
+
+1. **Batch log** (per batch): `Wrote blocks X to Y (N remaining, 2.34s)`
+   - Shows DB write duration for the batch
+   - Useful for identifying slow batches
+
+2. **Progress log** (every 10s): `Progress: 33.96% (6279999/18491045) - 3465.00 blocks/sec (EMA: 3200.00)`
+   - Shows overall sync percentage and throughput
+   - `blocks/sec`: 10-second sliding window (real-time, volatile)
+   - `EMA`: Exponential Moving Average with α=0.1 (smoothed, stable)
+   - ETA: `remaining_blocks / EMA` (simple calculation)
+
+## Redis Sync Data
+
+The indexer publishes sync data to Redis for API/WebSocket consumption:
+
+| Key             | TTL | Contents                        |
+| --------------- | --- | ------------------------------- |
+| `sync:status`   | 60s | JSON: `SyncStatusData` struct   |
+| `sync:progress` | 30s | JSON: `SyncProgressData` struct |
+| `memory:stats`  | 30s | JSON: `MemoryStatsData` struct  |
+
+**`sync:status`** - Core sync state (`crates/common/src/sync.rs`):
+
+```rust
+pub struct SyncStatusData {
+    pub tip_block_number: i64,
+    pub tip_block_hash: String,
+    pub total_transactions: i64,
+    pub total_cells: i64,
+    pub total_live_cells: i64,
+    pub total_addresses: i64,
+    pub last_synced_at: i64,
+    pub sync_ema_rate: Option<f64>,
+    pub sync_started_at: Option<i64>,
+    pub bulk_sync_completed_at: Option<i64>,
+    // ... other fields
+}
+```
+
+**`sync:progress`** - Real-time progress with ETA:
+
+```rust
+pub struct SyncProgressData {
+    pub current_block: u64,
+    pub target_block: u64,
+    pub blocks_per_second: f64,
+    pub ema_blocks_per_second: f64,
+    pub eta_seconds: Option<f64>,
+    pub eta_formatted: String,
+    pub progress_percentage: f64,
+    pub updated_at: i64,
+}
+```
+
+**`memory:stats`** - RocksDB and cell store memory usage:
+
+```rust
+pub struct MemoryStatsData {
+    pub live_cells_count: u64,           // Live cells in RocksDB
+    pub consumed_cells_count: u64,       // Consumed cells cache count
+    pub consumed_cells_bytes: u64,       // Consumed cells cache size
+    pub rocksdb_memtable_bytes: u64,     // RocksDB memtable usage
+    pub rocksdb_block_cache_bytes: u64,  // RocksDB block cache usage
+    pub rocksdb_table_readers_bytes: u64,// RocksDB table readers
+    pub rocksdb_total_bytes: u64,        // Total RocksDB memory
+    pub block_headers_count: u64,        // Cached block headers
+    pub bulk_sync_cell_cache_enabled: bool, // Bulk sync cache flag
+    pub bulk_sync_mode: bool,            // Currently in bulk sync
+    pub updated_at: i64,                 // Unix timestamp
+}
+```
+
+### Data Flow
+
+1. Indexer updates `sync:status` after each batch write
+2. Indexer updates `sync:progress` every 10 seconds with ETA
+3. Indexer updates `memory:stats` every 10 seconds with RocksDB memory usage
+4. API reads `sync:status` for totals (blocks, transactions, cells)
+5. API reads `sync:progress` for real-time progress display
+6. Operational tools can read `memory:stats` for memory monitoring
+7. WebSocket broadcaster uses both for `new_block` messages
+
+### Fallback (when Redis unavailable)
+
+| Data                 | Fallback Source                        |
+| -------------------- | -------------------------------------- |
+| `tip_block_number`   | `store.get_sync_tip()` from RocksDB    |
+| `total_transactions` | `store.get_sync_status()` from RocksDB |
+| `total_live_cells`   | `store.get_sync_status()` from RocksDB |
+| `sync_ema_rate`      | None (ETA not displayed)               |
+
+**Requires**: `redis-cache` feature enabled on both indexer and API, plus `REDIS_URL` environment variable.
+
 ---
 
-_Last updated: 2026-02-14_
+_Last updated: 2026-02-28_
