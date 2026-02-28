@@ -1356,6 +1356,9 @@ async fn get_cluster_activities(
                     ckbadger_store::AssetAction::Mint => "mint".to_string(),
                     ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
                     ckbadger_store::AssetAction::Burn => "burn".to_string(),
+                    ckbadger_store::AssetAction::Recycle => "recycle".to_string(),
+                    ckbadger_store::AssetAction::Renew => "renew".to_string(),
+                    ckbadger_store::AssetAction::Update => "update".to_string(),
                 })
                 .collect();
             ClusterActivityResponse {

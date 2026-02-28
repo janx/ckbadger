@@ -82,6 +82,9 @@ fn action_to_string(action: &AssetAction) -> String {
         AssetAction::Mint => "mint".to_string(),
         AssetAction::Transfer => "transfer".to_string(),
         AssetAction::Burn => "burn".to_string(),
+        AssetAction::Recycle => "recycle".to_string(),
+        AssetAction::Renew => "renew".to_string(),
+        AssetAction::Update => "update".to_string(),
     }
 }
 

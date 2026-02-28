@@ -17,6 +17,7 @@ const HASH_BYTES_LEN: usize = 32;
 const ACCOUNT_ID_LEN: usize = 20;
 const DAS_WITNESS_HEADER_LEN: usize = 7; // "das"(3) + action_data_type(4)
 const DAS_ACCOUNT_CELL_ACTION_DATA_TYPE: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
+const DAS_ACTION_DATA_TYPE: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
 
 #[derive(Debug, Clone)]
 pub struct ParsedDotbitAccount {
@@ -25,6 +26,8 @@ pub struct ParsedDotbitAccount {
     pub type_script_hash: Vec<u8>,
     pub next_account_id: Option<Vec<u8>>,
     pub expired_at: Option<u64>,
+    pub registered_at: Option<u64>,
+    pub status: Option<u8>,
     pub owner_lock_hash: Vec<u8>,
 }
 
@@ -107,12 +110,42 @@ impl DotbitParser {
             type_script_hash,
             next_account_id,
             expired_at,
+            registered_at: None,
+            status: None,
             owner_lock_hash,
         })
     }
 
+    /// Extract the .bit action name from the transaction's ActionData witness.
+    ///
+    /// Layout: witness bytes = "das"(3) + ActionDataType(4) + ActionData(molecule table)
+    /// ActionDataType 0x00000000 = ActionData witness
+    /// ActionData molecule table: field[0] = Action (Bytes), field[1] = Params (Bytes)
+    pub fn parse_das_action(witnesses: &[String]) -> Option<String> {
+        for witness in witnesses {
+            let bytes = parse_hex_to_bytes(witness);
+            if bytes.len() <= DAS_WITNESS_HEADER_LEN {
+                continue;
+            }
+            if &bytes[..3] != b"das" {
+                continue;
+            }
+            if bytes[3..7] != DAS_ACTION_DATA_TYPE {
+                continue;
+            }
+
+            // Remaining bytes are ActionData molecule table with 2 fields:
+            // field[0] = Action (Bytes), field[1] = Params (Bytes)
+            let fields = parse_molecule_table_fields(&bytes[7..], 2)?;
+            let action_bytes = parse_molecule_bytes(fields[0])?;
+            let action = std::str::from_utf8(action_bytes).ok()?;
+            return Some(action.to_string());
+        }
+        None
+    }
+
     pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccountOutput>> {
-        let account_name_map = parse_account_names_from_witnesses(&tx.witnesses);
+        let witness_data = parse_account_data_from_witnesses(&tx.witnesses);
         let mut accounts = Vec::new();
         let mut missing_name_count = 0usize;
         let mut missing_name_samples: Vec<String> = Vec::new();
@@ -131,7 +164,11 @@ impl DotbitParser {
                     output_index
                 )
             })?;
-            account.account = account_name_map.get(&account.account_id).cloned();
+            if let Some(wd) = witness_data.get(&account.account_id) {
+                account.account = wd.name.clone();
+                account.registered_at = wd.registered_at;
+                account.status = wd.status;
+            }
             if account.account.is_none() {
                 missing_name_count += 1;
                 if missing_name_samples.len() < 5 {
@@ -158,7 +195,14 @@ impl DotbitParser {
     }
 }
 
-fn parse_account_names_from_witnesses(witnesses: &[String]) -> HashMap<Vec<u8>, String> {
+/// Witness-extracted data for a single .bit account.
+struct WitnessAccountData {
+    name: Option<String>,
+    registered_at: Option<u64>,
+    status: Option<u8>,
+}
+
+fn parse_account_data_from_witnesses(witnesses: &[String]) -> HashMap<Vec<u8>, WitnessAccountData> {
     let mut result = HashMap::new();
 
     for witness in witnesses {
@@ -196,8 +240,8 @@ fn parse_account_names_from_witnesses(witnesses: &[String]) -> HashMap<Vec<u8>, 
             let Some(entity) = parse_molecule_bytes(data_entity_fields[2]) else {
                 continue;
             };
-            if let Some((account_id, account_name)) = parse_account_cell_entity(entity, version) {
-                result.insert(account_id, account_name);
+            if let Some((account_id, data)) = parse_account_cell_entity(entity, version) {
+                result.insert(account_id, data);
             }
         }
     }
@@ -205,7 +249,7 @@ fn parse_account_names_from_witnesses(witnesses: &[String]) -> HashMap<Vec<u8>, 
     result
 }
 
-fn parse_account_cell_entity(entity: &[u8], version: u32) -> Option<(Vec<u8>, String)> {
+fn parse_account_cell_entity(entity: &[u8], version: u32) -> Option<(Vec<u8>, WitnessAccountData)> {
     let min_field_count = match version {
         1 => 6,
         2 => 8,
@@ -218,8 +262,37 @@ fn parse_account_cell_entity(entity: &[u8], version: u32) -> Option<(Vec<u8>, St
         return None;
     }
 
-    let account_name = parse_account_chars_to_name(fields.get(1).copied()?)?;
-    Some((account_id, account_name))
+    let name = parse_account_chars_to_name(fields.get(1).copied()?);
+
+    // field[2] = registered_at (u64 LE, 8 bytes)
+    let registered_at = fields.get(2).and_then(|f| {
+        if f.len() != 8 {
+            return None;
+        }
+        let bytes: [u8; 8] = (*f).try_into().ok()?;
+        let val = u64::from_le_bytes(bytes);
+        if val == 0 {
+            None
+        } else {
+            Some(val)
+        }
+    });
+
+    // field[6] = status (u8, 1 byte) — only available in v2+
+    let status = if version >= 2 {
+        fields.get(6).and_then(|f| f.first().copied())
+    } else {
+        None
+    };
+
+    Some((
+        account_id,
+        WitnessAccountData {
+            name,
+            registered_at,
+            status,
+        },
+    ))
 }
 
 fn parse_account_chars_to_name(account_chars: &[u8]) -> Option<String> {
@@ -816,14 +889,166 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_account_names_from_witnesses_supports_v2_bytes_fixvec() {
+    fn test_parse_account_data_from_witnesses_supports_v2_bytes_fixvec() {
         let account_id = [0x55u8; 20];
         let witness = encode_dotbit_account_cell_witness_v2(&account_id, "smartest.bit");
-        let result = parse_account_names_from_witnesses(&[witness]);
+        let result = parse_account_data_from_witnesses(&[witness]);
 
-        assert_eq!(
-            result.get(account_id.as_slice()),
-            Some(&"smartest.bit".to_string())
+        let data = result
+            .get(account_id.as_slice())
+            .expect("should find account");
+        assert_eq!(data.name.as_deref(), Some("smartest.bit"));
+    }
+
+    // ---- parse_das_action tests ----
+
+    fn encode_das_action_witness(action: &str) -> String {
+        let action_bytes = encode_molecule_bytes(action.as_bytes());
+        let params_bytes = encode_molecule_bytes(&[]);
+        let action_data = encode_molecule_table(&[action_bytes, params_bytes]);
+
+        let mut witness = Vec::new();
+        witness.extend_from_slice(b"das");
+        witness.extend_from_slice(&DAS_ACTION_DATA_TYPE);
+        witness.extend_from_slice(&action_data);
+        format!("0x{}", hex::encode(witness))
+    }
+
+    #[test]
+    fn test_parse_das_action_transfer_account() {
+        let witness = encode_das_action_witness("transfer_account");
+        let result = DotbitParser::parse_das_action(&[witness]);
+        assert_eq!(result.as_deref(), Some("transfer_account"));
+    }
+
+    #[test]
+    fn test_parse_das_action_recycle_expired_account() {
+        let witness = encode_das_action_witness("recycle_expired_account");
+        let result = DotbitParser::parse_das_action(&[witness]);
+        assert_eq!(result.as_deref(), Some("recycle_expired_account"));
+    }
+
+    #[test]
+    fn test_parse_das_action_confirm_proposal() {
+        let witness = encode_das_action_witness("confirm_proposal");
+        let result = DotbitParser::parse_das_action(&[witness]);
+        assert_eq!(result.as_deref(), Some("confirm_proposal"));
+    }
+
+    #[test]
+    fn test_parse_das_action_no_das_witness() {
+        let plain_witness = "0xaabbccdd".to_string();
+        let result = DotbitParser::parse_das_action(&[plain_witness]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_das_action_wrong_action_data_type() {
+        // Use AccountCellData type (0x01000000) — should NOT match ActionData (0x00000000)
+        let account_witness = encode_dotbit_account_cell_witness(&[0x11; 20], "alice.bit");
+        let result = DotbitParser::parse_das_action(&[account_witness]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_das_action_picks_first_action_witness() {
+        let action_witness = encode_das_action_witness("edit_records");
+        let account_witness = encode_dotbit_account_cell_witness(&[0x11; 20], "alice.bit");
+        // ActionData witness comes after AccountCellData — should still be found
+        let result = DotbitParser::parse_das_action(&[account_witness, action_witness]);
+        assert_eq!(result.as_deref(), Some("edit_records"));
+    }
+
+    #[test]
+    fn test_parse_das_action_empty_witnesses() {
+        let result = DotbitParser::parse_das_action(&[]);
+        assert!(result.is_none());
+    }
+
+    // ---- registered_at / status enrichment tests ----
+
+    #[test]
+    fn test_parse_accounts_extracts_registered_at_and_status() {
+        let account_id = [0x66u8; 20];
+        let registered_at = 1700000000u64;
+        let status = 1u8; // selling
+
+        // Build a v3 witness with registered_at and status set
+        let mut account_items = Vec::new();
+        let account_str = "bob";
+        for ch in account_str.chars() {
+            let char_table = encode_molecule_table(&[
+                2u32.to_le_bytes().to_vec(),
+                encode_molecule_bytes(ch.to_string().as_bytes()),
+            ]);
+            account_items.push(char_table);
+        }
+        let account_chars = encode_molecule_dynvec(&account_items);
+        let records_empty = encode_molecule_dynvec(&[]);
+
+        let entity = encode_molecule_table(&[
+            account_id.to_vec(),
+            account_chars,
+            registered_at.to_le_bytes().to_vec(), // field[2]
+            0u64.to_le_bytes().to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            0u64.to_le_bytes().to_vec(),
+            vec![status], // field[6]
+            records_empty,
+            vec![0],
+            0u64.to_le_bytes().to_vec(),
+        ]);
+
+        let data_entity = encode_molecule_table(&[
+            0u32.to_le_bytes().to_vec(),
+            3u32.to_le_bytes().to_vec(),
+            encode_molecule_bytes(&entity),
+        ]);
+
+        let data = encode_molecule_table(&[Vec::new(), Vec::new(), data_entity]);
+
+        let mut witness = Vec::new();
+        witness.extend_from_slice(b"das");
+        witness.extend_from_slice(&DAS_ACCOUNT_CELL_ACTION_DATA_TYPE);
+        witness.extend_from_slice(&data);
+        let witness_hex = format!("0x{}", hex::encode(witness));
+
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_account_cell_type_script()),
+        };
+        let data_hex = format!(
+            "0x{}",
+            hex::encode(create_account_cell_data(
+                &account_id,
+                None,
+                Some(1800000000)
+            ))
         );
+
+        let tx = TransactionView {
+            hash: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::new(),
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![output],
+            outputs_data: vec![data_hex],
+            witnesses: vec![witness_hex],
+        };
+
+        let parsed = DotbitParser::parse_accounts(&tx).expect("parse");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].account.account.as_deref(), Some("bob.bit"));
+        assert_eq!(parsed[0].account.registered_at, Some(registered_at));
+        assert_eq!(parsed[0].account.status, Some(status));
     }
 }

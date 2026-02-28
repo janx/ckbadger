@@ -16,9 +16,10 @@ interface NftActivityCardProps {
   badgeActions?: boolean;
 }
 
-function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
+function actionBadgeVariant(action: string): 'green' | 'red' | 'blue' | 'neutral' {
   if (action === 'mint') return 'green';
-  if (action === 'burn') return 'red';
+  if (action === 'burn' || action === 'recycle') return 'red';
+  if (action === 'renew') return 'blue';
   return 'neutral';
 }
 

@@ -1,8 +1,12 @@
 use anyhow::{bail, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{NftCollectionAggregate, NftEntry, NftExtra, NftStandard};
+use ckbadger_store::types::{
+    AssetAction, NftCollectionActivityEntry, NftCollectionAggregate, NftEntry, NftExtra,
+    NftStandard,
+};
 use ckbadger_store::CkbadgerStore;
 
 use crate::parser::dotbit::ParsedDotbitAccountOutput;
@@ -11,7 +15,160 @@ use super::BatchWriter;
 
 /// Sentinel collection key for DotBit accounts (which have no collection_id).
 /// 32-byte key: "dotbit_collection_______________" (padded to 32 bytes).
-const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+pub(crate) const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+
+/// Map a DAS action string to AssetAction.
+///
+/// Returns `None` for suppressed actions (sub-account infra ops).
+pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
+    match action {
+        "confirm_proposal" => Some(AssetAction::Mint),
+        "transfer_account"
+        | "buy_account"
+        | "accept_offer"
+        | "fulfill_approval"
+        | "bid_expired_account_dutch_auction" => Some(AssetAction::Transfer),
+        "recycle_expired_account" => Some(AssetAction::Recycle),
+        "renew_account" => Some(AssetAction::Renew),
+        "edit_records"
+        | "edit_manager"
+        | "start_account_sale"
+        | "cancel_account_sale"
+        | "edit_account_sale"
+        | "force_recover_account_status"
+        | "lock_account_for_cross_chain"
+        | "unlock_account_for_cross_chain" => Some(AssetAction::Update),
+        // Sub-account infrastructure — suppress collection activity
+        "enable_sub_account"
+        | "create_sub_account"
+        | "edit_sub_account"
+        | "renew_sub_account"
+        | "recycle_sub_account"
+        | "config_sub_account_custom_script"
+        | "config_sub_account"
+        | "collect_sub_account_profit"
+        | "collect_sub_account_channel_profit" => None,
+        _ => {
+            // Unknown action — let caller fall back to generic detection
+            None
+        }
+    }
+}
+
+/// Resolve .bit collection activity for a single transaction.
+///
+/// Uses the parsed DAS action to determine the correct `AssetAction`, with
+/// neighbor suppression: for `confirm_proposal`, only new accounts (in
+/// outputs but NOT inputs) get Mint; for `recycle_expired_account`, only
+/// removed accounts (in inputs but NOT outputs) get Recycle.
+pub(crate) fn resolve_dotbit_tx_activity(
+    das_action: Option<&str>,
+    created_account_ids: &HashSet<Vec<u8>>,
+    consumed_account_ids: &HashSet<Vec<u8>>,
+    tx_hash: &[u8],
+    block_number: i64,
+    tx_idx: i32,
+    timestamp_ms: i64,
+    batch: &mut StoreBatch,
+) {
+    let actions = match das_action.and_then(das_action_to_asset_action) {
+        Some(asset_action) => {
+            match asset_action {
+                AssetAction::Mint => {
+                    // confirm_proposal: only truly new accounts (output-only)
+                    let new_only: Vec<_> = created_account_ids
+                        .iter()
+                        .filter(|id| !consumed_account_ids.contains(*id))
+                        .collect();
+                    if new_only.is_empty() {
+                        return;
+                    }
+                    vec![AssetAction::Mint]
+                }
+                AssetAction::Recycle => {
+                    // recycle_expired_account: only removed accounts (input-only)
+                    let removed_only: Vec<_> = consumed_account_ids
+                        .iter()
+                        .filter(|id| !created_account_ids.contains(*id))
+                        .collect();
+                    if removed_only.is_empty() {
+                        return;
+                    }
+                    vec![AssetAction::Recycle]
+                }
+                action => vec![action],
+            }
+        }
+        None if das_action.is_some() => {
+            // Known DAS action that was suppressed (sub-account ops) or unknown
+            let action_str = das_action.unwrap_or("");
+            // Sub-account ops are intentionally suppressed — no warning needed
+            if das_action_to_asset_action(action_str).is_none()
+                && !action_str.contains("sub_account")
+                && !action_str.is_empty()
+            {
+                warn!(
+                    action = action_str,
+                    tx_hash = %format!("0x{}", hex::encode(tx_hash)),
+                    "unknown DAS action, falling back to generic activity detection"
+                );
+            }
+            // Fall back to generic Create/Consume detection
+            resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids)
+        }
+        None => {
+            // No DAS action parsed — fall back to generic detection
+            resolve_generic_dotbit_actions(created_account_ids, consumed_account_ids)
+        }
+    };
+
+    if actions.is_empty() {
+        return;
+    }
+
+    let entry = NftCollectionActivityEntry {
+        tx_hash: tx_hash.to_vec(),
+        timestamp_ms,
+        actions,
+    };
+
+    batch.put_nft_collection_activity(&DOTBIT_SENTINEL_COLLECTION, block_number, tx_idx, &entry);
+}
+
+/// Generic fallback: same-account in both → Transfer, output-only → Mint, input-only → Burn.
+fn resolve_generic_dotbit_actions(
+    created: &HashSet<Vec<u8>>,
+    consumed: &HashSet<Vec<u8>>,
+) -> Vec<AssetAction> {
+    let mut has_mint = false;
+    let mut has_transfer = false;
+    let mut has_burn = false;
+
+    for id in created {
+        if consumed.contains(id) {
+            has_transfer = true;
+        } else {
+            has_mint = true;
+        }
+    }
+    for id in consumed {
+        if !created.contains(id) {
+            has_burn = true;
+        }
+    }
+
+    let mut actions = Vec::new();
+    if has_mint {
+        actions.push(AssetAction::Mint);
+    }
+    if has_transfer {
+        actions.push(AssetAction::Transfer);
+    }
+    if has_burn {
+        actions.push(AssetAction::Burn);
+    }
+    actions
+}
 
 #[derive(Default)]
 pub(crate) struct DotbitBatchState {
@@ -129,6 +286,8 @@ impl BatchWriter {
                 .unwrap_or(block_number),
             extra: NftExtra::DotBit {
                 expired_at: account.expired_at,
+                registered_at: account.registered_at,
+                status: account.status,
             },
         };
         batch.put_nft(&account.account_id, &entry);
@@ -278,6 +437,8 @@ mod tests {
                 type_script_hash: vec![0x21; 32],
                 next_account_id: None,
                 expired_at: None,
+                registered_at: None,
+                status: None,
                 owner_lock_hash: vec![0x31; 32],
             },
         };
@@ -331,6 +492,8 @@ mod tests {
                 type_script_hash: vec![0x21; 32],
                 next_account_id: None,
                 expired_at: None,
+                registered_at: None,
+                status: None,
                 owner_lock_hash: vec![0x31; 32],
             },
         };
@@ -373,6 +536,8 @@ mod tests {
                 type_script_hash: vec![0x21; 32],
                 next_account_id: None,
                 expired_at: None,
+                registered_at: None,
+                status: None,
                 owner_lock_hash: vec![0x31; 32],
             },
         };
@@ -411,6 +576,8 @@ mod tests {
                 type_script_hash: vec![0x21; 32],
                 next_account_id: None,
                 expired_at: None,
+                registered_at: None,
+                status: None,
                 owner_lock_hash: vec![0x31; 32],
             },
         };
@@ -488,6 +655,8 @@ mod tests {
                 type_script_hash: vec![0x21; 32],
                 next_account_id: None,
                 expired_at: None,
+                registered_at: None,
+                status: None,
                 owner_lock_hash: vec![0x31; 32],
             },
         };

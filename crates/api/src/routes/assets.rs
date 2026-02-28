@@ -234,6 +234,10 @@ pub struct NftCollectionItemResponse {
     pub is_live: bool,
     pub created_at_block: i64,
     pub expired_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u8>,
     pub tx_hash: Option<String>,
     pub output_index: Option<i16>,
 }
@@ -1745,6 +1749,8 @@ async fn list_nft_collection_items(
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at: None,
+                registered_at: None,
+                status: None,
                 tx_hash: None,
                 output_index: None,
             })
@@ -1907,9 +1913,13 @@ async fn list_nft_collection_items(
 
     let mut rows = Vec::with_capacity(page_items.len());
     for (nft_id, entry) in &page_items {
-        let expired_at = match &entry.extra {
-            ckbadger_store::types::NftExtra::DotBit { expired_at } => *expired_at,
-            _ => None,
+        let (expired_at, registered_at, status) = match &entry.extra {
+            ckbadger_store::types::NftExtra::DotBit {
+                expired_at,
+                registered_at,
+                status,
+            } => (*expired_at, *registered_at, *status),
+            _ => (None, None, None),
         };
 
         let (tx_hash, output_index) = match entry.standard {
@@ -1967,6 +1977,8 @@ async fn list_nft_collection_items(
             is_live: entry.is_live,
             created_at_block: entry.created_at_block,
             expired_at,
+            registered_at,
+            status,
             tx_hash,
             output_index,
         });
@@ -2261,6 +2273,9 @@ async fn list_nft_collection_activities(
                     ckbadger_store::AssetAction::Mint => "mint".to_string(),
                     ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
                     ckbadger_store::AssetAction::Burn => "burn".to_string(),
+                    ckbadger_store::AssetAction::Recycle => "recycle".to_string(),
+                    ckbadger_store::AssetAction::Renew => "renew".to_string(),
+                    ckbadger_store::AssetAction::Update => "update".to_string(),
                 })
                 .collect();
             NftCollectionActivityResponse {
@@ -2302,8 +2317,12 @@ async fn get_dotbit_item_detail(
         return Err(ApiError::bad_request("NFT item is not a .bit account"));
     }
 
-    let expired_at = match &entry.extra {
-        ckbadger_store::types::NftExtra::DotBit { expired_at } => *expired_at,
+    let (expired_at, registered_at, status) = match &entry.extra {
+        ckbadger_store::types::NftExtra::DotBit {
+            expired_at,
+            registered_at,
+            status,
+        } => (*expired_at, *registered_at, *status),
         _ => {
             return Err(ApiError::internal(format!(
                 "invalid NFT entry extra type for .bit account: nft_id=0x{}",
@@ -2347,6 +2366,8 @@ async fn get_dotbit_item_detail(
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at,
+        registered_at,
+        status,
         tx_hash,
         output_index,
     })
@@ -2378,6 +2399,8 @@ async fn get_did_ckb_item_detail(
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at: None,
+        registered_at: None,
+        status: None,
         tx_hash: None,
         output_index: None,
     })

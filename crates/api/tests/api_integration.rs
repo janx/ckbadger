@@ -4798,6 +4798,8 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
             created_at_block: 100,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -4813,6 +4815,8 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
             created_at_block: 101,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_900_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -4972,6 +4976,8 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
             created_at_block: 100,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5048,6 +5054,8 @@ async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fas
             created_at_block: 100,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5209,6 +5217,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
             created_at_block: 100,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5224,6 +5234,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
             created_at_block: 101,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_001),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5239,6 +5251,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
             created_at_block: 102,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_002),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5254,6 +5268,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
             created_at_block: 103,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_003),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5332,6 +5348,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             created_at_block: 100,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5755,6 +5773,8 @@ async fn test_assets_nft_item_activities_dotbit() {
             created_at_block: 120,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );
@@ -5939,6 +5959,8 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
             created_at_block: 100,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
             },
         },
     );

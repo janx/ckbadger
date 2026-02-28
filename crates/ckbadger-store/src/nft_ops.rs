@@ -239,6 +239,9 @@ impl CkbadgerStore {
             "mint" => AssetAction::Mint,
             "transfer" => AssetAction::Transfer,
             "burn" => AssetAction::Burn,
+            "recycle" => AssetAction::Recycle,
+            "renew" => AssetAction::Renew,
+            "update" => AssetAction::Update,
             _ => AssetAction::Mint, // unreachable if caller validates
         });
 

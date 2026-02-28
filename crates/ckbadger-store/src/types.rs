@@ -485,6 +485,12 @@ pub enum NftExtra {
     DotBit {
         /// Account expiration timestamp (Unix epoch seconds).
         expired_at: Option<u64>,
+        /// Account registration timestamp (Unix epoch seconds).
+        #[serde(default)]
+        registered_at: Option<u64>,
+        /// Account status: 0=normal, 1=selling, 2=auction, 3=cross-chain, 4=approved-transfer.
+        #[serde(default)]
+        status: Option<u8>,
     },
 }
 
@@ -905,6 +911,12 @@ pub enum AssetAction {
     Mint,
     Transfer,
     Burn,
+    /// .bit: expired account removed from chain (capacity refunded).
+    Recycle,
+    /// .bit: account expiry extended (no ownership change).
+    Renew,
+    /// .bit: metadata changed (edit_records, edit_manager, marketplace state, etc.).
+    Update,
 }
 
 // ============================================
@@ -1459,6 +1471,8 @@ mod tests {
             created_at_block: 400,
             extra: NftExtra::DotBit {
                 expired_at: Some(1_700_000_000),
+                registered_at: Some(1_600_000_000),
+                status: Some(1),
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1466,8 +1480,14 @@ mod tests {
         assert_eq!(decoded.standard, NftStandard::DotBit);
         assert_eq!(decoded.name.as_deref(), Some("test.bit"));
         match decoded.extra {
-            NftExtra::DotBit { expired_at } => {
+            NftExtra::DotBit {
+                expired_at,
+                registered_at,
+                status,
+            } => {
                 assert_eq!(expired_at, Some(1_700_000_000));
+                assert_eq!(registered_at, Some(1_600_000_000));
+                assert_eq!(status, Some(1));
             }
             _ => panic!("wrong variant"),
         }

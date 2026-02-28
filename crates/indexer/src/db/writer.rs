@@ -8,7 +8,7 @@ mod blocks;
 mod cells;
 mod core;
 mod dao;
-mod dotbit;
+pub(crate) mod dotbit;
 pub mod hodl_wave;
 mod inputs;
 mod mnft;

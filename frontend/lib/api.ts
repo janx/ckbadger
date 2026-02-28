@@ -218,11 +218,11 @@ interface NftCollectionItemsParams extends CursorQueryParams {
 type NftCollectionHoldersParams = CursorQueryParams;
 
 interface NftCollectionActivitiesParams extends CursorQueryParams {
-  action?: 'mint' | 'transfer' | 'burn';
+  action?: 'mint' | 'transfer' | 'burn' | 'recycle' | 'renew' | 'update';
 }
 
 interface MnftItemActivitiesParams extends CursorQueryParams {
-  action?: 'mint' | 'transfer' | 'burn';
+  action?: 'mint' | 'transfer' | 'burn' | 'recycle' | 'renew' | 'update';
 }
 
 interface Script {
