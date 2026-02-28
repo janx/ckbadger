@@ -9,7 +9,7 @@ use crate::types::{
 
 impl CkbadgerStore {
     pub fn get_nft(&self, id: &[u8]) -> anyhow::Result<Option<NftEntry>> {
-        match self.get_cf(self.cf_nft_data(), id)? {
+        match self.get_cf(self.cf_nft_item_meta(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -17,12 +17,12 @@ impl CkbadgerStore {
 
     pub fn put_nft_direct(&self, id: &[u8], entry: &NftEntry) -> anyhow::Result<()> {
         let value = bincode::serialize(entry)?;
-        self.put_cf(self.cf_nft_data(), id, &value)
+        self.put_cf(self.cf_nft_item_meta(), id, &value)
     }
 
     /// List all NFTs.
     pub fn list_nfts(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, NftEntry)>> {
-        let iter = self.iterator_cf(self.cf_nft_data(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_nft_item_meta(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -42,7 +42,7 @@ impl CkbadgerStore {
         &self,
         collection_id: &[u8],
     ) -> anyhow::Result<Option<NftCollectionAggregate>> {
-        match self.get_cf(self.cf_nft_collection_agg(), collection_id)? {
+        match self.get_cf(self.cf_nft_collection_stats(), collection_id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -52,7 +52,7 @@ impl CkbadgerStore {
     pub fn list_nft_collection_aggregates(
         &self,
     ) -> anyhow::Result<Vec<(Vec<u8>, NftCollectionAggregate)>> {
-        let iter = self.iterator_cf(self.cf_nft_collection_agg(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_nft_collection_stats(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -172,7 +172,7 @@ impl CkbadgerStore {
         let start_key = keys::encode_nft_by_collection_key(collection_id, start_nft_id);
 
         let iter = self.iterator_cf(
-            self.cf_nft_by_collection(),
+            self.cf_nft_item_by_collection(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();

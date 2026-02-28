@@ -1501,14 +1501,21 @@ fn load_block_date_transitions(
 
     let mut transitions: Vec<(i64, NaiveDate)> = Vec::new();
     let mut last_date: Option<NaiveDate> = None;
-    let iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
+    let iter = store.iterator_cf(store.cf_block_index(), rocksdb::IteratorMode::Start);
     for item in iter.flatten() {
-        let (key, value) = item;
+        let (key, block_hash) = item;
         if key.len() != 8 {
             continue;
         }
         let block_number = i64::from_be_bytes(key[..8].try_into().unwrap_or([0; 8]));
-        if let Ok(header) = bincode::deserialize::<ckbadger_store::CachedBlockHeader>(&value) {
+        let Some(meta_bytes) = store
+            .append_get_cf(store.cf_block_meta(), &block_hash)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        if let Ok(header) = bincode::deserialize::<ckbadger_store::CachedBlockHeader>(&meta_bytes) {
             if let Some(dt) = DateTime::from_timestamp_millis(header.timestamp) {
                 let date = ckbadger_common::block_date(dt);
                 if last_date != Some(date) {
@@ -1825,7 +1832,7 @@ async fn get_address_cohort_retention_chart(
 
     let iter = state
         .store
-        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+        .iterator_cf(state.store.cf_addr_stats(), rocksdb::IteratorMode::Start);
     for item in iter.flatten() {
         let (_, value) = item;
         let Ok(balance) = bincode::deserialize::<ckbadger_store::AddressBalance>(&value) else {

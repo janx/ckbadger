@@ -301,7 +301,7 @@ impl<'a> StoreBatch<'a> {
     pub fn put_addr_balance(&mut self, lock_hash: &[u8], balance: &AddressBalance) {
         let value = bincode::serialize(balance).expect("serialize AddressBalance");
         self.batch
-            .put_cf(self.store.cf_addr_balance(), lock_hash, &value);
+            .put_cf(self.store.cf_addr_stats(), lock_hash, &value);
     }
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -333,13 +333,14 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_token(&mut self, type_hash: &[u8], info: &TokenInfo) {
         let value = bincode::serialize(info).expect("serialize TokenInfo");
-        self.batch.put_cf(self.store.cf_tokens(), type_hash, &value);
+        self.batch
+            .put_cf(self.store.cf_asset_meta(), type_hash, &value);
     }
 
     pub fn put_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8], balance: i128) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.batch
-            .put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
+            .put_cf(self.store.cf_ft_holders(), key, balance.to_le_bytes());
     }
 
     pub fn put_token_transfers_count(&mut self, type_hash: &[u8], count: i64) {
@@ -449,7 +450,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
-        self.batch.delete_cf(self.store.cf_token_holders(), key);
+        self.batch.delete_cf(self.store.cf_ft_holders(), key);
     }
 
     pub fn put_token_transfer(
@@ -462,40 +463,43 @@ impl<'a> StoreBatch<'a> {
         let key = keys::encode_token_transfer_key(type_hash, block_num, tx_idx);
         let value = bincode::serialize(record).expect("serialize TokenTransferRecord");
         self.batch
-            .put_cf(self.store.cf_token_transfers(), key, &value);
+            .put_cf(self.store.cf_ft_activities(), key, &value);
     }
 
     // ---- Spore/NFT ----
 
     pub fn put_spore(&mut self, id: &[u8], entry: &SporeEntry) {
         let value = bincode::serialize(entry).expect("serialize SporeEntry");
-        self.batch.put_cf(self.store.cf_spore_data(), id, &value);
+        self.batch.put_cf(self.store.cf_nft_item_meta(), id, &value);
     }
 
     pub fn put_spore_by_cluster(&mut self, cluster_id: &[u8], spore_id: &[u8]) {
         let key = keys::encode_spore_by_cluster_key(cluster_id, spore_id);
-        self.batch.put_cf(self.store.cf_spore_by_cluster(), key, []);
+        self.batch
+            .put_cf(self.store.cf_nft_item_by_collection(), key, []);
     }
 
     pub fn delete_spore_by_cluster(&mut self, cluster_id: &[u8], spore_id: &[u8]) {
         let key = keys::encode_spore_by_cluster_key(cluster_id, spore_id);
-        self.batch.delete_cf(self.store.cf_spore_by_cluster(), key);
+        self.batch
+            .delete_cf(self.store.cf_nft_item_by_collection(), key);
     }
 
     pub fn put_nft(&mut self, id: &[u8], entry: &NftEntry) {
         let value = bincode::serialize(entry).expect("serialize NftEntry");
-        self.batch.put_cf(self.store.cf_nft_data(), id, &value);
+        self.batch.put_cf(self.store.cf_nft_item_meta(), id, &value);
     }
 
     pub fn put_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
         let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
         self.batch
-            .put_cf(self.store.cf_nft_by_collection(), key, []);
+            .put_cf(self.store.cf_nft_item_by_collection(), key, []);
     }
 
     pub fn delete_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
         let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
-        self.batch.delete_cf(self.store.cf_nft_by_collection(), key);
+        self.batch
+            .delete_cf(self.store.cf_nft_item_by_collection(), key);
     }
 
     // ---- Cluster aggregates ----
@@ -503,7 +507,7 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {
         let value = bincode::serialize(agg).expect("serialize ClusterAggregate");
         self.batch
-            .put_cf(self.store.cf_cluster_agg(), cluster_id, &value);
+            .put_cf(self.store.cf_nft_collection_stats(), cluster_id, &value);
     }
 
     pub fn put_cluster_owner_count(&mut self, cluster_id: &[u8], lock_hash: &[u8], count: i64) {
@@ -526,7 +530,7 @@ impl<'a> StoreBatch<'a> {
     ) {
         let value = bincode::serialize(agg).expect("serialize NftCollectionAggregate");
         self.batch
-            .put_cf(self.store.cf_nft_collection_agg(), collection_id, &value);
+            .put_cf(self.store.cf_nft_collection_stats(), collection_id, &value);
     }
 
     // ---- Activities ----

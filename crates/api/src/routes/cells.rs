@@ -2460,7 +2460,7 @@ async fn get_active_addresses(
     // Full scan of addr_balance CF, filter by last_activity_block
     let iter = state
         .store
-        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+        .iterator_cf(state.store.cf_addr_stats(), rocksdb::IteratorMode::Start);
 
     let mut all: Vec<(Vec<u8>, ckbadger_store::AddressBalance)> = Vec::new();
     for item in iter.flatten() {

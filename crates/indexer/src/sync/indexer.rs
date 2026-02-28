@@ -11110,8 +11110,7 @@ impl Indexer {
 
         let mut holder_count = 0i64;
         let mut balances_scanned = 0u64;
-        let balances_iter =
-            store.iterator_cf(store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+        let balances_iter = store.iterator_cf(store.cf_addr_stats(), rocksdb::IteratorMode::Start);
         for item in balances_iter.flatten() {
             let (_key, value) = item;
             let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {

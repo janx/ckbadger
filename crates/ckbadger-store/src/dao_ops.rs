@@ -65,24 +65,31 @@ impl CkbadgerStore {
 
     /// Aggregate secondary issuance by date.
     ///
-    /// Iterates all block headers and looks up the per-block secondary issuance,
+    /// Iterates the block index to enumerate all blocks, then looks up each
+    /// block's metadata (via `cf_block_meta`) and per-block secondary issuance,
     /// returning cumulative (dao_reward, miner_reward, treasury) per date sorted
     /// chronologically.
     pub fn list_daily_secondary_issuance(&self) -> anyhow::Result<Vec<(String, i128, i128, i128)>> {
-        let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_block_index(), rocksdb::IteratorMode::Start);
         // date -> (dao_reward_sum, miner_reward_sum, treasury_sum)
         let mut daily: BTreeMap<String, (i128, i128, i128)> = BTreeMap::new();
 
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, block_hash) = item;
             if key.len() != 8 {
                 continue;
             }
             let block_num = keys::decode_block_num(&key);
-            let header: CachedBlockHeader = match bincode::deserialize(&value) {
-                Ok(h) => h,
-                Err(_) => continue,
-            };
+
+            // cf_block_index value is the block_hash; look up the header from cf_block_meta
+            let header: CachedBlockHeader =
+                match self.append_get_cf(self.cf_block_meta(), &block_hash) {
+                    Ok(Some(meta_bytes)) => match bincode::deserialize(&meta_bytes) {
+                        Ok(h) => h,
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
 
             let issuance = match self.get_cf(self.cf_block_issuance(), &key)? {
                 Some(v) => match bincode::deserialize::<SecondaryIssuance>(&v) {

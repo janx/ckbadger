@@ -7,7 +7,7 @@ use crate::types::{ClusterDailyDelta, SporeDailyDelta, SporeEntry, SporeTypeInde
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
-        match self.get_cf(self.cf_spore_data(), id)? {
+        match self.get_cf(self.cf_nft_item_meta(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -18,7 +18,7 @@ impl CkbadgerStore {
         if ids.is_empty() {
             return Vec::new();
         }
-        let cf = self.cf_spore_data();
+        let cf = self.cf_nft_item_meta();
         let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             ids.iter().map(|id| (cf, id.as_slice())).collect();
         let values = self.multi_get_cf(cf_keys);
@@ -36,12 +36,12 @@ impl CkbadgerStore {
 
     pub fn put_spore_direct(&self, id: &[u8], entry: &SporeEntry) -> anyhow::Result<()> {
         let value = bincode::serialize(entry)?;
-        self.put_cf(self.cf_spore_data(), id, &value)
+        self.put_cf(self.cf_nft_item_meta(), id, &value)
     }
 
     /// List all spores.
     pub fn list_spores(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, SporeEntry)>> {
-        let iter = self.iterator_cf(self.cf_spore_data(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_nft_item_meta(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -62,7 +62,7 @@ impl CkbadgerStore {
         cluster_id: &[u8],
         limit: usize,
     ) -> anyhow::Result<Vec<(Vec<u8>, SporeEntry)>> {
-        let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
+        let iter = self.prefix_iterator_cf(self.cf_nft_item_by_collection(), cluster_id);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
@@ -86,7 +86,7 @@ impl CkbadgerStore {
 
     /// Count spores in a cluster using the secondary index.
     pub fn count_spores_in_cluster(&self, cluster_id: &[u8]) -> anyhow::Result<i64> {
-        let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
+        let iter = self.prefix_iterator_cf(self.cf_nft_item_by_collection(), cluster_id);
         let mut count: i64 = 0;
 
         for item in iter.flatten() {

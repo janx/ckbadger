@@ -80,7 +80,7 @@ impl BatchWriter {
 
         let cf_keys: Vec<_> = lock_hashes
             .iter()
-            .map(|k| (self.store.cf_addr_balance(), k.as_slice()))
+            .map(|k| (self.store.cf_addr_stats(), k.as_slice()))
             .collect();
         let results = self.store.multi_get_cf(cf_keys);
 
@@ -808,7 +808,7 @@ mod tests {
         let lock_hash = vec![0xEF; 32];
 
         store
-            .put_cf(store.cf_addr_balance(), &lock_hash, &[0xFF, 0x00])
+            .put_cf(store.cf_addr_stats(), &lock_hash, &[0xFF, 0x00])
             .unwrap();
 
         let refs = vec![&lock_hash];

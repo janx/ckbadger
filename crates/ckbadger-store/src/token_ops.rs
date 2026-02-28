@@ -869,7 +869,7 @@ impl CkbadgerStore {
         };
 
         let iter = self.iterator_cf(
-            self.cf_token_transfers(),
+            self.cf_ft_activities(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
@@ -893,7 +893,7 @@ impl CkbadgerStore {
 
     /// List token activities grouped by transaction.
     ///
-    /// Iterates `cf_token_transfers()` and groups consecutive records sharing the same
+    /// Iterates `cf_ft_activities()` and groups consecutive records sharing the same
     /// `tx_hash` into a single `TokenActivityEntry`.  Returns `(block_num, entry_idx, entry)`
     /// where `entry_idx` is the *last* record's key index within the group — suitable as
     /// the cursor for the next page.
@@ -917,7 +917,7 @@ impl CkbadgerStore {
         };
 
         let iter = self.iterator_cf(
-            self.cf_token_transfers(),
+            self.cf_ft_activities(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
@@ -1162,7 +1162,7 @@ impl CkbadgerStore {
 
         // 2) Aggregate transfer counters from token_transfers.
         let mut transfer_aggs: HashMap<Vec<u8>, TransferTokenAgg> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_ft_activities(), IteratorMode::Start);
         for item in iter.flatten() {
             let (key, value) = item;
             if key.len() != 44 {

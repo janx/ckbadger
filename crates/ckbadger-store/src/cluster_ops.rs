@@ -10,7 +10,7 @@ impl CkbadgerStore {
         &self,
         cluster_id: &[u8],
     ) -> anyhow::Result<Option<ClusterAggregate>> {
-        match self.get_cf(self.cf_cluster_agg(), cluster_id)? {
+        match self.get_cf(self.cf_nft_collection_stats(), cluster_id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -18,7 +18,7 @@ impl CkbadgerStore {
 
     /// List all cluster aggregates. Scans the small `cluster_agg` CF.
     pub fn list_cluster_aggregates(&self) -> anyhow::Result<Vec<(Vec<u8>, ClusterAggregate)>> {
-        let iter = self.iterator_cf(self.cf_cluster_agg(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_nft_collection_stats(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter.flatten() {
