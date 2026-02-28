@@ -11628,6 +11628,8 @@ mod tests {
 
     fn dummy_tx_index_entry() -> ckbadger_store::types::TxIndexEntry {
         ckbadger_store::types::TxIndexEntry {
+            block_number: 0,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,

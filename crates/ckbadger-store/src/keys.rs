@@ -3,11 +3,49 @@
 //! All numeric keys use big-endian encoding for correct lexicographic sort order.
 //! Fixed-size fields with no delimiters needed.
 
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
 /// Outpoint key: tx_hash(32B) + output_index(2B BE) = 34 bytes
 pub const OUTPOINT_KEY_SIZE: usize = 34;
 
 /// Block number key: 8 bytes big-endian i64
 pub const BLOCK_NUM_KEY_SIZE: usize = 8;
+
+/// Activity ID: block_number(8B BE) + tx_index(4B BE) + seq(2B BE) = 14 bytes
+pub const ACTIVITY_ID_SIZE: usize = 14;
+
+/// Consumed cell value: consumed_at_block(8B BE) + consumed_by_tx(32B) = 40 bytes
+pub const CONSUMED_CELL_VALUE_SIZE: usize = 40;
+
+// ---------------------------------------------------------------------------
+// FT type discriminants (for key encoding)
+// ---------------------------------------------------------------------------
+
+pub mod ft_type {
+    pub const XUDT: u8 = 0;
+    pub const SUDT: u8 = 1;
+    pub const OMNILOCK: u8 = 2;
+}
+
+// ---------------------------------------------------------------------------
+// NFT type discriminants (must match NftType enum in types.rs)
+// ---------------------------------------------------------------------------
+
+pub mod nft_type {
+    pub const SPORE: u8 = 0;
+    pub const SPORE_CLUSTER: u8 = 1;
+    pub const DID_CKB: u8 = 2;
+    pub const MNFT_ISSUER: u8 = 3;
+    pub const MNFT_CLASS: u8 = 4;
+    pub const MNFT_TOKEN: u8 = 5;
+    pub const DOT_BIT: u8 = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Core key encoders / decoders (UNCHANGED)
+// ---------------------------------------------------------------------------
 
 pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; OUTPOINT_KEY_SIZE];
@@ -48,6 +86,10 @@ pub fn encode_composite(parts: &[&[u8]]) -> Vec<u8> {
     key
 }
 
+// ---------------------------------------------------------------------------
+// Cell index key (live_cells_by_lock, live_cells_by_type, etc.)
+// ---------------------------------------------------------------------------
+
 /// Encode a cell-by-lock/type index key:
 /// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
 pub fn encode_cell_index_key(
@@ -64,6 +106,19 @@ pub fn encode_cell_index_key(
     key
 }
 
+/// Decode a cell index key into (script_hash, block_num, tx_hash, output_index).
+pub fn decode_cell_index_key(key: &[u8]) -> (Vec<u8>, i64, Vec<u8>, i16) {
+    let script_hash = key[..32].to_vec();
+    let block_num = i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let tx_hash = key[40..72].to_vec();
+    let output_index = i16::from_be_bytes(key[72..74].try_into().unwrap());
+    (script_hash, block_num, tx_hash, output_index)
+}
+
+// ---------------------------------------------------------------------------
+// Address-tx index key
+// ---------------------------------------------------------------------------
+
 /// Encode an address-tx index key:
 /// lock_hash(32B) + block_num(8B BE) + tx_idx(4B BE) = 44 bytes
 pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
@@ -74,13 +129,397 @@ pub fn encode_addr_tx_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<
     key
 }
 
-/// Encode a token_holders key: type_hash(32B) + lock_hash(32B) = 64 bytes
-pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
+/// Decode an address-tx index key into (lock_hash, block_num, tx_idx).
+pub fn decode_addr_tx_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
+    let lock_hash = key[..32].to_vec();
+    let block_num = i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
+    (lock_hash, block_num, tx_idx)
+}
+
+// ---------------------------------------------------------------------------
+// FT holder key (renamed from token_holder)
+// ---------------------------------------------------------------------------
+
+/// Encode an ft_holders key: script_hash(32B) + lock_hash(32B) = 64 bytes
+pub fn encode_ft_holder_key(script_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
     let mut key = [0u8; 64];
-    key[..32].copy_from_slice(&type_hash[..32]);
+    key[..32].copy_from_slice(&script_hash[..32]);
     key[32..64].copy_from_slice(&lock_hash[..32]);
     key
 }
+
+/// Decode an ft_holders key into (script_hash, lock_hash).
+pub fn decode_ft_holder_key(key: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let script_hash = key[..32].to_vec();
+    let lock_hash = key[32..64].to_vec();
+    (script_hash, lock_hash)
+}
+
+/// Backward-compatible alias for `encode_ft_holder_key`.
+#[inline]
+pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
+    encode_ft_holder_key(type_hash, lock_hash)
+}
+
+/// Backward-compatible alias for `decode_ft_holder_key`.
+#[inline]
+pub fn decode_token_holder_key(key: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    decode_ft_holder_key(key)
+}
+
+// ---------------------------------------------------------------------------
+// Activity ID (global activities CF - append store)
+// ---------------------------------------------------------------------------
+
+/// Activity ID: block_number(8B BE) + tx_index(4B BE) + seq(2B BE) = 14 bytes
+pub fn encode_activity_id(block_num: i64, tx_idx: i32, seq: i16) -> [u8; ACTIVITY_ID_SIZE] {
+    let mut key = [0u8; ACTIVITY_ID_SIZE];
+    key[..8].copy_from_slice(&block_num.to_be_bytes());
+    key[8..12].copy_from_slice(&tx_idx.to_be_bytes());
+    key[12..14].copy_from_slice(&seq.to_be_bytes());
+    key
+}
+
+pub fn decode_activity_id(key: &[u8]) -> (i64, i32, i16) {
+    let block_num = i64::from_be_bytes(key[..8].try_into().unwrap());
+    let tx_idx = i32::from_be_bytes(key[8..12].try_into().unwrap());
+    let seq = i16::from_be_bytes(key[12..14].try_into().unwrap());
+    (block_num, tx_idx, seq)
+}
+
+/// Encode an inverted activity ID for descending sort order:
+/// (MAX - block_number)(8B) + tx_index(4B) + seq(2B) = 14 bytes
+fn encode_inverted_activity_id(block_num: i64, tx_idx: i32, seq: i16) -> [u8; ACTIVITY_ID_SIZE] {
+    let mut key = [0u8; ACTIVITY_ID_SIZE];
+    key[..8].copy_from_slice(&(i64::MAX - block_num).to_be_bytes());
+    key[8..12].copy_from_slice(&tx_idx.to_be_bytes());
+    key[12..14].copy_from_slice(&seq.to_be_bytes());
+    key
+}
+
+/// Decode an inverted activity ID back to (block_num, tx_idx, seq).
+fn decode_inverted_activity_id(key: &[u8]) -> (i64, i32, i16) {
+    let block_desc = i64::from_be_bytes(key[..8].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let tx_idx = i32::from_be_bytes(key[8..12].try_into().unwrap());
+    let seq = i16::from_be_bytes(key[12..14].try_into().unwrap());
+    (block_num, tx_idx, seq)
+}
+
+// ---------------------------------------------------------------------------
+// Address activity key (addr_activities CF)
+// ---------------------------------------------------------------------------
+
+/// Address activity key (v2 with seq):
+/// lock_hash(32B) + inverted_activity_id(14B) = 46 bytes
+///
+/// Uses inverted block_number for descending order: (MAX - block_number).
+pub fn encode_addr_activity_key(
+    lock_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    seq: i16,
+) -> Vec<u8> {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_addr_activity_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    let inv = encode_inverted_activity_id(block_num, tx_idx, seq);
+    let mut key = Vec::with_capacity(46);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&inv);
+    key
+}
+
+pub fn decode_addr_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, i16) {
+    let lock_hash = key[..32].to_vec();
+    let (block_num, tx_idx, seq) = decode_inverted_activity_id(&key[32..46]);
+    (lock_hash, block_num, tx_idx, seq)
+}
+
+/// Legacy address activity key (no seq):
+/// lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
+///
+/// Uses descending block_num so newest activities come first in prefix scan.
+/// Backward-compatible alias; kept for existing callers.
+pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_activity_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    let block_desc = (i64::MAX - block_num).to_be_bytes();
+    let mut key = Vec::with_capacity(44);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&block_desc);
+    key.extend_from_slice(&tx_idx.to_be_bytes());
+    key
+}
+
+/// Decode block_num and tx_idx from a legacy activity key (no seq).
+pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
+    let lock_hash = key[..32].to_vec();
+    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
+    (lock_hash, block_num, tx_idx)
+}
+
+// ---------------------------------------------------------------------------
+// NFT item index key (append store)
+// ---------------------------------------------------------------------------
+
+/// NFT item index key: nft_type(1B) + nft_id(32B) + outpoint(34B) = 67 bytes
+pub fn encode_nft_item_index_key(
+    nft_type_val: u8,
+    nft_id: &[u8],
+    tx_hash: &[u8],
+    output_index: i16,
+) -> Vec<u8> {
+    let mut key = Vec::with_capacity(67);
+    key.push(nft_type_val);
+    key.extend_from_slice(&pad_id_32(nft_id));
+    key.extend_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+pub fn decode_nft_item_index_key(key: &[u8]) -> (u8, Vec<u8>, Vec<u8>, i16) {
+    let nft_type_val = key[0];
+    let nft_id = key[1..33].to_vec();
+    let (tx_hash, output_index) = decode_outpoint(&key[33..67]);
+    (nft_type_val, nft_id, tx_hash, output_index)
+}
+
+// ---------------------------------------------------------------------------
+// FT index key (append store)
+// ---------------------------------------------------------------------------
+
+/// FT index key: ft_type(1B) + script_hash(32B) + outpoint(34B) = 67 bytes
+pub fn encode_ft_index_key(
+    ft_type_val: u8,
+    script_hash: &[u8],
+    tx_hash: &[u8],
+    output_index: i16,
+) -> Vec<u8> {
+    let mut key = Vec::with_capacity(67);
+    key.push(ft_type_val);
+    key.extend_from_slice(&script_hash[..32]);
+    key.extend_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+pub fn decode_ft_index_key(key: &[u8]) -> (u8, Vec<u8>, Vec<u8>, i16) {
+    let ft_type_val = key[0];
+    let script_hash = key[1..33].to_vec();
+    let (tx_hash, output_index) = decode_outpoint(&key[33..67]);
+    (ft_type_val, script_hash, tx_hash, output_index)
+}
+
+// ---------------------------------------------------------------------------
+// NFT outpoint value (outpoint key -> nft_type + nft_id value)
+// ---------------------------------------------------------------------------
+
+/// NFT outpoint value: nft_type(1B) + nft_id(32B) = 33 bytes
+pub fn encode_nft_outpoint_value(nft_type_val: u8, nft_id: &[u8]) -> Vec<u8> {
+    let mut val = Vec::with_capacity(33);
+    val.push(nft_type_val);
+    val.extend_from_slice(&pad_id_32(nft_id));
+    val
+}
+
+pub fn decode_nft_outpoint_value(value: &[u8]) -> (u8, Vec<u8>) {
+    let nft_type_val = value[0];
+    let nft_id = value[1..33].to_vec();
+    (nft_type_val, nft_id)
+}
+
+// ---------------------------------------------------------------------------
+// FT outpoint value (outpoint key -> ft_type + script_hash value)
+// ---------------------------------------------------------------------------
+
+/// FT outpoint value: ft_type(1B) + script_hash(32B) = 33 bytes
+pub fn encode_ft_outpoint_value(ft_type_val: u8, script_hash: &[u8]) -> Vec<u8> {
+    let mut val = Vec::with_capacity(33);
+    val.push(ft_type_val);
+    val.extend_from_slice(&script_hash[..32]);
+    val
+}
+
+pub fn decode_ft_outpoint_value(value: &[u8]) -> (u8, Vec<u8>) {
+    let ft_type_val = value[0];
+    let script_hash = value[1..33].to_vec();
+    (ft_type_val, script_hash)
+}
+
+// ---------------------------------------------------------------------------
+// NFT item by collection key
+// ---------------------------------------------------------------------------
+
+/// NFT item by collection key: nft_type(1B) + collection_id(32B) + nft_id(32B) = 65 bytes
+pub fn encode_nft_item_by_collection_key(
+    nft_type_val: u8,
+    collection_id: &[u8],
+    nft_id: &[u8],
+) -> Vec<u8> {
+    let mut key = Vec::with_capacity(65);
+    key.push(nft_type_val);
+    key.extend_from_slice(&pad_id_32(collection_id));
+    key.extend_from_slice(&pad_id_32(nft_id));
+    key
+}
+
+pub fn decode_nft_item_by_collection_key(key: &[u8]) -> (u8, Vec<u8>, Vec<u8>) {
+    let nft_type_val = key[0];
+    let collection_id = key[1..33].to_vec();
+    let nft_id = key[33..65].to_vec();
+    (nft_type_val, collection_id, nft_id)
+}
+
+/// Prefix for scanning all NFT items in a collection:
+/// nft_type(1B) + collection_id(32B) = 33 bytes
+pub fn encode_nft_item_by_collection_prefix(nft_type_val: u8, collection_id: &[u8]) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(33);
+    prefix.push(nft_type_val);
+    prefix.extend_from_slice(&pad_id_32(collection_id));
+    prefix
+}
+
+// ---------------------------------------------------------------------------
+// NFT item meta key
+// ---------------------------------------------------------------------------
+
+/// NFT item meta key: nft_type(1B) + nft_id(32B) = 33 bytes
+pub fn encode_nft_item_meta_key(nft_type_val: u8, nft_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(nft_type_val);
+    key.extend_from_slice(&pad_id_32(nft_id));
+    key
+}
+
+pub fn decode_nft_item_meta_key(key: &[u8]) -> (u8, Vec<u8>) {
+    let nft_type_val = key[0];
+    let nft_id = key[1..33].to_vec();
+    (nft_type_val, nft_id)
+}
+
+// ---------------------------------------------------------------------------
+// NFT collection stats key
+// ---------------------------------------------------------------------------
+
+/// NFT collection stats key: nft_type(1B) + collection_id(32B) = 33 bytes
+pub fn encode_nft_collection_stats_key(nft_type_val: u8, collection_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(33);
+    key.push(nft_type_val);
+    key.extend_from_slice(&pad_id_32(collection_id));
+    key
+}
+
+pub fn decode_nft_collection_stats_key(key: &[u8]) -> (u8, Vec<u8>) {
+    let nft_type_val = key[0];
+    let collection_id = key[1..33].to_vec();
+    (nft_type_val, collection_id)
+}
+
+// ---------------------------------------------------------------------------
+// NFT collection activity key (v2 with nft_type + seq)
+// ---------------------------------------------------------------------------
+
+/// NFT collection activity key (v2):
+/// nft_type(1B) + collection_id(32B) + inverted_activity_id(14B) = 47 bytes
+pub fn encode_nft_collection_activity_key_v2(
+    nft_type_val: u8,
+    collection_id: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    seq: i16,
+) -> Vec<u8> {
+    let inv = encode_inverted_activity_id(block_num, tx_idx, seq);
+    let mut key = Vec::with_capacity(47);
+    key.push(nft_type_val);
+    key.extend_from_slice(&pad_id_32(collection_id));
+    key.extend_from_slice(&inv);
+    key
+}
+
+pub fn decode_nft_collection_activity_key_v2(key: &[u8]) -> (u8, Vec<u8>, i64, i32, i16) {
+    let nft_type_val = key[0];
+    let collection_id = key[1..33].to_vec();
+    let (block_num, tx_idx, seq) = decode_inverted_activity_id(&key[33..47]);
+    (nft_type_val, collection_id, block_num, tx_idx, seq)
+}
+
+/// Prefix for scanning all activities of an NFT collection (v2):
+/// nft_type(1B) + collection_id(32B) = 33 bytes
+pub fn encode_nft_collection_activity_prefix_v2(nft_type_val: u8, collection_id: &[u8]) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(33);
+    prefix.push(nft_type_val);
+    prefix.extend_from_slice(&pad_id_32(collection_id));
+    prefix
+}
+
+// ---------------------------------------------------------------------------
+// FT activity key
+// ---------------------------------------------------------------------------
+
+/// FT activity key:
+/// ft_type(1B) + script_hash(32B) + inverted_activity_id(14B) = 47 bytes
+pub fn encode_ft_activity_key(
+    ft_type_val: u8,
+    script_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    seq: i16,
+) -> Vec<u8> {
+    let inv = encode_inverted_activity_id(block_num, tx_idx, seq);
+    let mut key = Vec::with_capacity(47);
+    key.push(ft_type_val);
+    key.extend_from_slice(&script_hash[..32]);
+    key.extend_from_slice(&inv);
+    key
+}
+
+pub fn decode_ft_activity_key(key: &[u8]) -> (u8, Vec<u8>, i64, i32, i16) {
+    let ft_type_val = key[0];
+    let script_hash = key[1..33].to_vec();
+    let (block_num, tx_idx, seq) = decode_inverted_activity_id(&key[33..47]);
+    (ft_type_val, script_hash, block_num, tx_idx, seq)
+}
+
+/// Prefix for scanning all activities of an FT:
+/// ft_type(1B) + script_hash(32B) = 33 bytes
+pub fn encode_ft_activity_prefix(ft_type_val: u8, script_hash: &[u8]) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(33);
+    prefix.push(ft_type_val);
+    prefix.extend_from_slice(&script_hash[..32]);
+    prefix
+}
+
+// ---------------------------------------------------------------------------
+// Consumed cell value (fixed-size, no bincode)
+// ---------------------------------------------------------------------------
+
+/// Consumed cell value: consumed_at_block(8B BE) + consumed_by_tx(32B) = 40 bytes
+pub fn encode_consumed_cell_value(
+    consumed_at_block: i64,
+    consumed_by_tx: &[u8],
+) -> [u8; CONSUMED_CELL_VALUE_SIZE] {
+    let mut val = [0u8; CONSUMED_CELL_VALUE_SIZE];
+    val[..8].copy_from_slice(&consumed_at_block.to_be_bytes());
+    val[8..40].copy_from_slice(&consumed_by_tx[..32]);
+    val
+}
+
+pub fn decode_consumed_cell_value(value: &[u8]) -> (i64, Vec<u8>) {
+    let consumed_at_block = i64::from_be_bytes(value[..8].try_into().unwrap());
+    let consumed_by_tx = value[8..40].to_vec();
+    (consumed_at_block, consumed_by_tx)
+}
+
+// ---------------------------------------------------------------------------
+// Stats key
+// ---------------------------------------------------------------------------
 
 /// Stats key: prefix(1B) + variable key
 pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
@@ -118,6 +557,11 @@ pub mod stats_prefix {
     pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
     pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
     pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
+
+    // New prefixes for data refactor
+    pub const ADDR_DAILY_STATS: u8 = 0x20;
+    pub const SCRIPT_INFO: u8 = 0x21;
+    pub const SYNC_META: u8 = 0xF0;
 }
 
 // Flat re-exports for convenience
@@ -147,6 +591,13 @@ pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOI
 pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
 pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
 pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
+pub const STATS_PREFIX_ADDR_DAILY_STATS: u8 = stats_prefix::ADDR_DAILY_STATS;
+pub const STATS_PREFIX_SCRIPT_INFO: u8 = stats_prefix::SCRIPT_INFO;
+pub const STATS_PREFIX_SYNC_META: u8 = stats_prefix::SYNC_META;
+
+// ---------------------------------------------------------------------------
+// Token transfers key
+// ---------------------------------------------------------------------------
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -155,6 +606,10 @@ pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
     key.extend_from_slice(&type_hash[..32]);
     key
 }
+
+// ---------------------------------------------------------------------------
+// Token hourly key
+// ---------------------------------------------------------------------------
 
 /// Token hourly transfer count key: prefix(1B) + type_hash(32B) + hour_bucket(8B BE) = 41 bytes
 /// hour_bucket = timestamp_ms / 3_600_000
@@ -173,6 +628,10 @@ pub fn encode_token_hourly_prefix(type_hash: &[u8]) -> Vec<u8> {
     key.extend_from_slice(&type_hash[..32]);
     key
 }
+
+// ---------------------------------------------------------------------------
+// Token daily key
+// ---------------------------------------------------------------------------
 
 /// Token daily stats key: prefix(1B) + type_hash(32B) + date(4B YYYYMMDD BE)
 pub const TOKEN_DAILY_KEY_SIZE: usize = 37;
@@ -198,6 +657,10 @@ pub fn decode_token_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     let date = u32::from_be_bytes(key[33..37].try_into().unwrap());
     (type_hash, date)
 }
+
+// ---------------------------------------------------------------------------
+// Cluster daily key
+// ---------------------------------------------------------------------------
 
 /// Cluster daily stats key: prefix(1B) + cluster_id(32B) + date(4B YYYYMMDD BE)
 pub const CLUSTER_DAILY_KEY_SIZE: usize = 37;
@@ -226,6 +689,10 @@ pub fn decode_cluster_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     (cluster_id, date)
 }
 
+// ---------------------------------------------------------------------------
+// Spore daily key
+// ---------------------------------------------------------------------------
+
 /// Spore daily stats key: prefix(1B) + spore_id(32B) + date(4B YYYYMMDD BE)
 pub const SPORE_DAILY_KEY_SIZE: usize = 37;
 
@@ -250,6 +717,10 @@ pub fn decode_spore_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     (spore_id, date)
 }
 
+// ---------------------------------------------------------------------------
+// Spore outpoint key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
+
 /// Spore outpoint lookup key: prefix(1B) + outpoint(34B)
 pub const SPORE_OUTPOINT_KEY_SIZE: usize = 35;
 
@@ -266,6 +737,10 @@ pub fn encode_spore_outpoint_key(
 pub fn decode_spore_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
+
+// ---------------------------------------------------------------------------
+// Spore outpoint by ID key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
 
 /// Spore outpoint reverse index key: prefix(1B) + spore_id(32B) + outpoint(34B)
 pub const SPORE_OUTPOINT_BY_ID_KEY_SIZE: usize = 67;
@@ -298,6 +773,10 @@ pub fn decode_spore_outpoint_by_id_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[33..67])
 }
 
+// ---------------------------------------------------------------------------
+// mNFT class outpoint key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
+
 /// mNFT class outpoint lookup key: prefix(1B) + outpoint(34B)
 pub const MNFT_CLASS_OUTPOINT_KEY_SIZE: usize = 35;
 
@@ -311,6 +790,10 @@ pub fn encode_mnft_class_outpoint_key(
     key
 }
 
+// ---------------------------------------------------------------------------
+// mNFT token outpoint key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
+
 /// mNFT token outpoint lookup key: prefix(1B) + outpoint(34B)
 pub const MNFT_TOKEN_OUTPOINT_KEY_SIZE: usize = 35;
 
@@ -323,6 +806,10 @@ pub fn encode_mnft_token_outpoint_key(
     key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
     key
 }
+
+// ---------------------------------------------------------------------------
+// .bit account outpoint key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
 
 /// .bit account outpoint lookup key: prefix(1B) + outpoint(34B)
 pub const DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE: usize = 35;
@@ -341,6 +828,10 @@ pub fn decode_dotbit_account_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
 }
 
+// ---------------------------------------------------------------------------
+// Spore type-script index key
+// ---------------------------------------------------------------------------
+
 /// Spore type-script index key: prefix(1B) + type_script_hash(32B)
 pub const SPORE_TYPE_INDEX_KEY_SIZE: usize = 33;
 
@@ -350,6 +841,10 @@ pub fn encode_spore_type_index_key(type_script_hash: &[u8]) -> [u8; SPORE_TYPE_I
     key[1..33].copy_from_slice(&type_script_hash[..32]);
     key
 }
+
+// ---------------------------------------------------------------------------
+// NFT collection daily stats key
+// ---------------------------------------------------------------------------
 
 /// NFT collection daily stats key: prefix(1B) + collection_id(32B padded) + date(4B YYYYMMDD BE)
 pub const NFT_DAILY_KEY_SIZE: usize = 37;
@@ -375,6 +870,10 @@ pub fn decode_nft_daily_key(key: &[u8]) -> (Vec<u8>, u32) {
     (collection_id, date)
 }
 
+// ---------------------------------------------------------------------------
+// NFT type-script index key
+// ---------------------------------------------------------------------------
+
 /// NFT type-script index key: prefix(1B) + type_script_hash(32B)
 pub const NFT_TYPE_INDEX_KEY_SIZE: usize = 33;
 
@@ -384,6 +883,10 @@ pub fn encode_nft_type_index_key(type_script_hash: &[u8]) -> [u8; NFT_TYPE_INDEX
     key[1..33].copy_from_slice(&type_script_hash[..32]);
     key
 }
+
+// ---------------------------------------------------------------------------
+// NFT-by-collection secondary index key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
 
 /// NFT-by-collection secondary index key: collection_id(32B padded) + nft_id(variable).
 pub fn encode_nft_by_collection_key(collection_id: &[u8], nft_id: &[u8]) -> Vec<u8> {
@@ -405,14 +908,34 @@ pub fn decode_nft_by_collection_key(key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((key[..32].to_vec(), key[32..].to_vec()))
 }
 
+// ---------------------------------------------------------------------------
+// Spore-by-cluster key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
+
+/// Spore-by-cluster key: cluster_id(32B) + spore_id(32B) = 64 bytes
+pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 64] {
+    let mut key = [0u8; 64];
+    key[..32].copy_from_slice(&cluster_id[..32]);
+    key[32..64].copy_from_slice(&spore_id[..32]);
+    key
+}
+
+// ---------------------------------------------------------------------------
+// pad_id_32 utility
+// ---------------------------------------------------------------------------
+
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
 /// are right-padded with zeros; IDs already 32+ bytes are truncated to 32.
-fn pad_id_32(id: &[u8]) -> [u8; 32] {
+pub fn pad_id_32(id: &[u8]) -> [u8; 32] {
     let mut buf = [0u8; 32];
     let len = id.len().min(32);
     buf[..len].copy_from_slice(&id[..len]);
     buf
 }
+
+// ---------------------------------------------------------------------------
+// Spore hourly key
+// ---------------------------------------------------------------------------
 
 /// Spore (DOB) hourly transfer count key: prefix(1B) + cluster_id(32B) + hour_bucket(8B BE) = 41 bytes
 pub fn encode_spore_hourly_key(cluster_id: &[u8], hour_bucket: i64) -> Vec<u8> {
@@ -431,6 +954,10 @@ pub fn encode_spore_hourly_prefix(cluster_id: &[u8]) -> Vec<u8> {
     key
 }
 
+// ---------------------------------------------------------------------------
+// NFT hourly key
+// ---------------------------------------------------------------------------
+
 /// NFT hourly transfer count key: prefix(1B) + collection_id(32B) + hour_bucket(8B BE) = 41 bytes
 pub fn encode_nft_hourly_key(collection_id: &[u8], hour_bucket: i64) -> Vec<u8> {
     let mut key = Vec::with_capacity(41);
@@ -447,6 +974,10 @@ pub fn encode_nft_hourly_prefix(collection_id: &[u8]) -> Vec<u8> {
     key.extend_from_slice(&pad_id_32(collection_id));
     key
 }
+
+// ---------------------------------------------------------------------------
+// Script daily key
+// ---------------------------------------------------------------------------
 
 /// Script daily stats key:
 /// prefix(1B) + code_hash(32B) + script_kind(1B, 0=lock/1=type) + date(4B YYYYMMDD BE)
@@ -477,6 +1008,10 @@ pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, bool, u32) {
     (code_hash, is_type, date)
 }
 
+// ---------------------------------------------------------------------------
+// Token transfer key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
+
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
 /// Uses descending block_num so newest transfers come first in prefix scan.
 pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
@@ -495,6 +1030,10 @@ pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
     let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
     (block_num, tx_idx)
 }
+
+// ---------------------------------------------------------------------------
+// Cluster owner key
+// ---------------------------------------------------------------------------
 
 /// Cluster owner key: prefix(1B) + cluster_id(32B) + lock_hash(32B) = 65 bytes
 /// Stored in the stats CF. Value is i64 LE (live spore count for this owner).
@@ -519,38 +1058,9 @@ pub fn encode_cluster_owner_prefix(cluster_id: &[u8]) -> [u8; 33] {
     prefix
 }
 
-/// Spore-by-cluster key: cluster_id(32B) + spore_id(32B) = 64 bytes
-pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 64] {
-    let mut key = [0u8; 64];
-    key[..32].copy_from_slice(&cluster_id[..32]);
-    key[32..64].copy_from_slice(&spore_id[..32]);
-    key
-}
-
-/// Activity key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
-/// Uses descending block_num so newest activities come first in prefix scan.
-pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_activity_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
-    );
-    let block_desc = (i64::MAX - block_num).to_be_bytes();
-    let mut key = Vec::with_capacity(44);
-    key.extend_from_slice(&lock_hash[..32]);
-    key.extend_from_slice(&block_desc);
-    key.extend_from_slice(&tx_idx.to_be_bytes());
-    key
-}
-
-/// Decode block_num and tx_idx from an activity key.
-pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
-    let lock_hash = key[..32].to_vec();
-    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
-    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
-    (lock_hash, block_num, tx_idx)
-}
+// ---------------------------------------------------------------------------
+// Address daily stats key
+// ---------------------------------------------------------------------------
 
 /// Address daily stats key: lock_hash(32B) + date(4B u32 YYYYMMDD BE) = 36 bytes
 pub const ADDR_DAILY_STATS_KEY_SIZE: usize = 36;
@@ -571,12 +1081,9 @@ pub fn decode_addr_daily_stats_key(key: &[u8]) -> (Vec<u8>, u32) {
     (lock_hash, date)
 }
 
-/// Convert a Unix timestamp in milliseconds to YYYYMMDD u32 (UTC+8 day boundary).
-pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
-    let date = ckbadger_common::block_date_from_ms(timestamp_ms);
-    let s = date.format("%Y%m%d").to_string();
-    s.parse::<u32>().unwrap_or(0)
-}
+// ---------------------------------------------------------------------------
+// NFT collection activity key (legacy, kept for compat)
+// ---------------------------------------------------------------------------
 
 /// NFT collection activity key: collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
 /// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
@@ -606,6 +1113,21 @@ pub fn decode_nft_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32) {
     (collection_id, block_num, tx_idx)
 }
 
+// ---------------------------------------------------------------------------
+// timestamp_ms_to_date
+// ---------------------------------------------------------------------------
+
+/// Convert a Unix timestamp in milliseconds to YYYYMMDD u32 (UTC+8 day boundary).
+pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
+    let date = ckbadger_common::block_date_from_ms(timestamp_ms);
+    let s = date.format("%Y%m%d").to_string();
+    s.parse::<u32>().unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------------
+// Sync meta keys
+// ---------------------------------------------------------------------------
+
 /// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
@@ -617,9 +1139,15 @@ pub mod sync_meta_keys {
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
 }
 
+// ===========================================================================
+// Tests
+// ===========================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Core key roundtrips ----
 
     #[test]
     fn test_outpoint_roundtrip() {
@@ -657,6 +1185,107 @@ mod tests {
         assert_eq!(decode_block_num(&key[32..40]), 42);
     }
 
+    // ---- Cell index key ----
+
+    #[test]
+    fn test_cell_index_key_roundtrip() {
+        let script_hash = [0xAAu8; 32];
+        let block_num = 12345i64;
+        let tx_hash = [0xBBu8; 32];
+        let output_index = 3i16;
+        let key = encode_cell_index_key(&script_hash, block_num, &tx_hash, output_index);
+        assert_eq!(key.len(), 74);
+        let (dsh, dbn, dth, doi) = decode_cell_index_key(&key);
+        assert_eq!(dsh, script_hash.to_vec());
+        assert_eq!(dbn, block_num);
+        assert_eq!(dth, tx_hash.to_vec());
+        assert_eq!(doi, output_index);
+    }
+
+    // ---- Address-tx key ----
+
+    #[test]
+    fn test_addr_tx_key_roundtrip() {
+        let lock_hash = [0xCCu8; 32];
+        let block_num = 99999i64;
+        let tx_idx = 7i32;
+        let key = encode_addr_tx_key(&lock_hash, block_num, tx_idx);
+        assert_eq!(key.len(), 44);
+        let (dlh, dbn, dti) = decode_addr_tx_key(&key);
+        assert_eq!(dlh, lock_hash.to_vec());
+        assert_eq!(dbn, block_num);
+        assert_eq!(dti, tx_idx);
+    }
+
+    // ---- FT holder key (and backward-compat token_holder alias) ----
+
+    #[test]
+    fn test_ft_holder_key_roundtrip() {
+        let script_hash = [0xAAu8; 32];
+        let lock_hash = [0xBBu8; 32];
+        let key = encode_ft_holder_key(&script_hash, &lock_hash);
+        assert_eq!(key.len(), 64);
+        let (dsh, dlh) = decode_ft_holder_key(&key);
+        assert_eq!(dsh, script_hash.to_vec());
+        assert_eq!(dlh, lock_hash.to_vec());
+    }
+
+    #[test]
+    fn test_token_holder_key_alias() {
+        let type_hash = [0x11u8; 32];
+        let lock_hash = [0x22u8; 32];
+        assert_eq!(
+            encode_token_holder_key(&type_hash, &lock_hash),
+            encode_ft_holder_key(&type_hash, &lock_hash)
+        );
+        let key = encode_token_holder_key(&type_hash, &lock_hash);
+        let (d1, d2) = decode_token_holder_key(&key);
+        assert_eq!(d1, type_hash.to_vec());
+        assert_eq!(d2, lock_hash.to_vec());
+    }
+
+    // ---- Activity ID ----
+
+    #[test]
+    fn test_activity_id_roundtrip() {
+        for (block, idx, seq) in [
+            (0i64, 0i32, 0i16),
+            (1, 0, 0),
+            (100, 5, 1),
+            (1_000_000, 42, 127),
+            (i64::MAX, i32::MAX, i16::MAX),
+        ] {
+            let key = encode_activity_id(block, idx, seq);
+            assert_eq!(key.len(), ACTIVITY_ID_SIZE);
+            let (db, di, ds) = decode_activity_id(&key);
+            assert_eq!(db, block);
+            assert_eq!(di, idx);
+            assert_eq!(ds, seq);
+        }
+    }
+
+    #[test]
+    fn test_activity_id_sort_order() {
+        // Ascending: lower block_num comes first
+        let k1 = encode_activity_id(100, 0, 0);
+        let k2 = encode_activity_id(200, 0, 0);
+        let k3 = encode_activity_id(300, 0, 0);
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+
+        // Same block, ascending tx_idx
+        let k4 = encode_activity_id(100, 1, 0);
+        let k5 = encode_activity_id(100, 2, 0);
+        assert!(k4 < k5);
+
+        // Same block+tx_idx, ascending seq
+        let k6 = encode_activity_id(100, 1, 0);
+        let k7 = encode_activity_id(100, 1, 1);
+        assert!(k6 < k7);
+    }
+
+    // ---- Token transfers key ----
+
     #[test]
     fn test_token_transfers_key_structure() {
         let type_hash = [0xABu8; 32];
@@ -665,6 +1294,8 @@ mod tests {
         assert_eq!(key[0], STATS_PREFIX_TOKEN_TRANSFERS);
         assert_eq!(&key[1..33], &type_hash);
     }
+
+    // ---- Token hourly key ----
 
     #[test]
     fn test_token_hourly_key_structure() {
@@ -699,6 +1330,8 @@ mod tests {
         assert!(full_key.starts_with(&prefix));
     }
 
+    // ---- Token daily key ----
+
     #[test]
     fn test_token_daily_key_roundtrip() {
         let type_hash = [0x77u8; 32];
@@ -717,6 +1350,8 @@ mod tests {
         assert_eq!(prefix.len(), 33);
         assert!(key.starts_with(&prefix));
     }
+
+    // ---- Cluster daily key ----
 
     #[test]
     fn test_cluster_daily_key_roundtrip() {
@@ -737,6 +1372,8 @@ mod tests {
         assert!(key.starts_with(&prefix));
     }
 
+    // ---- Spore daily key ----
+
     #[test]
     fn test_spore_daily_key_roundtrip() {
         let spore_id = [0x99u8; 32];
@@ -756,6 +1393,8 @@ mod tests {
         assert!(key.starts_with(&prefix));
     }
 
+    // ---- Spore outpoint key (legacy) ----
+
     #[test]
     fn test_spore_outpoint_key_roundtrip() {
         let tx_hash = [0xABu8; 32];
@@ -766,6 +1405,8 @@ mod tests {
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 7);
     }
+
+    // ---- Spore outpoint by ID key (legacy) ----
 
     #[test]
     fn test_spore_outpoint_by_id_key_roundtrip() {
@@ -784,6 +1425,8 @@ mod tests {
         assert!(key.starts_with(&prefix));
     }
 
+    // ---- mNFT class outpoint key (legacy) ----
+
     #[test]
     fn test_mnft_class_outpoint_key_structure() {
         let tx_hash = [0xACu8; 32];
@@ -794,6 +1437,8 @@ mod tests {
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 8);
     }
+
+    // ---- mNFT token outpoint key (legacy) ----
 
     #[test]
     fn test_mnft_token_outpoint_key_structure() {
@@ -806,6 +1451,8 @@ mod tests {
         assert_eq!(decoded_output_index, 9);
     }
 
+    // ---- .bit account outpoint key (legacy) ----
+
     #[test]
     fn test_dotbit_account_outpoint_key_structure() {
         let tx_hash = [0xAEu8; 32];
@@ -817,6 +1464,8 @@ mod tests {
         assert_eq!(decoded_output_index, 10);
     }
 
+    // ---- Spore type index key ----
+
     #[test]
     fn test_spore_type_index_key_structure() {
         let type_script_hash = [0xBCu8; 32];
@@ -825,6 +1474,8 @@ mod tests {
         assert_eq!(key[0], STATS_PREFIX_SPORE_TYPE_INDEX);
         assert_eq!(&key[1..33], &type_script_hash);
     }
+
+    // ---- NFT daily key ----
 
     #[test]
     fn test_nft_daily_key_roundtrip() {
@@ -846,6 +1497,8 @@ mod tests {
         assert!(key.starts_with(&prefix));
     }
 
+    // ---- NFT type index key ----
+
     #[test]
     fn test_nft_type_index_key_structure() {
         let type_script_hash = [0xDDu8; 32];
@@ -854,6 +1507,8 @@ mod tests {
         assert_eq!(key[0], STATS_PREFIX_NFT_TYPE_INDEX);
         assert_eq!(&key[1..33], &type_script_hash);
     }
+
+    // ---- NFT by collection key (legacy) ----
 
     #[test]
     fn test_nft_by_collection_key_roundtrip() {
@@ -878,7 +1533,7 @@ mod tests {
         assert!(key.starts_with(&prefix));
     }
 
-    // ---- Activity key ----
+    // ---- Legacy activity key (no seq) ----
 
     #[test]
     fn test_activity_key_roundtrip() {
@@ -927,6 +1582,46 @@ mod tests {
         );
     }
 
+    // ---- Address activity key (v2 with seq) ----
+
+    #[test]
+    fn test_addr_activity_key_roundtrip() {
+        let lock_hash = [0xAAu8; 32];
+        for (block, idx, seq) in [
+            (0i64, 0i32, 0i16),
+            (1, 0, 0),
+            (100, 5, 1),
+            (1_000_000, 42, 7),
+        ] {
+            let key = encode_addr_activity_key(&lock_hash, block, idx, seq);
+            assert_eq!(key.len(), 46);
+            let (decoded_hash, decoded_block, decoded_idx, decoded_seq) =
+                decode_addr_activity_key(&key);
+            assert_eq!(decoded_hash, lock_hash.to_vec());
+            assert_eq!(decoded_block, block);
+            assert_eq!(decoded_idx, idx);
+            assert_eq!(decoded_seq, seq);
+        }
+    }
+
+    #[test]
+    fn test_addr_activity_key_descending_sort_order() {
+        let lock_hash = [0xBBu8; 32];
+        let k1 = encode_addr_activity_key(&lock_hash, 300, 0, 0);
+        let k2 = encode_addr_activity_key(&lock_hash, 200, 0, 0);
+        let k3 = encode_addr_activity_key(&lock_hash, 100, 0, 0);
+        // Higher block_num should produce SMALLER key (descending)
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_addr_activity_key_prefix_is_lock_hash() {
+        let lock_hash = [0xCCu8; 32];
+        let key = encode_addr_activity_key(&lock_hash, 500, 3, 1);
+        assert!(key.starts_with(&lock_hash));
+    }
+
     // ---- Address daily stats key ----
 
     #[test]
@@ -959,6 +1654,8 @@ mod tests {
         assert!(key.starts_with(&lock_hash));
     }
 
+    // ---- Script daily key ----
+
     #[test]
     fn test_script_daily_key_roundtrip() {
         let code_hash = [0x55u8; 32];
@@ -979,17 +1676,21 @@ mod tests {
         assert!(full.starts_with(&prefix));
     }
 
+    // ---- timestamp_ms_to_date ----
+
     #[test]
     fn test_timestamp_ms_to_date() {
-        // 2024-01-15 00:00:00 UTC = 08:00 UTC+8 → still 20240115
+        // 2024-01-15 00:00:00 UTC = 08:00 UTC+8 -> still 20240115
         assert_eq!(timestamp_ms_to_date(1705276800000), 20240115);
-        // 2025-06-15 12:30:00 UTC = 20:30 UTC+8 → still 20250615
+        // 2025-06-15 12:30:00 UTC = 20:30 UTC+8 -> still 20250615
         assert_eq!(timestamp_ms_to_date(1750000200000), 20250615);
-        // UTC+8 boundary test: 2024-01-15 15:59:59 UTC = 2024-01-15 23:59:59 UTC+8 → 20240115
+        // UTC+8 boundary test: 2024-01-15 15:59:59 UTC = 2024-01-15 23:59:59 UTC+8 -> 20240115
         assert_eq!(timestamp_ms_to_date(1705334399000), 20240115);
-        // 2024-01-15 16:00:00 UTC = 2024-01-16 00:00:00 UTC+8 → 20240116
+        // 2024-01-15 16:00:00 UTC = 2024-01-16 00:00:00 UTC+8 -> 20240116
         assert_eq!(timestamp_ms_to_date(1705334400000), 20240116);
     }
+
+    // ---- Spore hourly key ----
 
     #[test]
     fn test_spore_hourly_key_structure() {
@@ -1023,6 +1724,8 @@ mod tests {
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
     }
+
+    // ---- NFT hourly key ----
 
     #[test]
     fn test_nft_hourly_key_structure() {
@@ -1099,6 +1802,8 @@ mod tests {
         assert!(full_key.starts_with(&prefix));
     }
 
+    // ---- pad_id_32 ----
+
     #[test]
     fn test_pad_id_32_exact() {
         let id = [0xFF; 32];
@@ -1119,6 +1824,8 @@ mod tests {
         assert_eq!(padded, [0u8; 32]);
     }
 
+    // ---- Different tokens produce different keys ----
+
     #[test]
     fn test_different_tokens_produce_different_keys() {
         let hash_a = [0x01u8; 32];
@@ -1133,7 +1840,7 @@ mod tests {
         );
     }
 
-    // ---- NFT collection activity key ----
+    // ---- NFT collection activity key (legacy) ----
 
     #[test]
     fn test_nft_collection_activity_key_roundtrip() {
@@ -1192,5 +1899,292 @@ mod tests {
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
         assert_eq!(decoded_block, 100);
+    }
+
+    // ---- NFT item index key ----
+
+    #[test]
+    fn test_nft_item_index_key_roundtrip() {
+        let nft_id = [0xAAu8; 32];
+        let tx_hash = [0xBBu8; 32];
+        let output_index = 5i16;
+        let key = encode_nft_item_index_key(nft_type::SPORE, &nft_id, &tx_hash, output_index);
+        assert_eq!(key.len(), 67);
+        let (dt, did, dth, doi) = decode_nft_item_index_key(&key);
+        assert_eq!(dt, nft_type::SPORE);
+        assert_eq!(did, nft_id.to_vec());
+        assert_eq!(dth, tx_hash.to_vec());
+        assert_eq!(doi, output_index);
+    }
+
+    #[test]
+    fn test_nft_item_index_key_short_id_padded() {
+        let nft_id = [0xCC; 20];
+        let tx_hash = [0xDD; 32];
+        let key = encode_nft_item_index_key(nft_type::MNFT_TOKEN, &nft_id, &tx_hash, 0);
+        assert_eq!(key.len(), 67);
+        let (dt, did, _, _) = decode_nft_item_index_key(&key);
+        assert_eq!(dt, nft_type::MNFT_TOKEN);
+        assert_eq!(&did[..20], &nft_id);
+        assert_eq!(&did[20..], &[0u8; 12]);
+    }
+
+    // ---- FT index key ----
+
+    #[test]
+    fn test_ft_index_key_roundtrip() {
+        let script_hash = [0xAAu8; 32];
+        let tx_hash = [0xBBu8; 32];
+        let output_index = 3i16;
+        let key = encode_ft_index_key(ft_type::XUDT, &script_hash, &tx_hash, output_index);
+        assert_eq!(key.len(), 67);
+        let (dt, dsh, dth, doi) = decode_ft_index_key(&key);
+        assert_eq!(dt, ft_type::XUDT);
+        assert_eq!(dsh, script_hash.to_vec());
+        assert_eq!(dth, tx_hash.to_vec());
+        assert_eq!(doi, output_index);
+    }
+
+    // ---- NFT outpoint value ----
+
+    #[test]
+    fn test_nft_outpoint_value_roundtrip() {
+        let nft_id = [0xEEu8; 32];
+        let val = encode_nft_outpoint_value(nft_type::SPORE, &nft_id);
+        assert_eq!(val.len(), 33);
+        let (dt, did) = decode_nft_outpoint_value(&val);
+        assert_eq!(dt, nft_type::SPORE);
+        assert_eq!(did, nft_id.to_vec());
+    }
+
+    #[test]
+    fn test_nft_outpoint_value_short_id_padded() {
+        let nft_id = [0xCC; 20];
+        let val = encode_nft_outpoint_value(nft_type::MNFT_TOKEN, &nft_id);
+        assert_eq!(val.len(), 33);
+        let (dt, did) = decode_nft_outpoint_value(&val);
+        assert_eq!(dt, nft_type::MNFT_TOKEN);
+        assert_eq!(&did[..20], &nft_id);
+        assert_eq!(&did[20..], &[0u8; 12]);
+    }
+
+    // ---- FT outpoint value ----
+
+    #[test]
+    fn test_ft_outpoint_value_roundtrip() {
+        let script_hash = [0xFFu8; 32];
+        let val = encode_ft_outpoint_value(ft_type::SUDT, &script_hash);
+        assert_eq!(val.len(), 33);
+        let (dt, dsh) = decode_ft_outpoint_value(&val);
+        assert_eq!(dt, ft_type::SUDT);
+        assert_eq!(dsh, script_hash.to_vec());
+    }
+
+    // ---- NFT item by collection key ----
+
+    #[test]
+    fn test_nft_item_by_collection_key_roundtrip() {
+        let collection_id = [0xAAu8; 32];
+        let nft_id = [0xBBu8; 32];
+        let key = encode_nft_item_by_collection_key(nft_type::SPORE, &collection_id, &nft_id);
+        assert_eq!(key.len(), 65);
+        let (dt, dcid, dnid) = decode_nft_item_by_collection_key(&key);
+        assert_eq!(dt, nft_type::SPORE);
+        assert_eq!(dcid, collection_id.to_vec());
+        assert_eq!(dnid, nft_id.to_vec());
+    }
+
+    #[test]
+    fn test_nft_item_by_collection_prefix() {
+        let collection_id = [0xCCu8; 32];
+        let nft_id = [0xDDu8; 32];
+        let prefix = encode_nft_item_by_collection_prefix(nft_type::SPORE, &collection_id);
+        let key = encode_nft_item_by_collection_key(nft_type::SPORE, &collection_id, &nft_id);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
+    }
+
+    // ---- NFT item meta key ----
+
+    #[test]
+    fn test_nft_item_meta_key_roundtrip() {
+        let nft_id = [0xAAu8; 32];
+        let key = encode_nft_item_meta_key(nft_type::DID_CKB, &nft_id);
+        assert_eq!(key.len(), 33);
+        let (dt, did) = decode_nft_item_meta_key(&key);
+        assert_eq!(dt, nft_type::DID_CKB);
+        assert_eq!(did, nft_id.to_vec());
+    }
+
+    // ---- NFT collection stats key ----
+
+    #[test]
+    fn test_nft_collection_stats_key_roundtrip() {
+        let collection_id = [0xBBu8; 32];
+        let key = encode_nft_collection_stats_key(nft_type::SPORE_CLUSTER, &collection_id);
+        assert_eq!(key.len(), 33);
+        let (dt, dcid) = decode_nft_collection_stats_key(&key);
+        assert_eq!(dt, nft_type::SPORE_CLUSTER);
+        assert_eq!(dcid, collection_id.to_vec());
+    }
+
+    // ---- NFT collection activity key v2 ----
+
+    #[test]
+    fn test_nft_collection_activity_key_v2_roundtrip() {
+        let collection_id = [0xAAu8; 32];
+        for (block, idx, seq) in [
+            (0i64, 0i32, 0i16),
+            (1, 0, 0),
+            (100, 5, 1),
+            (1_000_000, 42, 7),
+        ] {
+            let key = encode_nft_collection_activity_key_v2(
+                nft_type::SPORE,
+                &collection_id,
+                block,
+                idx,
+                seq,
+            );
+            assert_eq!(key.len(), 47);
+            let (dt, dcid, db, di, ds) = decode_nft_collection_activity_key_v2(&key);
+            assert_eq!(dt, nft_type::SPORE);
+            assert_eq!(dcid, collection_id.to_vec());
+            assert_eq!(db, block);
+            assert_eq!(di, idx);
+            assert_eq!(ds, seq);
+        }
+    }
+
+    #[test]
+    fn test_nft_collection_activity_key_v2_descending_sort() {
+        let cid = [0xBBu8; 32];
+        let k1 = encode_nft_collection_activity_key_v2(nft_type::SPORE, &cid, 300, 0, 0);
+        let k2 = encode_nft_collection_activity_key_v2(nft_type::SPORE, &cid, 200, 0, 0);
+        let k3 = encode_nft_collection_activity_key_v2(nft_type::SPORE, &cid, 100, 0, 0);
+        // Higher block_num => smaller key (descending)
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_nft_collection_activity_key_v2_prefix() {
+        let cid = [0xCCu8; 32];
+        let prefix = encode_nft_collection_activity_prefix_v2(nft_type::SPORE, &cid);
+        let key = encode_nft_collection_activity_key_v2(nft_type::SPORE, &cid, 500, 3, 1);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
+    }
+
+    // ---- FT activity key ----
+
+    #[test]
+    fn test_ft_activity_key_roundtrip() {
+        let script_hash = [0xAAu8; 32];
+        for (block, idx, seq) in [
+            (0i64, 0i32, 0i16),
+            (1, 0, 0),
+            (100, 5, 1),
+            (1_000_000, 42, 7),
+        ] {
+            let key = encode_ft_activity_key(ft_type::XUDT, &script_hash, block, idx, seq);
+            assert_eq!(key.len(), 47);
+            let (dt, dsh, db, di, ds) = decode_ft_activity_key(&key);
+            assert_eq!(dt, ft_type::XUDT);
+            assert_eq!(dsh, script_hash.to_vec());
+            assert_eq!(db, block);
+            assert_eq!(di, idx);
+            assert_eq!(ds, seq);
+        }
+    }
+
+    #[test]
+    fn test_ft_activity_key_descending_sort() {
+        let sh = [0xBBu8; 32];
+        let k1 = encode_ft_activity_key(ft_type::XUDT, &sh, 300, 0, 0);
+        let k2 = encode_ft_activity_key(ft_type::XUDT, &sh, 200, 0, 0);
+        let k3 = encode_ft_activity_key(ft_type::XUDT, &sh, 100, 0, 0);
+        // Higher block_num => smaller key (descending)
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+    }
+
+    #[test]
+    fn test_ft_activity_key_prefix() {
+        let sh = [0xCCu8; 32];
+        let prefix = encode_ft_activity_prefix(ft_type::XUDT, &sh);
+        let key = encode_ft_activity_key(ft_type::XUDT, &sh, 500, 3, 1);
+        assert_eq!(prefix.len(), 33);
+        assert!(key.starts_with(&prefix));
+    }
+
+    // ---- Consumed cell value ----
+
+    #[test]
+    fn test_consumed_cell_value_roundtrip() {
+        let consumed_at_block = 12345i64;
+        let consumed_by_tx = [0xABu8; 32];
+        let val = encode_consumed_cell_value(consumed_at_block, &consumed_by_tx);
+        assert_eq!(val.len(), CONSUMED_CELL_VALUE_SIZE);
+        let (db, dtx) = decode_consumed_cell_value(&val);
+        assert_eq!(db, consumed_at_block);
+        assert_eq!(dtx, consumed_by_tx.to_vec());
+    }
+
+    #[test]
+    fn test_consumed_cell_value_boundary() {
+        for block in [0i64, 1, i64::MAX] {
+            let tx = [0xFFu8; 32];
+            let val = encode_consumed_cell_value(block, &tx);
+            let (db, dtx) = decode_consumed_cell_value(&val);
+            assert_eq!(db, block);
+            assert_eq!(dtx, tx.to_vec());
+        }
+    }
+
+    // ---- ft_type / nft_type module constants ----
+
+    #[test]
+    fn test_ft_type_constants_distinct() {
+        let vals = [ft_type::XUDT, ft_type::SUDT, ft_type::OMNILOCK];
+        for i in 0..vals.len() {
+            for j in (i + 1)..vals.len() {
+                assert_ne!(vals[i], vals[j]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_nft_type_constants_distinct() {
+        let vals = [
+            nft_type::SPORE,
+            nft_type::SPORE_CLUSTER,
+            nft_type::DID_CKB,
+            nft_type::MNFT_ISSUER,
+            nft_type::MNFT_CLASS,
+            nft_type::MNFT_TOKEN,
+            nft_type::DOT_BIT,
+        ];
+        for i in 0..vals.len() {
+            for j in (i + 1)..vals.len() {
+                assert_ne!(vals[i], vals[j]);
+            }
+        }
+    }
+
+    // ---- stats_prefix new constants ----
+
+    #[test]
+    fn test_new_stats_prefix_constants() {
+        assert_eq!(stats_prefix::ADDR_DAILY_STATS, 0x20);
+        assert_eq!(stats_prefix::SCRIPT_INFO, 0x21);
+        assert_eq!(stats_prefix::SYNC_META, 0xF0);
+        // Flat re-exports match
+        assert_eq!(
+            STATS_PREFIX_ADDR_DAILY_STATS,
+            stats_prefix::ADDR_DAILY_STATS
+        );
+        assert_eq!(STATS_PREFIX_SCRIPT_INFO, stats_prefix::SCRIPT_INFO);
+        assert_eq!(STATS_PREFIX_SYNC_META, stats_prefix::SYNC_META);
     }
 }

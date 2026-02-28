@@ -36,6 +36,8 @@ impl BatchWriter {
 
         for tx in txs {
             let entry = TxIndexEntry {
+                block_number: tx.1,
+                tx_index: tx.3,
                 is_cellbase: tx.15,
                 timestamp: tx.16.timestamp_millis(),
                 inputs_count: tx.5,

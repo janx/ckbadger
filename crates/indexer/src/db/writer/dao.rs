@@ -784,6 +784,7 @@ mod tests {
         let mut dao = vec![0u8; 32];
         dao[8..16].copy_from_slice(&ar.to_le_bytes());
         CachedBlockHeader {
+            block_number: 0,
             hash: vec![0x11; 32],
             timestamp: 1_704_067_200_000,
             epoch_number: 0,

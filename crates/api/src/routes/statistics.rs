@@ -3301,6 +3301,7 @@ mod tests {
             batch.put_block_header(
                 number,
                 &CachedBlockHeader {
+                    block_number: number,
                     hash: vec![number as u8; 32],
                     timestamp: ts_ms,
                     epoch_number: 0,
@@ -3345,6 +3346,7 @@ mod tests {
             batch.put_block_header(
                 number,
                 &CachedBlockHeader {
+                    block_number: number,
                     hash: vec![number as u8; 32],
                     timestamp: ts_ms,
                     epoch_number: 0,

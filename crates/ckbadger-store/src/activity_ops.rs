@@ -31,7 +31,7 @@ impl CkbadgerStore {
         };
 
         let iter = self.iterator_cf(
-            self.cf_activities(),
+            self.cf_addr_activities(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 

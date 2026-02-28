@@ -20,6 +20,7 @@ impl BatchWriter {
 
         for block in blocks {
             let header = CachedBlockHeader {
+                block_number: block.number,
                 hash: block.hash.clone(),
                 timestamp: block.timestamp.timestamp_millis(),
                 epoch_number: block.epoch_number,

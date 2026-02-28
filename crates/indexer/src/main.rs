@@ -1110,6 +1110,7 @@ mod tests {
         let day2 = ckbadger_store::keys::timestamp_ms_to_date(day2_ts);
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: day1_ts,
             epoch_number: 0,
@@ -1119,6 +1120,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: day2_ts,
             epoch_number: 0,

@@ -6,10 +6,15 @@ use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::*;
 
-/// Accumulates writes across all CFs and commits atomically.
+/// Accumulates writes across both physical stores and commits them.
+///
+/// Default batch → mutable CFs (indices, aggregates).
+/// Append batch → immutable CFs (cells, tx_meta, block_meta, activities, etc.).
+/// Committed separately (append is idempotent, so no cross-DB atomicity needed).
 pub struct StoreBatch<'a> {
     store: &'a CkbadgerStore,
     batch: WriteBatch,
+    append_batch: WriteBatch,
 }
 
 impl<'a> StoreBatch<'a> {
@@ -17,32 +22,39 @@ impl<'a> StoreBatch<'a> {
         Self {
             store,
             batch: WriteBatch::default(),
+            append_batch: WriteBatch::default(),
         }
     }
 
-    /// Commit all accumulated writes atomically.
+    /// Commit all accumulated writes. Append batch first (idempotent), then default.
     pub fn commit(self) -> anyhow::Result<()> {
+        if !self.append_batch.is_empty() {
+            self.store.append_write_batch(self.append_batch)?;
+        }
         self.store.write_batch(self.batch)
     }
 
     /// Commit with WAL disabled. Use during bulk sync where crash recovery
     /// re-syncs from the last committed block header.
     pub fn commit_no_wal(self) -> anyhow::Result<()> {
+        if !self.append_batch.is_empty() {
+            self.store.append_write_batch_no_wal(self.append_batch)?;
+        }
         self.store.write_batch_no_wal(self.batch)
     }
 
-    /// Get the number of operations in the batch.
+    /// Get the number of operations in the batch (both stores combined).
     pub fn len(&self) -> usize {
-        self.batch.len()
+        self.batch.len() + self.append_batch.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.batch.is_empty()
+        self.batch.is_empty() && self.append_batch.is_empty()
     }
 
-    /// Get the approximate size of the batch in bytes.
+    /// Get the approximate size of the batch in bytes (both stores combined).
     pub fn size_in_bytes(&self) -> usize {
-        self.batch.size_in_bytes()
+        self.batch.size_in_bytes() + self.append_batch.size_in_bytes()
     }
 
     // ---- Live cells ----
@@ -222,10 +234,10 @@ impl<'a> StoreBatch<'a> {
     pub fn put_block_header(&mut self, block_number: i64, header: &CachedBlockHeader) {
         let key = keys::encode_block_num(block_number);
         let value = bincode::serialize(header).expect("serialize CachedBlockHeader");
+        // Legacy: write to old CFs in default store
+        // TODO(data-refactor): switch to block_meta (append) + block_index (default)
         self.batch
             .put_cf(self.store.cf_block_headers(), key, &value);
-
-        // Also update hash -> number index
         self.batch.put_cf(
             self.store.cf_block_hash_index(),
             &header.hash,
@@ -255,6 +267,8 @@ impl<'a> StoreBatch<'a> {
             &keys::encode_block_num(block_num),
             &keys::encode_tx_idx(tx_idx),
         ]);
+        // Legacy: write to old CF in default store
+        // TODO(data-refactor): switch to tx_meta (append) + tx_index (default)
         self.batch
             .put_cf(self.store.cf_tx_hash_map(), tx_hash, &value);
     }
@@ -513,9 +527,12 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ActivityEntry,
     ) {
+        // During transition: write to addr_activities (default store) using old key format
+        // TODO(data-refactor): split into global activities (append) + addr_activities index (default)
         let key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
         let value = bincode::serialize(entry).expect("serialize ActivityEntry");
-        self.batch.put_cf(self.store.cf_activities(), key, &value);
+        self.batch
+            .put_cf(self.store.cf_addr_activities(), &key, &value);
     }
 
     // ---- NFT collection activities ----
@@ -569,9 +586,14 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_sync_meta(), key, value);
     }
 
-    /// Get mutable access to the underlying WriteBatch for direct operations.
+    /// Get mutable access to the default store WriteBatch for direct operations.
     pub fn raw_batch(&mut self) -> &mut WriteBatch {
         &mut self.batch
+    }
+
+    /// Get mutable access to the append store WriteBatch for direct operations.
+    pub fn append_raw_batch(&mut self) -> &mut WriteBatch {
+        &mut self.append_batch
     }
 }
 
@@ -587,6 +609,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         let header = CachedBlockHeader {
+            block_number: 0,
             hash: vec![1u8; 32],
             timestamp: 1000,
             epoch_number: 1,
@@ -599,6 +622,7 @@ mod tests {
         assert!(!batch.is_empty());
         batch.commit().unwrap();
 
+        // block_headers is in default store (legacy), keyed by block_number
         let cf = store.cf_block_headers();
         let key = keys::encode_block_num(0);
         let val = store.get_cf(cf, &key).unwrap();

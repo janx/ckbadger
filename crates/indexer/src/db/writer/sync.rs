@@ -392,6 +392,7 @@ mod tests {
 
     fn make_header(hash_byte: u8, ts_ms: i64) -> CachedBlockHeader {
         CachedBlockHeader {
+            block_number: hash_byte as i64,
             hash: vec![hash_byte; 32],
             timestamp: ts_ms,
             epoch_number: 0,
@@ -404,6 +405,8 @@ mod tests {
 
     fn make_tx_index_entry() -> TxIndexEntry {
         TxIndexEntry {
+            block_number: 0,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_000_000,
             inputs_count: 1,

@@ -1822,6 +1822,7 @@ mod tests {
         let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
 
         let header_withdraw = CachedBlockHeader {
+            block_number: 5,
             hash: vec![0x05; 32],
             timestamp: 1_704_067_200_000, // 2024-01-01 UTC
             epoch_number: 0,
@@ -1831,6 +1832,7 @@ mod tests {
             transactions_count: 1,
         };
         let header_deposit = CachedBlockHeader {
+            block_number: 10,
             hash: vec![0x0A; 32],
             timestamp: 1_704_153_600_000, // 2024-01-02 UTC
             epoch_number: 0,
@@ -1872,6 +1874,7 @@ mod tests {
         let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
 
         let header_deposit = CachedBlockHeader {
+            block_number: 5,
             hash: vec![0x05; 32],
             timestamp: 1_704_067_200_000, // 2024-01-01 UTC
             epoch_number: 0,
@@ -1881,6 +1884,7 @@ mod tests {
             transactions_count: 1,
         };
         let header_withdraw_request = CachedBlockHeader {
+            block_number: 10,
             hash: vec![0x0A; 32],
             timestamp: 1_704_153_600_000, // 2024-01-02 UTC
             epoch_number: 0,
@@ -1932,6 +1936,7 @@ mod tests {
         dao_day2[24..32].copy_from_slice(&(900u64).to_le_bytes()); // U -> C-U == 0 (invalid)
 
         let header_day1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x10; 32],
             timestamp: 1_704_067_200_000, // 2024-01-01 UTC
             epoch_number: 0,
@@ -1941,6 +1946,7 @@ mod tests {
             transactions_count: 1,
         };
         let header_day2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x11; 32],
             timestamp: 1_704_153_600_000, // 2024-01-02 UTC
             epoch_number: 0,

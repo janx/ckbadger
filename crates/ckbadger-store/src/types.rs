@@ -1,16 +1,28 @@
 //! Value types for all column families.
 //!
 //! All types use `bincode` serialization for compact binary storage.
+//!
+//! ## Naming conventions
+//!
+//! New canonical names follow the CF they belong to (e.g. `CellInfo` for the
+//! `cells` CF, `BlockMeta` for `block_meta`, `TxMeta` for `tx_meta`).
+//! Old names are kept as type aliases for backward compatibility while callers
+//! are migrated.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 // ============================================
-// Group A: Core cell data (ported from LiveCellStorage)
+// Group A: Core cell data (append `cells` CF)
 // ============================================
 
+/// Full cell metadata stored in the append-only `cells` CF.
+///
+/// Key: `tx_hash + output_index` (outpoint).
+/// This is the single source of truth for all cell data. Consumption metadata
+/// is stored separately in the `consumed_cells` CF.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveCellInfo {
+pub struct CellInfo {
     pub capacity: i64,
     pub created_at_block: i64,
     pub lock_script_hash: Vec<u8>,
@@ -28,6 +40,22 @@ pub struct LiveCellInfo {
     pub udt_amount: Option<u128>,
 }
 
+/// Backward-compatible alias. Prefer `CellInfo` in new code.
+pub type LiveCellInfo = CellInfo;
+
+/// Consumption metadata stored in the `consumed_cells` CF.
+///
+/// Key: `tx_hash + output_index` (outpoint of the consumed cell).
+/// Only stores *when* and *by whom* a cell was consumed. Full cell data lives
+/// in the `cells` CF (append store) and is joined at read time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellConsumption {
+    pub consumed_at_block: i64,
+    pub consumed_by_tx: Vec<u8>,
+}
+
+/// Compact consumed cell info (legacy schema).
+// TODO(data-refactor): Use CellInfo + CellConsumption instead. Kept for legacy deserialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactConsumedCellInfo {
     pub capacity: i64,
@@ -41,7 +69,7 @@ pub struct CompactConsumedCellInfo {
 }
 
 impl CompactConsumedCellInfo {
-    pub fn from_live_cell_info(info: &LiveCellInfo) -> Self {
+    pub fn from_live_cell_info(info: &CellInfo) -> Self {
         Self {
             capacity: info.capacity,
             created_at_block: info.created_at_block,
@@ -54,8 +82,8 @@ impl CompactConsumedCellInfo {
         }
     }
 
-    pub fn to_live_cell_info(&self) -> LiveCellInfo {
-        LiveCellInfo {
+    pub fn to_live_cell_info(&self) -> CellInfo {
+        CellInfo {
             capacity: self.capacity,
             created_at_block: self.created_at_block,
             lock_script_hash: self.lock_script_hash.clone(),
@@ -72,26 +100,28 @@ impl CompactConsumedCellInfo {
     }
 }
 
+/// Full consumed cell info (legacy schema, includes embedded cell data).
+// TODO(data-refactor): Use CellInfo + CellConsumption instead. Kept for legacy deserialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsumedCellInfo {
-    pub cell: LiveCellInfo,
+    pub cell: CellInfo,
     pub consumed_at_block: i64,
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LegacyConsumedCellInfoV2 {
-    pub cell: LiveCellInfo,
+    pub cell: CellInfo,
     pub consumed_at_block: i64,
 }
 
 impl ConsumedCellInfo {
-    pub fn from_live_cell_info(info: &LiveCellInfo, consumed_at_block: i64) -> Self {
+    pub fn from_live_cell_info(info: &CellInfo, consumed_at_block: i64) -> Self {
         Self::from_live_cell_info_with_consumer(info, consumed_at_block, None)
     }
 
     pub fn from_live_cell_info_with_consumer(
-        info: &LiveCellInfo,
+        info: &CellInfo,
         consumed_at_block: i64,
         consumed_by_tx: Option<&[u8]>,
     ) -> Self {
@@ -102,7 +132,7 @@ impl ConsumedCellInfo {
         }
     }
 
-    pub fn to_live_cell_info(&self) -> LiveCellInfo {
+    pub fn to_live_cell_info(&self) -> CellInfo {
         self.cell.clone()
     }
 }
@@ -113,7 +143,8 @@ impl ConsumedCellInfo {
 /// 1. `ConsumedCellInfo` (current schema, includes consumed_at_block + consumed_by_tx)
 /// 2. `LegacyConsumedCellInfoV2` (older schema, consumed_at_block only)
 /// 3. `CompactConsumedCellInfo` (legacy compact schema)
-/// 4. `LiveCellInfo` (very old schema)
+/// 4. `CellInfo` (very old schema)
+// TODO(data-refactor): Use CellInfo + CellConsumption instead. Kept for legacy deserialization.
 pub fn decode_consumed_cell_info(value: &[u8]) -> Option<ConsumedCellInfo> {
     if let Ok(v3) = bincode::deserialize::<ConsumedCellInfo>(value) {
         return Some(v3);
@@ -128,7 +159,7 @@ pub fn decode_consumed_cell_info(value: &[u8]) -> Option<ConsumedCellInfo> {
             consumed_by_tx: None,
         });
     }
-    bincode::deserialize::<LiveCellInfo>(value)
+    bincode::deserialize::<CellInfo>(value)
         .ok()
         .map(|cell| ConsumedCellInfo {
             cell,
@@ -147,8 +178,17 @@ impl From<LegacyConsumedCellInfoV2> for ConsumedCellInfo {
     }
 }
 
+// ============================================
+// Group A2: Block metadata (`block_meta` CF)
+// ============================================
+
+/// Block header metadata stored in the `block_meta` CF.
+///
+/// Key: `block_hash` (32 bytes).
+/// Includes `block_number` since the key is a hash, not a number.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedBlockHeader {
+pub struct BlockMeta {
+    pub block_number: i64,
     pub hash: Vec<u8>,
     pub timestamp: i64,
     pub epoch_number: i64,
@@ -158,12 +198,21 @@ pub struct CachedBlockHeader {
     pub transactions_count: i32,
 }
 
+/// Backward-compatible alias. Prefer `BlockMeta` in new code.
+pub type CachedBlockHeader = BlockMeta;
+
 // ============================================
-// Group B: Transaction indexes
+// Group B: Transaction indexes (`tx_meta` CF)
 // ============================================
 
+/// Transaction metadata stored in the `tx_meta` CF.
+///
+/// Key: `tx_hash` (32 bytes).
+/// Includes `block_number` and `tx_index` since the key is a hash, not positional.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxIndexEntry {
+pub struct TxMeta {
+    pub block_number: i64,
+    pub tx_index: i32,
     pub is_cellbase: bool,
     pub timestamp: i64,
     pub inputs_count: i16,
@@ -173,12 +222,18 @@ pub struct TxIndexEntry {
     pub cycles: Option<i64>,
 }
 
+/// Backward-compatible alias. Prefer `TxMeta` in new code.
+pub type TxIndexEntry = TxMeta;
+
 // ============================================
-// Group C: Address data
+// Group C: Address data (`addr_stats` CF)
 // ============================================
 
+/// Per-address aggregate statistics stored in the `addr_stats` CF.
+///
+/// Key: `lock_script_hash` (32 bytes).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AddressBalance {
+pub struct AddrStats {
     pub balance: i128,
     #[serde(default)]
     pub occupied_capacity: i128,
@@ -191,12 +246,18 @@ pub struct AddressBalance {
     pub last_activity_tx: Vec<u8>,
 }
 
+/// Backward-compatible alias. Prefer `AddrStats` in new code.
+pub type AddressBalance = AddrStats;
+
 // ============================================
 // Group D: DAO
 // ============================================
 
+/// DAO deposit record stored in the `dao_deposits` CF.
+///
+/// Key: `deposit_tx_hash + output_index`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DaoDepositCacheEntry {
+pub struct DaoDeposit {
     pub capacity: i64,
     pub deposit_block_number: i64,
     pub lock_script_hash: Vec<u8>,
@@ -213,6 +274,9 @@ pub struct DaoDepositCacheEntry {
     pub withdraw_to_output_index: Option<i16>,
     pub compensation: Option<i64>,
 }
+
+/// Backward-compatible alias. Prefer `DaoDeposit` in new code.
+pub type DaoDepositCacheEntry = DaoDeposit;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaoDailySnapshot {
@@ -255,9 +319,72 @@ pub struct SecondaryIssuance {
 }
 
 // ============================================
+// Group E: Asset metadata (`asset_meta` CF)
+// ============================================
+
+/// Asset type discriminator for the `asset_meta` CF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AssetType {
+    /// Fungible token (xUDT, sUDT, etc.).
+    #[default]
+    FungibleToken,
+    /// NFT collection (Spore cluster, mNFT class/issuer, .bit, did:ckb).
+    NftCollection,
+}
+
+/// Source of asset metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AssetMetaSource {
+    /// Discovered on-chain by the indexer.
+    #[default]
+    OnChain,
+    /// Imported from label files.
+    LabelImport,
+    /// Read from an on-chain info cell.
+    InfoCell,
+}
+
+/// Asset metadata stored in the `asset_meta` CF.
+///
+/// Key: `type_script_hash` (32 bytes).
+/// Replaces `TokenInfo` but without aggregate fields (those live in `ft_stats`
+/// or `nft_collection_stats`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetMeta {
+    pub asset_type: AssetType,
+    pub type_code_hash: Vec<u8>,
+    pub hash_type: u8,
+    pub type_args: Vec<u8>,
+    pub standard: String,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<i32>,
+    pub description: Option<String>,
+    pub icon_url: Option<String>,
+    pub first_seen_block: i64,
+    pub source: AssetMetaSource,
+}
+
+/// FT aggregate stats stored in the `ft_stats` CF.
+///
+/// Key: `type_script_hash` (32 bytes).
+/// Separated from `AssetMeta` so metadata and aggregate stats can be written
+/// independently without read-modify-write contention.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FtStats {
+    pub total_supply: Option<i128>,
+    pub holder_count: i64,
+    pub live_cells_count: i64,
+    pub total_capacity: i128,
+    pub transfer_count: i64,
+}
+
+// ============================================
 // Group F: Tokens & NFTs
 // ============================================
 
+/// Token info (legacy, being replaced by `AssetMeta` + `FtStats`).
+// TODO(data-refactor): Use AssetMeta + FtStats instead. Kept while API response types still reference it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenInfo {
     pub type_code_hash: Vec<u8>,
@@ -278,6 +405,8 @@ pub struct TokenInfo {
     pub transfers_count: i64,
 }
 
+/// Token transfer record (legacy).
+// TODO(data-refactor): Being replaced by activity-based tracking. Kept for backward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenTransferRecord {
     pub tx_hash: Vec<u8>,
@@ -315,7 +444,7 @@ impl DobStandard {
         }
     }
 
-    /// Asset-level standard name for API grouping (collapses cluster → "spore").
+    /// Asset-level standard name for API grouping (collapses cluster -> "spore").
     pub fn asset_standard(&self) -> &'static str {
         match self {
             DobStandard::Spore | DobStandard::SporeCluster => "spore",
@@ -501,7 +630,7 @@ pub enum NftExtra {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NftEntry {
     pub standard: NftStandard,
-    /// Parent collection. mNFT tokens → class_id, mNFT classes → issuer_id.
+    /// Parent collection. mNFT tokens -> class_id, mNFT classes -> issuer_id.
     /// `None` = default collection for this standard (e.g. all .bit accounts).
     pub collection_id: Option<Vec<u8>>,
     pub token_id: Option<Vec<u8>>,
@@ -513,7 +642,103 @@ pub struct NftEntry {
     pub extra: NftExtra,
 }
 
+// ============================================
+// Group F2: Unified NFT item metadata (`nft_item_meta` CF)
+// ============================================
+
+/// Unified NFT type discriminator covering all NFT-like standards.
+///
+/// This replaces separate `DobStandard` + `NftStandard` for the unified
+/// `nft_item_meta` CF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[repr(u8)]
+pub enum NftType {
+    #[default]
+    Spore = 0,
+    SporeCluster = 1,
+    DidCkb = 2,
+    MnftIssuer = 3,
+    MnftClass = 4,
+    MnftToken = 5,
+    DotBit = 6,
+}
+
+/// Standard-specific extra data for `NftItemMeta`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum NftItemExtra {
+    Spore {
+        content_length: i64,
+        media_profile: SporeMediaProfile,
+    },
+    SporeCluster,
+    DidCkb,
+    MnftIssuer {
+        class_count: u32,
+        set_count: u32,
+        info: Option<Vec<u8>>,
+    },
+    MnftClass {
+        description: Option<String>,
+        renderer: Option<String>,
+        total: u32,
+        issued: u32,
+        configure: u8,
+    },
+    MnftToken {
+        token_index: u32,
+        characteristic: Vec<u8>,
+        configure: u8,
+        state: u8,
+    },
+    DotBit {
+        expired_at: Option<u64>,
+        registered_at: Option<u64>,
+        status: Option<u8>,
+    },
+}
+
+/// Unified NFT item metadata stored in the `nft_item_meta` CF.
+///
+/// Key: `nft_id` (type_script_hash or standard-specific ID).
+/// Replaces separate `DobEntry` + `NftEntry` for new code paths.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NftItemMeta {
+    pub nft_type: NftType,
+    pub collection_id: Option<Vec<u8>>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub content_type: Option<String>,
+    pub is_live: bool,
+    pub owner_lock_hash: Option<Vec<u8>>,
+    pub capacity: i64,
+    pub created_at_block: i64,
+    pub created_at_tx: Vec<u8>,
+    /// Standard-specific data.
+    pub extra: NftItemExtra,
+}
+
+/// Unified NFT collection stats stored in the `nft_collection_stats` CF.
+///
+/// Key: `collection_id` (type_script_hash of cluster/class/issuer).
+/// Replaces `ClusterAggregate` + `NftCollectionAggregate`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NftCollectionStats {
+    pub nft_type: NftType,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub total_count: i64,
+    pub live_count: i64,
+    pub owner_count: i64,
+    pub total_capacity: i128,
+    // Spore-specific tier counts (zero for non-spore collections)
+    pub fully_onchain_count: i64,
+    pub decentralized_external_count: i64,
+    pub centralized_dependent_count: i64,
+    pub unknown_count: i64,
+}
+
 /// Pre-aggregated cluster (DOB collection) data, maintained inline by the indexer.
+// TODO(data-refactor): Use NftCollectionStats instead. Kept while writers still reference it.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClusterAggregate {
     pub name: Option<String>,
@@ -532,6 +757,7 @@ pub struct ClusterAggregate {
 }
 
 /// Pre-aggregated NFT collection data, maintained inline by the indexer.
+// TODO(data-refactor): Use NftCollectionStats instead. Kept while writers still reference it.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NftCollectionAggregate {
     pub name: Option<String>,
@@ -856,7 +1082,7 @@ pub struct Cursor {
 }
 
 // ============================================
-// Group I: Activities
+// Group I: Activities (append `activities` CF)
 // ============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -935,7 +1161,7 @@ pub struct NftCollectionActivityEntry {
 // ============================================
 
 /// A single token activity: one transaction with aggregated actions and individual transfers.
-/// Derived at read time by grouping token_transfers records by tx_hash — not persisted.
+/// Derived at read time by grouping token_transfers records by tx_hash -- not persisted.
 #[derive(Debug, Clone)]
 pub struct TokenActivityEntry {
     pub tx_hash: Vec<u8>,
@@ -972,8 +1198,8 @@ pub struct AddressDailyStats {
 mod tests {
     use super::*;
 
-    fn sample_live_cell_info() -> LiveCellInfo {
-        LiveCellInfo {
+    fn sample_live_cell_info() -> CellInfo {
+        CellInfo {
             capacity: 1_000_000_000,
             created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
@@ -1015,6 +1241,443 @@ mod tests {
         assert_eq!(decoded.cell.capacity, info.capacity);
         assert_eq!(decoded.consumed_at_block, 777);
         assert_eq!(decoded.consumed_by_tx, None);
+    }
+
+    // ---- CellConsumption ----
+
+    #[test]
+    fn test_cell_consumption_roundtrip() {
+        let consumption = CellConsumption {
+            consumed_at_block: 42000,
+            consumed_by_tx: vec![0xDE; 32],
+        };
+        let bytes = bincode::serialize(&consumption).unwrap();
+        let decoded: CellConsumption = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.consumed_at_block, 42000);
+        assert_eq!(decoded.consumed_by_tx, vec![0xDE; 32]);
+    }
+
+    // ---- BlockMeta ----
+
+    #[test]
+    fn test_block_meta_roundtrip() {
+        let meta = BlockMeta {
+            block_number: 12345,
+            hash: vec![0xAB; 32],
+            timestamp: 1_700_000_000,
+            epoch_number: 100,
+            epoch_index: 5,
+            epoch_length: 1800,
+            dao: vec![0xCD; 32],
+            transactions_count: 42,
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: BlockMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.block_number, 12345);
+        assert_eq!(decoded.hash, vec![0xAB; 32]);
+        assert_eq!(decoded.timestamp, 1_700_000_000);
+        assert_eq!(decoded.transactions_count, 42);
+    }
+
+    #[test]
+    fn test_cached_block_header_alias() {
+        // Verify the type alias compiles and works
+        let _header: CachedBlockHeader = BlockMeta {
+            block_number: 1,
+            hash: vec![],
+            timestamp: 0,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 0,
+            dao: vec![],
+            transactions_count: 0,
+        };
+    }
+
+    // ---- TxMeta ----
+
+    #[test]
+    fn test_tx_meta_roundtrip() {
+        let meta = TxMeta {
+            block_number: 99999,
+            tx_index: 3,
+            is_cellbase: false,
+            timestamp: 1_700_000_000,
+            inputs_count: 2,
+            outputs_count: 5,
+            fee: 100_000,
+            tx_size: 512,
+            cycles: Some(1_000_000),
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: TxMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.block_number, 99999);
+        assert_eq!(decoded.tx_index, 3);
+        assert!(!decoded.is_cellbase);
+        assert_eq!(decoded.fee, 100_000);
+        assert_eq!(decoded.cycles, Some(1_000_000));
+    }
+
+    #[test]
+    fn test_tx_index_entry_alias() {
+        // Verify the type alias compiles and works
+        let _entry: TxIndexEntry = TxMeta {
+            block_number: 1,
+            tx_index: 0,
+            is_cellbase: true,
+            timestamp: 0,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+        };
+    }
+
+    // ---- AddrStats ----
+
+    #[test]
+    fn test_addr_stats_roundtrip() {
+        let stats = AddrStats {
+            balance: 100_000_000_000,
+            occupied_capacity: 610_000_000_000,
+            live_cells_count: 3,
+            total_cells_count: 10,
+            txs_count: 7,
+            first_seen_block: 100,
+            first_seen_tx: vec![0x01; 32],
+            last_activity_block: 500,
+            last_activity_tx: vec![0x02; 32],
+        };
+        let bytes = bincode::serialize(&stats).unwrap();
+        let decoded: AddrStats = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.balance, 100_000_000_000);
+        assert_eq!(decoded.occupied_capacity, 610_000_000_000);
+        assert_eq!(decoded.live_cells_count, 3);
+        assert_eq!(decoded.total_cells_count, 10);
+        assert_eq!(decoded.txs_count, 7);
+        assert_eq!(decoded.first_seen_block, 100);
+        assert_eq!(decoded.last_activity_block, 500);
+    }
+
+    #[test]
+    fn test_addr_stats_default() {
+        let stats = AddrStats::default();
+        assert_eq!(stats.balance, 0);
+        assert_eq!(stats.occupied_capacity, 0);
+        assert_eq!(stats.live_cells_count, 0);
+        assert_eq!(stats.txs_count, 0);
+    }
+
+    #[test]
+    fn test_address_balance_alias() {
+        // Verify the type alias compiles with old name
+        let _bal: AddressBalance = AddrStats::default();
+        assert_eq!(_bal.balance, 0);
+    }
+
+    // ---- DaoDeposit ----
+
+    #[test]
+    fn test_dao_deposit_roundtrip() {
+        let deposit = DaoDeposit {
+            capacity: 100_000_000_000,
+            deposit_block_number: 5000,
+            lock_script_hash: vec![0xAA; 32],
+            deposit_ar: 1_000_000,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        let bytes = bincode::serialize(&deposit).unwrap();
+        let decoded: DaoDeposit = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.capacity, 100_000_000_000);
+        assert_eq!(decoded.deposit_block_number, 5000);
+        assert_eq!(decoded.status, 0);
+    }
+
+    #[test]
+    fn test_dao_deposit_cache_entry_alias() {
+        // Verify alias compiles
+        let _entry: DaoDepositCacheEntry = DaoDeposit {
+            capacity: 0,
+            deposit_block_number: 0,
+            lock_script_hash: vec![],
+            deposit_ar: 0,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+    }
+
+    // ---- AssetMeta ----
+
+    #[test]
+    fn test_asset_meta_roundtrip() {
+        let meta = AssetMeta {
+            asset_type: AssetType::FungibleToken,
+            type_code_hash: vec![0x11; 32],
+            hash_type: 1,
+            type_args: vec![0x22; 20],
+            standard: "xudt".to_string(),
+            name: Some("Test Token".to_string()),
+            symbol: Some("TT".to_string()),
+            decimals: Some(8),
+            description: Some("A test token".to_string()),
+            icon_url: Some("https://example.com/icon.png".to_string()),
+            first_seen_block: 1000,
+            source: AssetMetaSource::OnChain,
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: AssetMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.asset_type, AssetType::FungibleToken);
+        assert_eq!(decoded.standard, "xudt");
+        assert_eq!(decoded.name.as_deref(), Some("Test Token"));
+        assert_eq!(decoded.symbol.as_deref(), Some("TT"));
+        assert_eq!(decoded.decimals, Some(8));
+        assert_eq!(decoded.first_seen_block, 1000);
+        assert_eq!(decoded.source, AssetMetaSource::OnChain);
+    }
+
+    #[test]
+    fn test_asset_meta_nft_collection() {
+        let meta = AssetMeta {
+            asset_type: AssetType::NftCollection,
+            type_code_hash: vec![0x33; 32],
+            hash_type: 0,
+            type_args: vec![0x44; 32],
+            standard: "spore".to_string(),
+            name: Some("My Spore Collection".to_string()),
+            symbol: None,
+            decimals: None,
+            description: Some("A spore cluster".to_string()),
+            icon_url: None,
+            first_seen_block: 2000,
+            source: AssetMetaSource::LabelImport,
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: AssetMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.asset_type, AssetType::NftCollection);
+        assert_eq!(decoded.source, AssetMetaSource::LabelImport);
+    }
+
+    #[test]
+    fn test_asset_type_default() {
+        assert_eq!(AssetType::default(), AssetType::FungibleToken);
+    }
+
+    #[test]
+    fn test_asset_meta_source_default() {
+        assert_eq!(AssetMetaSource::default(), AssetMetaSource::OnChain);
+    }
+
+    // ---- FtStats ----
+
+    #[test]
+    fn test_ft_stats_roundtrip() {
+        let stats = FtStats {
+            total_supply: Some(1_000_000_000_000),
+            holder_count: 5000,
+            live_cells_count: 10000,
+            total_capacity: 500_000_000_000_000,
+            transfer_count: 100_000,
+        };
+        let bytes = bincode::serialize(&stats).unwrap();
+        let decoded: FtStats = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.total_supply, Some(1_000_000_000_000));
+        assert_eq!(decoded.holder_count, 5000);
+        assert_eq!(decoded.live_cells_count, 10000);
+        assert_eq!(decoded.transfer_count, 100_000);
+    }
+
+    #[test]
+    fn test_ft_stats_default() {
+        let stats = FtStats::default();
+        assert_eq!(stats.total_supply, None);
+        assert_eq!(stats.holder_count, 0);
+        assert_eq!(stats.live_cells_count, 0);
+        assert_eq!(stats.total_capacity, 0);
+        assert_eq!(stats.transfer_count, 0);
+    }
+
+    // ---- NftItemMeta ----
+
+    #[test]
+    fn test_nft_item_meta_spore_roundtrip() {
+        let meta = NftItemMeta {
+            nft_type: NftType::Spore,
+            collection_id: Some(vec![0xAA; 32]),
+            name: Some("My Spore".to_string()),
+            description: None,
+            content_type: Some("image/png".to_string()),
+            is_live: true,
+            owner_lock_hash: Some(vec![0xBB; 32]),
+            capacity: 1_000_000_000,
+            created_at_block: 5000,
+            created_at_tx: vec![0xCC; 32],
+            extra: NftItemExtra::Spore {
+                content_length: 4096,
+                media_profile: SporeMediaProfile::default(),
+            },
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: NftItemMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.nft_type, NftType::Spore);
+        assert_eq!(decoded.name.as_deref(), Some("My Spore"));
+        assert_eq!(decoded.capacity, 1_000_000_000);
+        match decoded.extra {
+            NftItemExtra::Spore {
+                content_length,
+                media_profile,
+            } => {
+                assert_eq!(content_length, 4096);
+                assert_eq!(media_profile.tier, StorageDependencyTier::Unknown);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_nft_item_meta_mnft_token_roundtrip() {
+        let meta = NftItemMeta {
+            nft_type: NftType::MnftToken,
+            collection_id: Some(vec![0x11; 32]),
+            name: None,
+            description: None,
+            content_type: None,
+            is_live: true,
+            owner_lock_hash: Some(vec![0x22; 32]),
+            capacity: 500_000_000,
+            created_at_block: 3000,
+            created_at_tx: vec![0x33; 32],
+            extra: NftItemExtra::MnftToken {
+                token_index: 7,
+                characteristic: vec![0xDE, 0xAD],
+                configure: 0x01,
+                state: 0x02,
+            },
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: NftItemMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.nft_type, NftType::MnftToken);
+        match decoded.extra {
+            NftItemExtra::MnftToken {
+                token_index,
+                characteristic,
+                configure,
+                state,
+            } => {
+                assert_eq!(token_index, 7);
+                assert_eq!(characteristic, vec![0xDE, 0xAD]);
+                assert_eq!(configure, 0x01);
+                assert_eq!(state, 0x02);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_nft_item_meta_dotbit_roundtrip() {
+        let meta = NftItemMeta {
+            nft_type: NftType::DotBit,
+            collection_id: None,
+            name: Some("test.bit".to_string()),
+            description: None,
+            content_type: None,
+            is_live: true,
+            owner_lock_hash: Some(vec![0x55; 32]),
+            capacity: 200_000_000,
+            created_at_block: 4000,
+            created_at_tx: vec![0x66; 32],
+            extra: NftItemExtra::DotBit {
+                expired_at: Some(1_700_000_000),
+                registered_at: Some(1_600_000_000),
+                status: Some(1),
+            },
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded: NftItemMeta = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.nft_type, NftType::DotBit);
+        assert_eq!(decoded.name.as_deref(), Some("test.bit"));
+        match decoded.extra {
+            NftItemExtra::DotBit {
+                expired_at,
+                registered_at,
+                status,
+            } => {
+                assert_eq!(expired_at, Some(1_700_000_000));
+                assert_eq!(registered_at, Some(1_600_000_000));
+                assert_eq!(status, Some(1));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    // ---- NftType ----
+
+    #[test]
+    fn test_nft_type_default() {
+        assert_eq!(NftType::default(), NftType::Spore);
+    }
+
+    #[test]
+    fn test_nft_type_repr_values() {
+        assert_eq!(NftType::Spore as u8, 0);
+        assert_eq!(NftType::SporeCluster as u8, 1);
+        assert_eq!(NftType::DidCkb as u8, 2);
+        assert_eq!(NftType::MnftIssuer as u8, 3);
+        assert_eq!(NftType::MnftClass as u8, 4);
+        assert_eq!(NftType::MnftToken as u8, 5);
+        assert_eq!(NftType::DotBit as u8, 6);
+    }
+
+    // ---- NftCollectionStats ----
+
+    #[test]
+    fn test_nft_collection_stats_roundtrip() {
+        let stats = NftCollectionStats {
+            nft_type: NftType::Spore,
+            name: Some("My Collection".to_string()),
+            description: Some("A collection".to_string()),
+            total_count: 100,
+            live_count: 90,
+            owner_count: 50,
+            total_capacity: 10_000_000_000_000,
+            fully_onchain_count: 80,
+            decentralized_external_count: 5,
+            centralized_dependent_count: 3,
+            unknown_count: 2,
+        };
+        let bytes = bincode::serialize(&stats).unwrap();
+        let decoded: NftCollectionStats = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.nft_type, NftType::Spore);
+        assert_eq!(decoded.total_count, 100);
+        assert_eq!(decoded.live_count, 90);
+        assert_eq!(decoded.owner_count, 50);
+        assert_eq!(decoded.fully_onchain_count, 80);
+    }
+
+    #[test]
+    fn test_nft_collection_stats_default() {
+        let stats = NftCollectionStats::default();
+        assert_eq!(stats.nft_type, NftType::Spore);
+        assert_eq!(stats.total_count, 0);
+        assert_eq!(stats.live_count, 0);
+        assert_eq!(stats.owner_count, 0);
+        assert_eq!(stats.total_capacity, 0);
+        assert_eq!(stats.fully_onchain_count, 0);
     }
 
     // ---- ScriptDailyDelta ----
@@ -1570,7 +2233,7 @@ mod tests {
         assert!(matches!(decoded.extra, DobExtra::DidCkb));
     }
 
-    // ---- AddressBalance ----
+    // ---- AddressBalance (alias test, kept for backward compat) ----
 
     #[test]
     fn test_address_balance_roundtrip() {

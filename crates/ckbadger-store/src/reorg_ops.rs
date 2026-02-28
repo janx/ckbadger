@@ -879,6 +879,7 @@ mod tests {
         let lock_hash = vec![0xAA; 32];
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
@@ -888,6 +889,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
@@ -961,6 +963,7 @@ mod tests {
         let lock_code_hash = vec![0x7A; 32];
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
@@ -970,6 +973,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
@@ -1049,6 +1053,7 @@ mod tests {
         let tx_hash = vec![0x42; 32];
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
@@ -1058,6 +1063,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
@@ -1113,6 +1119,7 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
@@ -1122,6 +1129,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 0,
@@ -1131,6 +1139,7 @@ mod tests {
             transactions_count: 1,
         };
         let header3 = CachedBlockHeader {
+            block_number: 3,
             hash: vec![0x03; 32],
             timestamp: 1_700_000_020_000,
             epoch_number: 0,
@@ -1273,6 +1282,7 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
@@ -1282,6 +1292,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: 1_700_003_600_000,
             epoch_number: 0,
@@ -1423,6 +1434,7 @@ mod tests {
         let type_hash = vec![0x44; 32];
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: day1_ts,
             epoch_number: 0,
@@ -1432,6 +1444,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: day2_ts,
             epoch_number: 0,
@@ -1544,6 +1557,7 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
+            block_number: 1,
             hash: vec![0x01; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 0,
@@ -1553,6 +1567,7 @@ mod tests {
             transactions_count: 1,
         };
         let header2 = CachedBlockHeader {
+            block_number: 2,
             hash: vec![0x02; 32],
             timestamp: 1_700_003_600_000,
             epoch_number: 0,

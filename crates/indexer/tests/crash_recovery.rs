@@ -19,6 +19,7 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
     let mut hash = vec![0u8; 32];
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     CachedBlockHeader {
+        block_number: block_num,
         hash,
         timestamp: 1_600_000_000_000 + block_num * 8000,
         epoch_number: block_num / 1800,
@@ -31,6 +32,8 @@ fn make_header(block_num: i64) -> CachedBlockHeader {
 
 fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
     TxIndexEntry {
+        block_number: 0,
+        tx_index: 0,
         is_cellbase,
         timestamp: 1_600_000_000,
         inputs_count: if is_cellbase { 0 } else { 1 },

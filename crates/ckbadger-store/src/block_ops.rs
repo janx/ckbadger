@@ -189,6 +189,7 @@ mod tests {
         let mut hash = vec![0u8; 32];
         hash[..8].copy_from_slice(&block_number.to_le_bytes());
         CachedBlockHeader {
+            block_number,
             hash,
             timestamp: block_number,
             epoch_number: 0,

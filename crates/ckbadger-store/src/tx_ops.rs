@@ -132,6 +132,8 @@ mod tests {
             block_num,
             tx_idx,
             &TxIndexEntry {
+                block_number: block_num,
+                tx_index: tx_idx,
                 is_cellbase: false,
                 timestamp: 1_700_000_000_000,
                 inputs_count: 1,

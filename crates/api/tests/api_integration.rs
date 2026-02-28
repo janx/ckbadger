@@ -107,6 +107,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     batch.put_block_header(
         19_000_000,
         &CachedBlockHeader {
+            block_number: 19_000_000,
             hash: vec![0xaa; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 13_000,
@@ -263,6 +264,7 @@ async fn test_tx_stats_reads_from_derived_store() {
     core_batch.put_block_header(
         100,
         &CachedBlockHeader {
+            block_number: 100,
             hash: vec![0x10; 32],
             timestamp: now_ms,
             epoch_number: 1,
@@ -404,6 +406,7 @@ async fn test_network_stats_reads_derived_statistics() {
     core_batch.put_block_header(
         200,
         &CachedBlockHeader {
+            block_number: 200,
             hash: vec![0x22; 32],
             timestamp: now_ms,
             epoch_number: 42,
@@ -663,6 +666,7 @@ async fn test_get_block_includes_hardfork_activation() {
     batch.put_block_header(
         8_775_638,
         &CachedBlockHeader {
+            block_number: 8_775_638,
             hash: vec![0x11; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 5414,
@@ -724,6 +728,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
     batch.put_block_header(
         8_775_639,
         &CachedBlockHeader {
+            block_number: 8_775_639,
             hash: vec![0x22; 32],
             timestamp: 1_700_000_010_000,
             epoch_number: 5414,
@@ -736,6 +741,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
     batch.put_block_header(
         8_775_638,
         &CachedBlockHeader {
+            block_number: 8_775_638,
             hash: vec![0x11; 32],
             timestamp: 1_700_000_000_000,
             epoch_number: 5414,
@@ -1036,6 +1042,7 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
     batch.put_block_header(
         123,
         &CachedBlockHeader {
+            block_number: 123,
             hash: hash.clone(),
             timestamp: 1_700_000_000_000,
             epoch_number: 1,
@@ -1871,6 +1878,7 @@ async fn test_charts_block_time_distribution_with_data() {
         batch.put_block_header(
             number,
             &CachedBlockHeader {
+                block_number: number,
                 hash: vec![number as u8; 32],
                 timestamp: ts_ms,
                 epoch_number: 0,
@@ -2551,6 +2559,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
     batch.put_block_header(
         older_block,
         &CachedBlockHeader {
+            block_number: older_block,
             hash: vec![0x01; 32],
             timestamp: older_timestamp,
             epoch_number: 0,
@@ -2563,6 +2572,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
     batch.put_block_header(
         newer_block,
         &CachedBlockHeader {
+            block_number: newer_block,
             hash: vec![0x02; 32],
             timestamp: newer_timestamp,
             epoch_number: 0,
@@ -4654,6 +4664,8 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         100,
         0,
         &TxIndexEntry {
+            block_number: 100,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -4668,6 +4680,8 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         200,
         0,
         &TxIndexEntry {
+            block_number: 200,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -5401,6 +5415,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         100,
         0,
         &TxIndexEntry {
+            block_number: 100,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -5415,6 +5431,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         200,
         0,
         &TxIndexEntry {
+            block_number: 200,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -5429,6 +5447,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         0,
         &TxIndexEntry {
+            block_number: 300,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 1,
@@ -5645,6 +5665,8 @@ async fn test_assets_nft_item_activities_mnft() {
         100,
         0,
         &TxIndexEntry {
+            block_number: 100,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -5659,6 +5681,8 @@ async fn test_assets_nft_item_activities_mnft() {
         300,
         0,
         &TxIndexEntry {
+            block_number: 300,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 1,
@@ -5826,6 +5850,8 @@ async fn test_assets_nft_item_activities_dotbit() {
         300,
         0,
         &TxIndexEntry {
+            block_number: 300,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_300,
             inputs_count: 0,
@@ -5840,6 +5866,8 @@ async fn test_assets_nft_item_activities_dotbit() {
         320,
         0,
         &TxIndexEntry {
+            block_number: 320,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_320,
             inputs_count: 1,
@@ -5854,6 +5882,8 @@ async fn test_assets_nft_item_activities_dotbit() {
         340,
         0,
         &TxIndexEntry {
+            block_number: 340,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_340,
             inputs_count: 1,
@@ -6011,6 +6041,8 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         100,
         0,
         &TxIndexEntry {
+            block_number: 100,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_100,
             inputs_count: 0,
@@ -6025,6 +6057,8 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         200,
         0,
         &TxIndexEntry {
+            block_number: 200,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_200,
             inputs_count: 1,
@@ -6039,6 +6073,8 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         260,
         0,
         &TxIndexEntry {
+            block_number: 260,
+            tx_index: 0,
             is_cellbase: false,
             timestamp: 1_700_000_260,
             inputs_count: 1,
