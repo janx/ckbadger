@@ -115,7 +115,6 @@ export default function ClusterDetailPage() {
   const {
     data: clusterHolders,
     isLoading: isClusterHoldersLoading,
-    isFetching: isClusterHoldersFetching,
     isError: isClusterHoldersError,
   } = useQuery({
     queryKey: ['cluster-holders', clusterId, clusterHoldersPagination.cursor],
@@ -131,7 +130,6 @@ export default function ClusterDetailPage() {
   const {
     data: clusterActivities,
     isLoading: isClusterActivitiesLoading,
-    isFetching: isClusterActivitiesFetching,
     isError: isClusterActivitiesError,
   } = useQuery({
     queryKey: ['cluster-activities', clusterId, clusterActivitiesPagination.cursor],
@@ -615,9 +613,15 @@ export default function ClusterDetailPage() {
                         </div>
                       )}
                       <TabsList className="border-b-0">
-                        <TabsTrigger value="activities">Activities</TabsTrigger>
-                        <TabsTrigger value="nfts">NFTs</TabsTrigger>
-                        <TabsTrigger value="holders">Holders</TabsTrigger>
+                        <TabsTrigger value="activities">
+                          Activities ({formatNumber(cluster.activitiesCount)})
+                        </TabsTrigger>
+                        <TabsTrigger value="nfts">
+                          NFTs ({formatNumber(cluster.sporesCount)})
+                        </TabsTrigger>
+                        <TabsTrigger value="holders">
+                          Holders ({formatNumber(cluster.holdersCount)})
+                        </TabsTrigger>
                       </TabsList>
                     </div>
                   }
@@ -631,7 +635,7 @@ export default function ClusterDetailPage() {
 
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
-                    {isClusterActivitiesLoading || isClusterActivitiesFetching ? (
+                    {isClusterActivitiesLoading && !clusterActivities ? (
                       <div className="py-8 text-center text-slate-500">Loading activities...</div>
                     ) : isClusterActivitiesError ? (
                       <div className="py-8 text-center text-rose-400">
@@ -857,7 +861,7 @@ export default function ClusterDetailPage() {
 
                 <TabsContent value="holders" className="py-0">
                   <TerminalPanelContent>
-                    {isClusterHoldersLoading || isClusterHoldersFetching ? (
+                    {isClusterHoldersLoading && !clusterHolders ? (
                       <div className="py-8 text-center text-slate-500">Loading holders...</div>
                     ) : isClusterHoldersError ? (
                       <div className="py-8 text-center text-rose-400">

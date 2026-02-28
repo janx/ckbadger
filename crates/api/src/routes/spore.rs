@@ -159,6 +159,8 @@ pub struct ClusterResponse {
     pub owner_lock_hash: String,
     pub owner_address: Option<String>,
     pub spores_count: i32,
+    pub holders_count: i64,
+    pub activities_count: i64,
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
     pub live_occupied_capacity: Option<String>,
@@ -1111,6 +1113,11 @@ fn serve_clusters_from_cache(
                     .unwrap_or_default(),
                 owner_address: None,
                 spores_count: entry.transfers_count as i32, // transfers_count holds spore count for DOB
+                holders_count: cluster_aggregate
+                    .as_ref()
+                    .map(|a| a.owner_count)
+                    .unwrap_or(0),
+                activities_count: 0,
                 created_at_block,
                 live_capacity: None,
                 live_occupied_capacity: None,
@@ -1211,6 +1218,11 @@ fn serve_clusters_from_store(
                     .unwrap_or_default(),
                 owner_address: None,
                 spores_count: *spores_count,
+                holders_count: cluster_aggregate
+                    .as_ref()
+                    .map(|a| a.owner_count)
+                    .unwrap_or(0),
+                activities_count: 0,
                 created_at_block: *created_at_block,
                 live_capacity: None,
                 live_occupied_capacity: None,
@@ -1448,6 +1460,15 @@ async fn get_cluster(
         return Err(ApiError::not_found("Cluster not found"));
     }
 
+    let holders_count = cluster_aggregate
+        .as_ref()
+        .map(|agg| agg.owner_count)
+        .unwrap_or(0);
+    let activities_count = state
+        .store
+        .count_nft_collection_activities(&id)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
     let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
     let created_at_block = cluster_entry
@@ -1490,6 +1511,8 @@ async fn get_cluster(
             .unwrap_or_default(),
         owner_address: None,
         spores_count: spores_count as i32,
+        holders_count,
+        activities_count,
         created_at_block,
         live_capacity,
         live_occupied_capacity,

@@ -757,6 +757,8 @@ interface SporeCluster {
   ownerLockHash: string;
   ownerAddress?: string;
   sporesCount: number;
+  holdersCount: number;
+  activitiesCount: number;
   createdAtBlock: number;
   liveCapacity?: string | null;
   liveOccupiedCapacity?: string | null;
