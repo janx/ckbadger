@@ -6118,15 +6118,30 @@ impl Indexer {
         let headers_ms = t_headers.elapsed().as_secs_f64() * 1000.0;
 
         // Block proposals (no-op in RocksDB but kept for API compatibility)
+        let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
         for parsed_block in &all_parsed_blocks {
             if !parsed_block.proposals.is_empty() {
                 self.writer
                     .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)?;
                 if !self.is_bulk_sync_active() {
-                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
-                        .await?;
+                    for (idx, proposal_id) in parsed_block.proposals.iter().enumerate() {
+                        batch_proposals.push((
+                            proposal_id.clone(),
+                            parsed_block.number,
+                            idx as i16,
+                        ));
+                    }
                 }
             }
+        }
+        if !batch_proposals.is_empty() {
+            let last_bn = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
+            tokio::spawn(Self::run_proposal_cache_batch(
+                self.rpc.clone(),
+                self.cache_invalidator.clone(),
+                batch_proposals,
+                last_bn,
+            ));
         }
 
         // Inputs and flows (no-ops in RocksDB model)
@@ -7829,8 +7844,11 @@ impl Indexer {
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
 
-        // Pass 4: Proposals (iterates all_parsed_blocks, has async call in live sync)
+        // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
         let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
+        let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
+        let is_bulk = self.is_bulk_sync_active();
+        let mut last_proposal_block: i64 = 0;
         for parsed_block in all_parsed_blocks {
             if !parsed_block.proposals.is_empty() {
                 for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
@@ -7839,12 +7857,26 @@ impl Indexer {
                         proposal_index as i16,
                         proposal_id.as_slice(),
                     ));
+                    if !is_bulk {
+                        batch_proposals.push((
+                            proposal_id.clone(),
+                            parsed_block.number,
+                            proposal_index as i16,
+                        ));
+                    }
                 }
-                if !self.is_bulk_sync_active() {
-                    self.cache_block_proposals(&parsed_block.proposals, parsed_block.number)
-                        .await?;
+                if !is_bulk {
+                    last_proposal_block = parsed_block.number;
                 }
             }
+        }
+        if !batch_proposals.is_empty() {
+            tokio::spawn(Self::run_proposal_cache_batch(
+                self.rpc.clone(),
+                self.cache_invalidator.clone(),
+                batch_proposals,
+                last_proposal_block,
+            ));
         }
 
         let skip_address_balances = should_skip_address_balances(bulk_sync_mode);
@@ -11355,28 +11387,34 @@ impl Indexer {
         }
     }
 
-    // === cache_block_proposals ===
+    // === run_proposal_cache_batch ===
 
-    async fn cache_block_proposals(&self, proposals: &[Vec<u8>], block_number: i64) -> Result<()> {
+    /// Enrich and cache block proposals against a single mempool snapshot.
+    /// Called from a spawned task — does not require &self.
+    async fn run_proposal_cache_batch(
+        rpc: CkbRpcClient,
+        cache_invalidator: CacheInvalidator,
+        proposals: Vec<(Vec<u8>, i64, i16)>,
+        last_block_number: i64,
+    ) {
         use ckbadger_common::CachedProposal;
 
-        if proposals.is_empty() || !self.cache_invalidator.is_enabled() {
-            return Ok(());
+        if proposals.is_empty() || !cache_invalidator.is_enabled() {
+            return;
         }
 
-        let mempool = match self.rpc.get_raw_tx_pool_verbose().await {
+        let mempool = match rpc.get_raw_tx_pool_verbose().await {
             Ok(pool) => pool,
             Err(e) => {
                 warn!("Failed to fetch mempool for proposal enrichment: {}", e);
                 let cached: Vec<CachedProposal> = proposals
                     .iter()
-                    .enumerate()
-                    .map(|(idx, p)| {
-                        CachedProposal::new_minimal(hex::encode(p), block_number, idx as i16)
+                    .map(|(bytes, bn, idx)| {
+                        CachedProposal::new_minimal(hex::encode(bytes), *bn, *idx)
                     })
                     .collect();
-                self.cache_invalidator.cache_proposals(&cached).await;
-                return Ok(());
+                cache_invalidator.cache_proposals(&cached).await;
+                return;
             }
         };
 
@@ -11388,49 +11426,51 @@ impl Indexer {
 
         let mut cached_proposals = Vec::with_capacity(proposals.len());
 
-        for (idx, proposal_bytes) in proposals.iter().enumerate() {
+        for (proposal_bytes, block_number, idx) in &proposals {
             let proposal_id = hex::encode(proposal_bytes);
 
             if let Some(entry) = all_mempool_txs.get(&proposal_id) {
-                let fee_u64 =
-                    parse_prefixed_hex_u64(&entry.fee, "mempool proposal fee").map_err(|e| {
-                        anyhow!("invalid mempool fee for proposal {}: {}", proposal_id, e)
-                    })?;
-                let size =
-                    parse_prefixed_hex_u64(&entry.size, "mempool proposal size").map_err(|e| {
-                        anyhow!("invalid mempool size for proposal {}: {}", proposal_id, e)
-                    })?;
-                let cycles = parse_prefixed_hex_u64(&entry.cycles, "mempool proposal cycles")
-                    .map_err(|e| {
-                        anyhow!("invalid mempool cycles for proposal {}: {}", proposal_id, e)
-                    })?;
-
-                cached_proposals.push(CachedProposal::new_with_details(
-                    proposal_id,
-                    "".to_string(),
-                    block_number,
-                    idx as i16,
-                    fee_u64,
-                    size,
-                    cycles,
-                ));
+                match (
+                    parse_prefixed_hex_u64(&entry.fee, "mempool proposal fee"),
+                    parse_prefixed_hex_u64(&entry.size, "mempool proposal size"),
+                    parse_prefixed_hex_u64(&entry.cycles, "mempool proposal cycles"),
+                ) {
+                    (Ok(fee), Ok(size), Ok(cycles)) => {
+                        cached_proposals.push(CachedProposal::new_with_details(
+                            proposal_id,
+                            String::new(),
+                            *block_number,
+                            *idx,
+                            fee,
+                            size,
+                            cycles,
+                        ));
+                    }
+                    _ => {
+                        warn!(
+                            "Invalid mempool entry fields for proposal {}, using minimal",
+                            proposal_id
+                        );
+                        cached_proposals.push(CachedProposal::new_minimal(
+                            proposal_id,
+                            *block_number,
+                            *idx,
+                        ));
+                    }
+                }
             } else {
                 cached_proposals.push(CachedProposal::new_minimal(
                     proposal_id,
-                    block_number,
-                    idx as i16,
+                    *block_number,
+                    *idx,
                 ));
             }
         }
 
-        self.cache_invalidator
-            .cache_proposals(&cached_proposals)
+        cache_invalidator.cache_proposals(&cached_proposals).await;
+        cache_invalidator
+            .cleanup_expired_proposals(last_block_number)
             .await;
-        self.cache_invalidator
-            .cleanup_expired_proposals(block_number)
-            .await;
-
-        Ok(())
     }
 }
 
