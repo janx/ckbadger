@@ -10176,29 +10176,48 @@ impl Indexer {
                             if should_consume_dotbit_account(
                                 latest_create_order,
                                 *dotbit_consume_order,
-                            ) {
-                                if let Some(coll_id) =
-                                    self.writer.consume_dotbit_account_with_state(
-                                        account_id,
-                                        *block_number,
-                                        consuming_tx_hash,
-                                        &mut data_batch,
-                                        &mut dotbit_state,
-                                    )?
-                                {
-                                    nft_activity_acc.record(
-                                        &coll_id,
-                                        consuming_tx_hash,
-                                        account_id,
-                                        *block_number,
-                                        *ctx_tx_idx,
-                                        *ctx_ts_ms,
-                                        false,
-                                    );
-                                }
+                            ) && self
+                                .writer
+                                .consume_dotbit_account_with_state(
+                                    account_id,
+                                    *block_number,
+                                    consuming_tx_hash,
+                                    &mut data_batch,
+                                    &mut dotbit_state,
+                                )?
+                                .is_some()
+                            {
+                                let tx_key: [u8; 32] = consuming_tx_hash
+                                    .as_slice()
+                                    .try_into()
+                                    .expect("consuming_tx_hash must be 32 bytes");
+                                let activity = dotbit_tx_activity_data
+                                    .entry(tx_key)
+                                    .or_insert_with(|| DotbitTxActivityData {
+                                        das_action: None,
+                                        created_account_ids: HashSet::new(),
+                                        consumed_account_ids: HashSet::new(),
+                                        block_number: *block_number,
+                                        tx_idx: *ctx_tx_idx,
+                                        timestamp_ms: *ctx_ts_ms,
+                                    });
+                                activity.consumed_account_ids.insert(account_id.clone());
                             }
                         }
                     }
+                }
+                // Write .bit collection activities directly (bypassing accumulator)
+                for (tx_hash, activity) in &dotbit_tx_activity_data {
+                    resolve_dotbit_tx_activity(
+                        activity.das_action.as_deref(),
+                        &activity.created_account_ids,
+                        &activity.consumed_account_ids,
+                        tx_hash,
+                        activity.block_number,
+                        activity.tx_idx,
+                        activity.timestamp_ms,
+                        &mut data_batch,
+                    );
                 }
                 nft_activity_acc.flush(&mut data_batch);
             }
