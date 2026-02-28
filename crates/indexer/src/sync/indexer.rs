@@ -32,7 +32,8 @@ use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
 use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
 use crate::parser::{
     analyze_spore_media_profile, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser,
-    ParsedClusterCell, ParsedSporeCell, ScriptParser, SporeParser, TransactionParser, UdtParser,
+    ParsedClusterCell, ParsedDotbitAccountOutput, ParsedMnftClass, ParsedMnftIssuer,
+    ParsedMnftToken, ParsedSporeCell, ScriptParser, SporeParser, TransactionParser, UdtParser,
 };
 use ckb_store_reader::CkbChainReader;
 
@@ -94,6 +95,24 @@ const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
 const ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF: u8 = 11;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
+
+/// Pre-parsed mNFT/DotBit data computed in the parser stage.
+/// Moves all CPU-intensive parsing out of the t6b writer thread.
+struct PreParsedNftData {
+    mnft_issuers: Vec<(usize, ParsedMnftIssuer)>,
+    mnft_classes: Vec<(usize, usize, ParsedMnftClass)>,
+    mnft_tokens: Vec<(usize, usize, ParsedMnftToken)>,
+    dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)>,
+    consumed_dotbit: Vec<DotbitConsumptionEvent>,
+}
+
+struct DotbitConsumptionEvent {
+    account_id: Vec<u8>,
+    block_number: i64,
+    consuming_tx_hash: [u8; 32],
+    tx_idx: i32,
+    ts_ms: i64,
+}
 
 #[derive(Debug, Clone)]
 struct XudtExtensionScript {
@@ -3447,6 +3466,7 @@ impl Indexer {
             HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
             HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
             PreParsedSporeData,                    // pre-parsed spore/cluster data
+            PreParsedNftData,                      // pre-parsed mNFT/DotBit data
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -4556,6 +4576,178 @@ impl Indexer {
                     per_tx
                 };
 
+                // mNFT/DotBit precompute: parse all mNFT issuers/classes/tokens and DotBit
+                // accounts in the parser stage to offload t6b writer thread.
+                // Also pre-identify consumed DotBit inputs using input_cell_info
+                // type_code_hash (zero DB reads).
+                let pre_parsed_nft_data: PreParsedNftData = {
+                    let mut mnft_issuers: Vec<(usize, ParsedMnftIssuer)> = Vec::new();
+                    let mut mnft_classes: Vec<(usize, usize, ParsedMnftClass)> = Vec::new();
+                    let mut mnft_tokens: Vec<(usize, usize, ParsedMnftToken)> = Vec::new();
+                    let mut dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)> = Vec::new();
+                    let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
+                        HashMap::new();
+                    let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> =
+                        HashMap::new();
+
+                    // Phase 1: Parse mNFT/DotBit outputs
+                    let mut block_tx_idx = 0usize;
+                    for (block_idx, block_response) in blocks.iter().enumerate() {
+                        let parsed = &all_parsed_blocks[block_idx];
+                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_slice =
+                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                            let tx_global_index = block_tx_idx + tx_idx;
+                            let tx = &block_response.block.transactions[tx_idx];
+                            for issuer in MnftParser::parse_issuers(tx) {
+                                mnft_issuers.push((tx_global_index, issuer));
+                            }
+                            for (output_index, class) in
+                                MnftParser::parse_classes_with_output_indices(tx)
+                            {
+                                mnft_classes.push((tx_global_index, output_index, class));
+                            }
+                            for (output_index, token) in
+                                MnftParser::parse_tokens_with_output_indices(tx)
+                            {
+                                mnft_tokens.push((tx_global_index, output_index, token));
+                            }
+                            let parsed_accounts = match DotbitParser::parse_accounts(tx) {
+                                Ok(accounts) => accounts,
+                                Err(e) => {
+                                    error!(
+                                        "Parser: DotBit parse_accounts failed at block {}, tx 0x{}: {}",
+                                        parsed.number, hex::encode(tx_data.hash), e
+                                    );
+                                    return;
+                                }
+                            };
+                            let dotbit_create_order =
+                                match dotbit_create_event_order(tx_global_index) {
+                                    Ok(order) => order,
+                                    Err(e) => {
+                                        error!("Parser: dotbit_create_event_order overflow: {}", e);
+                                        return;
+                                    }
+                                };
+                            for account in parsed_accounts {
+                                batch_dotbit_outpoints.insert(
+                                    (tx_data.hash.to_vec(), account.output_index),
+                                    account.account.account_id.clone(),
+                                );
+                                batch_dotbit_latest_create_order
+                                    .entry(account.account.account_id.clone())
+                                    .and_modify(|current| {
+                                        if dotbit_create_order > *current {
+                                            *current = dotbit_create_order;
+                                        }
+                                    })
+                                    .or_insert(dotbit_create_order);
+                                dotbit_accounts.push((tx_global_index, account));
+                            }
+                        }
+                        block_tx_idx += tx_count_for_block;
+                    }
+
+                    // Phase 2: Pre-identify consumed DotBit inputs using
+                    // input_cell_info type_code_hash (zero DB reads).
+                    let mut consumed_dotbit: Vec<DotbitConsumptionEvent> = Vec::new();
+                    let mut block_tx_idx = 0usize;
+                    for parsed in all_parsed_blocks.iter().take(blocks.len()) {
+                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_slice =
+                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                                continue;
+                            }
+                            let tx_global_index = block_tx_idx + tx_idx;
+                            let dotbit_consume_order =
+                                match dotbit_consume_event_order(tx_global_index) {
+                                    Ok(order) => order,
+                                    Err(e) => {
+                                        error!(
+                                            "Parser: dotbit_consume_event_order overflow: {}",
+                                            e
+                                        );
+                                        return;
+                                    }
+                                };
+                            for input in &tx_data.inputs {
+                                let key = (
+                                    input.previous_tx_hash.to_vec(),
+                                    input.previous_output_index as i16,
+                                );
+
+                                // 1. Check same-batch first
+                                if let Some(account_id) = batch_dotbit_outpoints.get(&key) {
+                                    let latest_create_order =
+                                        batch_dotbit_latest_create_order.get(account_id).copied();
+                                    if should_consume_dotbit_account(
+                                        latest_create_order,
+                                        dotbit_consume_order,
+                                    ) {
+                                        consumed_dotbit.push(DotbitConsumptionEvent {
+                                            account_id: account_id.clone(),
+                                            block_number: parsed.number,
+                                            consuming_tx_hash: tx_data.hash,
+                                            tx_idx: tx_idx as i32,
+                                            ts_ms: parsed.timestamp.timestamp_millis(),
+                                        });
+                                    }
+                                    continue;
+                                }
+
+                                // 2. Check input_cell_info / batch_cell_infos type_code_hash
+                                let cell_info = input_cell_info
+                                    .get(&key)
+                                    .or_else(|| batch_cell_infos.get(&key));
+                                let is_dotbit = cell_info
+                                    .and_then(|info| info.type_code_hash.as_ref())
+                                    .map(|tc| DotbitParser::is_account_cell_type_script(tc))
+                                    .unwrap_or(false);
+                                if !is_dotbit {
+                                    continue;
+                                }
+
+                                // 3. Extract account_id from type_args (20 bytes, non-zero)
+                                let account_id = cell_info
+                                    .and_then(|info| info.type_args.as_ref())
+                                    .filter(|args| {
+                                        args.len() == 20 && !args.iter().all(|&b| b == 0)
+                                    })
+                                    .cloned();
+                                if let Some(account_id) = account_id {
+                                    let latest_create_order =
+                                        batch_dotbit_latest_create_order.get(&account_id).copied();
+                                    if should_consume_dotbit_account(
+                                        latest_create_order,
+                                        dotbit_consume_order,
+                                    ) {
+                                        consumed_dotbit.push(DotbitConsumptionEvent {
+                                            account_id,
+                                            block_number: parsed.number,
+                                            consuming_tx_hash: tx_data.hash,
+                                            tx_idx: tx_idx as i32,
+                                            ts_ms: parsed.timestamp.timestamp_millis(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        block_tx_idx += tx_count_for_block;
+                    }
+
+                    PreParsedNftData {
+                        mnft_issuers,
+                        mnft_classes,
+                        mnft_tokens,
+                        dotbit_accounts,
+                        consumed_dotbit,
+                    }
+                };
+
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
                 let tx_count: usize = all_tx_data.len();
@@ -4631,6 +4823,7 @@ impl Indexer {
                         nft_type_index_changes,
                         nft_daily_changes,
                         pre_parsed_spore_data,
+                        pre_parsed_nft_data,
                     ))
                     .await
                     .is_err()
@@ -4690,6 +4883,7 @@ impl Indexer {
                     nft_type_index_changes,
                     nft_daily_changes,
                     pre_parsed_spore_data,
+                    pre_parsed_nft_data,
                 ))) => {
                     consecutive_idle_timeouts = 0;
                     atomic_saturating_sub_u64(
@@ -4850,6 +5044,7 @@ impl Indexer {
                             nft_type_index_changes,
                             nft_daily_changes,
                             pre_parsed_spore_data,
+                            pre_parsed_nft_data,
                             chain_tip,
                         )
                         .await
@@ -7398,6 +7593,7 @@ impl Indexer {
         nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
         nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         pre_parsed_spore_data: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>,
+        pre_parsed_nft_data: PreParsedNftData,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
@@ -8446,187 +8642,127 @@ impl Indexer {
                     // T6b: mNFT + DotBit writes and DotBit consumption.
                     // CFs: NFT_DATA, NFT_COLLECTION_AGG, NFT_BY_COLLECTION, STATS (nft keys)
                     // Runs in parallel with T6a — mNFT/DotBit use independent CFs from Spore.
+                    // All parsing is done in the parser stage (pre_parsed_nft_data);
+                    // this thread only does DB writes.
                     let h6b = s.spawn(|| -> Result<(f64, f64)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
-                    let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
-                        HashMap::new();
-                    let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
-                    let mut block_tx_idx = 0usize;
-                    for (block_idx, block_response) in blocks.iter().enumerate() {
-                        let parsed = &all_parsed_blocks[block_idx];
+
+                    // Build tx_global_index → (tx_idx_in_block, block_number, ts_ms) lookup.
+                    let mut tx_lookup: Vec<(usize, i64, i64)> = Vec::with_capacity(all_tx_data.len());
+                    for parsed in all_parsed_blocks.iter().take(blocks.len()) {
                         let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                         let ts_ms = parsed.timestamp.timestamp_millis();
-                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                            let tx_global_index = block_tx_idx + tx_idx;
-                            let dotbit_create_order = dotbit_create_event_order(tx_global_index)?;
-                            let tx = &block_response.block.transactions[tx_idx];
-                            for issuer in MnftParser::parse_issuers(tx) {
-                                writer.insert_mnft_issuer(
-                                    &issuer,
-                                    &tx_data.hash,
-                                    0,
-                                    parsed.number,
-                                    &mut batch,
-                                )?;
-                            }
-                            for (output_index, class) in
-                                MnftParser::parse_classes_with_output_indices(tx)
-                            {
-                                let output_index = i16::try_from(output_index).map_err(|_| {
-                                    anyhow!(
-                                        "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
-                                        parsed.number,
-                                        hex::encode(tx_data.hash),
-                                        output_index
-                                    )
-                                })?;
-                                writer.insert_mnft_class(
-                                    &class,
-                                    &tx_data.hash,
-                                    output_index,
-                                    parsed.number,
-                                    &mut batch,
-                                )?;
-                            }
-                            for (output_index, token) in
-                                MnftParser::parse_tokens_with_output_indices(tx)
-                            {
-                                let output_index = i16::try_from(output_index).map_err(|_| {
-                                    anyhow!(
-                                        "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
-                                        parsed.number,
-                                        hex::encode(tx_data.hash),
-                                        output_index
-                                    )
-                                })?;
-                                writer.insert_mnft_token(
-                                    &token,
-                                    &tx_data.hash,
-                                    output_index,
-                                    parsed.number,
-                                    ts_ms,
-                                    &mut batch,
-                                )?;
-                                nft_activity_acc.record(
-                                    &token.class_id,
-                                    &tx_data.hash,
-                                    &token.token_id,
-                                    parsed.number,
-                                    tx_idx as i32,
-                                    ts_ms,
-                                    true,
-                                );
-                            }
-                            for account in DotbitParser::parse_accounts(tx)? {
-                                writer.insert_dotbit_account_with_state(
-                                    &account,
-                                    &tx_data.hash,
-                                    parsed.number,
-                                    ts_ms,
-                                    &mut batch,
-                                    &mut dotbit_state,
-                                )?;
-                                batch_dotbit_outpoints.insert(
-                                    (tx_data.hash.to_vec(), account.output_index),
-                                    account.account.account_id.clone(),
-                                );
-                                let account_id = account.account.account_id.clone();
-                                batch_dotbit_latest_create_order
-                                    .entry(account_id)
-                                    .and_modify(|current| {
-                                        if dotbit_create_order > *current {
-                                            *current = dotbit_create_order;
-                                        }
-                                    })
-                                    .or_insert(dotbit_create_order);
-                                nft_activity_acc.record(
-                                    &DOTBIT_SENTINEL_COLLECTION,
-                                    &tx_data.hash,
-                                    &account.account.account_id,
-                                    parsed.number,
-                                    tx_idx as i32,
-                                    ts_ms,
-                                    true,
-                                );
-                            }
+                        for tx_idx in 0..tx_count_for_block {
+                            tx_lookup.push((tx_idx, parsed.number, ts_ms));
                         }
-                        block_tx_idx += tx_count_for_block;
                     }
 
-                    // DotBit must be consumed in bulk sync too; otherwise `is_live` drifts.
-                    let mut block_tx_idx = 0usize;
-                    for (block_idx, block_response) in blocks.iter().enumerate() {
-                        let parsed = &all_parsed_blocks[block_idx];
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                            if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                                continue;
-                            }
-                            let tx_global_index = block_tx_idx + tx_idx;
-                            let dotbit_consume_order = dotbit_consume_event_order(tx_global_index)?;
-                            let tx = &block_response.block.transactions[tx_idx];
-                            for input in &tx.inputs {
-                                let prev_tx_hash =
-                                    crate::rpc::parse_hex_to_bytes(&input.previous_output.tx_hash);
-                                let prev_index = parse_outpoint_index_i16(
-                                    &input.previous_output.index,
-                                    "input.previous_output.index",
-                                )
-                                .map_err(|e| {
-                                    anyhow!(
-                                        "invalid consumed dotbit input index at block {}, tx 0x{}: {}",
-                                        parsed.number,
-                                        hex::encode(tx_data.hash),
-                                        e
-                                    )
-                                })?;
-
-                                let consumed_dotbit_account_id = resolve_dotbit_account_id_for_outpoint(
-                                    writer
-                                        .get_dotbit_account_id_by_outpoint(&prev_tx_hash, prev_index)?,
-                                    &prev_tx_hash,
-                                    prev_index,
-                                    &batch_dotbit_outpoints,
-                                );
-                                if let Some(account_id) = consumed_dotbit_account_id {
-                                    let latest_create_order =
-                                        batch_dotbit_latest_create_order.get(&account_id).copied();
-                                    if should_consume_dotbit_account(
-                                        latest_create_order,
-                                        dotbit_consume_order,
-                                    ) {
-                                        if let Some(coll_id) =
-                                            writer.consume_dotbit_account_with_state(
-                                                &account_id,
-                                                parsed.number,
-                                                &tx_data.hash,
-                                                &mut batch,
-                                                &mut dotbit_state,
-                                            )?
-                                        {
-                                            nft_activity_acc.record(
-                                                &coll_id,
-                                                &tx_data.hash,
-                                                &account_id,
-                                                parsed.number,
-                                                tx_idx as i32,
-                                                parsed.timestamp.timestamp_millis(),
-                                                false,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        block_tx_idx += tx_count_for_block;
+                    // Phase 1: Insert mNFT issuers/classes/tokens from pre-parsed data.
+                    for &(tx_gi, ref issuer) in &pre_parsed_nft_data.mnft_issuers {
+                        let (_, block_number, _) = tx_lookup[tx_gi];
+                        writer.insert_mnft_issuer(
+                            issuer,
+                            &all_tx_data[tx_gi].hash,
+                            0,
+                            block_number,
+                            &mut batch,
+                        )?;
                     }
+                    for &(tx_gi, output_index, ref class) in &pre_parsed_nft_data.mnft_classes {
+                        let (_, block_number, _) = tx_lookup[tx_gi];
+                        let output_index = i16::try_from(output_index).map_err(|_| {
+                            anyhow!(
+                                "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                block_number,
+                                hex::encode(all_tx_data[tx_gi].hash),
+                                output_index
+                            )
+                        })?;
+                        writer.insert_mnft_class(
+                            class,
+                            &all_tx_data[tx_gi].hash,
+                            output_index,
+                            block_number,
+                            &mut batch,
+                        )?;
+                    }
+                    for &(tx_gi, output_index, ref token) in &pre_parsed_nft_data.mnft_tokens {
+                        let (tx_idx, block_number, ts_ms) = tx_lookup[tx_gi];
+                        let output_index = i16::try_from(output_index).map_err(|_| {
+                            anyhow!(
+                                "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
+                                block_number,
+                                hex::encode(all_tx_data[tx_gi].hash),
+                                output_index
+                            )
+                        })?;
+                        writer.insert_mnft_token(
+                            token,
+                            &all_tx_data[tx_gi].hash,
+                            output_index,
+                            block_number,
+                            ts_ms,
+                            &mut batch,
+                        )?;
+                        nft_activity_acc.record(
+                            &token.class_id,
+                            &all_tx_data[tx_gi].hash,
+                            &token.token_id,
+                            block_number,
+                            tx_idx as i32,
+                            ts_ms,
+                            true,
+                        );
+                    }
+
+                    // Phase 1b: Insert DotBit accounts from pre-parsed data.
+                    for &(tx_gi, ref account) in &pre_parsed_nft_data.dotbit_accounts {
+                        let (tx_idx, block_number, ts_ms) = tx_lookup[tx_gi];
+                        writer.insert_dotbit_account_with_state(
+                            account,
+                            &all_tx_data[tx_gi].hash,
+                            block_number,
+                            ts_ms,
+                            &mut batch,
+                            &mut dotbit_state,
+                        )?;
+                        nft_activity_acc.record(
+                            &DOTBIT_SENTINEL_COLLECTION,
+                            &all_tx_data[tx_gi].hash,
+                            &account.account.account_id,
+                            block_number,
+                            tx_idx as i32,
+                            ts_ms,
+                            true,
+                        );
+                    }
+
+                    // Phase 2: Consume DotBit accounts from pre-identified events
+                    // (zero DB reads — all identification done in parser via
+                    // input_cell_info type_code_hash + type_args).
+                    for event in &pre_parsed_nft_data.consumed_dotbit {
+                        if let Some(coll_id) = writer.consume_dotbit_account_with_state(
+                            &event.account_id,
+                            event.block_number,
+                            &event.consuming_tx_hash,
+                            &mut batch,
+                            &mut dotbit_state,
+                        )? {
+                            nft_activity_acc.record(
+                                &coll_id,
+                                &event.consuming_tx_hash,
+                                &event.account_id,
+                                event.block_number,
+                                event.tx_idx,
+                                event.ts_ms,
+                                false,
+                            );
+                        }
+                    }
+
                     nft_activity_acc.flush(&mut batch);
                     let commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;

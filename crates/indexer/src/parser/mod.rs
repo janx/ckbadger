@@ -13,7 +13,7 @@ pub mod udt;
 pub use block::BlockParser;
 pub use cell::CellParser;
 pub use dao::{DaoParser, DaoState, ParsedDaoDeposit, ParsedDaoWithdrawRequest};
-pub use dotbit::{DotbitParser, ParsedDotbitAccount};
+pub use dotbit::{DotbitParser, ParsedDotbitAccount, ParsedDotbitAccountOutput};
 pub use media_source::analyze_spore_media_profile;
 pub use mnft::{MnftParser, ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 pub use rgbpp::{RgbppLockArgs, RgbppLockType, RgbppParser};
