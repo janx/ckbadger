@@ -738,10 +738,9 @@ impl CkbadgerStore {
     // ---- HODL tracker state persistence ----
 
     pub fn get_hodl_tracker_state(&self) -> anyhow::Result<Option<HodlTrackerState>> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::HODL_TRACKER,
-        )? {
+        let key =
+            crate::keys::encode_sync_meta_stats_key(crate::keys::sync_meta_keys::HODL_TRACKER);
+        match self.get_cf(self.cf_stats(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -749,11 +748,9 @@ impl CkbadgerStore {
 
     pub fn put_hodl_tracker_state(&self, state: &HodlTrackerState) -> anyhow::Result<()> {
         let value = bincode::serialize(state)?;
-        self.put_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::HODL_TRACKER,
-            &value,
-        )
+        let key =
+            crate::keys::encode_sync_meta_stats_key(crate::keys::sync_meta_keys::HODL_TRACKER);
+        self.put_cf(self.cf_stats(), &key, &value)
     }
 
     // ---- Script daily deltas ----
@@ -835,7 +832,8 @@ impl CkbadgerStore {
     // ---- Script info ----
 
     pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
-        match self.get_cf(self.cf_script_info(), code_hash)? {
+        let key = crate::keys::encode_script_info_stats_key(code_hash);
+        match self.get_cf(self.cf_stats(), &key)? {
             Some(value) => {
                 let info = bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
@@ -859,17 +857,26 @@ impl CkbadgerStore {
         info: &ScriptInfo,
     ) -> anyhow::Result<()> {
         let value = bincode::serialize(info)?;
-        self.put_cf(self.cf_script_info(), code_hash, &value)
+        let key = crate::keys::encode_script_info_stats_key(code_hash);
+        self.put_cf(self.cf_stats(), &key, &value)
     }
 
     pub fn list_script_infos(&self) -> anyhow::Result<Vec<(Vec<u8>, ScriptInfo)>> {
-        let iter = self.iterator_cf(self.cf_script_info(), rocksdb::IteratorMode::Start);
+        let prefix = [crate::keys::STATS_PREFIX_SCRIPT_INFO];
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
         let mut results = Vec::new();
 
         for item in iter.flatten() {
             let (key, value) = item;
+            if key.first() != Some(&crate::keys::STATS_PREFIX_SCRIPT_INFO) {
+                break;
+            }
             if let Ok(info) = bincode::deserialize::<ScriptInfo>(&value) {
-                results.push((key.to_vec(), info));
+                // Return the code_hash (key without prefix)
+                results.push((key[1..].to_vec(), info));
             }
         }
         Ok(results)
@@ -1255,10 +1262,17 @@ impl CkbadgerStore {
 
         let mut clear_batch = rocksdb::WriteBatch::default();
         let mut cleared = 0usize;
-        let iter = self.iterator_cf(self.cf_script_info(), rocksdb::IteratorMode::Start);
+        let prefix = [crate::keys::STATS_PREFIX_SCRIPT_INFO];
+        let iter = self.iterator_cf(
+            self.cf_stats(),
+            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+        );
         for item in iter.flatten() {
             let (key, _) = item;
-            clear_batch.delete_cf(self.cf_script_info(), &key);
+            if key.first() != Some(&crate::keys::STATS_PREFIX_SCRIPT_INFO) {
+                break;
+            }
+            clear_batch.delete_cf(self.cf_stats(), &key);
             cleared += 1;
             #[allow(clippy::manual_is_multiple_of)]
             if cleared % 20_000 == 0 {

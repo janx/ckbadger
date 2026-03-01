@@ -632,10 +632,9 @@ impl<'a> StoreBatch<'a> {
         date_yyyymmdd: u32,
         stats: &AddressDailyStats,
     ) {
-        let key = keys::encode_addr_daily_stats_key(lock_hash, date_yyyymmdd);
+        let key = keys::encode_addr_daily_stats_stats_key(lock_hash, date_yyyymmdd);
         let value = bincode::serialize(stats).expect("serialize AddressDailyStats");
-        self.batch
-            .put_cf(self.store.cf_addr_daily_stats(), key, &value);
+        self.batch.put_cf(self.store.cf_stats(), &key, &value);
     }
 
     // ---- Statistics ----
@@ -650,14 +649,15 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
         let value = bincode::serialize(info).expect("serialize ScriptInfo");
-        self.batch
-            .put_cf(self.store.cf_script_info(), code_hash, &value);
+        let key = keys::encode_script_info_stats_key(code_hash);
+        self.batch.put_cf(self.store.cf_stats(), &key, &value);
     }
 
-    // ---- Sync meta ----
+    // ---- Sync meta (stored in cf_stats with SYNC_META prefix) ----
 
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {
-        self.batch.put_cf(self.store.cf_sync_meta(), key, value);
+        let prefixed = keys::encode_sync_meta_stats_key(key);
+        self.batch.put_cf(self.store.cf_stats(), &prefixed, value);
     }
 
     /// Get mutable access to the default store WriteBatch for direct operations.
@@ -722,10 +722,12 @@ mod tests {
         batch.put_sync_meta(b"key2", b"val2");
         batch.commit().unwrap();
 
-        // Verify both written
-        let cf = store.cf_sync_meta();
-        assert!(store.get_cf(cf, b"key1").unwrap().is_some());
-        assert!(store.get_cf(cf, b"key2").unwrap().is_some());
+        // Verify both written (stored in cf_stats with SYNC_META prefix)
+        let cf = store.cf_stats();
+        let k1 = keys::encode_sync_meta_stats_key(b"key1");
+        let k2 = keys::encode_sync_meta_stats_key(b"key2");
+        assert!(store.get_cf(cf, &k1).unwrap().is_some());
+        assert!(store.get_cf(cf, &k2).unwrap().is_some());
     }
 
     #[test]

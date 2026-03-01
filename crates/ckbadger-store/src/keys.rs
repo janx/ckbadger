@@ -1128,7 +1128,7 @@ pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
 // Sync meta keys
 // ---------------------------------------------------------------------------
 
-/// Sync meta keys
+/// Sync meta keys (stored in cf_stats with STATS_PREFIX_SYNC_META prefix)
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
     pub const SYNC_STATUS: &[u8] = b"sync_status";
@@ -1137,6 +1137,27 @@ pub mod sync_meta_keys {
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
+}
+
+/// Encode a sync_meta key for storage in cf_stats (prefix 0xF0 + original key).
+pub fn encode_sync_meta_stats_key(key: &[u8]) -> Vec<u8> {
+    encode_stats_key(STATS_PREFIX_SYNC_META, key)
+}
+
+/// Encode a script_info key for storage in cf_stats (prefix 0x21 + code_hash).
+pub fn encode_script_info_stats_key(code_hash: &[u8]) -> Vec<u8> {
+    encode_stats_key(STATS_PREFIX_SCRIPT_INFO, code_hash)
+}
+
+/// Encode an addr_daily_stats key for storage in cf_stats (prefix 0x20 + lock_hash + date).
+pub fn encode_addr_daily_stats_stats_key(lock_hash: &[u8], date_yyyymmdd: u32) -> Vec<u8> {
+    let inner = encode_addr_daily_stats_key(lock_hash, date_yyyymmdd);
+    encode_stats_key(STATS_PREFIX_ADDR_DAILY_STATS, &inner)
+}
+
+/// Encode an addr_daily_stats prefix for cf_stats iteration (prefix 0x20 + lock_hash).
+pub fn encode_addr_daily_stats_stats_prefix(lock_hash: &[u8]) -> Vec<u8> {
+    encode_stats_key(STATS_PREFIX_ADDR_DAILY_STATS, lock_hash)
 }
 
 // ===========================================================================

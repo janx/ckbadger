@@ -61,8 +61,8 @@ impl CkbadgerStore {
         lock_hash: &[u8],
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<AddressDailyStats>> {
-        let key = keys::encode_addr_daily_stats_key(lock_hash, date_yyyymmdd);
-        match self.get_cf(self.cf_addr_daily_stats(), &key)? {
+        let key = keys::encode_addr_daily_stats_stats_key(lock_hash, date_yyyymmdd);
+        match self.get_cf(self.cf_stats(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -76,22 +76,23 @@ impl CkbadgerStore {
         from_date: u32,
         to_date: u32,
     ) -> anyhow::Result<Vec<(u32, AddressDailyStats)>> {
-        let start_key = keys::encode_addr_daily_stats_key(lock_hash, from_date);
-        let prefix = &lock_hash[..32];
+        let start_key = keys::encode_addr_daily_stats_stats_key(lock_hash, from_date);
+        let prefix = keys::encode_addr_daily_stats_stats_prefix(lock_hash);
 
         let iter = self.iterator_cf(
-            self.cf_addr_daily_stats(),
+            self.cf_stats(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
         let mut results = Vec::new();
         for item in iter.flatten() {
             let (key, value) = item;
-            if !key.starts_with(prefix) {
+            if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() == keys::ADDR_DAILY_STATS_KEY_SIZE {
-                let (_, date) = keys::decode_addr_daily_stats_key(&key);
+            // Key: prefix(1) + lock_hash(32) + date(4) = 37B
+            if key.len() == 1 + keys::ADDR_DAILY_STATS_KEY_SIZE {
+                let (_, date) = keys::decode_addr_daily_stats_key(&key[1..]);
                 if date > to_date {
                     break;
                 }

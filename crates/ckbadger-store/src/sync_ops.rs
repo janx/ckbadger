@@ -3,7 +3,7 @@
 use anyhow::anyhow;
 use serde::Deserialize;
 
-use crate::keys::sync_meta_keys;
+use crate::keys::{self, sync_meta_keys};
 use crate::store::CkbadgerStore;
 use crate::types::{DeepForkInfo, RuntimeStatus, SyncStatus};
 
@@ -82,7 +82,8 @@ impl From<LegacyRuntimeStatusV2> for RuntimeStatus {
 
 impl CkbadgerStore {
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
-        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
+        let key = keys::encode_sync_meta_stats_key(sync_meta_keys::SYNC_STATUS);
+        match self.get_cf(self.cf_stats(), &key)? {
             Some(value) => Ok(bincode::deserialize(&value)?),
             None => Ok(SyncStatus::default()),
         }
@@ -90,7 +91,8 @@ impl CkbadgerStore {
 
     pub fn set_sync_status(&self, status: &SyncStatus) -> anyhow::Result<()> {
         let value = bincode::serialize(status)?;
-        self.put_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS, &value)
+        let key = keys::encode_sync_meta_stats_key(sync_meta_keys::SYNC_STATUS);
+        self.put_cf(self.cf_stats(), &key, &value)
     }
 
     pub fn update_sync_status<F>(&self, update_fn: F) -> anyhow::Result<()>
@@ -103,7 +105,8 @@ impl CkbadgerStore {
     }
 
     pub fn get_runtime_status(&self) -> anyhow::Result<RuntimeStatus> {
-        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS)? {
+        let key = keys::encode_sync_meta_stats_key(sync_meta_keys::RUNTIME_STATUS);
+        match self.get_cf(self.cf_stats(), &key)? {
             Some(value) => match bincode::deserialize::<RuntimeStatus>(&value) {
                 Ok(status) => Ok(status),
                 Err(primary_err) => match bincode::deserialize::<LegacyRuntimeStatusV2>(&value) {
@@ -125,7 +128,8 @@ impl CkbadgerStore {
 
     pub fn set_runtime_status(&self, status: &RuntimeStatus) -> anyhow::Result<()> {
         let value = bincode::serialize(status)?;
-        self.put_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &value)
+        let key = keys::encode_sync_meta_stats_key(sync_meta_keys::RUNTIME_STATUS);
+        self.put_cf(self.cf_stats(), &key, &value)
     }
 
     pub fn update_runtime_status<F>(&self, update_fn: F) -> anyhow::Result<()>
@@ -258,27 +262,19 @@ impl CkbadgerStore {
     }
 
     pub fn is_rollback_cleanup_in_progress(&self) -> anyhow::Result<bool> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
-        )? {
+        let key = keys::encode_sync_meta_stats_key(sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS);
+        match self.get_cf(self.cf_stats(), &key)? {
             Some(value) => Ok(value.first().copied() == Some(1)),
             None => Ok(false),
         }
     }
 
     pub fn set_rollback_cleanup_in_progress(&self, in_progress: bool) -> anyhow::Result<()> {
+        let key = keys::encode_sync_meta_stats_key(sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS);
         if in_progress {
-            self.put_cf(
-                self.cf_sync_meta(),
-                sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
-                &[1u8],
-            )
+            self.put_cf(self.cf_stats(), &key, &[1u8])
         } else {
-            self.delete_cf(
-                self.cf_sync_meta(),
-                sync_meta_keys::ROLLBACK_CLEANUP_IN_PROGRESS,
-            )
+            self.delete_cf(self.cf_stats(), &key)
         }
     }
 
@@ -513,7 +509,11 @@ mod tests {
         };
         let bytes = bincode::serialize(&legacy).unwrap();
         store
-            .put_cf(store.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &bytes)
+            .put_cf(
+                store.cf_stats(),
+                &keys::encode_sync_meta_stats_key(sync_meta_keys::RUNTIME_STATUS),
+                &bytes,
+            )
             .unwrap();
 
         let status = store.get_runtime_status().unwrap();
@@ -556,7 +556,11 @@ mod tests {
         };
         let bytes = bincode::serialize(&legacy).unwrap();
         store
-            .put_cf(store.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &bytes)
+            .put_cf(
+                store.cf_stats(),
+                &keys::encode_sync_meta_stats_key(sync_meta_keys::RUNTIME_STATUS),
+                &bytes,
+            )
             .unwrap();
 
         let status = store.get_runtime_status().unwrap();

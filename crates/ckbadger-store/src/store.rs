@@ -92,52 +92,15 @@ pub const CF_FT_INDEX: &str = "ft_index";
 pub const CF_ACTIVITIES: &str = "activities";
 
 // ============================================================
-// Backward-compatible CF aliases (deprecated, for migration)
+// Backward-compatible CF aliases (point to canonical names)
 // ============================================================
 
-// TODO(data-refactor): Use CF_LIVE_CELLS_BY_LOCK
-pub const CF_CELL_BY_LOCK: &str = "live_cells_by_lock";
-// TODO(data-refactor): Use CF_LIVE_CELLS_BY_TYPE
-pub const CF_CELL_BY_TYPE: &str = "live_cells_by_type";
-// TODO(data-refactor): Use CF_LIVE_CELLS_BY_LOCK_CODE
-pub const CF_CELL_BY_LOCK_CODE: &str = "live_cells_by_lock_code";
-// TODO(data-refactor): Use CF_LIVE_CELLS_BY_TYPE_CODE
-pub const CF_CELL_BY_TYPE_CODE: &str = "live_cells_by_type_code";
-// TODO(data-refactor): Use CF_ADDR_STATS
-pub const CF_ADDR_BALANCE: &str = "addr_stats";
-// TODO(data-refactor): Use CF_DAO_WITHDRAW_INDEX
-pub const CF_DAO_BY_WITHDRAW_TX: &str = "dao_withdraw_index";
-// TODO(data-refactor): Use CF_ASSET_META
-pub const CF_TOKENS: &str = "asset_meta";
-// TODO(data-refactor): Use CF_FT_HOLDERS
-pub const CF_TOKEN_HOLDERS: &str = "ft_holders";
-// Legacy CFs that still physically exist in the DEFAULT store during migration.
-// These have DIFFERENT names from the new append-store CFs to avoid collision.
-// They will be removed once ops files are fully rewritten (Phase 1e).
-// TODO(data-refactor): Use CF_BLOCK_META (append store) + CF_BLOCK_INDEX
-pub const CF_BLOCK_HEADERS: &str = "block_headers";
-// TODO(data-refactor): Use CF_BLOCK_INDEX
-pub const CF_BLOCK_HASH_INDEX: &str = "block_hash_index";
-// TODO(data-refactor): Use CF_TX_META (append store) + CF_TX_INDEX
-pub const CF_TX_HASH_MAP: &str = "tx_hash_map";
-// TODO(data-refactor): Use CF_NFT_ITEM_META
-pub const CF_SPORE_DATA: &str = "spore_data";
-// TODO(data-refactor): Use CF_NFT_ITEM_BY_COLLECTION
-pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
-// TODO(data-refactor): Use CF_NFT_ITEM_META
-pub const CF_NFT_DATA: &str = "nft_data";
-// TODO(data-refactor): Use CF_NFT_COLLECTION_STATS
-pub const CF_CLUSTER_AGG: &str = "cluster_agg";
-// TODO(data-refactor): Use CF_NFT_COLLECTION_STATS
-pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
-// TODO(data-refactor): Merged into CF_STATS with prefix 0x21
-pub const CF_SCRIPT_INFO: &str = "script_info";
-// TODO(data-refactor): Merged into CF_STATS with prefix 0xF0
-pub const CF_SYNC_META: &str = "sync_meta";
-// TODO(data-refactor): Use CF_FT_ACTIVITIES
-pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
-// TODO(data-refactor): Merged into CF_STATS with prefix 0x20
-pub const CF_ADDR_DAILY_STATS: &str = "addr_daily_stats";
+pub const CF_CELL_BY_LOCK: &str = CF_LIVE_CELLS_BY_LOCK;
+pub const CF_CELL_BY_TYPE: &str = CF_LIVE_CELLS_BY_TYPE;
+pub const CF_ADDR_BALANCE: &str = CF_ADDR_STATS;
+pub const CF_DAO_BY_WITHDRAW_TX: &str = CF_DAO_WITHDRAW_INDEX;
+pub const CF_TOKENS: &str = CF_ASSET_META;
+pub const CF_TOKEN_HOLDERS: &str = CF_FT_HOLDERS;
 
 // ============================================================
 // CF arrays
@@ -171,19 +134,6 @@ pub const DEFAULT_CFS: &[&str] = &[
     CF_NFT_COLLECTION_ACTIVITIES,
     CF_FT_ACTIVITIES,
     CF_STATS,
-    // Legacy CFs (kept during migration, removed in Phase 1e)
-    CF_BLOCK_HEADERS,
-    CF_BLOCK_HASH_INDEX,
-    CF_TX_HASH_MAP,
-    CF_SPORE_DATA,
-    CF_SPORE_BY_CLUSTER,
-    CF_NFT_DATA,
-    CF_CLUSTER_AGG,
-    CF_NFT_COLLECTION_AGG,
-    CF_SCRIPT_INFO,
-    CF_SYNC_META,
-    CF_TOKEN_TRANSFERS,
-    CF_ADDR_DAILY_STATS,
 ];
 
 /// All column families in the APPEND (immutable) store.
@@ -225,19 +175,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_NFT_COLLECTION_ACTIVITIES,
     CF_FT_ACTIVITIES,
     CF_STATS,
-    // Default store — legacy (12, removed in Phase 1e)
-    CF_BLOCK_HEADERS,
-    CF_BLOCK_HASH_INDEX,
-    CF_TX_HASH_MAP,
-    CF_SPORE_DATA,
-    CF_SPORE_BY_CLUSTER,
-    CF_NFT_DATA,
-    CF_CLUSTER_AGG,
-    CF_NFT_COLLECTION_AGG,
-    CF_SCRIPT_INFO,
-    CF_SYNC_META,
-    CF_TOKEN_TRANSFERS,
-    CF_ADDR_DAILY_STATS,
     // Append store (6)
     CF_CELLS,
     CF_TX_META,
@@ -711,61 +648,6 @@ impl CkbadgerStore {
     pub fn cf_token_holders(&self) -> &ColumnFamily {
         self.cf_ft_holders()
     }
-    // Legacy accessors — these return CFs from the DEFAULT store (old physical CFs
-    // kept during migration). Remove when ops files are rewritten to use new CFs.
-    // TODO(data-refactor): Use cf_block_meta() (append store) + cf_block_index()
-    pub fn cf_block_headers(&self) -> &ColumnFamily {
-        self.default_cf(CF_BLOCK_HEADERS)
-    }
-    // TODO(data-refactor): Use cf_block_index()
-    pub fn cf_block_hash_index(&self) -> &ColumnFamily {
-        self.default_cf(CF_BLOCK_HASH_INDEX)
-    }
-    // TODO(data-refactor): Use cf_tx_meta() (append store) + cf_tx_index()
-    pub fn cf_tx_hash_map(&self) -> &ColumnFamily {
-        self.default_cf(CF_TX_HASH_MAP)
-    }
-    // TODO(data-refactor): Use cf_nft_item_meta()
-    pub fn cf_spore_data(&self) -> &ColumnFamily {
-        self.default_cf(CF_SPORE_DATA)
-    }
-    // TODO(data-refactor): Use cf_nft_item_by_collection()
-    pub fn cf_spore_by_cluster(&self) -> &ColumnFamily {
-        self.default_cf(CF_SPORE_BY_CLUSTER)
-    }
-    // TODO(data-refactor): Use cf_nft_item_meta()
-    pub fn cf_nft_data(&self) -> &ColumnFamily {
-        self.default_cf(CF_NFT_DATA)
-    }
-    // TODO(data-refactor): Use cf_nft_item_by_collection()
-    pub fn cf_nft_by_collection(&self) -> &ColumnFamily {
-        self.cf_nft_item_by_collection()
-    }
-    // TODO(data-refactor): Use cf_nft_collection_stats()
-    pub fn cf_cluster_agg(&self) -> &ColumnFamily {
-        self.default_cf(CF_CLUSTER_AGG)
-    }
-    // TODO(data-refactor): Use cf_nft_collection_stats()
-    pub fn cf_nft_collection_agg(&self) -> &ColumnFamily {
-        self.default_cf(CF_NFT_COLLECTION_AGG)
-    }
-    // TODO(data-refactor): Merged into cf_stats() with prefix 0x21
-    pub fn cf_script_info(&self) -> &ColumnFamily {
-        self.default_cf(CF_SCRIPT_INFO)
-    }
-    // TODO(data-refactor): Merged into cf_stats() with prefix 0xF0
-    pub fn cf_sync_meta(&self) -> &ColumnFamily {
-        self.default_cf(CF_SYNC_META)
-    }
-    // TODO(data-refactor): Use cf_ft_activities()
-    pub fn cf_token_transfers(&self) -> &ColumnFamily {
-        self.default_cf(CF_TOKEN_TRANSFERS)
-    }
-    // TODO(data-refactor): Merged into cf_stats() with prefix 0x20
-    pub fn cf_addr_daily_stats(&self) -> &ColumnFamily {
-        self.default_cf(CF_ADDR_DAILY_STATS)
-    }
-
     // ============================================================
     // Raw DB operations — DEFAULT store
     // ============================================================
@@ -1430,11 +1312,9 @@ mod tests {
 
     #[test]
     fn test_cf_count() {
-        // 25 new + 12 legacy = 37 default CFs
-        assert_eq!(DEFAULT_CFS.len(), 37);
+        assert_eq!(DEFAULT_CFS.len(), 25);
         assert_eq!(APPEND_CFS.len(), 6);
-        // 37 default + 6 append = 43 total
-        assert_eq!(ALL_CFS.len(), 43);
+        assert_eq!(ALL_CFS.len(), 31);
     }
 
     #[test]

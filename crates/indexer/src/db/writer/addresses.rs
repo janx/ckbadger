@@ -242,9 +242,13 @@ impl BatchWriter {
             return Ok(HashMap::new());
         }
 
-        let cf_keys: Vec<_> = code_hashes
+        let prefixed_keys: Vec<Vec<u8>> = code_hashes
             .iter()
-            .map(|k| (self.store.cf_script_info(), k.as_slice()))
+            .map(|k| ckbadger_store::keys::encode_script_info_stats_key(k))
+            .collect();
+        let cf_keys: Vec<_> = prefixed_keys
+            .iter()
+            .map(|k| (self.store.cf_stats(), k.as_slice()))
             .collect();
         let results = self.store.multi_get_cf(cf_keys);
 
@@ -789,8 +793,9 @@ mod tests {
         let writer = BatchWriter::new(store.clone());
         let code_hash = vec![0xEE; 32];
 
+        let prefixed_key = ckbadger_store::keys::encode_script_info_stats_key(&code_hash);
         store
-            .put_cf(store.cf_script_info(), &code_hash, &[0xFF, 0x00])
+            .put_cf(store.cf_stats(), &prefixed_key, &[0xFF, 0x00])
             .unwrap();
 
         let refs = vec![&code_hash];

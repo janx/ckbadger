@@ -320,7 +320,8 @@ impl CkbadgerStore {
     /// Gated by a marker key in sync_meta to ensure it only runs once.
     pub fn migrate_spore_by_cluster_index(&self) -> anyhow::Result<u64> {
         let marker = b"migration:spore_by_cluster";
-        if self.get_cf(self.cf_sync_meta(), marker)?.is_some() {
+        let marker_key = crate::keys::encode_sync_meta_stats_key(marker);
+        if self.get_cf(self.cf_stats(), &marker_key)?.is_some() {
             return Ok(0); // Already migrated
         }
 

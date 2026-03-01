@@ -26,11 +26,9 @@ impl BatchWriter {
         };
         let event_key = format!("reorg:{}", Utc::now().timestamp_millis());
         let event_bytes = bincode::serialize(&event)?;
-        self.store.put_cf(
-            self.store.cf_sync_meta(),
-            event_key.as_bytes(),
-            &event_bytes,
-        )?;
+        let prefixed_key = ckbadger_store::keys::encode_sync_meta_stats_key(event_key.as_bytes());
+        self.store
+            .put_cf(self.store.cf_stats(), &prefixed_key, &event_bytes)?;
 
         // Update sync status with deep fork info
         self.store.set_deep_fork(DeepForkInfo {
@@ -65,11 +63,9 @@ impl BatchWriter {
         };
         let event_key = format!("reorg:{}", Utc::now().timestamp_millis());
         let event_bytes = bincode::serialize(&event)?;
-        self.store.put_cf(
-            self.store.cf_sync_meta(),
-            event_key.as_bytes(),
-            &event_bytes,
-        )?;
+        let prefixed_key = ckbadger_store::keys::encode_sync_meta_stats_key(event_key.as_bytes());
+        self.store
+            .put_cf(self.store.cf_stats(), &prefixed_key, &event_bytes)?;
 
         // Use the store's atomic rollback which handles all CFs
         self.store.rollback_to_block(fork_point)?;
