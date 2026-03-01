@@ -2088,10 +2088,10 @@ const PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS: u64 = 8;
 const BULK_PHASE_COMMIT_SLOW_WARN_MS: f64 = 2_000.0;
 const ADAPTIVE_BATCH_BASE_MIN_TXS: u64 = 10_000;
 const ADAPTIVE_BATCH_HARD_MIN_TXS: u64 = 2_000;
-const ADAPTIVE_BATCH_MAX_TXS: u64 = 160_000;
-const ADAPTIVE_BATCH_INITIAL_TXS: u64 = 40_000;
+const ADAPTIVE_BATCH_MAX_TXS: u64 = 250_000;
+const ADAPTIVE_BATCH_INITIAL_TXS: u64 = 80_000;
 const ADAPTIVE_BATCH_EARLY_HEIGHT_CUTOFF: u64 = 4_000_000;
-const ADAPTIVE_BATCH_EARLY_TARGET_TXS: u64 = 120_000;
+const ADAPTIVE_BATCH_EARLY_TARGET_TXS: u64 = 200_000;
 const ADAPTIVE_BATCH_MIN_BLOCKS: u64 = 1;
 const ADAPTIVE_BATCH_MAX_BLOCKS: u64 = 5_000;
 const ADAPTIVE_BATCH_TPB_EMA_ALPHA_PCT: u64 = 20; // 0.20
@@ -2397,16 +2397,16 @@ impl AdaptiveBatchController {
 
         // RocksDB internal pressure signals: detect compaction backlog, L0 pile-up,
         // and immutable memtable accumulation BEFORE they cause write stalls.
-        // L0 thresholds (40/20) are architectural; pending bytes and immutable memtable
+        // L0 thresholds (56/32) are architectural; pending bytes and immutable memtable
         // thresholds scale with the memory profile.
-        let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 40)
+        let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 56)
             || input
                 .compaction_pending_bytes
                 .is_some_and(|b| b >= input.severe_pending_threshold)
             || input
                 .immutable_memtables
                 .is_some_and(|imm| imm >= input.severe_imm_threshold);
-        let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 20)
+        let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 32)
             || input
                 .compaction_pending_bytes
                 .is_some_and(|b| b >= input.moderate_pending_threshold)
@@ -2792,6 +2792,10 @@ pub struct Indexer {
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
+    /// Cached active depositor counts keyed by lock_script_hash.
+    /// Loaded once at startup from CF_DAO_DEPOSITS, then updated incrementally
+    /// per batch to avoid O(total_deposits) scans in the reconciliation loop.
+    active_depositors: std::sync::Mutex<HashMap<Vec<u8>, i64>>,
     /// Limits concurrent background secondary issuance tasks to prevent unbounded spawning.
     secondary_issuance_semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -2849,6 +2853,18 @@ impl Indexer {
             }
         };
 
+        // One-time scan of active DAO deposits to seed the depositor cache.
+        let mut active_depositors_init: HashMap<Vec<u8>, i64> = HashMap::new();
+        for (_, entry) in writer.store().list_active_dao_deposits()? {
+            *active_depositors_init
+                .entry(entry.lock_script_hash.clone())
+                .or_insert(0) += 1;
+        }
+        info!(
+            "Loaded active depositor cache: {} unique depositors",
+            active_depositors_init.len()
+        );
+
         let incident_dir = PathBuf::from(&config.data_path).join("incidents");
 
         Ok(Self {
@@ -2881,6 +2897,7 @@ impl Indexer {
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
+            active_depositors: std::sync::Mutex::new(active_depositors_init),
             secondary_issuance_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         })
     }
@@ -10717,7 +10734,7 @@ impl Indexer {
         }
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
 
-        // Finalization: block headers + stats commit
+        // Finalization: block headers + stats commit (parallelized with HODL wave)
         let t_finalize = Instant::now();
         {
             let mut finalize_batch = StoreBatch::new(self.writer.store());
@@ -10732,21 +10749,41 @@ impl Indexer {
                 "Batch finalize commit start"
             );
             let finalize_commit_started = Instant::now();
-            if bulk_sync_mode {
-                finalize_batch.commit_no_wal().with_context(|| {
-                    format!(
-                        "finalize commit_no_wal failed for blocks {}-{}",
-                        first_block, last_block
+
+            // Run commit and HODL wave update in parallel. The HODL tracker
+            // only writes to its own in-memory Mutex, not the StoreBatch, so
+            // there is no conflict with the commit.
+            let (commit_result, hodl_result) = rayon::join(
+                || {
+                    if bulk_sync_mode {
+                        finalize_batch.commit_no_wal().with_context(|| {
+                            format!(
+                                "finalize commit_no_wal failed for blocks {}-{}",
+                                first_block, last_block
+                            )
+                        })
+                    } else {
+                        finalize_batch.commit().with_context(|| {
+                            format!(
+                                "finalize commit failed for blocks {}-{}",
+                                first_block, last_block
+                            )
+                        })
+                    }
+                },
+                || {
+                    self.update_hodl_wave(
+                        all_parsed_blocks,
+                        &all_tx_data,
+                        &input_cell_info,
+                        &batch_cell_infos,
+                        &address_balance_changes,
                     )
-                })?;
-            } else {
-                finalize_batch.commit().with_context(|| {
-                    format!(
-                        "finalize commit failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-            }
+                },
+            );
+            commit_result?;
+            hodl_result?;
+
             let finalize_commit_ms = finalize_commit_started.elapsed().as_secs_f64() * 1000.0;
             write_commit_ms += finalize_commit_ms;
             if finalize_commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
@@ -10769,15 +10806,6 @@ impl Indexer {
                 );
             }
         }
-
-        // HODL wave tracker update
-        self.update_hodl_wave(
-            all_parsed_blocks,
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-            &address_balance_changes,
-        )?;
 
         // Lightweight async cache update (no DB write)
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
@@ -11002,41 +11030,11 @@ impl Indexer {
                     .map(|s| s.secondary_pool)
                     .unwrap_or(0);
 
-                // Build active depositor set from committed DB state.
-                // DB state is END-of-batch (DAO writes already committed), so we must
-                // reverse this batch's deltas to reconstruct the PRE-batch state,
-                // then apply forward per day in the loop below.
-                let mut active_depositors: HashMap<Vec<u8>, i64> = HashMap::new();
-                if stats.dao_deltas_computed {
-                    for (_, entry) in self.writer.store().list_active_dao_deposits()? {
-                        *active_depositors
-                            .entry(entry.lock_script_hash.clone())
-                            .or_insert(0) += 1;
-                    }
-
-                    // Reverse ALL batch deltas (in reverse date order) to undo the
-                    // already-committed DAO writes and recover the pre-batch depositor
-                    // state.
-                    for date in snapshot_dates.iter().rev() {
-                        // Undo withdrawals: re-add their lock hashes
-                        if let Some(hashes) = stats.dao_daily_withdrawal_lock_hashes.get(date) {
-                            for h in hashes {
-                                *active_depositors.entry(h.clone()).or_insert(0) += 1;
-                            }
-                        }
-                        // Undo deposits: remove their lock hashes
-                        if let Some(hashes) = stats.dao_daily_deposit_lock_hashes.get(date) {
-                            for h in hashes {
-                                if let Some(count) = active_depositors.get_mut(h) {
-                                    *count -= 1;
-                                    if *count <= 0 {
-                                        active_depositors.remove(h);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                // Use the cached active depositor set (pre-batch state).
+                // The cache is maintained incrementally across batches, so no
+                // full CF_DAO_DEPOSITS scan is needed here.
+                let mut active_depositors: HashMap<Vec<u8>, i64> =
+                    self.active_depositors.lock().unwrap().clone();
 
                 // Build per-day phase-2 withdrawal completion counts and compensation
                 // by scanning completed deposits whose withdraw_block is in this
@@ -11164,6 +11162,10 @@ impl Indexer {
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
                 }
+
+                // Write the post-batch depositor state back to the cache so the
+                // next batch can use it without rescanning CF_DAO_DEPOSITS.
+                *self.active_depositors.lock().unwrap() = active_depositors;
             }
         }
 
@@ -12444,7 +12446,7 @@ mod tests {
             })
             .expect("moderate pressure should reduce target");
         assert_eq!(adjustment.reason, "moderate_backoff");
-        assert_eq!(adjustment.new_target_batch_txs, 36_000);
+        assert_eq!(adjustment.new_target_batch_txs, 72_000);
         assert_eq!(
             adjustment.new_inflight_limit,
             ADAPTIVE_BATCH_INITIAL_INFLIGHT
