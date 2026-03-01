@@ -1590,40 +1590,38 @@ async fn get_cell_age_vs_occupied_capacity_chart(
     let mut d30_180d: i128 = 0;
     let mut gt_180d: i128 = 0;
 
-    let iter = state
+    state
         .store
-        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (_, value) = item;
-        let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
-            continue;
-        };
-        let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
-            continue;
-        };
-        let age_days_raw = (snapshot_date - created_date).num_days();
-        if age_days_raw < 0 {
-            return Err(ApiError::internal(format!(
-                "negative cell age detected: snapshot_date={}, created_date={}, created_at_block={}",
-                snapshot_date, created_date, cell.created_at_block
-            )));
-        }
-        let age_days = age_days_raw;
-        let occupied = cell.occupied_capacity as i128;
-        if occupied < 0 {
-            return Err(ApiError::internal(format!(
-                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, occupied
-            )));
-        }
-        match age_days {
-            0 => lt_1d += occupied,
-            1..=6 => d1_7d += occupied,
-            7..=29 => d7_30d += occupied,
-            30..=179 => d30_180d += occupied,
-            _ => gt_180d += occupied,
-        }
-    }
+        .for_each_live_cell(|cell| {
+            let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block)
+            else {
+                return Ok(());
+            };
+            let age_days_raw = (snapshot_date - created_date).num_days();
+            if age_days_raw < 0 {
+                anyhow::bail!(
+                    "negative cell age detected: snapshot_date={}, created_date={}, created_at_block={}",
+                    snapshot_date, created_date, cell.created_at_block
+                );
+            }
+            let age_days = age_days_raw;
+            let occupied = cell.occupied_capacity as i128;
+            if occupied < 0 {
+                anyhow::bail!(
+                    "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
+                    cell.created_at_block, occupied
+                );
+            }
+            match age_days {
+                0 => lt_1d += occupied,
+                1..=6 => d1_7d += occupied,
+                7..=29 => d7_30d += occupied,
+                30..=179 => d30_180d += occupied,
+                _ => gt_180d += occupied,
+            }
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let snapshot_values = HashMap::from([
         ("lt1d".to_string(), shannon_to_ckb_string(lt_1d)),
@@ -1777,25 +1775,22 @@ async fn get_cell_size_distribution_chart(
     let mut bucket_counts = vec![0_i128; bucket_labels.len()];
     let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
 
-    let iter = state
+    state
         .store
-        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (_, value) = item;
-        let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
-            continue;
-        };
-        let occupied = cell.occupied_capacity as i128;
-        if occupied < 0 {
-            return Err(ApiError::internal(format!(
-                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, occupied
-            )));
-        }
-        let idx = occupied_capacity_bucket_index(occupied);
-        bucket_counts[idx] += 1;
-        bucket_occupied[idx] += occupied;
-    }
+        .for_each_live_cell(|cell| {
+            let occupied = cell.occupied_capacity as i128;
+            if occupied < 0 {
+                anyhow::bail!(
+                    "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
+                    cell.created_at_block, occupied
+                );
+            }
+            let idx = occupied_capacity_bucket_index(occupied);
+            bucket_counts[idx] += 1;
+            bucket_occupied[idx] += occupied;
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let data = bucket_labels
         .iter()

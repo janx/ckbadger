@@ -422,15 +422,22 @@ async fn get_tx_graph(
     } else {
         // Fallback: look up live cells created by this tx from the store.
         // This won't show consumed outputs.
-        let iter = state
-            .store
-            .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+        // Prefix-seek by tx_hash in live_cells (key = tx_hash(32) + output_index(2))
+        let prefix = hash_bytes.as_slice();
+        let iter = state.store.iterator_cf(
+            state.store.cf_live_cells(),
+            rocksdb::IteratorMode::From(prefix, rocksdb::Direction::Forward),
+        );
 
         for item in iter.flatten() {
-            let (key, value) = item;
-            if key.len() >= 34 && &key[..32] == hash_bytes.as_slice() {
+            let (key, _) = item;
+            if !key.starts_with(prefix) {
+                break;
+            }
+            if key.len() >= 34 {
                 let output_index = i16::from_be_bytes([key[32], key[33]]);
-                if let Ok(info) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) {
+                // Get cell data from append store
+                if let Ok(Some(info)) = state.store.get_cell_data(&hash_bytes, output_index) {
                     let output_cell_id = format!("cell-{}-{}", hash, output_index);
                     let capacity_str = info.capacity.to_string();
 

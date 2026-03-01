@@ -366,6 +366,53 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// Iterate all live cells, fetching data from append store in batches.
+    /// Calls `f(cell_info)` for each live cell. The closure can return `Err` to
+    /// short-circuit with an error.
+    pub fn for_each_live_cell<F>(&self, mut f: F) -> anyhow::Result<()>
+    where
+        F: FnMut(&LiveCellInfo) -> anyhow::Result<()>,
+    {
+        const BATCH_SIZE: usize = 256;
+        let mut key_batch: Vec<Vec<u8>> = Vec::with_capacity(BATCH_SIZE);
+
+        let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            key_batch.push(key.to_vec());
+
+            if key_batch.len() >= BATCH_SIZE {
+                Self::process_live_cell_batch(self, &key_batch, &mut f)?;
+                key_batch.clear();
+            }
+        }
+
+        if !key_batch.is_empty() {
+            Self::process_live_cell_batch(self, &key_batch, &mut f)?;
+        }
+
+        Ok(())
+    }
+
+    fn process_live_cell_batch<F>(&self, keys: &[Vec<u8>], f: &mut F) -> anyhow::Result<()>
+    where
+        F: FnMut(&LiveCellInfo) -> anyhow::Result<()>,
+    {
+        let cf = self.cf_cells();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.append_multi_get_cf(cf_keys);
+
+        for value_result in values.into_iter() {
+            if let Ok(Some(value)) = value_result {
+                if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
+                    f(&info)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn live_cells_count(&self) -> usize {
         let mut count = 0;
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
