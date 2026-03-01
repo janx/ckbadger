@@ -1437,6 +1437,8 @@ struct BatchStats {
     dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
+    dao_daily_deposit_lock_hashes: HashMap<NaiveDate, Vec<Vec<u8>>>,
+    dao_daily_withdrawal_lock_hashes: HashMap<NaiveDate, Vec<Vec<u8>>>,
     /// Set to true after the DAO delta computation code path runs, even if no
     /// DAO transactions were found.  This distinguishes "genuinely zero deltas"
     /// from "deltas never computed" (e.g. stale DB from an older indexer).
@@ -1735,6 +1737,7 @@ fn dao_csu_for_snapshot_date(stats: &BatchStats, date: NaiveDate) -> Result<(i12
 type DaoConsumedRow = (i64, Vec<u8>, i16, String, i64, i16);
 type DaoConsumedMap = HashMap<(Vec<u8>, i16), DaoConsumedRow>;
 type DaoSameBatchMap = HashMap<(Vec<u8>, i16), i64>;
+type DaoLockHashMap = HashMap<(Vec<u8>, i16), Vec<u8>>;
 
 #[allow(clippy::too_many_arguments)]
 fn accumulate_dao_snapshot_deltas_for_txs(
@@ -1743,9 +1746,13 @@ fn accumulate_dao_snapshot_deltas_for_txs(
     dao_code_hash: &[u8],
     consumed_dao_map: &DaoConsumedMap,
     same_batch_dao_map: &mut DaoSameBatchMap,
+    consumed_dao_lock_hashes: &DaoLockHashMap,
+    same_batch_dao_lock_hashes: &mut DaoLockHashMap,
     daily_active_delta: &mut HashMap<NaiveDate, i128>,
     daily_gross_deposit_delta: &mut HashMap<NaiveDate, i128>,
     daily_new_deposits_delta: &mut HashMap<NaiveDate, i64>,
+    daily_deposit_lock_hashes: &mut HashMap<NaiveDate, Vec<Vec<u8>>>,
+    daily_withdrawal_lock_hashes: &mut HashMap<NaiveDate, Vec<Vec<u8>>>,
 ) {
     for tx_data in tx_slice {
         let mut has_withdraw_request_output = false;
@@ -1758,8 +1765,14 @@ fn accumulate_dao_snapshot_deltas_for_txs(
                         *daily_gross_deposit_delta.entry(block_date).or_default() +=
                             cell.capacity as i128;
                         *daily_new_deposits_delta.entry(block_date).or_default() += 1;
-                        same_batch_dao_map
-                            .insert((tx_data.hash.to_vec(), output_index as i16), cell.capacity);
+                        let outpoint_key = (tx_data.hash.to_vec(), output_index as i16);
+                        same_batch_dao_map.insert(outpoint_key.clone(), cell.capacity);
+                        same_batch_dao_lock_hashes
+                            .insert(outpoint_key, cell.lock_script_hash.clone());
+                        daily_deposit_lock_hashes
+                            .entry(block_date)
+                            .or_default()
+                            .push(cell.lock_script_hash.clone());
                     } else if let Some(data) = tx_data.outputs_data.get(output_index) {
                         let data_bytes = crate::rpc::parse_hex_to_bytes(data);
                         if DaoParser::parse_deposit_block_number(&data_bytes).is_some() {
@@ -1791,6 +1804,17 @@ fn accumulate_dao_snapshot_deltas_for_txs(
             }
             if let Some(capacity) = maybe_cap {
                 *daily_active_delta.entry(block_date).or_default() -= capacity as i128;
+                // Track withdrawal lock_script_hash for depositor counting
+                let lock_hash = same_batch_dao_lock_hashes
+                    .get(&outpoint)
+                    .cloned()
+                    .or_else(|| consumed_dao_lock_hashes.get(&outpoint).cloned());
+                if let Some(lh) = lock_hash {
+                    daily_withdrawal_lock_hashes
+                        .entry(block_date)
+                        .or_default()
+                        .push(lh);
+                }
             }
         }
     }
@@ -6748,20 +6772,23 @@ impl Indexer {
                 })
             })
             .collect();
-        let consumed_dao_for_seq_stats = if !all_input_outpoints_for_seq_dao.is_empty() {
-            let unique: Vec<(Vec<u8>, i16)> = {
-                let mut seen = HashSet::new();
-                all_input_outpoints_for_seq_dao
-                    .into_iter()
-                    .filter(|x| seen.insert(x.clone()))
-                    .collect()
+        let (consumed_dao_for_seq_stats, consumed_dao_lock_hashes_for_seq) =
+            if !all_input_outpoints_for_seq_dao.is_empty() {
+                let unique: Vec<(Vec<u8>, i16)> = {
+                    let mut seen = HashSet::new();
+                    all_input_outpoints_for_seq_dao
+                        .into_iter()
+                        .filter(|x| seen.insert(x.clone()))
+                        .collect()
+                };
+                let refs: Vec<(&[u8], i16)> =
+                    unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                self.writer.find_consumed_dao_deposits_batch(&refs)?
+            } else {
+                (HashMap::new(), HashMap::new())
             };
-            let refs: Vec<(&[u8], i16)> = unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-            self.writer.find_consumed_dao_deposits_batch(&refs)?
-        } else {
-            HashMap::new()
-        };
         let mut same_batch_dao_for_seq_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+        let mut same_batch_dao_lock_hashes_for_seq: DaoLockHashMap = HashMap::new();
 
         let mut block_tx_idx = 0usize;
         for parsed in &all_parsed_blocks {
@@ -6981,9 +7008,13 @@ impl Indexer {
                 &dao_code_hash_for_seq_stats,
                 &consumed_dao_for_seq_stats,
                 &mut same_batch_dao_for_seq_stats,
+                &consumed_dao_lock_hashes_for_seq,
+                &mut same_batch_dao_lock_hashes_for_seq,
                 &mut batch_stats.dao_daily_active_delta,
                 &mut batch_stats.dao_daily_gross_deposit_delta,
                 &mut batch_stats.dao_daily_new_deposits_delta,
+                &mut batch_stats.dao_daily_deposit_lock_hashes,
+                &mut batch_stats.dao_daily_withdrawal_lock_hashes,
             );
 
             batch_stats.dao_snapshot_dates.insert(block_date);
@@ -7963,7 +7994,7 @@ impl Indexer {
 
         let (
             (
-                consumed_dao_map,
+                (consumed_dao_map, consumed_dao_lock_hashes_for_bulk),
                 (prefetched_input_udt_info, prefetched_batch_udt_cells, prefetched_udt_tx_infos),
             ),
             (prefetched_addr_balances, prefetched_script_info),
@@ -8010,7 +8041,7 @@ impl Indexer {
                                     .find_consumed_dao_deposits_batch(&outpoint_refs)
                                     .unwrap_or_default()
                             } else {
-                                HashMap::new()
+                                (HashMap::new(), HashMap::new())
                             }
                         },
                         || {
@@ -8157,7 +8188,10 @@ impl Indexer {
             )
         } else {
             (
-                (HashMap::new(), (HashMap::new(), HashMap::new(), Vec::new())),
+                (
+                    (HashMap::new(), HashMap::new()),
+                    (HashMap::new(), HashMap::new(), Vec::new()),
+                ),
                 (HashMap::new(), HashMap::new()),
             )
         };
@@ -8925,6 +8959,7 @@ impl Indexer {
                             None
                         };
                     let mut same_batch_dao_deposits: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+                    let mut same_batch_dao_lock_hashes: DaoLockHashMap = HashMap::new();
 
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
@@ -8947,9 +8982,13 @@ impl Indexer {
                             &dao_code_hash,
                             &consumed_dao_map,
                             &mut same_batch_dao_deposits,
+                            &consumed_dao_lock_hashes_for_bulk,
+                            &mut same_batch_dao_lock_hashes,
                             &mut stats.dao_daily_active_delta,
                             &mut stats.dao_daily_gross_deposit_delta,
                             &mut stats.dao_daily_new_deposits_delta,
+                            &mut stats.dao_daily_deposit_lock_hashes,
+                            &mut stats.dao_daily_withdrawal_lock_hashes,
                         );
 
                         let cells_created: i32 =
@@ -9482,6 +9521,7 @@ impl Indexer {
                         .collect();
                     self.writer
                         .find_consumed_dao_deposits_batch(&outpoint_refs)?
+                        .0
                 } else {
                     HashMap::new()
                 };
@@ -10396,21 +10436,23 @@ impl Indexer {
                     })
                 })
                 .collect();
-            let consumed_dao_for_stats = if !all_input_outpoints_for_dao.is_empty() {
-                let unique: Vec<(Vec<u8>, i16)> = {
-                    let mut seen = HashSet::new();
-                    all_input_outpoints_for_dao
-                        .into_iter()
-                        .filter(|x| seen.insert(x.clone()))
-                        .collect()
+            let (consumed_dao_for_stats, consumed_dao_lock_hashes_for_live) =
+                if !all_input_outpoints_for_dao.is_empty() {
+                    let unique: Vec<(Vec<u8>, i16)> = {
+                        let mut seen = HashSet::new();
+                        all_input_outpoints_for_dao
+                            .into_iter()
+                            .filter(|x| seen.insert(x.clone()))
+                            .collect()
+                    };
+                    let refs: Vec<(&[u8], i16)> =
+                        unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                    self.writer.find_consumed_dao_deposits_batch(&refs)?
+                } else {
+                    (HashMap::new(), HashMap::new())
                 };
-                let refs: Vec<(&[u8], i16)> =
-                    unique.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-                self.writer.find_consumed_dao_deposits_batch(&refs)?
-            } else {
-                HashMap::new()
-            };
             let mut same_batch_dao_for_stats: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+            let mut same_batch_dao_lock_hashes_for_live: DaoLockHashMap = HashMap::new();
 
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
@@ -10627,9 +10669,13 @@ impl Indexer {
                     &dao_code_hash_for_stats,
                     &consumed_dao_for_stats,
                     &mut same_batch_dao_for_stats,
+                    &consumed_dao_lock_hashes_for_live,
+                    &mut same_batch_dao_lock_hashes_for_live,
                     &mut batch_stats.dao_daily_active_delta,
                     &mut batch_stats.dao_daily_gross_deposit_delta,
                     &mut batch_stats.dao_daily_new_deposits_delta,
+                    &mut batch_stats.dao_daily_deposit_lock_hashes,
+                    &mut batch_stats.dao_daily_withdrawal_lock_hashes,
                 );
 
                 batch_stats.dao_snapshot_dates.insert(block_date);
@@ -10892,10 +10938,6 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.total_deposited)
                     .unwrap_or(0);
-                let running_depositors = latest_snapshot
-                    .as_ref()
-                    .map(|s| s.depositors_count)
-                    .unwrap_or(0);
                 let mut running_total_deposit_count = latest_snapshot
                     .as_ref()
                     .map(|s| s.new_deposits)
@@ -10927,6 +10969,17 @@ impl Indexer {
                     .map(|s| s.secondary_pool)
                     .unwrap_or(0);
 
+                // Build active depositor set from committed DB state (before this batch).
+                // Each lock_script_hash maps to its count of active deposits.
+                let mut active_depositors: HashMap<Vec<u8>, i64> = HashMap::new();
+                if stats.dao_deltas_computed {
+                    for (_, entry) in self.writer.store().list_active_dao_deposits()? {
+                        *active_depositors
+                            .entry(entry.lock_script_hash.clone())
+                            .or_insert(0) += 1;
+                    }
+                }
+
                 for date in snapshot_dates {
                     running_total_deposited +=
                         stats.dao_daily_active_delta.get(date).copied().unwrap_or(0);
@@ -10940,6 +10993,24 @@ impl Indexer {
                         .get(date)
                         .copied()
                         .unwrap_or(0);
+
+                    // Apply depositor changes from this batch
+                    if let Some(hashes) = stats.dao_daily_deposit_lock_hashes.get(date) {
+                        for h in hashes {
+                            *active_depositors.entry(h.clone()).or_insert(0) += 1;
+                        }
+                    }
+                    if let Some(hashes) = stats.dao_daily_withdrawal_lock_hashes.get(date) {
+                        for h in hashes {
+                            if let Some(count) = active_depositors.get_mut(h) {
+                                *count -= 1;
+                                if *count <= 0 {
+                                    active_depositors.remove(h);
+                                }
+                            }
+                        }
+                    }
+                    let running_depositors = active_depositors.len() as i64;
 
                     // Extract C, S, U from the DAO header field for this date.
                     let (total_issuance, secondary_pool, occupied_capacity) =
@@ -13611,14 +13682,21 @@ mod tests {
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
         consumed_dao_map.insert(
-            (input_hash_vec, 0),
+            (input_hash_vec.clone(), 0),
             (0, vec![], 0, "10000000000".to_string(), 0, 0),
         );
+        let mut consumed_dao_lock_hashes: DaoLockHashMap = HashMap::new();
+        consumed_dao_lock_hashes.insert((input_hash_vec, 0), vec![0xDD; 32]);
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut same_batch_dao_lock_hashes: DaoLockHashMap = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_deposit_lock_hashes: HashMap<chrono::NaiveDate, Vec<Vec<u8>>> =
+            HashMap::new();
+        let mut daily_withdrawal_lock_hashes: HashMap<chrono::NaiveDate, Vec<Vec<u8>>> =
+            HashMap::new();
 
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
@@ -13626,14 +13704,24 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &consumed_dao_lock_hashes,
+            &mut same_batch_dao_lock_hashes,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
+            &mut daily_deposit_lock_hashes,
+            &mut daily_withdrawal_lock_hashes,
         );
 
         assert_eq!(daily_active_delta.get(&block_date), Some(&-10_000_000_000));
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        assert_eq!(
+            daily_withdrawal_lock_hashes
+                .get(&block_date)
+                .map(|v| v.len()),
+            Some(1)
+        );
     }
 
     #[test]
@@ -13658,11 +13746,17 @@ mod tests {
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
         consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+        let consumed_dao_lock_hashes: DaoLockHashMap = HashMap::new();
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut same_batch_dao_lock_hashes: DaoLockHashMap = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_deposit_lock_hashes: HashMap<chrono::NaiveDate, Vec<Vec<u8>>> =
+            HashMap::new();
+        let mut daily_withdrawal_lock_hashes: HashMap<chrono::NaiveDate, Vec<Vec<u8>>> =
+            HashMap::new();
 
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
@@ -13670,9 +13764,13 @@ mod tests {
             &dao_code_hash,
             &consumed_dao_map,
             &mut same_batch_dao_map,
+            &consumed_dao_lock_hashes,
+            &mut same_batch_dao_lock_hashes,
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
+            &mut daily_deposit_lock_hashes,
+            &mut daily_withdrawal_lock_hashes,
         );
 
         assert!(daily_active_delta.is_empty());

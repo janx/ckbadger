@@ -481,16 +481,21 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Returns `(consumed_dao_map, lock_hash_map)` from a single DB scan.
     pub fn find_consumed_dao_deposits_batch(
         &self,
         inputs: &[(&[u8], i16)],
-    ) -> Result<HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>> {
+    ) -> Result<(
+        HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>,
+        HashMap<(Vec<u8>, i16), Vec<u8>>,
+    )> {
         if inputs.is_empty() {
-            return Ok(HashMap::new());
+            return Ok((HashMap::new(), HashMap::new()));
         }
 
         let mut result_map: HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)> =
             HashMap::new();
+        let mut lock_hash_map: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
 
         let tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| *h).collect();
 
@@ -502,8 +507,10 @@ impl BatchWriter {
                 .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
             {
                 if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
+                    let key = (tx_hash.to_vec(), *output_index);
+                    lock_hash_map.insert(key.clone(), entry.lock_script_hash.clone());
                     result_map.insert(
-                        (tx_hash.to_vec(), *output_index),
+                        key,
                         dao_cache_entry_to_row(tx_hash.to_vec(), *output_index, entry),
                     );
                 }
@@ -525,6 +532,9 @@ impl BatchWriter {
                         if entry.status == 1 {
                             let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
                             let key = (tx_hash.to_vec(), 0i16);
+                            lock_hash_map
+                                .entry(key.clone())
+                                .or_insert_with(|| entry.lock_script_hash.clone());
                             result_map.entry(key).or_insert_with(|| {
                                 dao_cache_entry_to_row(orig_tx, orig_idx, entry)
                             });
@@ -534,7 +544,7 @@ impl BatchWriter {
             }
         }
 
-        Ok(result_map)
+        Ok((result_map, lock_hash_map))
     }
 
     pub fn process_dao_withdrawals_batch<T>(
