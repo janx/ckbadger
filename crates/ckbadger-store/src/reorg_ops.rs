@@ -423,6 +423,9 @@ impl CkbadgerStore {
                     );
                     batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
                 }
+                // Clean up asset outpoint reverse indices (blind delete — no-op if not FT/NFT)
+                batch.delete_cf(self.cf_ft_outpoints(), &key);
+                batch.delete_cf(self.cf_nft_outpoints(), &key);
             }
             stage.tick(cells_removed);
         }
