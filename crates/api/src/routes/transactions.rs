@@ -17,7 +17,7 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::{ensure_derived_ready, script_to_address};
+use crate::utils::script_to_address;
 use crate::AppState;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -480,7 +480,7 @@ fn compute_tx_fee_from_io(
 
 fn resolve_stored_input_type_hash_type(
     core_store: &ckbadger_store::CkbadgerStore,
-    derived_store: &ckbadger_store::CkbadgerStore,
+    store: &ckbadger_store::CkbadgerStore,
     type_script_hash: Option<&[u8]>,
     type_code_hash: &[u8],
 ) -> Result<String, RouteError> {
@@ -498,7 +498,7 @@ fn resolve_stored_input_type_hash_type(
         }
     }
 
-    match derived_store.get_script_info(type_code_hash) {
+    match store.get_script_info(type_code_hash) {
         Ok(Some(script)) => Ok(hash_type_to_string(script.hash_type as i16)),
         Ok(None) => Ok("unknown".to_string()),
         Err(e) => Err(ApiError::internal(format!(
@@ -679,8 +679,6 @@ async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionDetailResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
@@ -772,7 +770,7 @@ async fn get_transaction_detail(
                     &tx_view,
                     ckb_store,
                     &state.store,
-                    &state.derived_store,
+                    &state.store,
                     &state.ckb_network,
                     block_number,
                 )?
@@ -846,7 +844,7 @@ fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
     ckb_store: &ckb_store_reader::CkbChainReader,
     core_store: &ckbadger_store::CkbadgerStore,
-    derived_store: &ckbadger_store::CkbadgerStore,
+    store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
 ) -> Result<TxIoBundle, RouteError> {
@@ -914,7 +912,7 @@ fn build_inputs_outputs_from_ckb(
                                     code_hash: format!("0x{}", hex::encode(type_code_hash)),
                                     hash_type: resolve_stored_input_type_hash_type(
                                         core_store,
-                                        derived_store,
+                                        store,
                                         info.type_script_hash.as_deref(),
                                         type_code_hash,
                                     )?,

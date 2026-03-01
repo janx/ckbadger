@@ -10,9 +10,7 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{
-    apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready, parse_chart_date_range,
-};
+use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT};
 use crate::AppState;
 
@@ -1246,8 +1244,6 @@ async fn get_cluster_holders(
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterHoldersParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
-    ensure_derived_ready(state.as_ref())?;
-
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
     let limit = params.limit.clamp(1, 100) as usize;
@@ -1316,8 +1312,6 @@ async fn get_cluster_activities(
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterActivityResponse>> {
-    ensure_derived_ready(state.as_ref())?;
-
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
     let limit = params.limit.clamp(1, 100);
@@ -1438,8 +1432,6 @@ async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
         .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
 
@@ -1482,7 +1474,7 @@ async fn get_cluster(
         .as_ref()
         .and_then(|e| e.owner_lock_hash.clone());
     let daily = state
-        .derived_store
+        .store
         .list_cluster_daily_deltas(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_occupation_chart(
@@ -1572,8 +1564,6 @@ async fn get_spore(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
 ) -> ApiResult<SporeResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let id = hex::decode(spore_id.strip_prefix("0x").unwrap_or(&spore_id))
         .map_err(|_| ApiError::bad_request("Invalid spore ID"))?;
 
@@ -1585,7 +1575,7 @@ async fn get_spore(
     match entry {
         Some(entry) => {
             let daily = state
-                .derived_store
+                .store
                 .list_spore_daily_deltas(&id)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let chart = build_capacity_occupation_chart(
@@ -1682,8 +1672,6 @@ async fn get_cluster_occupation_chart(
     Path(cluster_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -1707,14 +1695,14 @@ async fn get_cluster_occupation_chart(
         .and_then(|e| e.name.clone())
         .unwrap_or_else(|| "Spore Cluster".to_string());
     let daily = state
-        .derived_store
+        .store
         .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .derived_store
+            .store
             .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
@@ -1757,8 +1745,6 @@ async fn get_spore_occupation_chart(
     Path(spore_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -1774,14 +1760,14 @@ async fn get_spore_occupation_chart(
     }
 
     let daily = state
-        .derived_store
+        .store
         .list_spore_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .derived_store
+            .store
             .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {

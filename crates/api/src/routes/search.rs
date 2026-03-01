@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::{address_to_lock_script_hash, ensure_derived_ready, is_ckb_address};
+use crate::utils::{address_to_lock_script_hash, is_ckb_address};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -188,19 +188,12 @@ fn normalized_query_for_response(query: &str) -> String {
     trimmed.to_string()
 }
 
-fn scope_requires_derived(scope: SearchScope) -> bool {
-    scope_allows(scope, &[SearchScope::Script])
-}
-
 async fn search(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SearchParams>,
 ) -> ApiResult<SearchResponse> {
     let query = params.q.trim();
     let (scope, scoped_query_raw) = parse_scope(query);
-    if scope_requires_derived(scope) {
-        ensure_derived_ready(state.as_ref())?;
-    }
     let scoped_query = scoped_query_raw.trim();
     let normalized_query = normalized_query_for_response(scoped_query);
     let mut results = SearchAccumulator::default();
@@ -302,7 +295,7 @@ async fn search(
 
             if scope_allows(scope, &[SearchScope::Script]) {
                 let script = state
-                    .derived_store
+                    .store
                     .get_script_info(&hash_bytes)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 if let Some(script_info) = script {
@@ -446,7 +439,7 @@ async fn search(
 
         if scope_allows(scope, &[SearchScope::Script]) {
             let mut script_matches: Vec<_> = state
-                .derived_store
+                .store
                 .list_script_infos()
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .into_iter()

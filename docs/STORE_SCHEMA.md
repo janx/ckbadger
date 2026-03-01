@@ -88,10 +88,9 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 
 ## Environment Variables
 
-| Parameter                    | Default                         | Description                                    |
-| ---------------------------- | ------------------------------- | ---------------------------------------------- |
-| `CKBADGER_DATA_PATH`         | `./data/ckbadger-store`         | Default store + append store (`{path}-append`) |
-| `CKBADGER_DERIVED_DATA_PATH` | `./data/ckbadger-store-derived` | Derived store (legacy, may be removed)         |
+| Parameter            | Default                 | Description                                    |
+| -------------------- | ----------------------- | ---------------------------------------------- |
+| `CKBADGER_DATA_PATH` | `./data/ckbadger-store` | Default store + append store (`{path}-append`) |
 
 ```bash
 # Default paths

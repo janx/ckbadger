@@ -18,9 +18,6 @@ struct Args {
     )]
     data_path: String,
 
-    #[arg(long, env = "CKBADGER_DERIVED_DATA_PATH")]
-    derived_data_path: Option<String>,
-
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
 
@@ -74,22 +71,8 @@ async fn main() -> Result<()> {
         &args.data_path,
         &secondary_path,
     )?);
-    let derived_data_path = args
-        .derived_data_path
-        .unwrap_or_else(|| format!("{}-derived", args.data_path));
-    let derived_secondary_path = format!("{}-api-secondary", derived_data_path);
-    info!(
-        "Opening ckbadger-derived-store (secondary) at: {} -> {}",
-        derived_data_path, derived_secondary_path
-    );
-    let derived_store = Arc::new(CkbadgerStore::open_secondary(
-        &derived_data_path,
-        &derived_secondary_path,
-    )?);
-
     let config = AppConfig {
         store,
-        derived_store,
         redis_url,
         ckb_rpc_url: args.ckb_rpc_url,
         ckb_network: args.ckb_network,

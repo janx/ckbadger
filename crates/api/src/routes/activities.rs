@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{address::address_to_lock_script_hash, ensure_derived_ready};
+use crate::utils::address::address_to_lock_script_hash;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -144,7 +144,6 @@ async fn get_address_activities(
     Path(addr): Path<String>,
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<ActivityResponse>> {
-    ensure_derived_ready(&state)?;
     let lock_hash = if addr.starts_with("ckb1") || addr.starts_with("ckt1") {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
@@ -173,7 +172,7 @@ async fn get_address_activities(
     });
 
     let results = state
-        .derived_store
+        .store
         .list_activities(&lock_hash, limit + 1, cursor, params.filter.as_deref())
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_hash::new_blake2b;
-use ckbadger_common::{LabelImportConfig, LabelImportResult, PipelineProgressData};
+use ckbadger_common::{LabelImportConfig, PipelineProgressData};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
@@ -2734,8 +2734,6 @@ pub struct Indexer {
     rpc: CkbRpcClient,
     repo: Repository,
     writer: BatchWriter,
-    derived_writer: BatchWriter,
-    derived_store: Arc<CkbadgerStore>,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
@@ -2763,12 +2761,7 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub async fn new(
-        run_id: String,
-        config: Config,
-        store: Arc<CkbadgerStore>,
-        derived_store: Arc<CkbadgerStore>,
-    ) -> Result<Self> {
+    pub async fn new(run_id: String, config: Config, store: Arc<CkbadgerStore>) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
 
@@ -2786,9 +2779,6 @@ impl Indexer {
             config.fast_sync_mode,
             cache_invalidator.clone(),
         );
-        let derived_writer =
-            BatchWriter::with_fast_sync_mode(derived_store.clone(), config.fast_sync_mode);
-
         let (tip_number, _) = repo.get_sync_tip().await?;
         let chain_tip = if let Some(ref store) = ckb_store {
             store.tip_number().unwrap_or(0)
@@ -2831,8 +2821,6 @@ impl Indexer {
             rpc,
             repo,
             writer,
-            derived_writer,
-            derived_store,
             progress,
             cell_cache,
             udt_cell_cache,
@@ -5787,37 +5775,12 @@ impl Indexer {
             token_labels_path,
             ..Default::default()
         };
-        let core_store = Arc::clone(self.writer.store());
-        let derived_store = Arc::clone(&self.derived_store);
+        let store = Arc::clone(self.writer.store());
         let ckb_store = self.ckb_store.clone();
 
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                let mut summary = LabelImportResult::default();
-
-                let mut core_config = config.clone();
-                core_config.import_scripts = false;
-                let core_result = crate::label_import::run_label_import(
-                    core_store.as_ref(),
-                    ckb_store.as_deref(),
-                    &core_config,
-                )?;
-                summary.udt_labels_imported += core_result.udt_labels_imported;
-                summary.script_labels_imported += core_result.script_labels_imported;
-                summary.errors.extend(core_result.errors);
-
-                let mut derived_config = config;
-                derived_config.import_udt = false;
-                let derived_result = crate::label_import::run_label_import(
-                    derived_store.as_ref(),
-                    ckb_store.as_deref(),
-                    &derived_config,
-                )?;
-                summary.udt_labels_imported += derived_result.udt_labels_imported;
-                summary.script_labels_imported += derived_result.script_labels_imported;
-                summary.errors.extend(derived_result.errors);
-
-                Ok::<LabelImportResult, anyhow::Error>(summary)
+                crate::label_import::run_label_import(store.as_ref(), ckb_store.as_deref(), &config)
             })
             .await;
 
@@ -6262,7 +6225,7 @@ impl Indexer {
         }
         // Single batch for consume + address balances + script usage
         let mut consume_addr_batch = StoreBatch::new(self.writer.store());
-        let mut derived_analytics_batch = StoreBatch::new(&self.derived_store);
+        let mut derived_analytics_batch = StoreBatch::new(self.writer.store());
         if !all_consumptions.is_empty() {
             self.writer.consume_cells_batch_preloaded(
                 &all_consumptions,
@@ -6632,7 +6595,6 @@ impl Indexer {
 
         if need_balances || need_scripts {
             let writer = &self.writer;
-            let derived_writer = &self.derived_writer;
             let (existing_balances, existing_scripts) = std::thread::scope(|s| {
                 let bal = if need_balances {
                     Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
@@ -6640,7 +6602,7 @@ impl Indexer {
                     None
                 };
                 let scr = if need_scripts {
-                    Some(s.spawn(|| derived_writer.read_script_info(&code_hash_refs)))
+                    Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
                 } else {
                     None
                 };
@@ -6659,7 +6621,7 @@ impl Indexer {
                 )?;
             }
             if let Some(existing) = existing_scripts {
-                self.derived_writer.apply_script_usage_deltas(
+                self.writer.apply_script_usage_deltas(
                     &existing?,
                     &script_usage_changes,
                     &mut derived_analytics_batch,
@@ -6667,13 +6629,13 @@ impl Indexer {
             }
         }
         if !script_daily_changes.is_empty() {
-            self.derived_writer.update_script_daily_deltas_batch(
+            self.writer.update_script_daily_deltas_batch(
                 &script_daily_changes,
                 &mut derived_analytics_batch,
             )?;
         }
         if !token_daily_changes.is_empty() {
-            self.derived_writer.update_token_daily_deltas_batch(
+            self.writer.update_token_daily_deltas_batch(
                 &token_daily_changes,
                 &mut derived_analytics_batch,
             )?;
@@ -6685,7 +6647,7 @@ impl Indexer {
             )?;
         }
         if !spore_daily_changes.is_empty() {
-            self.derived_writer.update_spore_daily_deltas_batch(
+            self.writer.update_spore_daily_deltas_batch(
                 &spore_daily_changes,
                 &mut derived_analytics_batch,
             )?;
@@ -6695,11 +6657,11 @@ impl Indexer {
                 .update_nft_type_index_batch(&nft_type_index_changes, &mut consume_addr_batch)?;
         }
         if !nft_daily_changes.is_empty() {
-            self.derived_writer
+            self.writer
                 .update_nft_daily_deltas_batch(&nft_daily_changes, &mut derived_analytics_batch)?;
         }
         if !cluster_daily_changes.is_empty() {
-            self.derived_writer.update_cluster_daily_deltas_batch(
+            self.writer.update_cluster_daily_deltas_batch(
                 &cluster_daily_changes,
                 &mut derived_analytics_batch,
             )?;
@@ -7590,7 +7552,7 @@ impl Indexer {
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
 
         {
-            let mut batch = StoreBatch::new(&self.derived_store);
+            let mut batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
             if bulk_sync_mode {
                 let commit_started = Instant::now();
@@ -7985,7 +7947,6 @@ impl Indexer {
             (prefetched_addr_balances, prefetched_script_info),
         ) = if bulk_sync_mode {
             let writer = &self.writer;
-            let derived_writer = &self.derived_writer;
             let udt_cache = &self.udt_cell_cache;
             rayon::join(
                 || {
@@ -8164,9 +8125,7 @@ impl Indexer {
                         },
                         || {
                             if !code_hash_refs.is_empty() {
-                                derived_writer
-                                    .read_script_info(&code_hash_refs)
-                                    .unwrap_or_default()
+                                writer.read_script_info(&code_hash_refs).unwrap_or_default()
                             } else {
                                 HashMap::new()
                             }
@@ -8196,9 +8155,7 @@ impl Indexer {
             // Independent batches let all threads run fully in parallel; the RocksDB write
             // group overhead (~2ms) is negligible.
             let store = self.writer.store();
-            let derived_store = &self.derived_store;
             let writer = &self.writer;
-            let derived_writer = &self.derived_writer;
 
             let tt;
             (batch_stats, tt, write_commit_ms) = std::thread::scope(
@@ -8252,7 +8209,7 @@ impl Indexer {
                     let h2 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
-                        let mut derived_analytics_batch = StoreBatch::new(derived_store);
+                        let mut derived_analytics_batch = StoreBatch::new(store);
                         if !txs_for_batch.is_empty() {
                             writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
                         }
@@ -8264,20 +8221,20 @@ impl Indexer {
                             )?;
                         }
                         if !script_usage_changes.is_empty() {
-                            derived_writer.apply_script_usage_deltas(
+                            writer.apply_script_usage_deltas(
                                 &prefetched_script_info,
                                 &script_usage_changes,
                                 &mut derived_analytics_batch,
                             )?;
                         }
                         if !script_daily_changes.is_empty() {
-                            derived_writer.update_script_daily_deltas_batch(
+                            writer.update_script_daily_deltas_batch(
                                 &script_daily_changes,
                                 &mut derived_analytics_batch,
                             )?;
                         }
                         if !token_daily_changes.is_empty() {
-                            derived_writer.update_token_daily_deltas_batch(
+                            writer.update_token_daily_deltas_batch(
                                 &token_daily_changes,
                                 &mut derived_analytics_batch,
                             )?;
@@ -8289,7 +8246,7 @@ impl Indexer {
                             )?;
                         }
                         if !spore_daily_changes.is_empty() {
-                            derived_writer.update_spore_daily_deltas_batch(
+                            writer.update_spore_daily_deltas_batch(
                                 &spore_daily_changes,
                                 &mut derived_analytics_batch,
                             )?;
@@ -8299,13 +8256,13 @@ impl Indexer {
                                 .update_nft_type_index_batch(&nft_type_index_changes, &mut batch)?;
                         }
                         if !nft_daily_changes.is_empty() {
-                            derived_writer.update_nft_daily_deltas_batch(
+                            writer.update_nft_daily_deltas_batch(
                                 &nft_daily_changes,
                                 &mut derived_analytics_batch,
                             )?;
                         }
                         if !cluster_daily_changes.is_empty() {
-                            derived_writer.update_cluster_daily_deltas_batch(
+                            writer.update_cluster_daily_deltas_batch(
                                 &cluster_daily_changes,
                                 &mut derived_analytics_batch,
                             )?;
@@ -9177,7 +9134,7 @@ impl Indexer {
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
-                        let mut batch = StoreBatch::new(derived_store);
+                        let mut batch = StoreBatch::new(store);
                         let token_info_cache = load_activity_token_info_cache(
                             store,
                             &all_tx_data,
@@ -9361,11 +9318,10 @@ impl Indexer {
 
             let need_balances = !lock_hash_keys.is_empty();
             let need_scripts = !code_hash_refs.is_empty();
-            let mut derived_analytics_batch = StoreBatch::new(&self.derived_store);
+            let mut derived_analytics_batch = StoreBatch::new(self.writer.store());
 
             if need_balances || need_scripts {
                 let writer = &self.writer;
-                let derived_writer = &self.derived_writer;
                 let (existing_balances, existing_scripts) = std::thread::scope(|s| {
                     let bal = if need_balances {
                         Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
@@ -9373,7 +9329,7 @@ impl Indexer {
                         None
                     };
                     let scr = if need_scripts {
-                        Some(s.spawn(|| derived_writer.read_script_info(&code_hash_refs)))
+                        Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
                     } else {
                         None
                     };
@@ -9392,7 +9348,7 @@ impl Indexer {
                     )?;
                 }
                 if let Some(existing) = existing_scripts {
-                    self.derived_writer.apply_script_usage_deltas(
+                    self.writer.apply_script_usage_deltas(
                         &existing?,
                         &script_usage_changes,
                         &mut derived_analytics_batch,
@@ -9400,13 +9356,13 @@ impl Indexer {
                 }
             }
             if !script_daily_changes.is_empty() {
-                self.derived_writer.update_script_daily_deltas_batch(
+                self.writer.update_script_daily_deltas_batch(
                     &script_daily_changes,
                     &mut derived_analytics_batch,
                 )?;
             }
             if !token_daily_changes.is_empty() {
-                self.derived_writer.update_token_daily_deltas_batch(
+                self.writer.update_token_daily_deltas_batch(
                     &token_daily_changes,
                     &mut derived_analytics_batch,
                 )?;
@@ -9416,7 +9372,7 @@ impl Indexer {
                     .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
             }
             if !spore_daily_changes.is_empty() {
-                self.derived_writer.update_spore_daily_deltas_batch(
+                self.writer.update_spore_daily_deltas_batch(
                     &spore_daily_changes,
                     &mut derived_analytics_batch,
                 )?;
@@ -9426,13 +9382,13 @@ impl Indexer {
                     .update_nft_type_index_batch(&nft_type_index_changes, &mut data_batch)?;
             }
             if !nft_daily_changes.is_empty() {
-                self.derived_writer.update_nft_daily_deltas_batch(
+                self.writer.update_nft_daily_deltas_batch(
                     &nft_daily_changes,
                     &mut derived_analytics_batch,
                 )?;
             }
             if !cluster_daily_changes.is_empty() {
-                self.derived_writer.update_cluster_daily_deltas_batch(
+                self.writer.update_cluster_daily_deltas_batch(
                     &cluster_daily_changes,
                     &mut derived_analytics_batch,
                 )?;
@@ -10264,7 +10220,7 @@ impl Indexer {
             }
 
             // Activity writes (live sync)
-            let mut activity_batch = StoreBatch::new(&self.derived_store);
+            let mut activity_batch = StoreBatch::new(self.writer.store());
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),
@@ -10666,7 +10622,7 @@ impl Indexer {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
                 .insert_blocks_batch(&block_refs, &mut core_batch)?;
-            let mut derived_batch = StoreBatch::new(&self.derived_store);
+            let mut derived_batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(&batch_stats, &mut derived_batch)?;
             debug!(
                 phase = "finalize_headers_stats",
@@ -10810,7 +10766,7 @@ impl Indexer {
     fn write_batch_stats_to_batch(&self, stats: &BatchStats, batch: &mut StoreBatch) -> Result<()> {
         // Epoch statistics
         for (epoch_number, accum) in &stats.epoch_stats {
-            self.derived_writer.upsert_epoch_statistics_batch(
+            self.writer.upsert_epoch_statistics_batch(
                 *epoch_number,
                 accum.start_block,
                 accum.end_block,
@@ -10841,7 +10797,7 @@ impl Indexer {
         {
             let dao_field = stats.daily_dao_fields.get(date);
             let block_time = stats.daily_block_times.get(date).copied();
-            self.derived_writer.update_daily_statistics(
+            self.writer.update_daily_statistics(
                 *date,
                 *blocks,
                 *txs,
@@ -10872,20 +10828,20 @@ impl Indexer {
             } else {
                 0
             };
-            self.derived_writer
+            self.writer
                 .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, batch)?;
         }
 
         // Hourly statistics
         for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
-            self.derived_writer.update_hourly_statistics(
+            self.writer.update_hourly_statistics(
                 *hour, *blocks, *txs, *created, *consumed, *capacity, batch,
             )?;
         }
 
         // Miner statistics
         for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
-            self.derived_writer.update_miner_statistics_batch(
+            self.writer.update_miner_statistics_batch(
                 miner_hash,
                 *last_block,
                 *date,
@@ -10896,13 +10852,13 @@ impl Indexer {
 
         // Block time distribution
         for (bucket, count) in &stats.block_time_dist {
-            self.derived_writer
+            self.writer
                 .update_block_time_distribution_batch(*bucket, *count, batch)?;
         }
 
         // Epoch time distribution
         for (bucket, count) in &stats.epoch_time_dist {
-            self.derived_writer
+            self.writer
                 .update_epoch_time_distribution_batch(*bucket, *count, batch)?;
         }
 
@@ -10917,7 +10873,7 @@ impl Indexer {
                 // deltas default to 0 via unwrap_or(0), carrying forward previous
                 // totals while still updating DAO fields and secondary issuance.
                 let latest_snapshot = self
-                    .derived_writer
+                    .writer
                     .store()
                     .list_dao_daily_snapshots()
                     .ok()
@@ -11030,7 +10986,7 @@ impl Indexer {
                         cum_dao_compensation: running_cum_dao,
                         cum_treasury: running_cum_treasury,
                     };
-                    self.derived_writer
+                    self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
                 }
             }
@@ -11422,7 +11378,7 @@ impl Indexer {
             .await?;
         let fork_point_i64 = i64::try_from(fork_point)
             .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?;
-        self.derived_store.rollback_to_block(fork_point_i64)?;
+        self.writer.store().rollback_to_block(fork_point_i64)?;
 
         Ok(Some(ReorgAction::Handled(result)))
     }

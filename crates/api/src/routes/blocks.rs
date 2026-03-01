@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{ensure_derived_ready, script_to_address};
+use crate::utils::script_to_address;
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -84,8 +84,6 @@ async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
-    ensure_derived_ready(state.as_ref())?;
-
     let limit = params.limit.clamp(1, 100);
 
     let cache_key = format!("{}:{}", CacheKeys::LATEST_BLOCKS, limit);
@@ -128,11 +126,10 @@ async fn list_blocks(
     let network = state.ckb_network.clone();
 
     let store = state.store.clone();
-    let derived_store = state.derived_store.clone();
     let ckb_store = state.ckb_store.clone();
     let hardfork_activation_by_block = tokio::task::spawn_blocking({
-        let derived_store = derived_store.clone();
-        move || resolve_hardfork_activation_blocks(&network, &derived_store)
+        let store = store.clone();
+        move || resolve_hardfork_activation_blocks(&network, &store)
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
@@ -185,7 +182,7 @@ async fn list_blocks(
 
 fn resolve_hardfork_activation_blocks(
     network: &str,
-    derived_store: &ckbadger_store::CkbadgerStore,
+    store: &ckbadger_store::CkbadgerStore,
 ) -> anyhow::Result<HashMap<i64, HardforkActivationResponse>> {
     let Some(specs) = hardforks_for_network(network) else {
         return Ok(HashMap::new());
@@ -193,7 +190,7 @@ fn resolve_hardfork_activation_blocks(
 
     let mut activations = HashMap::new();
     for spec in specs {
-        let activation_block = derived_store
+        let activation_block = store
             .get_epoch_stats(spec.activation_epoch)?
             .map(|stats| stats.start_block);
         if let Some(activation_block) = activation_block {
@@ -306,7 +303,7 @@ fn cached_header_to_block_response(
 
 fn resolve_hardfork_activation(
     network: &str,
-    derived_store: &ckbadger_store::CkbadgerStore,
+    store: &ckbadger_store::CkbadgerStore,
     block_num: i64,
     epoch_number: i64,
     epoch_index: i32,
@@ -320,7 +317,7 @@ fn resolve_hardfork_activation(
             continue;
         }
 
-        let activation_block = derived_store
+        let activation_block = store
             .get_epoch_stats(spec.activation_epoch)?
             .map(|stats| stats.start_block);
 
@@ -355,8 +352,6 @@ async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let store = state.store.clone();
     let ckb_store = state.ckb_store.clone();
 
@@ -416,7 +411,7 @@ async fn get_block(
                 None => (None, None),
             };
             let activation = {
-                let derived_store_c = state.derived_store.clone();
+                let store_c = state.store.clone();
                 let network = state.ckb_network.clone();
                 let block_num_c = block_num;
                 let epoch_number = header.epoch_number;
@@ -424,7 +419,7 @@ async fn get_block(
                 tokio::task::spawn_blocking(move || {
                     resolve_hardfork_activation(
                         &network,
-                        &derived_store_c,
+                        &store_c,
                         block_num_c,
                         epoch_number,
                         epoch_index,

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{ensure_derived_ready, shannon_to_ckb};
+use crate::utils::shannon_to_ckb;
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -365,8 +365,6 @@ async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
 ) -> ApiResult<AddressDaoSummaryResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
 
@@ -465,7 +463,7 @@ async fn get_address_dao_summary(
     }
 
     let latest_snapshot = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .last()
@@ -496,8 +494,6 @@ async fn get_address_dao_summary(
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let active_deposits = state
         .store
         .list_active_dao_deposits()
@@ -596,7 +592,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     }
 
     let latest_snapshot = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .last()
@@ -801,15 +797,13 @@ pub struct ChartResponse {
 }
 
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let cache_key = "chart:dao-total-deposit";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -834,15 +828,13 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 }
 
 async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let cache_key = "chart:dao-daily-deposit";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -892,15 +884,13 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 async fn get_circulation_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let cache_key = "chart:dao-circulation-ratio";
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

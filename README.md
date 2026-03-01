@@ -224,7 +224,7 @@ make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 
 `make reset CONFIRM=1` cleanup scope:
 
-- Deletes local RocksDB paths (`CKBADGER_DATA_PATH`, `CKBADGER_DERIVED_DATA_PATH`) and both api secondary paths
+- Deletes local RocksDB paths (`CKBADGER_DATA_PATH`) and api secondary path
 - Deletes compose volumes `ckbadger-data` and `redis-data` (if present)
 - Keeps `ckb-data` volume (CKB chain data is not removed)
 
@@ -248,8 +248,6 @@ CKB_NETWORK=mainnet  # mainnet | testnet | devnet
 
 # ckbadger-store RocksDB data path
 CKBADGER_DATA_PATH=./data/ckbadger-store
-# ckbadger-derived-store RocksDB data path
-CKBADGER_DERIVED_DATA_PATH=./data/ckbadger-store-derived
 
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
@@ -285,7 +283,6 @@ cargo run -p ckbadger-indexer -- \
 
 # Environment variables
 CKBADGER_DATA_PATH=./data/ckbadger-store
-CKBADGER_DERIVED_DATA_PATH=./data/ckbadger-store-derived
 CKB_RPC_URL=http://localhost:8114
 REDIS_URL=redis://localhost:6379
 TOKEN_LABELS_PATH=docs/token-labels

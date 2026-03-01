@@ -20,7 +20,7 @@ use crate::response::{
 };
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    ensure_derived_ready, is_ckb_address, is_known_script_name, merge_script_info_for_reference,
+    is_ckb_address, is_known_script_name, merge_script_info_for_reference,
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::AppState;
@@ -1833,8 +1833,6 @@ async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
-    ensure_derived_ready(state.as_ref())?;
-
     let limit = params.limit.clamp(1, 100) as usize;
 
     let code_hash_bytes = hex::decode(
@@ -1850,7 +1848,7 @@ async fn list_cells_by_script(
     })?;
 
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .derived_store
+        .store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
@@ -1964,8 +1962,6 @@ async fn get_address(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
 ) -> ApiResult<AddressResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     // Check cache first
     let cache_key = CacheKeys::address_balance(&addr);
     if let Some(cached) = state.cache.get::<AddressResponse>(&cache_key).await {
@@ -2007,7 +2003,7 @@ async fn get_address(
     let (lock_script, lock_script_info, address) =
         if let Some((_, _, info)) = cells_for_script.first() {
             let script_info = state
-                .derived_store
+                .store
                 .get_script_info(&info.lock_code_hash)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2241,8 +2237,6 @@ async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
 ) -> ApiResult<CellDetailResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 
@@ -2288,7 +2282,7 @@ async fn get_cell(
 
     let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
         let type_hash_type_num: i16 = state
-            .derived_store
+            .store
             .get_script_info(code_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map(|si| si.hash_type as i16)
@@ -2345,7 +2339,7 @@ async fn get_cell(
     });
 
     let code_cell_of = if let Some(dh) = data_hash.as_ref() {
-        lookup_code_cell_scripts(&state.derived_store, dh, info.type_script_hash.as_ref())?
+        lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref())?
     } else {
         None
     };
@@ -2495,8 +2489,6 @@ async fn get_address_transactions(
     axum::extract::Path(addr): axum::extract::Path<String>,
     Query(params): Query<AddressTxParams>,
 ) -> ApiResult<CursorPaginatedResponse<AddressTransactionResponse>> {
-    ensure_derived_ready(&state)?;
-
     let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
@@ -2511,7 +2503,7 @@ async fn get_address_transactions(
 
     // Fetch recent transactions for this address (newest first)
     let addr_txs = state
-        .derived_store
+        .store
         .list_addr_txs_recent(&lock_hash, limit + 1, cursor)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2683,7 +2675,7 @@ async fn get_address_transactions(
                 .map(
                     |ch| -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
                     let known_name = state
-                        .derived_store
+                        .store
                         .get_script_info(ch)
                         .map_err(|e| ApiError::internal(e.to_string()))?
                         .and_then(|si| si.name)

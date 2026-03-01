@@ -67,11 +67,8 @@ impl Repository {
                 .update_sync_status(|status| {
                     status.tip_block_number = block_number;
                     status.tip_block_hash = hash_hex;
-                    status.derived_tip_block_number = Some(block_number);
                     status.total_transactions += tx_count_delta;
                     status.last_synced_at = chrono::Utc::now().timestamp();
-                    status.derived_last_synced_at = Some(status.last_synced_at);
-                    status.derived_sync_in_progress = false;
                 })
                 .await;
         }

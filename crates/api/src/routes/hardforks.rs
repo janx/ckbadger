@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::ensure_derived_ready;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +68,6 @@ async fn list_hardforks(
             network
         ))
     })?;
-    ensure_derived_ready(state.as_ref())?;
 
     let (tip_block, tip_epoch) = state
         .store
@@ -80,7 +78,7 @@ async fn list_hardforks(
     let mut events = Vec::with_capacity(hardforks.len());
     for spec in hardforks {
         let activation_block = state
-            .derived_store
+            .store
             .get_epoch_stats(spec.activation_epoch)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map(|stats| stats.start_block);

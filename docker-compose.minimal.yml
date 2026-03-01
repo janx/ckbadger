@@ -24,7 +24,6 @@ services:
         condition: service_healthy
     environment:
       CKBADGER_DATA_PATH: /data/ckbadger-store
-      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://host.docker.internal:8114}
       TOKEN_LABELS_PATH: /app/token-labels
@@ -56,7 +55,6 @@ services:
         condition: service_healthy
     environment:
       CKBADGER_DATA_PATH: /data/ckbadger-store
-      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://host.docker.internal:8114}
       RUST_LOG: info
