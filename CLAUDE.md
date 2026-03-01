@@ -124,8 +124,8 @@ Frontend pages support `md` (markdown) and `raw` (structured JSON) formats. Form
 crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
-    src/verify/   #   Data integrity verification suite (43 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (31 column families)
+    src/verify/   #   Data integrity verification suite (54 checks)
+  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 31 canonical CFs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI (sync/memory/throughput)
@@ -167,7 +167,7 @@ Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
 ## Data Integrity Verification
 
-43 checks across 3 tiers: Fast (6, seconds), Sampling (21, minutes), Explorer (16, minutes). See `docs/VERIFY.md` for full details.
+54 checks across 3 tiers: Fast (6, seconds), Sampling (21, minutes), Explorer (27, minutes). See `docs/VERIFY.md` for full details.
 
 ```bash
 cargo run -p ckbadger-indexer -- verify --depth fast      # Quick sanity
