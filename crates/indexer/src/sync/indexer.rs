@@ -3686,6 +3686,15 @@ impl Indexer {
                         }
                     }
                 } else {
+                    let blocks_behind = chain_tip.saturating_sub(start_block);
+                    if is_bulk_sync_active_by_lag(blocks_behind, config.bulk_sync_threshold) {
+                        error!(
+                            "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set \
+                             (blocks {}-{}). Set CKB_DATA_PATH to the CKB node data directory",
+                            start_block, end_block
+                        );
+                        break;
+                    }
                     match Self::fetch_blocks_with_config(
                         &rpc,
                         start_block,
@@ -5857,6 +5866,13 @@ impl Indexer {
             tokio::task::spawn_blocking(move || Self::fetch_blocks_direct(&store, start, end))
                 .await
                 .map_err(|e| anyhow::anyhow!("Block fetch task panicked: {}", e))?
+        } else if self.is_bulk_sync_active() {
+            bail!(
+                "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set \
+                 (blocks {}-{}). Set CKB_DATA_PATH to the CKB node data directory",
+                start,
+                end
+            )
         } else {
             Self::fetch_blocks_with_config(&self.rpc, start, end, self.config.parallel_fetch_size)
                 .await
