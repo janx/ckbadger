@@ -21,6 +21,8 @@ use super::report::{format_number, format_number_i128};
 struct ChartDataPoint {
     date: String,
     value: String,
+    #[serde(default)]
+    value2: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -40,6 +42,48 @@ struct StackedAreaDataPoint {
 #[serde(rename_all = "camelCase")]
 struct StackedAreaChartResponse {
     data: Vec<StackedAreaDataPoint>,
+}
+
+// ---------------------------------------------------------------------------
+// Explorer NervosDAO API types
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct ExplorerNervosDaoResponse {
+    data: ExplorerNervosDaoData,
+}
+
+#[derive(serde::Deserialize)]
+struct ExplorerNervosDaoData {
+    attributes: ExplorerNervosDaoAttributes,
+}
+
+#[derive(serde::Deserialize)]
+struct ExplorerNervosDaoAttributes {
+    total_deposit: String,
+    depositors_count: String,
+    unclaimed_compensation: String,
+    claimed_compensation: String,
+    average_deposit_time: String,
+    mining_reward: String,
+    deposit_compensation: String,
+    treasury_amount: String,
+    estimated_apc: String,
+}
+
+/// Our `/dao/statistics` response (subset of fields needed for verification).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OurDaoStatisticsResponse {
+    total_deposited: String,
+    total_depositors: i32,
+    total_compensation_paid: String,
+    unclaimed_compensation: String,
+    average_deposit_days: String,
+    estimated_apc: String,
+    mining_reward: String,
+    deposit_compensation: String,
+    burnt: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +400,148 @@ fn fetch_our_stacked_chart_sum(
             .filter_map(|v| v.parse::<f64>().ok())
             .sum();
         map.insert(normalize_date(&point.date), format!("{sum:.0}"));
+    }
+    Ok(map)
+}
+
+/// Fetch the NervosDAO contract summary from the official CKB explorer API, with file-based caching.
+fn fetch_explorer_nervos_dao(ctx: &CheckContext) -> anyhow::Result<ExplorerNervosDaoAttributes> {
+    let cache_key = "nervos_dao";
+
+    // 1. Try fresh cache first
+    if let Some(cached) = read_cache(&ctx.cache_dir, cache_key) {
+        if is_cache_fresh(&cached) {
+            // Reconstruct attributes from cached data map
+            return nervos_dao_from_cache(&cached.data);
+        }
+    }
+
+    // 2. Fetch from API
+    let explorer_url = ctx
+        .explorer_url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Explorer URL not set"))?;
+    let url = format!(
+        "{}/api/v1/contracts/nervos_dao",
+        explorer_url.trim_end_matches('/')
+    );
+
+    let fetch_result = (|| -> anyhow::Result<ExplorerNervosDaoAttributes> {
+        let resp = ctx
+            .http
+            .get(&url)
+            .header("Content-Type", "application/vnd.api+json")
+            .header("Accept", "application/vnd.api+json")
+            .send()?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("GET {} returned {}", url, status);
+        }
+        let parsed: ExplorerNervosDaoResponse = resp.json()?;
+        Ok(parsed.data.attributes)
+    })();
+
+    match fetch_result {
+        Ok(attrs) => {
+            // Cache as flat key-value map
+            let mut data = HashMap::new();
+            data.insert("total_deposit".to_string(), attrs.total_deposit.clone());
+            data.insert(
+                "depositors_count".to_string(),
+                attrs.depositors_count.clone(),
+            );
+            data.insert(
+                "unclaimed_compensation".to_string(),
+                attrs.unclaimed_compensation.clone(),
+            );
+            data.insert(
+                "claimed_compensation".to_string(),
+                attrs.claimed_compensation.clone(),
+            );
+            data.insert(
+                "average_deposit_time".to_string(),
+                attrs.average_deposit_time.clone(),
+            );
+            data.insert("mining_reward".to_string(), attrs.mining_reward.clone());
+            data.insert(
+                "deposit_compensation".to_string(),
+                attrs.deposit_compensation.clone(),
+            );
+            data.insert("treasury_amount".to_string(), attrs.treasury_amount.clone());
+            data.insert("estimated_apc".to_string(), attrs.estimated_apc.clone());
+            write_cache(&ctx.cache_dir, cache_key, &data);
+            Ok(attrs)
+        }
+        Err(e) => {
+            // 3. Fall back to stale cache
+            if let Some(cached) = read_cache(&ctx.cache_dir, cache_key) {
+                eprintln!(
+                    "    {} Explorer fetch for '{}' failed ({}), using stale cache from {}",
+                    style("⚠").yellow(),
+                    cache_key,
+                    e,
+                    cached.fetched_at,
+                );
+                nervos_dao_from_cache(&cached.data)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn nervos_dao_from_cache(
+    data: &HashMap<String, String>,
+) -> anyhow::Result<ExplorerNervosDaoAttributes> {
+    let get = |key: &str| -> anyhow::Result<String> {
+        data.get(key)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing cached field '{}'", key))
+    };
+    Ok(ExplorerNervosDaoAttributes {
+        total_deposit: get("total_deposit")?,
+        depositors_count: get("depositors_count")?,
+        unclaimed_compensation: get("unclaimed_compensation")?,
+        claimed_compensation: get("claimed_compensation")?,
+        average_deposit_time: get("average_deposit_time")?,
+        mining_reward: get("mining_reward")?,
+        deposit_compensation: get("deposit_compensation")?,
+        treasury_amount: get("treasury_amount")?,
+        estimated_apc: get("estimated_apc")?,
+    })
+}
+
+/// Parse our `averageDepositDays` formatted string back to a float.
+///
+/// Handles formats like `"1198 days"`, `"1.2K days+"`, `"0.3 days"`.
+fn parse_average_deposit_days(s: &str) -> Option<f64> {
+    let s = s
+        .trim()
+        .trim_end_matches('+')
+        .trim_end_matches(" days")
+        .trim_end_matches("days");
+    if s.ends_with('K') {
+        s.trim_end_matches('K')
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|v| v * 1000.0)
+    } else {
+        s.trim().parse::<f64>().ok()
+    }
+}
+
+/// Fetch our chart data and return `value2` as a date→value map (for depositors_count series).
+fn fetch_our_chart_value2(
+    ctx: &CheckContext,
+    chart_path: &str,
+) -> anyhow::Result<HashMap<String, String>> {
+    let wrapper: ChartResponse = api_get(ctx, chart_path)?;
+    let mut map = HashMap::new();
+    for point in wrapper.data {
+        if let Some(v2) = point.value2 {
+            map.insert(normalize_date(&point.date), v2);
+        }
     }
     Ok(map)
 }
@@ -1353,25 +1539,509 @@ impl Check for ExplorerBlockTimeDistribution {
     }
 }
 
+// ============================================
+// NervosDAO point-in-time checks (X17-X25)
+// ============================================
+
+/// Helper: compare a single shannon-valued field from our DAO stats vs explorer NervosDAO API.
+fn run_nervos_dao_shannon_check(
+    our_value: &str,
+    explorer_value: &str,
+    label: &str,
+    tolerance: f64,
+) -> CheckResult {
+    let ours: f64 = match our_value.parse::<f64>() {
+        Ok(v) => v,
+        Err(_) => {
+            return CheckResult::fail(
+                1,
+                vec![Finding {
+                    entity: "dao/statistics".to_string(),
+                    details: vec![format!(
+                        "{}: failed to parse our value '{}'",
+                        label, our_value
+                    )],
+                }],
+            )
+        }
+    };
+    let theirs: f64 = match explorer_value.parse::<f64>() {
+        Ok(v) => v,
+        Err(_) => {
+            return CheckResult::fail(
+                1,
+                vec![Finding {
+                    entity: "nervos_dao".to_string(),
+                    details: vec![format!(
+                        "{}: failed to parse explorer value '{}'",
+                        label, explorer_value
+                    )],
+                }],
+            )
+        }
+    };
+    if let Some(f) = compare_tolerance_f64_values(ours, theirs, "latest", label, tolerance) {
+        CheckResult::fail(1, vec![f])
+    } else {
+        CheckResult::pass(1)
+    }
+}
+
+/// X17: Compare total_deposit from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoTotalDeposit;
+
+impl Check for NervosDaoTotalDeposit {
+    fn name(&self) -> &'static str {
+        "nervos_dao_total_deposit"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO total_deposit vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        Ok(run_nervos_dao_shannon_check(
+            &ours.total_deposited,
+            &explorer.total_deposit,
+            "total_deposit",
+            0.005,
+        ))
+    }
+}
+
+/// X18: Compare depositors_count from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoDepositorsCount;
+
+impl Check for NervosDaoDepositorsCount {
+    fn name(&self) -> &'static str {
+        "nervos_dao_depositors_count"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO depositors_count vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        let our_val = ours.total_depositors as f64;
+        let their_val: f64 = explorer.depositors_count.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "failed to parse explorer depositors_count '{}'",
+                explorer.depositors_count
+            )
+        })?;
+        if let Some(f) =
+            compare_tolerance_f64_values(our_val, their_val, "latest", "depositors_count", 0.01)
+        {
+            Ok(CheckResult::fail(1, vec![f]))
+        } else {
+            Ok(CheckResult::pass(1))
+        }
+    }
+}
+
+/// X19: Compare unclaimed_compensation from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoUnclaimedCompensation;
+
+impl Check for NervosDaoUnclaimedCompensation {
+    fn name(&self) -> &'static str {
+        "nervos_dao_unclaimed_compensation"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO unclaimed_compensation vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        Ok(run_nervos_dao_shannon_check(
+            &ours.unclaimed_compensation,
+            &explorer.unclaimed_compensation,
+            "unclaimed_compensation",
+            0.02,
+        ))
+    }
+}
+
+/// X20: Compare claimed_compensation from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoClaimedCompensation;
+
+impl Check for NervosDaoClaimedCompensation {
+    fn name(&self) -> &'static str {
+        "nervos_dao_claimed_compensation"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO claimed_compensation vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        Ok(run_nervos_dao_shannon_check(
+            &ours.total_compensation_paid,
+            &explorer.claimed_compensation,
+            "claimed_compensation",
+            0.02,
+        ))
+    }
+}
+
+/// X21: Compare average_deposit_time from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoAverageDepositTime;
+
+impl Check for NervosDaoAverageDepositTime {
+    fn name(&self) -> &'static str {
+        "nervos_dao_average_deposit_time"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO average_deposit_time vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        let our_days = parse_average_deposit_days(&ours.average_deposit_days).ok_or_else(|| {
+            anyhow::anyhow!(
+                "failed to parse our averageDepositDays '{}'",
+                ours.average_deposit_days
+            )
+        })?;
+        let their_days: f64 = explorer.average_deposit_time.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "failed to parse explorer average_deposit_time '{}'",
+                explorer.average_deposit_time
+            )
+        })?;
+        if let Some(f) = compare_tolerance_f64_values(
+            our_days,
+            their_days,
+            "latest",
+            "average_deposit_time",
+            0.05,
+        ) {
+            Ok(CheckResult::fail(1, vec![f]))
+        } else {
+            Ok(CheckResult::pass(1))
+        }
+    }
+}
+
+/// X22: Compare mining_reward from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoMiningReward;
+
+impl Check for NervosDaoMiningReward {
+    fn name(&self) -> &'static str {
+        "nervos_dao_mining_reward"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO mining_reward vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        Ok(run_nervos_dao_shannon_check(
+            &ours.mining_reward,
+            &explorer.mining_reward,
+            "mining_reward",
+            0.005,
+        ))
+    }
+}
+
+/// X23: Compare deposit_compensation from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoDepositCompensation;
+
+impl Check for NervosDaoDepositCompensation {
+    fn name(&self) -> &'static str {
+        "nervos_dao_deposit_compensation"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO deposit_compensation vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        Ok(run_nervos_dao_shannon_check(
+            &ours.deposit_compensation,
+            &explorer.deposit_compensation,
+            "deposit_compensation",
+            0.005,
+        ))
+    }
+}
+
+/// X24: Compare treasury_amount (burnt) from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoTreasuryAmount;
+
+impl Check for NervosDaoTreasuryAmount {
+    fn name(&self) -> &'static str {
+        "nervos_dao_treasury_amount"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO treasury_amount vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        Ok(run_nervos_dao_shannon_check(
+            &ours.burnt,
+            &explorer.treasury_amount,
+            "treasury_amount",
+            0.005,
+        ))
+    }
+}
+
+/// X25: Compare estimated_apc from /dao/statistics vs explorer nervos_dao.
+pub struct NervosDaoEstimatedApc;
+
+impl Check for NervosDaoEstimatedApc {
+    fn name(&self) -> &'static str {
+        "nervos_dao_estimated_apc"
+    }
+    fn description(&self) -> &'static str {
+        "NervosDAO estimated_apc vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(1)
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer = fetch_explorer_nervos_dao(ctx)?;
+        let ours: OurDaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
+        let our_apc: f64 = ours.estimated_apc.parse().map_err(|_| {
+            anyhow::anyhow!("failed to parse our estimatedApc '{}'", ours.estimated_apc)
+        })?;
+        let their_apc: f64 = explorer.estimated_apc.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "failed to parse explorer estimated_apc '{}'",
+                explorer.estimated_apc
+            )
+        })?;
+        if let Some(f) =
+            compare_tolerance_f64_values(our_apc, their_apc, "latest", "estimated_apc", 0.05)
+        {
+            Ok(CheckResult::fail(1, vec![f]))
+        } else {
+            Ok(CheckResult::pass(1))
+        }
+    }
+}
+
+// ============================================
+// NervosDAO daily time-series checks (X26-X27)
+// ============================================
+
+/// X26: Compare /dao/charts/total-deposit value2 vs explorer total_depositors_count.
+pub struct ExplorerTotalDepositorsCount;
+
+impl Check for ExplorerTotalDepositorsCount {
+    fn name(&self) -> &'static str {
+        "explorer_total_depositors_count"
+    }
+    fn description(&self) -> &'static str {
+        "Daily total_depositors_count vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data =
+            fetch_explorer_daily(ctx, "total_depositors_count", "total_depositors_count")?;
+        let our_data = fetch_our_chart_value2(ctx, "dao/charts/total-deposit")?;
+        Ok(run_tolerance_explorer_check(
+            &our_data,
+            &explorer_data,
+            progress,
+            "total_depositors_count",
+            0.005,
+            |ours, theirs| {
+                let o: f64 = ours.parse().ok()?;
+                let t: f64 = theirs.parse().ok()?;
+                Some((o, t))
+            },
+        ))
+    }
+}
+
+/// X27: Compare daily delta of /dao/charts/total-deposit value2 vs explorer daily_dao_depositors_count.
+pub struct ExplorerDailyDaoDepositorsCount;
+
+impl Check for ExplorerDailyDaoDepositorsCount {
+    fn name(&self) -> &'static str {
+        "explorer_daily_dao_depositors_count"
+    }
+    fn description(&self) -> &'static str {
+        "Daily daily_dao_depositors_count vs explorer"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_explorer(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(30)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let explorer_data = fetch_explorer_daily(
+            ctx,
+            "daily_dao_depositors_count",
+            "daily_dao_depositors_count",
+        )?;
+        // Our value2 is cumulative total_depositors; compute daily delta.
+        let our_cumulative = fetch_our_chart_value2(ctx, "dao/charts/total-deposit")?;
+        let dates = last_30_days();
+        let mut findings = vec![];
+        let mut checked = 0u64;
+
+        for date in &dates {
+            if let (Some(explorer_val), Some(today_val)) =
+                (explorer_data.get(date), our_cumulative.get(date))
+            {
+                // Find the previous day's value for delta
+                if let Ok(d) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") {
+                    let prev_date = (d - chrono::Duration::days(1))
+                        .format("%Y-%m-%d")
+                        .to_string();
+                    if let Some(prev_val) = our_cumulative.get(&prev_date) {
+                        let today: f64 = today_val.parse().unwrap_or(0.0);
+                        let prev: f64 = prev_val.parse().unwrap_or(0.0);
+                        let our_delta = today - prev;
+                        let their_val: f64 = explorer_val.parse().unwrap_or(0.0);
+                        if let Some(f) = compare_tolerance_f64_values(
+                            our_delta,
+                            their_val,
+                            date,
+                            "daily_dao_depositors_count",
+                            0.005,
+                        ) {
+                            findings.push(f);
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+            progress.inc(1);
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 /// Return all explorer comparison checks.
 pub fn explorer_checks() -> Vec<Box<dyn Check>> {
     vec![
-        Box::new(ExplorerTxCount),               // X1
-        Box::new(ExplorerTotalDeposit),          // X2
-        Box::new(ExplorerHashRate),              // X3
-        Box::new(ExplorerDifficulty),            // X4
-        Box::new(ExplorerKnowledgeSize),         // X5
-        Box::new(ExplorerUncleRate),             // X6
-        Box::new(ExplorerLiveCellCount),         // X7
-        Box::new(ExplorerDeadCellCount),         // X8
-        Box::new(ExplorerDailyDeposit),          // X9
-        Box::new(ExplorerCirculationRatio),      // X10
-        Box::new(ExplorerCirculatingSupply),     // X11
-        Box::new(ExplorerBurnt),                 // X12
-        Box::new(ExplorerDepositCompensation),   // X13
-        Box::new(ExplorerMiningReward),          // X14
-        Box::new(ExplorerTreasuryAmount),        // X15
-        Box::new(ExplorerBlockTimeDistribution), // X16
+        Box::new(ExplorerTxCount),                 // X1
+        Box::new(ExplorerTotalDeposit),            // X2
+        Box::new(ExplorerHashRate),                // X3
+        Box::new(ExplorerDifficulty),              // X4
+        Box::new(ExplorerKnowledgeSize),           // X5
+        Box::new(ExplorerUncleRate),               // X6
+        Box::new(ExplorerLiveCellCount),           // X7
+        Box::new(ExplorerDeadCellCount),           // X8
+        Box::new(ExplorerDailyDeposit),            // X9
+        Box::new(ExplorerCirculationRatio),        // X10
+        Box::new(ExplorerCirculatingSupply),       // X11
+        Box::new(ExplorerBurnt),                   // X12
+        Box::new(ExplorerDepositCompensation),     // X13
+        Box::new(ExplorerMiningReward),            // X14
+        Box::new(ExplorerTreasuryAmount),          // X15
+        Box::new(ExplorerBlockTimeDistribution),   // X16
+        Box::new(NervosDaoTotalDeposit),           // X17
+        Box::new(NervosDaoDepositorsCount),        // X18
+        Box::new(NervosDaoUnclaimedCompensation),  // X19
+        Box::new(NervosDaoClaimedCompensation),    // X20
+        Box::new(NervosDaoAverageDepositTime),     // X21
+        Box::new(NervosDaoMiningReward),           // X22
+        Box::new(NervosDaoDepositCompensation),    // X23
+        Box::new(NervosDaoTreasuryAmount),         // X24
+        Box::new(NervosDaoEstimatedApc),           // X25
+        Box::new(ExplorerTotalDepositorsCount),    // X26
+        Box::new(ExplorerDailyDaoDepositorsCount), // X27
     ]
 }
 
@@ -1573,10 +2243,12 @@ mod tests {
             ChartDataPoint {
                 date: "10".to_string(),
                 value: "50".to_string(),
+                value2: None,
             },
             ChartDataPoint {
                 date: "14".to_string(),
                 value: "50".to_string(),
+                value2: None,
             },
         ];
         assert_eq!(
@@ -1590,6 +2262,7 @@ mod tests {
         let points = vec![ChartDataPoint {
             date: "10".to_string(),
             value: "0".to_string(),
+            value2: None,
         }];
         assert_eq!(weighted_avg_block_time_ms_from_distribution(&points), None);
     }
@@ -1597,10 +2270,41 @@ mod tests {
     #[test]
     fn test_explorer_checks_registered() {
         let checks = explorer_checks();
-        assert_eq!(checks.len(), 16);
+        assert_eq!(checks.len(), 27);
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
         assert!(names.contains(&"explorer_block_time_distribution"));
+        assert!(names.contains(&"nervos_dao_total_deposit"));
+        assert!(names.contains(&"nervos_dao_depositors_count"));
+        assert!(names.contains(&"nervos_dao_unclaimed_compensation"));
+        assert!(names.contains(&"nervos_dao_claimed_compensation"));
+        assert!(names.contains(&"nervos_dao_average_deposit_time"));
+        assert!(names.contains(&"nervos_dao_mining_reward"));
+        assert!(names.contains(&"nervos_dao_deposit_compensation"));
+        assert!(names.contains(&"nervos_dao_treasury_amount"));
+        assert!(names.contains(&"nervos_dao_estimated_apc"));
+        assert!(names.contains(&"explorer_total_depositors_count"));
+        assert!(names.contains(&"explorer_daily_dao_depositors_count"));
+    }
+
+    #[test]
+    fn test_parse_average_deposit_days_normal() {
+        assert_eq!(parse_average_deposit_days("1198 days"), Some(1198.0));
+    }
+
+    #[test]
+    fn test_parse_average_deposit_days_k_format() {
+        assert_eq!(parse_average_deposit_days("1.2K days+"), Some(1200.0));
+    }
+
+    #[test]
+    fn test_parse_average_deposit_days_fractional() {
+        assert_eq!(parse_average_deposit_days("0.3 days"), Some(0.3));
+    }
+
+    #[test]
+    fn test_parse_average_deposit_days_invalid() {
+        assert_eq!(parse_average_deposit_days("invalid"), None);
     }
 }
