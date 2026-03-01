@@ -185,22 +185,20 @@ impl CkbadgerStore {
             }
         }
 
-        // Phase 3: Batch lookup tx_idx for each tx_hash
+        // Phase 3: Batch lookup tx location for each tx_hash via cf_tx_meta (append store)
         let tx_hashes: Vec<Vec<u8>> = tx_addresses.keys().cloned().collect();
-        let cf_tx_hash_map = self.cf_tx_hash_map();
+        let cf_tx_meta = self.cf_tx_meta();
 
         for chunk in tx_hashes.chunks(5000) {
-            let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = chunk
-                .iter()
-                .map(|h| (cf_tx_hash_map, h.as_slice()))
-                .collect();
-            let results = self.multi_get_cf(cf_keys);
+            let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+                chunk.iter().map(|h| (cf_tx_meta, h.as_slice())).collect();
+            let results = self.append_multi_get_cf(cf_keys);
 
             for (i, result) in results.into_iter().enumerate() {
                 if let Ok(Some(value)) = result {
-                    if value.len() == 12 {
-                        let block_num = keys::decode_block_num(&value[..8]);
-                        let tx_idx = keys::decode_tx_idx(&value[8..12]);
+                    if let Ok(meta) = bincode::deserialize::<crate::types::TxMeta>(&value) {
+                        let block_num = meta.block_number;
+                        let tx_idx = meta.tx_index;
                         let tx_hash = &chunk[i];
 
                         if let Some(addresses) = tx_addresses.get(tx_hash) {
