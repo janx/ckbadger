@@ -112,7 +112,7 @@ impl BatchWriter {
     pub fn apply_address_balance_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
-        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
+        changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {
@@ -129,7 +129,7 @@ impl BatchWriter {
             let updated = match prev {
                 Some(bal) => {
                     let mut bal = bal.clone();
-                    let next_balance = bal.balance + *balance_delta as i128;
+                    let next_balance = bal.balance + *balance_delta;
                     if next_balance < 0 {
                         bail!(
                             "address balance underflow: lock_hash=0x{}, balance={}, delta={}",
@@ -138,7 +138,7 @@ impl BatchWriter {
                             balance_delta
                         );
                     }
-                    let next_occupied = bal.occupied_capacity + *occupied_delta as i128;
+                    let next_occupied = bal.occupied_capacity + *occupied_delta;
                     if next_occupied < 0 {
                         bail!(
                             "address occupied capacity underflow: lock_hash=0x{}, occupied_capacity={}, delta={}",
@@ -201,8 +201,8 @@ impl BatchWriter {
                         );
                     }
                     AddressBalance {
-                        balance: *balance_delta as i128,
-                        occupied_capacity: *occupied_delta as i128,
+                        balance: *balance_delta,
+                        occupied_capacity: *occupied_delta,
                         live_cells_count: *live_delta,
                         total_cells_count: *total_delta as i64,
                         txs_count: *tx_delta,
@@ -222,7 +222,7 @@ impl BatchWriter {
 
     pub fn update_address_balances_batch(
         &self,
-        changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
+        changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         if changes.is_empty() {

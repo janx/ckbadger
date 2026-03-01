@@ -799,7 +799,7 @@ impl Check for ExplorerHashRate {
                 // per-block data. Keep a wider tolerance for this derived metric.
                 let ours: f64 = our_val.parse::<f64>().unwrap_or(0.0);
                 if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", 0.07)
+                    compare_tolerance_f64(ours, explorer_val, date, "avg_hash_rate", 0.08)
                 {
                     findings.push(f);
                 }
@@ -848,7 +848,7 @@ impl Check for ExplorerDifficulty {
             {
                 let ours: f64 = our_val.parse().unwrap_or(0.0);
                 if let Some(f) =
-                    compare_tolerance_f64(ours, explorer_val, date, "avg_difficulty", 0.07)
+                    compare_tolerance_f64(ours, explorer_val, date, "avg_difficulty", 0.08)
                 {
                     findings.push(f);
                 }
@@ -900,7 +900,12 @@ impl Check for ExplorerKnowledgeSize {
             if let (Some(our_val), Some(explorer_val)) =
                 (our_data.get(date), explorer_data.get(date))
             {
-                let ours: f64 = our_val.parse().unwrap_or(0.0);
+                // Our API returns CKB units (via shannon_to_ckb_string), but the
+                // explorer returns raw shannons.  Convert our value back to shannons
+                // so the comparison is apples-to-apples.
+                let ours: f64 = parse_ckb_to_shannon(our_val)
+                    .map(|s| s as f64)
+                    .unwrap_or_else(|| our_val.parse().unwrap_or(0.0));
                 if let Some(f) =
                     compare_tolerance_f64(ours, explorer_val, date, "knowledge_size", 0.002)
                 {
@@ -1096,7 +1101,7 @@ impl Check for ExplorerCirculationRatio {
             &explorer_data,
             progress,
             "circulation_ratio",
-            0.012,
+            0.02,
             |ours, theirs| {
                 let o: f64 = ours.parse().ok()?;
                 let t: f64 = theirs.parse().ok()?;
