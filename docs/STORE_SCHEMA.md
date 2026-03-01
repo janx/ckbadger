@@ -39,7 +39,7 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 
 | CF                          | Key                                            | Value                        | Purpose                                               |
 | --------------------------- | ---------------------------------------------- | ---------------------------- | ----------------------------------------------------- |
-| `addr_stats`                | lock_hash (32B)                                | AddrStats (bincode)          | Address balance, cell counts (≥100 live cells only)   |
+| `addr_stats`                | lock_hash (32B)                                | AddrStats (bincode)          | Address balance, cell counts (all addresses)          |
 | `ft_stats`                  | script_hash (32B)                              | FtStats (bincode)            | FT supply, holder count                               |
 | `ft_holders`                | script_hash(32) + lock_hash(32)                | amount (16B u128)            | FT holder balances (hot tokens)                       |
 | `nft_collection_stats`      | nft_type(1) + collection_id(32)                | NftCollectionStats (bincode) | Collection aggregate stats                            |

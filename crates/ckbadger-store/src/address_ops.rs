@@ -7,107 +7,12 @@ use crate::store::CkbadgerStore;
 use crate::types::{AddressBalance, LiveCellInfo};
 
 impl CkbadgerStore {
-    /// Get address stats — checks materialized CF first, then derives from cell indices.
+    /// Get address stats from materialized CF_ADDR_STATS.
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
-        // Try materialized first (addresses above threshold)
-        if let Some(value) = self.get_cf(self.cf_addr_stats(), lock_hash)? {
-            return Ok(Some(bincode::deserialize(&value)?));
+        match self.get_cf(self.cf_addr_stats(), lock_hash)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
         }
-        // Derive from cell indices for sub-threshold addresses
-        self.derive_addr_stats(lock_hash)
-    }
-
-    /// Derive address stats at read time from cell indices.
-    /// Scans CF_LIVE_CELLS_BY_LOCK for the given lock_hash prefix, batch-gets cell data
-    /// from CF_CELLS (append), and aggregates balance/occupied_capacity/live_cells_count.
-    fn derive_addr_stats(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
-        let prefix = &lock_hash[..32];
-        let iter = self.iterator_cf(
-            self.cf_cell_by_lock(),
-            IteratorMode::From(prefix, rocksdb::Direction::Forward),
-        );
-
-        // Collect outpoints from the cell-by-lock index
-        let mut outpoint_keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = Vec::new();
-        for item in iter.flatten() {
-            let (key, _) = item;
-            if !key.starts_with(prefix) {
-                break;
-            }
-            // Key: lock_hash(32B) + block_num(8B) + outpoint(34B) = 74 bytes
-            if key.len() == 74 {
-                let mut outpoint = [0u8; keys::OUTPOINT_KEY_SIZE];
-                outpoint.copy_from_slice(&key[40..74]);
-                outpoint_keys.push(outpoint);
-            }
-        }
-
-        if outpoint_keys.is_empty() {
-            return Ok(None);
-        }
-
-        // Batch-get cell data from append store
-        let cf = self.cf_cells();
-        let cf_keys: Vec<_> = outpoint_keys.iter().map(|k| (cf, k.as_slice())).collect();
-        let values = self.append_multi_get_cf(cf_keys);
-
-        let mut balance: i128 = 0;
-        let mut occupied_capacity: i128 = 0;
-        let mut live_cells_count: i32 = 0;
-        let mut first_seen_block = i64::MAX;
-        let mut first_seen_tx = Vec::new();
-        let mut last_activity_block = 0i64;
-        let mut last_activity_tx = Vec::new();
-
-        for (outpoint, value_result) in outpoint_keys.iter().zip(values) {
-            if let Ok(Some(value)) = value_result {
-                let info: LiveCellInfo = bincode::deserialize(&value)?;
-                balance += info.capacity as i128;
-                occupied_capacity += info.occupied_capacity as i128;
-                live_cells_count += 1;
-
-                if info.created_at_block < first_seen_block {
-                    first_seen_block = info.created_at_block;
-                    first_seen_tx = outpoint[..32].to_vec();
-                }
-                if info.created_at_block > last_activity_block {
-                    last_activity_block = info.created_at_block;
-                    last_activity_tx = outpoint[..32].to_vec();
-                }
-            }
-        }
-
-        if live_cells_count == 0 {
-            return Ok(None);
-        }
-
-        // Derive txs_count from addr_txs index
-        let mut txs_count = 0i64;
-        let addr_tx_iter = self.iterator_cf(
-            self.cf_addr_txs(),
-            IteratorMode::From(prefix, rocksdb::Direction::Forward),
-        );
-        for item in addr_tx_iter.flatten() {
-            let (key, _) = item;
-            if !key.starts_with(prefix) {
-                break;
-            }
-            if key.len() == 44 {
-                txs_count += 1;
-            }
-        }
-
-        Ok(Some(AddressBalance {
-            balance,
-            occupied_capacity,
-            live_cells_count,
-            total_cells_count: i64::from(live_cells_count),
-            txs_count,
-            first_seen_block,
-            first_seen_tx,
-            last_activity_block,
-            last_activity_tx,
-        }))
     }
 
     pub fn put_addr_balance_direct(
@@ -462,40 +367,6 @@ impl CkbadgerStore {
 
         Ok(written)
     }
-
-    /// Delete addr_stats entries for addresses below the materialization threshold.
-    /// Called after bulk sync completes: during bulk sync all stats are written eagerly,
-    /// then this pass prunes sub-threshold entries so they'll be derived at read time.
-    pub fn cleanup_sub_threshold_addr_stats(&self) -> anyhow::Result<u64> {
-        use crate::store::ADDR_STATS_THRESHOLD;
-
-        let mut deleted = 0u64;
-        let mut batch = rocksdb::WriteBatch::default();
-        let batch_size = 20_000u64;
-
-        let iter = self.iterator_cf(self.cf_addr_stats(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, value) = item;
-            if let Ok(stats) = bincode::deserialize::<AddressBalance>(&value) {
-                if stats.live_cells_count < ADDR_STATS_THRESHOLD {
-                    batch.delete_cf(self.cf_addr_stats(), &key);
-                    deleted += 1;
-
-                    #[allow(clippy::manual_is_multiple_of)]
-                    if deleted % batch_size == 0 {
-                        self.write_batch(std::mem::take(&mut batch))?;
-                        batch = rocksdb::WriteBatch::default();
-                    }
-                }
-            }
-        }
-
-        if !batch.is_empty() {
-            self.write_batch(batch)?;
-        }
-
-        Ok(deleted)
-    }
 }
 
 #[cfg(test)]
@@ -597,28 +468,7 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_addr_stats_from_cells() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let lock_a = vec![0xAA; 32];
-
-        // Put cells + cell-by-lock index (simulating what indexer does)
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 60));
-        batch.put_cell_by_lock(&lock_a, 10, &[0x01; 32], 0);
-        batch.put_cell(&[0x02; 32], 0, &make_cell(lock_a.clone(), 20, 200, 80));
-        batch.put_cell_by_lock(&lock_a, 20, &[0x02; 32], 0);
-        batch.commit().unwrap();
-
-        // No materialized stats — get_addr_balance should derive from cells
-        let stats = store.get_addr_balance(&lock_a).unwrap().unwrap();
-        assert_eq!(stats.balance, 300);
-        assert_eq!(stats.occupied_capacity, 140);
-        assert_eq!(stats.live_cells_count, 2);
-    }
-
-    #[test]
-    fn test_derive_addr_stats_returns_none_for_unknown_address() {
+    fn test_get_addr_balance_returns_none_for_unknown_address() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let lock = vec![0xFF; 32];
@@ -627,32 +477,12 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_addr_stats_includes_txs_count() {
+    fn test_get_addr_balance_returns_materialized_stats() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let lock_a = vec![0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 60));
-        batch.put_cell_by_lock(&lock_a, 10, &[0x01; 32], 0);
-        batch.put_addr_tx(&lock_a, 10, 0, &[0x01; 32]);
-        batch.put_addr_tx(&lock_a, 20, 1, &[0x02; 32]);
-        batch.commit().unwrap();
-
-        let stats = store.get_addr_balance(&lock_a).unwrap().unwrap();
-        assert_eq!(stats.txs_count, 2);
-    }
-
-    #[test]
-    fn test_materialized_stats_preferred_over_derive() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let lock_a = vec![0xAA; 32];
-
-        // Write both materialized and cell data
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 60));
-        batch.put_cell_by_lock(&lock_a, 10, &[0x01; 32], 0);
         let materialized = AddressBalance {
             balance: 999,
             occupied_capacity: 500,
@@ -667,52 +497,8 @@ mod tests {
         batch.put_addr_balance(&lock_a, &materialized);
         batch.commit().unwrap();
 
-        // Should return materialized, not derived
         let stats = store.get_addr_balance(&lock_a).unwrap().unwrap();
         assert_eq!(stats.balance, 999);
         assert_eq!(stats.live_cells_count, 200);
-    }
-
-    #[test]
-    fn test_cleanup_sub_threshold_addr_stats() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let lock_small = vec![0xAA; 32];
-        let lock_big = vec![0xBB; 32];
-
-        let mut batch = StoreBatch::new(&store);
-        // Small address (below threshold)
-        batch.put_addr_balance(
-            &lock_small,
-            &AddressBalance {
-                balance: 100,
-                live_cells_count: 5,
-                ..Default::default()
-            },
-        );
-        // Big address (at threshold)
-        batch.put_addr_balance(
-            &lock_big,
-            &AddressBalance {
-                balance: 10000,
-                live_cells_count: crate::store::ADDR_STATS_THRESHOLD,
-                ..Default::default()
-            },
-        );
-        batch.commit().unwrap();
-
-        let deleted = store.cleanup_sub_threshold_addr_stats().unwrap();
-        assert_eq!(deleted, 1);
-
-        // Small should be gone from materialized
-        assert!(store
-            .get_cf(store.cf_addr_stats(), &lock_small)
-            .unwrap()
-            .is_none());
-        // Big should remain
-        assert!(store
-            .get_cf(store.cf_addr_stats(), &lock_big)
-            .unwrap()
-            .is_some());
     }
 }

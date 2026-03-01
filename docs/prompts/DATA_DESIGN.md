@@ -42,8 +42,7 @@ Derived Truth: various indices and aggregations on blocks, transactions, cells f
 1. Keep single source of truth.
 2. Don't store redundant data, don't write the same data multiple times/places.
 3. Use 'pointers' to link derived data with raw data, associate extended fields with original/core fields.
-4. Threshold-based Aggregation - whether an aggregation needs precomputing depends on the data set size it aggregates - if the set size exceeds a certain threshold, a precomputed aggregation value should be created and cached.
-5. Append-only stores serve as archives never delete - uncle blocks, reverted transactions, etc. are histories kept. Reorgs should not delete from append-only store. Hashes should be used as keys in append-only store because hashes are permanent ids. Block number should not be used as keys in append-only store because 'block number -> hash' mapping could change on reorgs.
+4. Append-only stores serve as archives never delete - uncle blocks, reverted transactions, etc. are histories kept. Reorgs should not delete from append-only store. Hashes should be used as keys in append-only store because hashes are permanent ids. Block number should not be used as keys in append-only store because 'block number -> hash' mapping could change on reorgs.
 
 # Column Family Suggestions
 
@@ -142,13 +141,13 @@ Value: Secondary issuance data
 ## Layer 2: Aggregates (Threshold-based)
 
 CF 22: `addr_stats`
-Purpose: Pre-computed aggregates for addresses whose associated cell count exceeds a threshold. Small addresses' stats derive at read time.
+Purpose: Pre-computed aggregates for addresses.
 
 CF 23: `ft_stats`
-Purpose: Pre-computed aggregates for fungible tokens whose associated cell count exceeds a threshold. Small tokens' stats derive at read time.
+Purpose: Pre-computed aggregates for fungible tokens.
 
 CF 24: `nft_collection_stats`
-Purpose: Pre-computed aggregates for non-fungible token collections whose associated cell count exceeds a threshold. Small NFT collections' stats derive at read time.
+Purpose: Pre-computed aggregates for non-fungible token collections.
 
 CF 24: `addr_txs`, index to `tx_meta`
 Purpose: Per-address tx history for paginated listing.

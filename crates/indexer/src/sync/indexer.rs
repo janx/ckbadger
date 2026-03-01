@@ -5749,26 +5749,6 @@ impl Indexer {
                 "Bulk sync completed"
             );
 
-            // Clean up sub-threshold addr_stats entries.
-            // During bulk sync, ALL addr_stats are written eagerly for performance.
-            // Now prune entries below ADDR_STATS_THRESHOLD.
-            match self.writer.store().cleanup_sub_threshold_addr_stats() {
-                Ok(deleted) => {
-                    if deleted > 0 {
-                        info!(
-                            deleted,
-                            "Post-bulk-sync: cleaned up sub-threshold addr_stats entries"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Post-bulk-sync: failed to clean up sub-threshold addr_stats"
-                    );
-                }
-            }
-
             self.cache_invalidator.invalidate_chart_caches().await;
 
             // Compaction mode transition is now handled by ensure_compaction_mode()

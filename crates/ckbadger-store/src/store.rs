@@ -55,9 +55,9 @@ pub const CF_DAO_DEPOSITS: &str = "dao_deposits";
 pub const CF_DAO_WITHDRAW_INDEX: &str = "dao_withdraw_index";
 /// Per-block secondary issuance breakdown. Key: block_num(8B).
 pub const CF_BLOCK_ISSUANCE: &str = "block_issuance";
-/// Address aggregate stats. Key: lock_hash(32B). Threshold-based materialization.
+/// Address aggregate stats. Key: lock_hash(32B). All addresses materialized.
 pub const CF_ADDR_STATS: &str = "addr_stats";
-/// FT aggregate stats. Key: script_hash(32B). Threshold-based materialization.
+/// FT aggregate stats. Key: script_hash(32B).
 pub const CF_FT_STATS: &str = "ft_stats";
 /// FT holder balances (hot tokens only). Key: script_hash(32B) + lock_hash(32B), Value: amount(16B).
 pub const CF_FT_HOLDERS: &str = "ft_holders";
@@ -94,10 +94,6 @@ pub const CF_ACTIVITIES: &str = "activities";
 // ============================================================
 // Backward-compatible CF aliases (point to canonical names)
 // ============================================================
-
-/// Minimum live_cells_count for an address to keep materialized stats in CF_ADDR_STATS.
-/// Below this threshold, stats are derived at read time from cell indices.
-pub const ADDR_STATS_THRESHOLD: i32 = 100;
 
 pub const CF_CELL_BY_LOCK: &str = CF_LIVE_CELLS_BY_LOCK;
 pub const CF_CELL_BY_TYPE: &str = CF_LIVE_CELLS_BY_TYPE;
