@@ -231,6 +231,10 @@ pub struct TuiDb {
 }
 
 impl TuiDb {
+    pub fn store(&self) -> &CkbadgerStore {
+        &self.store
+    }
+
     pub async fn new(store: Arc<CkbadgerStore>, redis_url: Option<&str>, api_url: &str) -> Self {
         let redis = if let Some(url) = redis_url {
             match redis::Client::open(url) {

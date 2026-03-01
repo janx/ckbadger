@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local};
 use ckbadger_common::MemoryStatsData;
+use ckbadger_store::{APPEND_CFS, DEFAULT_CFS};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -66,6 +67,7 @@ pub enum MainTab {
     #[default]
     Overview,
     Sync,
+    System,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -190,17 +192,23 @@ impl App {
         }
     }
 
+    pub fn db(&self) -> &TuiDb {
+        &self.db
+    }
+
     pub fn next_tab(&mut self) {
         self.main_tab = match self.main_tab {
             MainTab::Overview => MainTab::Sync,
-            MainTab::Sync => MainTab::Overview,
+            MainTab::Sync => MainTab::System,
+            MainTab::System => MainTab::Overview,
         };
     }
 
     pub fn previous_tab(&mut self) {
         self.main_tab = match self.main_tab {
-            MainTab::Overview => MainTab::Sync,
+            MainTab::Overview => MainTab::System,
             MainTab::Sync => MainTab::Overview,
+            MainTab::System => MainTab::Sync,
         };
     }
 
@@ -254,6 +262,7 @@ impl App {
                     self.sync_event_scroll += 1;
                 }
             }
+            MainTab::System => {}
         }
     }
 
@@ -265,6 +274,7 @@ impl App {
             MainTab::Sync => {
                 self.sync_event_scroll = self.sync_event_scroll.saturating_sub(1);
             }
+            MainTab::System => {}
         }
     }
 
@@ -272,6 +282,7 @@ impl App {
         match self.main_tab {
             MainTab::Overview => self.log_scroll = 0,
             MainTab::Sync => self.sync_event_scroll = 0,
+            MainTab::System => {}
         }
     }
 
@@ -281,6 +292,7 @@ impl App {
             MainTab::Sync => {
                 self.sync_event_scroll = self.sync_event_entries.len().saturating_sub(1)
             }
+            MainTab::System => {}
         }
     }
 
@@ -629,29 +641,40 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let (overview_style, sync_style) = match app.main_tab {
-        MainTab::Overview => (
-            Style::default()
-                .fg(Color::Black)
-                .bg(TERMINAL_GREEN)
-                .add_modifier(Modifier::BOLD),
-            Style::default().fg(SLATE_500),
-        ),
-        MainTab::Sync => (
-            Style::default().fg(SLATE_500),
-            Style::default()
-                .fg(Color::Black)
-                .bg(TERMINAL_GREEN)
-                .add_modifier(Modifier::BOLD),
-        ),
+    let active_style = Style::default()
+        .fg(Color::Black)
+        .bg(TERMINAL_GREEN)
+        .add_modifier(Modifier::BOLD);
+    let inactive_style = Style::default().fg(SLATE_500);
+
+    let overview_style = if app.main_tab == MainTab::Overview {
+        active_style
+    } else {
+        inactive_style
+    };
+    let sync_style = if app.main_tab == MainTab::Sync {
+        active_style
+    } else {
+        inactive_style
+    };
+    let system_style = if app.main_tab == MainTab::System {
+        active_style
+    } else {
+        inactive_style
     };
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" Tabs: ", Style::default().fg(SLATE_500)),
         Span::styled(" Overview ", overview_style),
         Span::styled("  ", Style::default().fg(SLATE_700)),
         Span::styled(" Sync ", sync_style),
-        Span::styled(
+        Span::styled("  ", Style::default().fg(SLATE_700)),
+        Span::styled(" System ", system_style),
+    ];
+
+    // Layout/diagnostics indicators only relevant on Overview and Sync tabs
+    if app.main_tab != MainTab::System {
+        spans.push(Span::styled(
             if app.force_compact_layout {
                 "  [Compact]"
             } else {
@@ -662,24 +685,27 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 SLATE_500
             }),
-        ),
-        Span::styled("  ", Style::default().fg(SLATE_700)),
-        Span::styled(
+        ));
+        spans.push(Span::styled("  ", Style::default().fg(SLATE_700)));
+        spans.push(Span::styled(
             format!(
                 "[Diag:{}]",
                 diagnostics_view_mode_label(app.diagnostics_view_mode)
             ),
             Style::default().fg(diagnostics_view_mode_color(app.diagnostics_view_mode)),
-        ),
-        Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)),
-    ]);
-    f.render_widget(Paragraph::new(line), inner);
+        ));
+    }
+
+    spans.push(Span::styled("  [Tab/s]", Style::default().fg(SLATE_500)));
+
+    f.render_widget(Paragraph::new(Line::from(spans)), inner);
 }
 
 fn draw_content(f: &mut Frame, app: &App, area: Rect) {
     match app.main_tab {
         MainTab::Overview => draw_overview_content(f, app, area),
         MainTab::Sync => draw_sync_content(f, app, area),
+        MainTab::System => draw_system_content(f, app, area),
     }
 }
 
@@ -3427,7 +3453,7 @@ fn draw_help_popup(f: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from("  q        Quit"),
-        Line::from("  Tab/s/l  Next tab"),
+        Line::from("  Tab/s/l  Next tab (Overview / Sync / System)"),
         Line::from("  h        Previous tab"),
         Line::from("  c        Toggle compact layout override"),
         Line::from("  v        Cycle diagnostics view (Auto/Compact/Detail)"),
@@ -3525,23 +3551,368 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// System tab
+// ---------------------------------------------------------------------------
+
+fn system_kv_line(label: &str, value: String, value_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("  {:<22}", label), Style::default().fg(SLATE_500)),
+        Span::styled(value, Style::default().fg(value_color)),
+    ])
+}
+
+fn direct_io_reads_label() -> &'static str {
+    let enabled = std::env::var("CKBADGER_DIRECT_IO_READS")
+        .map(|v| v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(true);
+    if enabled {
+        "reads + flush/compact"
+    } else {
+        "flush/compact only"
+    }
+}
+
+fn draw_system_content(f: &mut Frame, app: &App, area: Rect) {
+    let store = app.db().store();
+    let p = store.memory_profile();
+    let mem = &app.memory_stats;
+    let compact = app.force_compact_layout || area.width < 130;
+
+    // Section 1 grows by 2 rows when live indexer state is available.
+    let env_height = if mem.is_some() { 8 } else { 6 };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(env_height),
+            Constraint::Length(5),
+            Constraint::Min(10),
+        ])
+        .split(area);
+
+    // -- Section 1: System Environment --
+    draw_system_environment(f, p, mem, chunks[0]);
+
+    // -- Section 2: Store Paths --
+    draw_system_paths(f, store, chunks[1]);
+
+    // -- Section 3: RocksDB Parameters --
+    if compact {
+        draw_system_params_compact(f, p, chunks[2]);
+    } else {
+        draw_system_params_wide(f, p, chunks[2]);
+    }
+}
+
+fn draw_system_environment(
+    f: &mut Frame,
+    p: &ckbadger_store::MemoryProfile,
+    mem: &Option<MemoryStatsData>,
+    area: Rect,
+) {
+    let block = Block::default()
+        .title(Span::styled(
+            " System Environment ",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let ram_gb = p.system_ram_bytes as f64 / 1_073_741_824.0;
+    let budget_pct = if p.system_ram_bytes > 0 {
+        (p.rocksdb_budget_bytes as f64 / p.system_ram_bytes as f64 * 100.0) as u32
+    } else {
+        0
+    };
+    let mode_label = if p.is_secondary {
+        "Secondary (read-only)"
+    } else {
+        "Primary (read-write)"
+    };
+
+    let mut lines = vec![
+        system_kv_line("System RAM", format!("{:.1} GB", ram_gb), CYAN),
+        system_kv_line("CPU count", format!("{}", p.cpu_count), CYAN),
+        system_kv_line("Store mode", mode_label.to_string(), CYAN),
+        system_kv_line(
+            "RocksDB budget",
+            format!(
+                "{} ({}% of RAM)",
+                format_bytes(p.rocksdb_budget_bytes as u64),
+                budget_pct
+            ),
+            CYAN,
+        ),
+    ];
+
+    // Live indexer state from Redis memory stats
+    if let Some(m) = mem {
+        let mode_str = if m.bulk_sync_mode {
+            "Bulk Sync"
+        } else {
+            "Normal"
+        };
+        let mode_color = if m.bulk_sync_mode {
+            AMBER
+        } else {
+            TERMINAL_GREEN
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {:<22}", "Indexer mode"),
+                Style::default().fg(SLATE_500),
+            ),
+            Span::styled(mode_str.to_string(), Style::default().fg(mode_color)),
+        ]));
+
+        if m.wbm_budget_bytes > 0 {
+            let pct = (m.wbm_usage_bytes as f64 / m.wbm_budget_bytes as f64 * 100.0) as u32;
+            let color = if pct > 90 { AMBER } else { CYAN };
+            lines.push(system_kv_line(
+                "WBM usage",
+                format!(
+                    "{} / {} ({}%)",
+                    format_bytes(m.wbm_usage_bytes),
+                    format_bytes(m.wbm_budget_bytes),
+                    pct
+                ),
+                color,
+            ));
+        }
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn draw_system_paths(f: &mut Frame, store: &ckbadger_store::CkbadgerStore, area: Rect) {
+    let block = Block::default()
+        .title(Span::styled(
+            " Store Paths ",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let default_cf_count = DEFAULT_CFS.len();
+    let append_cf_count = APPEND_CFS.len();
+
+    let lines = vec![
+        system_kv_line(
+            "Default store",
+            store.default_path().display().to_string(),
+            FOREGROUND,
+        ),
+        system_kv_line(
+            "Append store",
+            store.append_path().display().to_string(),
+            FOREGROUND,
+        ),
+        system_kv_line(
+            "Column families",
+            format!(
+                "{} default + {} append = {}",
+                default_cf_count,
+                append_cf_count,
+                default_cf_count + append_cf_count
+            ),
+            SLATE_500,
+        ),
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn system_normal_mode_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            "  Normal Mode",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        )),
+        system_kv_line("WBM", format_bytes(p.wbm_normal_bytes as u64), CYAN),
+        system_kv_line(
+            "Block cache",
+            format_bytes(p.block_cache_normal_bytes as u64),
+            CYAN,
+        ),
+        system_kv_line(
+            "Level base",
+            format_bytes(p.normal_max_bytes_for_level_base),
+            CYAN,
+        ),
+        system_kv_line(
+            "File base",
+            format_bytes(p.normal_target_file_size_base),
+            CYAN,
+        ),
+        system_kv_line(
+            "WB mega",
+            format_bytes(p.write_buffer_mega_bytes as u64),
+            CYAN,
+        ),
+        system_kv_line(
+            "WB high",
+            format_bytes(p.write_buffer_high_bytes as u64),
+            CYAN,
+        ),
+        system_kv_line(
+            "WB low",
+            format_bytes(p.write_buffer_low_bytes as u64),
+            CYAN,
+        ),
+        system_kv_line(
+            "Background jobs",
+            format!("{}", p.max_background_jobs),
+            CYAN,
+        ),
+        system_kv_line("Subcompactions", format!("{}", p.max_subcompactions), CYAN),
+        system_kv_line("L0 trigger", "4".to_string(), SLATE_500),
+        system_kv_line("L0 slowdown", "12".to_string(), SLATE_500),
+        system_kv_line("L0 stop", "24".to_string(), SLATE_500),
+    ]
+}
+
+fn system_bulk_sync_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            "  Bulk Sync Mode",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        )),
+        system_kv_line("WBM", format_bytes(p.wbm_bulk_sync_bytes as u64), CYAN),
+        system_kv_line(
+            "Block cache",
+            format_bytes(p.block_cache_bulk_sync_bytes as u64),
+            CYAN,
+        ),
+        system_kv_line(
+            "Level base",
+            format_bytes(p.bulk_max_bytes_for_level_base),
+            CYAN,
+        ),
+        system_kv_line(
+            "File base",
+            format_bytes(p.bulk_target_file_size_base),
+            CYAN,
+        ),
+        system_kv_line(
+            "Hot CF WB",
+            format_bytes(p.write_buffer_hot_cf_bytes as u64),
+            CYAN,
+        ),
+        system_kv_line("L0 slowdown", "64".to_string(), SLATE_500),
+        system_kv_line("L0 stop", "128".to_string(), SLATE_500),
+    ]
+}
+
+fn system_fixed_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static>> {
+    vec![
+        Line::from(Span::styled(
+            "  Fixed Constants",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        )),
+        system_kv_line("Compression", "LZ4 (append: None)".to_string(), SLATE_500),
+        system_kv_line("Direct I/O", direct_io_reads_label().to_string(), SLATE_500),
+        system_kv_line("Unordered write", "true".to_string(), SLATE_500),
+        system_kv_line("Block size", "16 KB".to_string(), SLATE_500),
+        system_kv_line("Bloom filter", "10 bits".to_string(), SLATE_500),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Pressure Thresholds",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        )),
+        system_kv_line(
+            "Severe pending",
+            format_bytes(p.severe_compaction_pending_bytes),
+            CYAN,
+        ),
+        system_kv_line(
+            "Moderate pending",
+            format_bytes(p.moderate_compaction_pending_bytes),
+            CYAN,
+        ),
+        system_kv_line(
+            "Severe imm tables",
+            format!("{}", p.severe_immutable_memtables),
+            CYAN,
+        ),
+        system_kv_line(
+            "Moderate imm tables",
+            format!("{}", p.moderate_immutable_memtables),
+            CYAN,
+        ),
+        system_kv_line(
+            "Drain pending",
+            format_bytes(p.drain_pending_bytes_threshold),
+            CYAN,
+        ),
+    ]
+}
+
+fn draw_system_params_wide(f: &mut Frame, p: &ckbadger_store::MemoryProfile, area: Rect) {
+    let block = Block::default()
+        .title(Span::styled(
+            " RocksDB Parameters ",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let col_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
+            Constraint::Percentage(33),
+        ])
+        .split(inner);
+
+    f.render_widget(Paragraph::new(system_normal_mode_lines(p)), col_chunks[0]);
+    f.render_widget(Paragraph::new(system_bulk_sync_lines(p)), col_chunks[1]);
+    f.render_widget(Paragraph::new(system_fixed_lines(p)), col_chunks[2]);
+}
+
+fn draw_system_params_compact(f: &mut Frame, p: &ckbadger_store::MemoryProfile, area: Rect) {
+    let block = Block::default()
+        .title(Span::styled(
+            " RocksDB Parameters ",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines = system_normal_mode_lines(p);
+    lines.push(Line::from(""));
+    lines.extend(system_bulk_sync_lines(p));
+    lines.push(Line::from(""));
+    lines.extend(system_fixed_lines(p));
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
         consumed_cells_source_label, dense_right_lines, detail_right_lines,
-        diagnostics_dense_panel, eta_confidence_label, format_age_secs, format_hit_rate,
-        format_num, format_num_commas, format_rate_pair, format_ratio, format_signed_num_i128,
-        format_stage_commit_gap_ms, format_ttl, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
-        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
-        runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
+        diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, format_age_secs,
+        format_hit_rate, format_num, format_num_commas, format_rate_pair, format_ratio,
+        format_signed_num_i128, format_stage_commit_gap_ms, format_ttl, header_right_line,
+        header_title_line, heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop,
+        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
+        pipeline_flow_state, pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line,
+        redis_max_key_age, runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
         startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_chart_specs,
-        sync_timing_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, Color,
-        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        SyncChartKind, TERMINAL_DIM,
+        sync_timing_lines, system_kv_line, trend_delta, trim_for_panel, AdaptiveControlSnapshot,
+        Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        SyncChartKind, CYAN, TERMINAL_DIM,
     };
     use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
     use ckbadger_common::MemoryStatsData;
@@ -4200,5 +4571,25 @@ mod tests {
         assert!(line_text(&left[2]).contains("src sst"));
         assert!(line_text(&right[3]).contains("mode bulk"));
         assert!(line_text(&right[3]).contains("cache off"));
+    }
+
+    #[test]
+    fn test_system_kv_line_format() {
+        let line = system_kv_line("Test label", "value".to_string(), CYAN);
+        let text = line_text(&line);
+        assert!(text.contains("Test label"));
+        assert!(text.contains("value"));
+        // Label is left-padded to 22 chars + 2-char indent = 24 chars before value
+        assert!(text.starts_with("  Test label"));
+    }
+
+    #[test]
+    fn test_direct_io_reads_label() {
+        // Default (no env var set) should include reads
+        let label = direct_io_reads_label();
+        assert!(
+            label == "reads + flush/compact" || label == "flush/compact only",
+            "unexpected label: {label}"
+        );
     }
 }

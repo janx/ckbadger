@@ -1344,7 +1344,7 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
 }
 
 fn count_new_addresses(
-    changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)>,
+    changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)>,
     existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
 ) -> i64 {
     changes
@@ -3467,7 +3467,7 @@ impl Indexer {
             HashMap<(Vec<u8>, i16), LiveCellInfo>,
             // Pre-computed in parser stage:
             HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
-            HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>, // address_balance_changes
+            HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>, // address_balance_changes
             ScriptUsageChanges,                    // script_usage_changes
             HashMap<(Vec<u8>, bool, u32), (i128, i128)>, // script_daily_changes
             HashMap<(Vec<u8>, u32), (i128, i128)>, // token_daily_changes
@@ -4119,7 +4119,7 @@ impl Indexer {
                 // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
                 let mut address_balance_changes: HashMap<
                     Vec<u8>,
-                    (i64, i32, i32, i64, i64, Vec<u8>, i64),
+                    (i128, i32, i32, i64, i64, Vec<u8>, i128),
                 > = HashMap::new();
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)> =
@@ -4310,9 +4310,9 @@ impl Indexer {
                     }
 
                     // Per-tx balance/consumption tracking
-                    let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
+                    let mut tx_balance_changes: HashMap<Vec<u8>, i128> = HashMap::new();
                     let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-                    let mut tx_occupied_changes: HashMap<Vec<u8>, i64> = HashMap::new();
+                    let mut tx_occupied_changes: HashMap<Vec<u8>, i128> = HashMap::new();
 
                     if !tx_data.is_cellbase {
                         for input in &tx_data.inputs {
@@ -4326,13 +4326,13 @@ impl Indexer {
                             if let Some(info) = info {
                                 *tx_balance_changes
                                     .entry(info.lock_script_hash.clone())
-                                    .or_default() -= info.capacity;
+                                    .or_default() -= i128::from(info.capacity);
                                 *tx_cells_consumed
                                     .entry(info.lock_script_hash.clone())
                                     .or_default() += 1;
                                 *tx_occupied_changes
                                     .entry(info.lock_script_hash.clone())
-                                    .or_default() -= info.occupied_capacity;
+                                    .or_default() -= i128::from(info.occupied_capacity);
                                 // script usage - inputs
                                 let lock_key = (info.lock_code_hash.clone(), false);
                                 let entry = script_usage_changes
@@ -4449,18 +4449,18 @@ impl Indexer {
                     for cell in &tx_data.cells {
                         *tx_balance_changes
                             .entry(cell.lock_script_hash.clone())
-                            .or_default() += cell.capacity;
+                            .or_default() += i128::from(cell.capacity);
                         *tx_cells_created
                             .entry(cell.lock_script_hash.clone())
                             .or_default() += 1;
-                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                        let lock_script_size = 32i128 + 1 + cell.lock_args.len() as i128;
                         let type_script_size = cell
                             .type_args
                             .as_ref()
-                            .map(|a| 32 + 1 + a.len() as i64)
+                            .map(|a| 32i128 + 1 + a.len() as i128)
                             .unwrap_or(0);
                         let cell_occupied =
-                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
+                            (8 + lock_script_size + type_script_size + cell.data_size as i128)
                                 * 100_000_000;
                         *tx_occupied_changes
                             .entry(cell.lock_script_hash.clone())
@@ -6256,13 +6256,15 @@ impl Indexer {
         }
 
         // Address balances
-        let mut address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)> =
-            HashMap::new();
+        let mut address_balance_changes: HashMap<
+            Vec<u8>,
+            (i128, i32, i32, i64, i64, Vec<u8>, i128),
+        > = HashMap::new();
         for tx_data in &all_tx_data {
-            let mut tx_balance_changes: HashMap<Vec<u8>, i64> = HashMap::new();
+            let mut tx_balance_changes: HashMap<Vec<u8>, i128> = HashMap::new();
             let mut tx_cells_created: HashMap<Vec<u8>, i32> = HashMap::new();
             let mut tx_cells_consumed: HashMap<Vec<u8>, i32> = HashMap::new();
-            let mut tx_occupied_changes: HashMap<Vec<u8>, i64> = HashMap::new();
+            let mut tx_occupied_changes: HashMap<Vec<u8>, i128> = HashMap::new();
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
                     let key = (
@@ -6275,31 +6277,32 @@ impl Indexer {
                     if let Some(info) = info {
                         *tx_balance_changes
                             .entry(info.lock_script_hash.clone())
-                            .or_default() -= info.capacity;
+                            .or_default() -= i128::from(info.capacity);
                         *tx_cells_consumed
                             .entry(info.lock_script_hash.clone())
                             .or_default() += 1;
                         *tx_occupied_changes
                             .entry(info.lock_script_hash.clone())
-                            .or_default() -= info.occupied_capacity;
+                            .or_default() -= i128::from(info.occupied_capacity);
                     }
                 }
             }
             for cell in &tx_data.cells {
                 *tx_balance_changes
                     .entry(cell.lock_script_hash.clone())
-                    .or_default() += cell.capacity;
+                    .or_default() += i128::from(cell.capacity);
                 *tx_cells_created
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += 1;
-                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+                let lock_script_size = 32i128 + 1 + cell.lock_args.len() as i128;
                 let type_script_size = cell
                     .type_args
                     .as_ref()
-                    .map(|a| 32 + 1 + a.len() as i64)
+                    .map(|a| 32i128 + 1 + a.len() as i128)
                     .unwrap_or(0);
                 let cell_occupied =
-                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+                    (8 + lock_script_size + type_script_size + cell.data_size as i128)
+                        * 100_000_000;
                 *tx_occupied_changes
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += cell_occupied;
@@ -6343,7 +6346,7 @@ impl Indexer {
             }
         }
 
-        let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> =
+        let changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> =
             address_balance_changes
                 .iter()
                 .map(|(k, (a, b, c, d, e, f, g))| {
@@ -7641,7 +7644,7 @@ impl Indexer {
         all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        address_balance_changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
+        address_balance_changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
         script_usage_changes: ScriptUsageChanges,
         script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
         token_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -7876,7 +7879,7 @@ impl Indexer {
             }
         }
 
-        let changes_ref: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> =
+        let changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> =
             address_balance_changes
                 .iter()
                 .map(|(k, (a, b, c, d, e, f, g))| {
@@ -11176,7 +11179,7 @@ impl Indexer {
         all_tx_data: &[TxData],
         input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        address_balance_changes: &HashMap<Vec<u8>, (i64, i32, i32, i64, i64, Vec<u8>, i64)>,
+        address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
     ) -> Result<()> {
         let mut tracker = self.hodl_tracker.lock().unwrap();
         let store = self.writer.store();
@@ -12864,7 +12867,7 @@ mod tests {
 
     #[test]
     fn test_count_new_addresses_counts_only_first_live_transitions() {
-        let mut changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = HashMap::new();
+        let mut changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = HashMap::new();
         let addr_new = vec![0x11; 32];
         let addr_existing_live = vec![0x22; 32];
         let addr_existing_zero = vec![0x33; 32];
@@ -12895,7 +12898,7 @@ mod tests {
 
     #[test]
     fn test_count_new_addresses_ignores_non_positive_live_delta() {
-        let mut changes: HashMap<Vec<u8>, (i64, i32, i32, i64, i64, &[u8], i64)> = HashMap::new();
+        let mut changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = HashMap::new();
         let tx_hash = [0xBB; 32];
         changes.insert(vec![0x44; 32], (0, 0, 0, 1, 1, &tx_hash, 0));
         changes.insert(vec![0x55; 32], (-10, -1, 0, 1, 1, &tx_hash, -2));
