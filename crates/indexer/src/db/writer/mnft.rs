@@ -95,6 +95,13 @@ impl BatchWriter {
         agg.standard = NftStandard::MnftClass;
         batch.put_nft_collection_aggregate(&class.class_id, &agg);
         batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
+        // Unified NFT outpoint index
+        batch.put_nft_outpoint(
+            tx_hash,
+            output_index,
+            ckbadger_store::keys::nft_type::MNFT_CLASS,
+            &class.class_id,
+        );
         Ok(())
     }
 
@@ -173,6 +180,13 @@ impl BatchWriter {
             batch.put_nft_hourly_transfer(&token.class_id, hour_bucket, current + 1);
         }
         batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
+        // Unified NFT outpoint index
+        batch.put_nft_outpoint(
+            tx_hash,
+            output_index,
+            ckbadger_store::keys::nft_type::MNFT_TOKEN,
+            &token.token_id,
+        );
         Ok(())
     }
 

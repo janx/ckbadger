@@ -194,22 +194,25 @@ impl BatchWriter {
         Ok(result)
     }
 
-    /// Insert UDT cells into the store. UDT cell data is part of the live_cells CF
-    /// (already written by cells.rs), so this is a no-op for the cell data itself.
-    /// The token-specific metadata is handled by process_udt_transfers_batch.
+    /// Write FT outpoint reverse indices for UDT output cells.
+    /// Cell data itself is already stored in cf_cells by cells.rs.
     pub fn insert_udt_cells_batch(
         &self,
-        _cells: &[(&[u8], i16, &ParsedUdtCell, i64)],
-    ) -> Result<()> {
-        // UDT cell data (outpoint → cell info) is already stored in live_cells CF
-        // by the cells writer. No separate UDT cells table needed.
-        Ok(())
-    }
-
-    /// Mark UDT cells as consumed. Already handled by cells.rs consume_cells_batch.
-    pub fn consume_udt_cells_batch(&self, _outpoints: &[(&[u8], i16, i64, &[u8])]) -> Result<()> {
-        // Cell consumption is handled by cells.rs which moves from live_cells to consumed_cells.
-        Ok(())
+        cells: &[(&[u8], i16, &ParsedUdtCell)],
+        batch: &mut StoreBatch,
+    ) {
+        for &(tx_hash, output_index, udt_cell) in cells {
+            let ft_type_val = match udt_cell.standard {
+                crate::parser::UdtStandard::Xudt => ckbadger_store::keys::ft_type::XUDT,
+                crate::parser::UdtStandard::Sudt => ckbadger_store::keys::ft_type::SUDT,
+            };
+            batch.put_ft_outpoint(
+                tx_hash,
+                output_index,
+                ft_type_val,
+                &udt_cell.type_script_hash,
+            );
+        }
     }
 
     /// Process a batch of UDT transfers: upsert tokens and update holder balances.

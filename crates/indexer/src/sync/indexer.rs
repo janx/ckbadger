@@ -7226,6 +7226,19 @@ impl Indexer {
         }
 
         if !skip_token && !udt_tx_contexts.is_empty() {
+            // Write FT outpoint reverse indices for all UDT output cells in this batch
+            if !batch_udt_cells.is_empty() {
+                let ft_cells: Vec<(&[u8], i16, &crate::parser::ParsedUdtCell)> = batch_udt_cells
+                    .iter()
+                    .map(|((tx_hash, idx), cell)| (tx_hash.as_slice(), *idx, cell))
+                    .collect();
+                let mut ft_batch = StoreBatch::new(self.writer.store());
+                self.writer.insert_udt_cells_batch(&ft_cells, &mut ft_batch);
+                let commit_started = Instant::now();
+                ft_batch.commit()?;
+                commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
+
             let max_supply_observations = collect_token_max_supply_observations(&all_tx_data);
             let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
                 Vec::new();
@@ -8587,6 +8600,18 @@ impl Indexer {
                             let t = Instant::now();
                             let mut batch = StoreBatch::new(store);
 
+                            // Write FT outpoint reverse indices for all UDT output cells
+                            if !batch_udt_cells.is_empty() {
+                                let ft_cells: Vec<(&[u8], i16, &crate::parser::ParsedUdtCell)> =
+                                    batch_udt_cells
+                                        .iter()
+                                        .map(|((tx_hash, idx), cell)| {
+                                            (tx_hash.as_slice(), *idx, cell)
+                                        })
+                                        .collect();
+                                writer.insert_udt_cells_batch(&ft_cells, &mut batch);
+                            }
+
                             if !skip_token && !prefetched_udt_tx_infos.is_empty() {
                                 let mut all_transfers: Vec<(
                                     crate::parser::ParsedUdtTransfer,
@@ -9781,6 +9806,17 @@ impl Indexer {
                             input_outpoints: tx_info.input_outpoints,
                         });
                     }
+                }
+
+                // Write FT outpoint reverse indices for all UDT output cells
+                if !batch_udt_cells.is_empty() {
+                    let ft_cells: Vec<(&[u8], i16, &crate::parser::ParsedUdtCell)> =
+                        batch_udt_cells
+                            .iter()
+                            .map(|((tx_hash, idx), cell)| (tx_hash.as_slice(), *idx, cell))
+                            .collect();
+                    self.writer
+                        .insert_udt_cells_batch(&ft_cells, &mut data_batch);
                 }
 
                 if !skip_token && !udt_tx_contexts.is_empty() {

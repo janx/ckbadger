@@ -449,6 +449,13 @@ impl BatchWriter {
         state.put_spore(&spore.spore_id, entry);
         batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
         state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
+        // Unified NFT outpoint index
+        let nft_type_val = if new_is_did {
+            keys::nft_type::DID_CKB
+        } else {
+            keys::nft_type::SPORE
+        };
+        batch.put_nft_outpoint(tx_hash, output_index, nft_type_val, &spore.spore_id);
 
         if new_is_did {
             batch.put_nft_by_collection(&DID_CKB_SENTINEL_COLLECTION, &spore.spore_id);

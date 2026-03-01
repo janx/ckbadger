@@ -448,6 +448,65 @@ impl<'a> StoreBatch<'a> {
         self.batch.put_cf(self.store.cf_stats(), key, account_id);
     }
 
+    // ---- Unified outpoint → asset identity indices ----
+
+    /// Write NFT outpoint reverse index: outpoint → (nft_type, nft_id).
+    /// Also writes to append-only nft_item_index for historical tracking.
+    pub fn put_nft_outpoint(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        nft_type_val: u8,
+        nft_id: &[u8],
+    ) {
+        let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
+        let value = keys::encode_nft_outpoint_value(nft_type_val, nft_id);
+        // Default: outpoint → (nft_type + nft_id)
+        self.batch
+            .put_cf(self.store.cf_nft_outpoints(), outpoint_key, &value);
+        // Append: (nft_type + nft_id + outpoint) → empty (historical index)
+        let index_key =
+            keys::encode_nft_item_index_key(nft_type_val, nft_id, tx_hash, output_index);
+        self.append_batch
+            .put_cf(self.store.cf_nft_item_index(), index_key, &[] as &[u8]);
+    }
+
+    /// Remove NFT outpoint reverse index on cell consumption.
+    pub fn delete_nft_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+        let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
+        self.batch
+            .delete_cf(self.store.cf_nft_outpoints(), outpoint_key);
+        // nft_item_index (append) is never deleted — historical record
+    }
+
+    /// Write FT outpoint reverse index: outpoint → (ft_type, script_hash).
+    /// Also writes to append-only ft_index for historical tracking.
+    pub fn put_ft_outpoint(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        ft_type_val: u8,
+        script_hash: &[u8],
+    ) {
+        let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
+        let value = keys::encode_ft_outpoint_value(ft_type_val, script_hash);
+        // Default: outpoint → (ft_type + script_hash)
+        self.batch
+            .put_cf(self.store.cf_ft_outpoints(), outpoint_key, &value);
+        // Append: (ft_type + script_hash + outpoint) → empty (historical index)
+        let index_key = keys::encode_ft_index_key(ft_type_val, script_hash, tx_hash, output_index);
+        self.append_batch
+            .put_cf(self.store.cf_ft_index(), index_key, &[] as &[u8]);
+    }
+
+    /// Remove FT outpoint reverse index on cell consumption.
+    pub fn delete_ft_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+        let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
+        self.batch
+            .delete_cf(self.store.cf_ft_outpoints(), outpoint_key);
+        // ft_index (append) is never deleted — historical record
+    }
+
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.batch.delete_cf(self.store.cf_ft_holders(), key);
@@ -862,5 +921,92 @@ mod tests {
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_nft_outpoint_write_and_delete() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let tx_hash = [0xAAu8; 32];
+        let spore_id = [0xBBu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_outpoint(&tx_hash, 0, keys::nft_type::SPORE, &spore_id);
+        batch.commit().unwrap();
+
+        // Default store: outpoint → (nft_type + nft_id)
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        let val = store
+            .get_cf(store.cf_nft_outpoints(), &outpoint_key)
+            .unwrap()
+            .unwrap();
+        let (nft_type, nft_id) = keys::decode_nft_outpoint_value(&val);
+        assert_eq!(nft_type, keys::nft_type::SPORE);
+        assert_eq!(nft_id, spore_id.to_vec());
+
+        // Append store: (nft_type + nft_id + outpoint) → empty
+        let index_key =
+            keys::encode_nft_item_index_key(keys::nft_type::SPORE, &spore_id, &tx_hash, 0);
+        assert!(store
+            .append_get_cf(store.cf_nft_item_index(), &index_key)
+            .unwrap()
+            .is_some());
+
+        // Delete removes default but keeps append
+        let mut batch = StoreBatch::new(&store);
+        batch.delete_nft_outpoint(&tx_hash, 0);
+        batch.commit().unwrap();
+
+        assert!(store
+            .get_cf(store.cf_nft_outpoints(), &outpoint_key)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .append_get_cf(store.cf_nft_item_index(), &index_key)
+            .unwrap()
+            .is_some()); // historical index preserved
+    }
+
+    #[test]
+    fn test_ft_outpoint_write_and_delete() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let tx_hash = [0xCCu8; 32];
+        let script_hash = [0xDDu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_ft_outpoint(&tx_hash, 1, keys::ft_type::XUDT, &script_hash);
+        batch.commit().unwrap();
+
+        // Default store: outpoint → (ft_type + script_hash)
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 1);
+        let val = store
+            .get_cf(store.cf_ft_outpoints(), &outpoint_key)
+            .unwrap()
+            .unwrap();
+        let (ft_type, sh) = keys::decode_ft_outpoint_value(&val);
+        assert_eq!(ft_type, keys::ft_type::XUDT);
+        assert_eq!(sh, script_hash.to_vec());
+
+        // Append store: (ft_type + script_hash + outpoint) → empty
+        let index_key = keys::encode_ft_index_key(keys::ft_type::XUDT, &script_hash, &tx_hash, 1);
+        assert!(store
+            .append_get_cf(store.cf_ft_index(), &index_key)
+            .unwrap()
+            .is_some());
+
+        // Delete removes default but keeps append
+        let mut batch = StoreBatch::new(&store);
+        batch.delete_ft_outpoint(&tx_hash, 1);
+        batch.commit().unwrap();
+
+        assert!(store
+            .get_cf(store.cf_ft_outpoints(), &outpoint_key)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .append_get_cf(store.cf_ft_index(), &index_key)
+            .unwrap()
+            .is_some()); // historical index preserved
     }
 }

@@ -1377,6 +1377,21 @@ impl CkbadgerStore {
 
         Ok(result)
     }
+
+    // ---- FT outpoint reverse index ----
+
+    /// Look up FT identity by outpoint: returns (ft_type, script_hash) if found.
+    pub fn get_ft_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<(u8, Vec<u8>)>> {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        match self.get_cf(self.cf_ft_outpoints(), &key)? {
+            Some(value) if value.len() >= 33 => Ok(Some(keys::decode_ft_outpoint_value(&value))),
+            _ => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]

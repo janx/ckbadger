@@ -300,6 +300,21 @@ impl CkbadgerStore {
         }
         Ok(count)
     }
+
+    // ---- NFT outpoint reverse index ----
+
+    /// Look up NFT identity by outpoint: returns (nft_type, nft_id) if found.
+    pub fn get_nft_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<Option<(u8, Vec<u8>)>> {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        match self.get_cf(self.cf_nft_outpoints(), &key)? {
+            Some(value) if value.len() >= 33 => Ok(Some(keys::decode_nft_outpoint_value(&value))),
+            _ => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]

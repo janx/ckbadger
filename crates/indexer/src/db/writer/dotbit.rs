@@ -332,6 +332,13 @@ impl BatchWriter {
             account_output.output_index,
             &account.account_id,
         );
+        // Unified NFT outpoint index
+        batch.put_nft_outpoint(
+            tx_hash,
+            account_output.output_index,
+            ckbadger_store::keys::nft_type::DOT_BIT,
+            &account.account_id,
+        );
         Ok(())
     }
 
