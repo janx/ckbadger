@@ -8,24 +8,24 @@ use rocksdb::IteratorMode;
 impl CkbadgerStore {
     /// List activities for an address (lock_hash), newest first.
     ///
-    /// Optionally start after the given `(block_num, tx_idx)` cursor.
+    /// Optionally start after the given `(block_num, tx_idx, seq)` cursor.
     /// An optional `filter` narrows results: "ckb", "token", "nft", "dao".
-    /// Returns `(block_num, tx_idx, entry)` tuples for cursor construction.
+    /// Returns `(block_num, tx_idx, seq, entry)` tuples for cursor construction.
     pub fn list_activities(
         &self,
         lock_hash: &[u8],
         limit: usize,
-        cursor: Option<(i64, i32)>,
+        cursor: Option<(i64, i32, i16)>,
         filter: Option<&str>,
-    ) -> anyhow::Result<Vec<(i64, i32, ActivityEntry)>> {
+    ) -> anyhow::Result<Vec<(i64, i32, i16, ActivityEntry)>> {
         let prefix = &lock_hash[..32];
 
         // For cursor: start from the key just after the cursor position.
         // For no cursor: start from the lock_hash prefix (newest first due to desc key).
         let start_key = match cursor {
-            Some((block_num, tx_idx)) => {
-                // tx_idx + 1 moves past the cursor entry in the descending order
-                keys::encode_activity_key(lock_hash, block_num, tx_idx + 1)
+            Some((block_num, tx_idx, seq)) => {
+                // seq + 1 moves past the cursor entry in the descending (inverted) key order
+                keys::encode_addr_activity_key(lock_hash, block_num, tx_idx, seq + 1)
             }
             None => prefix.to_vec(),
         };
@@ -35,17 +35,42 @@ impl CkbadgerStore {
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
-        let mut results = Vec::new();
+        // Step 1: Collect activity IDs from the thin index
+        let over_fetch = limit * 4; // over-fetch to allow for filter rejection
+        let mut index_keys: Vec<(i64, i32, i16, [u8; keys::ACTIVITY_ID_SIZE])> = Vec::new();
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if !key.starts_with(prefix) {
                 break;
             }
-            if key.len() == 44 {
-                let (_, block_num, tx_idx) = keys::decode_activity_key(&key);
+            if key.len() == 46 {
+                let (_, block_num, tx_idx, seq) = keys::decode_addr_activity_key(&key);
+                let activity_id = keys::encode_activity_id(block_num, tx_idx, seq);
+                index_keys.push((block_num, tx_idx, seq, activity_id));
+                if index_keys.len() >= over_fetch {
+                    break;
+                }
+            }
+        }
+
+        if index_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Step 2: Batch-get full entries from append store
+        let cf = self.cf_activities();
+        let cf_keys: Vec<_> = index_keys
+            .iter()
+            .map(|(_, _, _, id)| (cf, id.as_slice()))
+            .collect();
+        let values = self.append_multi_get_cf(cf_keys);
+
+        let mut results = Vec::new();
+        for ((block_num, tx_idx, seq, _), value_result) in index_keys.into_iter().zip(values) {
+            if let Ok(Some(value)) = value_result {
                 let entry: ActivityEntry = bincode::deserialize(&value)?;
                 if Self::matches_activity_filter(&entry, filter) {
-                    results.push((block_num, tx_idx, entry));
+                    results.push((block_num, tx_idx, seq, entry));
                     if results.len() >= limit {
                         break;
                     }

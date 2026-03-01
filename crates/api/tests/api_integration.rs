@@ -6294,7 +6294,7 @@ async fn test_address_activities_reads_from_derived_store() {
     };
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_activity(&lock_hash, 10, 0, &activity);
+    core_batch.put_activity(&lock_hash, 10, 0, 0, &activity);
     core_batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -6319,7 +6319,7 @@ async fn test_address_activities_reads_from_derived_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
     let mut derived_batch = StoreBatch::new(derived_store.as_ref());
-    derived_batch.put_activity(&lock_hash, 10, 0, &activity);
+    derived_batch.put_activity(&lock_hash, 10, 0, 0, &activity);
     derived_batch.commit().unwrap();
 
     let request = Request::builder()

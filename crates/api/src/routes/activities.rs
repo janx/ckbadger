@@ -155,13 +155,18 @@ async fn get_address_activities(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    // Parse cursor: "block_num:tx_idx"
+    // Parse cursor: "block_num:tx_idx:seq" (or legacy "block_num:tx_idx" with seq=0)
     let cursor = params.cursor.as_ref().and_then(|c| {
         let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() == 2 {
+        if parts.len() == 3 {
             let block_num = parts[0].parse::<i64>().ok()?;
             let tx_idx = parts[1].parse::<i32>().ok()?;
-            Some((block_num, tx_idx))
+            let seq = parts[2].parse::<i16>().ok()?;
+            Some((block_num, tx_idx, seq))
+        } else if parts.len() == 2 {
+            let block_num = parts[0].parse::<i64>().ok()?;
+            let tx_idx = parts[1].parse::<i32>().ok()?;
+            Some((block_num, tx_idx, 0i16))
         } else {
             None
         }
@@ -177,14 +182,14 @@ async fn get_address_activities(
 
     let next_cursor = if has_more {
         page.last()
-            .map(|(block_num, tx_idx, _)| format!("{}:{}", block_num, tx_idx))
+            .map(|(block_num, tx_idx, seq, _)| format!("{}:{}:{}", block_num, tx_idx, seq))
     } else {
         None
     };
 
     let activities: Vec<ActivityResponse> = page
         .into_iter()
-        .map(|(_, _, entry)| ActivityResponse {
+        .map(|(_, _, _, entry)| ActivityResponse {
             tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
             block_number: entry.block_number,
             tx_index: entry.tx_index,

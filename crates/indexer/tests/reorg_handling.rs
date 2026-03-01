@@ -271,7 +271,7 @@ fn test_rollback_removes_activities() {
             asset_changes: vec![],
             peers: vec![],
         };
-        batch.put_activity(&lock_hash, block, 0, &entry);
+        batch.put_activity(&lock_hash, block, 0, 0, &entry);
     }
     batch.commit().unwrap();
 

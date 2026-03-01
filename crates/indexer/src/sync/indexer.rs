@@ -5749,6 +5749,26 @@ impl Indexer {
                 "Bulk sync completed"
             );
 
+            // Clean up sub-threshold addr_stats entries.
+            // During bulk sync, ALL addr_stats are written eagerly for performance.
+            // Now prune entries below ADDR_STATS_THRESHOLD.
+            match self.writer.store().cleanup_sub_threshold_addr_stats() {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        info!(
+                            deleted,
+                            "Post-bulk-sync: cleaned up sub-threshold addr_stats entries"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Post-bulk-sync: failed to clean up sub-threshold addr_stats"
+                    );
+                }
+            }
+
             self.cache_invalidator.invalidate_chart_caches().await;
 
             // Compaction mode transition is now handled by ensure_compaction_mode()
@@ -9256,13 +9276,18 @@ impl Indexer {
                                 &tx_views,
                                 &token_info_cache,
                             );
+                            let mut seq_counter: std::collections::HashMap<(i64, i32), i16> = std::collections::HashMap::new();
                             for (lock_hash, entry) in activities {
+                                let key = (entry.block_number, entry.tx_index);
+                                let seq = seq_counter.entry(key).or_insert(0);
                                 batch.put_activity(
                                     &lock_hash,
                                     entry.block_number,
                                     entry.tx_index,
+                                    *seq,
                                     &entry,
                                 );
+                                *seq += 1;
                             }
                         }
                         let commit_ms = commit_phase_no_wal(
@@ -10335,13 +10360,19 @@ impl Indexer {
                         &tx_views,
                         &token_info_cache,
                     );
+                    let mut seq_counter: std::collections::HashMap<(i64, i32), i16> =
+                        std::collections::HashMap::new();
                     for (lock_hash, entry) in activities {
+                        let key = (entry.block_number, entry.tx_index);
+                        let seq = seq_counter.entry(key).or_insert(0);
                         activity_batch.put_activity(
                             &lock_hash,
                             entry.block_number,
                             entry.tx_index,
+                            *seq,
                             &entry,
                         );
+                        *seq += 1;
                     }
                 }
             }

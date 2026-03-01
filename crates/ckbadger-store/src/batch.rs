@@ -304,6 +304,10 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_addr_stats(), lock_hash, &value);
     }
 
+    pub fn delete_addr_balance(&mut self, lock_hash: &[u8]) {
+        self.batch.delete_cf(self.store.cf_addr_stats(), lock_hash);
+    }
+
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
         self.batch.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
@@ -594,19 +598,25 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Activities ----
 
+    /// Write activity to append store (SSOT) and thin pointer to default store (index).
     pub fn put_activity(
         &mut self,
         lock_hash: &[u8],
         block_num: i64,
         tx_idx: i32,
+        seq: i16,
         entry: &ActivityEntry,
     ) {
-        // During transition: write to addr_activities (default store) using old key format
-        // TODO(data-refactor): split into global activities (append) + addr_activities index (default)
-        let key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
+        // Append: activity_id → full ActivityEntry (SSOT, never deleted)
+        let activity_id = keys::encode_activity_id(block_num, tx_idx, seq);
         let value = bincode::serialize(entry).expect("serialize ActivityEntry");
+        self.append_batch
+            .put_cf(self.store.cf_activities(), activity_id, &value);
+
+        // Default: lock_hash + inverted_activity_id → empty (thin index)
+        let index_key = keys::encode_addr_activity_key(lock_hash, block_num, tx_idx, seq);
         self.batch
-            .put_cf(self.store.cf_addr_activities(), &key, &value);
+            .put_cf(self.store.cf_addr_activities(), &index_key, &[] as &[u8]);
     }
 
     // ---- NFT collection activities ----
@@ -828,20 +838,20 @@ mod tests {
         let lock = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 500));
-        batch.put_activity(&lock, 200, 0, &make_activity(200, 0, -300));
-        batch.put_activity(&lock, 300, 1, &make_activity(300, 1, 1000));
+        batch.put_activity(&lock, 100, 0, 0, &make_activity(100, 0, 500));
+        batch.put_activity(&lock, 200, 0, 0, &make_activity(200, 0, -300));
+        batch.put_activity(&lock, 300, 1, 0, &make_activity(300, 1, 1000));
         batch.commit().unwrap();
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
         assert_eq!(results.len(), 3);
         // Descending block order: 300, 200, 100
         assert_eq!(results[0].0, 300);
-        assert_eq!(results[0].2.ckb_delta, 1000);
+        assert_eq!(results[0].3.ckb_delta, 1000);
         assert_eq!(results[1].0, 200);
-        assert_eq!(results[1].2.ckb_delta, -300);
+        assert_eq!(results[1].3.ckb_delta, -300);
         assert_eq!(results[2].0, 100);
-        assert_eq!(results[2].2.ckb_delta, 500);
+        assert_eq!(results[2].3.ckb_delta, 500);
     }
 
     #[test]
@@ -852,7 +862,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         for i in 1..=5 {
-            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+            batch.put_activity(&lock, i * 100, 0, 0, &make_activity(i * 100, 0, i as i128));
         }
         batch.commit().unwrap();
 
@@ -870,7 +880,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         for i in 1..=5 {
-            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+            batch.put_activity(&lock, i * 100, 0, 0, &make_activity(i * 100, 0, i as i128));
         }
         batch.commit().unwrap();
 
@@ -881,14 +891,14 @@ mod tests {
         assert_eq!(page1[1].0, 400);
 
         // Page 2: cursor from last item of page1
-        let cursor = (page1[1].0, page1[1].1);
+        let cursor = (page1[1].0, page1[1].1, page1[1].2);
         let page2 = store.list_activities(&lock, 2, Some(cursor), None).unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].0, 300);
         assert_eq!(page2[1].0, 200);
 
         // Page 3: last page
-        let cursor = (page2[1].0, page2[1].1);
+        let cursor = (page2[1].0, page2[1].1, page2[1].2);
         let page3 = store.list_activities(&lock, 2, Some(cursor), None).unwrap();
         assert_eq!(page3.len(), 1);
         assert_eq!(page3[0].0, 100);
@@ -902,9 +912,9 @@ mod tests {
         let lock_b = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock_a, 100, 0, &make_activity(100, 0, 10));
-        batch.put_activity(&lock_a, 200, 0, &make_activity(200, 0, 20));
-        batch.put_activity(&lock_b, 100, 0, &make_activity(100, 0, 30));
+        batch.put_activity(&lock_a, 100, 0, 0, &make_activity(100, 0, 10));
+        batch.put_activity(&lock_a, 200, 0, 0, &make_activity(200, 0, 20));
+        batch.put_activity(&lock_b, 100, 0, 0, &make_activity(100, 0, 30));
         batch.commit().unwrap();
 
         let a = store.list_activities(&lock_a, 100, None, None).unwrap();
@@ -912,7 +922,7 @@ mod tests {
 
         let b = store.list_activities(&lock_b, 100, None, None).unwrap();
         assert_eq!(b.len(), 1);
-        assert_eq!(b[0].2.ckb_delta, 30);
+        assert_eq!(b[0].3.ckb_delta, 30);
     }
 
     #[test]
@@ -923,6 +933,35 @@ mod tests {
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_activity_multi_seq_same_tx() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_a = [0x01u8; 32];
+        let lock_b = [0x02u8; 32];
+
+        // Same block/tx, different addresses → different seq values
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock_a, 100, 0, 0, &make_activity(100, 0, 500));
+        batch.put_activity(&lock_b, 100, 0, 1, &make_activity(100, 0, -500));
+        batch.commit().unwrap();
+
+        let a = store.list_activities(&lock_a, 10, None, None).unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].3.ckb_delta, 500);
+
+        let b = store.list_activities(&lock_b, 10, None, None).unwrap();
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].3.ckb_delta, -500);
+
+        // Both entries stored in append store at different activity_ids
+        let cf = store.cf_activities();
+        let id0 = crate::keys::encode_activity_id(100, 0, 0);
+        let id1 = crate::keys::encode_activity_id(100, 0, 1);
+        assert!(store.append_get_cf(cf, &id0).unwrap().is_some());
+        assert!(store.append_get_cf(cf, &id1).unwrap().is_some());
     }
 
     #[test]

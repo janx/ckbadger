@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
+use ckbadger_store::store::ADDR_STATS_THRESHOLD;
 use ckbadger_store::types::{AddressBalance, ScriptDailyDelta};
 
 use super::BatchWriter;
@@ -214,7 +215,14 @@ impl BatchWriter {
                 }
             };
 
-            batch.put_addr_balance(lock_hash, &updated);
+            // Threshold check: only materialize stats for addresses at or above threshold
+            if updated.live_cells_count >= ADDR_STATS_THRESHOLD {
+                batch.put_addr_balance(lock_hash, &updated);
+            } else {
+                // Below threshold — delete materialized entry if it existed
+                // (could have crossed down from above threshold)
+                batch.delete_addr_balance(lock_hash);
+            }
         }
 
         Ok(())

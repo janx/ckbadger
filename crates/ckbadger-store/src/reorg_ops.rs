@@ -659,16 +659,16 @@ impl CkbadgerStore {
         }
         stage.finish(addr_txs_removed);
 
-        // 10. Delete addr_activities entries > rollback_to
-        // Key: lock_hash(32) + block_num_desc(8) + tx_idx(4) = 44
+        // 10. Delete addr_activities index entries > rollback_to
+        // Key: lock_hash(32) + inverted_activity_id(14) = 46
         // Activities data in append store (cf_activities) is immutable; only clean the index.
         let mut activities_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_addr_activities");
         let iter = self.iterator_cf(self.cf_addr_activities(), IteratorMode::Start);
         for item in iter.flatten() {
             let (key, _) = item;
-            if key.len() == 44 {
-                let (_, block_num, _) = keys::decode_activity_key(&key);
+            if key.len() == 46 {
+                let (_, block_num, _, _) = keys::decode_addr_activity_key(&key);
                 if block_num > rollback_to {
                     batch.delete_cf(self.cf_addr_activities(), &key);
                     activities_removed += 1;

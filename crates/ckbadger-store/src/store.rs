@@ -95,6 +95,10 @@ pub const CF_ACTIVITIES: &str = "activities";
 // Backward-compatible CF aliases (point to canonical names)
 // ============================================================
 
+/// Minimum live_cells_count for an address to keep materialized stats in CF_ADDR_STATS.
+/// Below this threshold, stats are derived at read time from cell indices.
+pub const ADDR_STATS_THRESHOLD: i32 = 100;
+
 pub const CF_CELL_BY_LOCK: &str = CF_LIVE_CELLS_BY_LOCK;
 pub const CF_CELL_BY_TYPE: &str = CF_LIVE_CELLS_BY_TYPE;
 pub const CF_ADDR_BALANCE: &str = CF_ADDR_STATS;
