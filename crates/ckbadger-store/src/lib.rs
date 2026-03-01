@@ -53,7 +53,7 @@ pub use batch::StoreBatch;
 pub use cell_ops::TokenCellStats;
 pub use pagination::PaginatedResult;
 pub use reorg_ops::RollbackResult;
-pub use store::{CkbadgerStore, ALL_CFS, APPEND_CFS, DEFAULT_CFS};
+pub use store::{CkbadgerStore, MemoryProfile, ALL_CFS, APPEND_CFS, DEFAULT_CFS};
 
 // New canonical CF constants
 pub use store::{

@@ -2142,6 +2142,11 @@ struct AdaptiveBatchInput {
     compaction_pending_bytes: Option<u64>,
     /// Total immutable memtables across all CFs (from memory_stats)
     immutable_memtables: Option<u64>,
+    /// Dynamic pressure thresholds from MemoryProfile
+    severe_pending_threshold: u64,
+    moderate_pending_threshold: u64,
+    severe_imm_threshold: u64,
+    moderate_imm_threshold: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2367,16 +2372,22 @@ impl AdaptiveBatchController {
 
         // RocksDB internal pressure signals: detect compaction backlog, L0 pile-up,
         // and immutable memtable accumulation BEFORE they cause write stalls.
+        // L0 thresholds (40/20) are architectural; pending bytes and immutable memtable
+        // thresholds scale with the memory profile.
         let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 40)
             || input
                 .compaction_pending_bytes
-                .is_some_and(|b| b >= 8 * 1024 * 1024 * 1024)
-            || input.immutable_memtables.is_some_and(|imm| imm >= 60);
+                .is_some_and(|b| b >= input.severe_pending_threshold)
+            || input
+                .immutable_memtables
+                .is_some_and(|imm| imm >= input.severe_imm_threshold);
         let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 20)
             || input
                 .compaction_pending_bytes
-                .is_some_and(|b| b >= 4 * 1024 * 1024 * 1024)
-            || input.immutable_memtables.is_some_and(|imm| imm >= 30);
+                .is_some_and(|b| b >= input.moderate_pending_threshold)
+            || input
+                .immutable_memtables
+                .is_some_and(|imm| imm >= input.moderate_imm_threshold);
 
         let severe_pressure_signal = input.write_ms >= ADAPTIVE_BATCH_SEVERE_WRITE_MS
             || input.commit_ms >= ADAPTIVE_BATCH_SEVERE_COMMIT_MS
@@ -2906,9 +2917,9 @@ impl Indexer {
         } else if !should_be_bulk && in_bulk {
             let (l0_files_max, compaction_pending_bytes, _imm) = store.compaction_pressure();
             const DRAIN_L0_THRESHOLD: u64 = 10;
-            const DRAIN_PENDING_BYTES_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+            let drain_pending_threshold = store.memory_profile().drain_pending_bytes_threshold;
             if l0_files_max < DRAIN_L0_THRESHOLD
-                && compaction_pending_bytes < DRAIN_PENDING_BYTES_THRESHOLD
+                && compaction_pending_bytes < drain_pending_threshold
             {
                 info!(
                     l0_files_max,
@@ -5203,6 +5214,7 @@ impl Indexer {
                         } else {
                             None
                         };
+                        let mem_profile = self.writer.store().memory_profile();
                         if let Some(adjustment) =
                             self.adaptive_batch_controller
                                 .update_after_write(AdaptiveBatchInput {
@@ -5216,6 +5228,13 @@ impl Indexer {
                                     l0_files_max: Some(l0_files_max),
                                     compaction_pending_bytes: Some(compaction_pending_bytes),
                                     immutable_memtables: Some(immutable_memtables),
+                                    severe_pending_threshold: mem_profile
+                                        .severe_compaction_pending_bytes,
+                                    moderate_pending_threshold: mem_profile
+                                        .moderate_compaction_pending_bytes,
+                                    severe_imm_threshold: mem_profile.severe_immutable_memtables,
+                                    moderate_imm_threshold: mem_profile
+                                        .moderate_immutable_memtables,
                                 })
                         {
                             info!(
@@ -12249,6 +12268,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("moderate pressure should reduce target");
         assert_eq!(adjustment.reason, "moderate_backoff");
@@ -12274,6 +12297,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("healthy signal should adjust inflight first");
         assert_eq!(adjustment.reason, "healthy_step_up");
@@ -12305,6 +12332,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("far bulk mode should enforce minimum floors");
         assert_eq!(
@@ -12336,6 +12367,10 @@ mod tests {
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
         });
         assert!(
             first.is_none(),
@@ -12354,6 +12389,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("consecutive severe pressure at floor should lower adaptive min floor");
 
@@ -12386,6 +12425,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("healthy throughput should recover adaptive min floor");
 
@@ -12412,6 +12455,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("first severe sample should only moderate-backoff");
         assert_eq!(first.reason, "moderate_backoff");
@@ -12428,6 +12475,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("second severe sample should trigger severe backoff");
         assert_eq!(second.reason, "severe_pressure_backoff");
@@ -12451,6 +12502,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("first healthy sample should step up");
         assert_eq!(first.reason, "healthy_step_up");
@@ -12466,6 +12521,10 @@ mod tests {
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
         });
         assert!(
             no_adjustment.is_none(),
@@ -12491,6 +12550,10 @@ mod tests {
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
         });
         assert!(
             no_adjustment.is_none(),
@@ -12526,6 +12589,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("near-tip path should allow lower min floor");
 
@@ -12552,6 +12619,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("first healthy sample should step up");
         assert_eq!(first.reason, "healthy_step_up");
@@ -12567,6 +12638,10 @@ mod tests {
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
         });
         assert!(
             no_adjustment.is_none(),
@@ -12589,6 +12664,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("first pressure sample should adjust");
         let _ = controller
@@ -12603,6 +12682,10 @@ mod tests {
                 l0_files_max: None,
                 compaction_pending_bytes: None,
                 immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
             })
             .expect("second pressure sample should trigger cooldown");
         let snapshot_after_pressure = controller.snapshot();
@@ -12618,6 +12701,10 @@ mod tests {
             l0_files_max: None,
             compaction_pending_bytes: None,
             immutable_memtables: None,
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
         });
         assert!(no_adjustment.is_none());
         let snapshot_after_healthy = controller.snapshot();

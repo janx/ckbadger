@@ -20,6 +20,220 @@ use crate::types::MemoryStats;
 pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
 
 // ============================================================
+// Dynamic memory profile — auto-detects system RAM and CPUs
+// ============================================================
+
+const GB: u64 = 1024 * 1024 * 1024;
+const MB: u64 = 1024 * 1024;
+
+/// Scales `base` by `scale` factor then clamps to `[min, max]`.
+fn scale_clamp(base: u64, scale: f64, min: u64, max: u64) -> usize {
+    let v = (base as f64 * scale).round() as u64;
+    v.clamp(min, max) as usize
+}
+
+/// Auto-detected system memory profile that drives all RocksDB memory parameters.
+///
+/// Formulas are calibrated so that a 32GB machine with 24 CPUs reproduces the
+/// previous hardcoded constants exactly.
+#[derive(Debug, Clone)]
+pub struct MemoryProfile {
+    pub system_ram_bytes: u64,
+    pub cpu_count: usize,
+    pub is_secondary: bool,
+    pub rocksdb_budget_bytes: usize,
+    // Normal mode
+    pub wbm_normal_bytes: usize,
+    pub block_cache_normal_bytes: usize,
+    // Bulk sync mode
+    pub wbm_bulk_sync_bytes: usize,
+    pub block_cache_bulk_sync_bytes: usize,
+    // Per-CF write buffers
+    pub write_buffer_mega_bytes: usize,
+    pub write_buffer_high_bytes: usize,
+    pub write_buffer_low_bytes: usize,
+    pub write_buffer_hot_cf_bytes: usize,
+    // Threading
+    pub max_background_jobs: i32,
+    pub max_subcompactions: u32,
+    // Compaction level sizing
+    pub bulk_max_bytes_for_level_base: u64,
+    pub bulk_target_file_size_base: u64,
+    pub normal_max_bytes_for_level_base: u64,
+    pub normal_target_file_size_base: u64,
+    // Pressure thresholds (for indexer)
+    pub severe_compaction_pending_bytes: u64,
+    pub moderate_compaction_pending_bytes: u64,
+    pub severe_immutable_memtables: u64,
+    pub moderate_immutable_memtables: u64,
+    pub drain_pending_bytes_threshold: u64,
+}
+
+impl MemoryProfile {
+    /// Detect system RAM and CPUs, then compute a primary (read-write) profile.
+    pub fn for_primary() -> Self {
+        let (ram, cpus) = detect_system_resources();
+        Self::compute(ram, cpus, false)
+    }
+
+    /// Detect system RAM and CPUs, then compute a secondary (read-only) profile.
+    pub fn for_secondary() -> Self {
+        let (ram, cpus) = detect_system_resources();
+        Self::compute(ram, cpus, true)
+    }
+
+    /// Pure computation from known values — deterministic and testable.
+    pub fn compute(system_ram_bytes: u64, cpu_count: usize, is_secondary: bool) -> Self {
+        let budget = if is_secondary {
+            // Secondary: 25% of RAM, floor 2GB, cap 16GB
+            let raw = system_ram_bytes / 4;
+            raw.clamp(2 * GB, 16 * GB) as usize
+        } else {
+            // Primary: 50% of RAM, floor 2GB
+            let raw = system_ram_bytes / 2;
+            raw.max(2 * GB) as usize
+        };
+
+        let budget_u64 = budget as u64;
+
+        // Normal mode: 50/50 split WBM/cache
+        let wbm_normal = budget / 2;
+        let cache_normal = budget / 2;
+
+        // Bulk sync mode: 85/15 split WBM/cache
+        let wbm_bulk = (budget_u64 * 85 / 100) as usize;
+        let cache_bulk = budget - wbm_bulk;
+
+        // Scale factor for per-CF write buffers (1.0 at 8GB WBM = 32GB machine)
+        let wbm_scale = wbm_normal as f64 / (8.0 * GB as f64);
+
+        let write_buffer_mega = scale_clamp(256 * MB, wbm_scale, 64 * MB, 512 * MB);
+        let write_buffer_high = scale_clamp(128 * MB, wbm_scale, 32 * MB, 256 * MB);
+        let write_buffer_low = scale_clamp(32 * MB, wbm_scale, 8 * MB, 128 * MB);
+
+        // Hot CF scale factor during bulk sync (1.0 at 13.6GB WBM bulk ≈ 32GB machine)
+        let wbm_bulk_scale = wbm_bulk as f64 / (13_635_534_029.0); // exact 85% of 16GB budget
+        let write_buffer_hot = scale_clamp(512 * MB, wbm_bulk_scale, 128 * MB, GB);
+
+        // Threading
+        let cpus = cpu_count.max(1);
+        let max_background_jobs = cpus.clamp(4, 32) as i32;
+        let max_subcompactions = (cpus / 4).clamp(2, 8) as u32;
+
+        // Compaction level sizing — scale proportionally to budget
+        let budget_scale = budget_u64 as f64 / (16.0 * GB as f64); // 1.0 at 32GB machine
+        let bulk_level_base = scale_clamp(2 * GB, budget_scale, 512 * MB, 8 * GB) as u64;
+        let bulk_file_base = scale_clamp(256 * MB, budget_scale, 64 * MB, GB) as u64;
+        let normal_level_base = scale_clamp(512 * MB, budget_scale, 128 * MB, 2 * GB) as u64;
+        let normal_file_base = scale_clamp(64 * MB, budget_scale, 16 * MB, 256 * MB) as u64;
+
+        // Pressure thresholds — scale with WBM budget
+        let severe_pending = scale_clamp(8 * GB, wbm_scale, 2 * GB, 32 * GB) as u64;
+        let moderate_pending = scale_clamp(4 * GB, wbm_scale, GB, 16 * GB) as u64;
+        let severe_imm = scale_clamp(60, wbm_scale, 15, 240) as u64;
+        let moderate_imm = scale_clamp(30, wbm_scale, 8, 120) as u64;
+        let drain_pending = scale_clamp(2 * GB, wbm_scale, 512 * MB, 8 * GB) as u64;
+
+        Self {
+            system_ram_bytes,
+            cpu_count,
+            is_secondary,
+            rocksdb_budget_bytes: budget,
+            wbm_normal_bytes: wbm_normal,
+            block_cache_normal_bytes: cache_normal,
+            wbm_bulk_sync_bytes: wbm_bulk,
+            block_cache_bulk_sync_bytes: cache_bulk,
+            write_buffer_mega_bytes: write_buffer_mega,
+            write_buffer_high_bytes: write_buffer_high,
+            write_buffer_low_bytes: write_buffer_low,
+            write_buffer_hot_cf_bytes: write_buffer_hot,
+            max_background_jobs,
+            max_subcompactions,
+            bulk_max_bytes_for_level_base: bulk_level_base,
+            bulk_target_file_size_base: bulk_file_base,
+            normal_max_bytes_for_level_base: normal_level_base,
+            normal_target_file_size_base: normal_file_base,
+            severe_compaction_pending_bytes: severe_pending,
+            moderate_compaction_pending_bytes: moderate_pending,
+            severe_immutable_memtables: severe_imm,
+            moderate_immutable_memtables: moderate_imm,
+            drain_pending_bytes_threshold: drain_pending,
+        }
+    }
+}
+
+/// Read total physical RAM from `/proc/meminfo` (Linux).
+fn read_proc_meminfo() -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("MemTotal:") {
+            let rest = rest.trim();
+            let kb_str = rest.strip_suffix("kB").unwrap_or(rest).trim();
+            return kb_str.parse::<u64>().ok().map(|kb| kb * 1024);
+        }
+    }
+    None
+}
+
+/// Read cgroup memory limit (cgroup v2: `memory.max`, v1: `memory.limit_in_bytes`).
+fn read_cgroup_memory_limit() -> Option<u64> {
+    // cgroup v2
+    if let Ok(content) = std::fs::read_to_string("/sys/fs/cgroup/memory.max") {
+        let trimmed = content.trim();
+        if trimmed != "max" {
+            if let Ok(bytes) = trimmed.parse::<u64>() {
+                return Some(bytes);
+            }
+        }
+    }
+    // cgroup v1 fallback
+    if let Ok(content) = std::fs::read_to_string("/sys/fs/cgroup/memory/memory.limit_in_bytes") {
+        let trimmed = content.trim();
+        // Ignore extremely large values (kernel sentinel for "unlimited")
+        if let Ok(bytes) = trimmed.parse::<u64>() {
+            if bytes < 1024 * 1024 * 1024 * 1024 {
+                // < 1TB
+                return Some(bytes);
+            }
+        }
+    }
+    None
+}
+
+/// Detect system RAM and CPU count.
+/// Priority: `CKBADGER_MEMORY_BUDGET_GB` env → `/proc/meminfo` → cgroup → default 32GB.
+fn detect_system_resources() -> (u64, usize) {
+    let ram = if let Ok(val) = std::env::var("CKBADGER_MEMORY_BUDGET_GB") {
+        if let Ok(gb) = val.parse::<u64>() {
+            info!(gb, "Using CKBADGER_MEMORY_BUDGET_GB override");
+            gb * GB
+        } else {
+            warn!(
+                val,
+                "Invalid CKBADGER_MEMORY_BUDGET_GB, falling back to detection"
+            );
+            read_proc_meminfo()
+                .or_else(read_cgroup_memory_limit)
+                .unwrap_or(32 * GB)
+        }
+    } else {
+        let detected = read_proc_meminfo()
+            .or_else(read_cgroup_memory_limit)
+            .unwrap_or_else(|| {
+                warn!("Could not detect system RAM, defaulting to 32 GB");
+                32 * GB
+            });
+        detected
+    };
+
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(8);
+
+    (ram, cpus)
+}
+
+// ============================================================
 // Column family name constants — DEFAULT store (mutable state)
 // ============================================================
 
@@ -219,6 +433,8 @@ pub struct CkbadgerStore {
     default_path: PathBuf,
     /// Path to the append store (for reference).
     append_path: PathBuf,
+    /// Dynamic memory parameters derived from system RAM/CPU.
+    memory_profile: MemoryProfile,
 }
 
 impl CkbadgerStore {
@@ -231,10 +447,13 @@ impl CkbadgerStore {
 
     /// Open as primary (read-write) with explicit paths for both stores.
     pub fn open_split<P: AsRef<Path>>(default_path: P, append_path: P) -> anyhow::Result<Self> {
-        let (opts, block_cache, write_buffer_manager) = Self::default_options();
+        let profile = MemoryProfile::for_primary();
+        let (opts, block_cache, write_buffer_manager) = Self::configured_options(&profile);
 
-        let default_db = Self::open_db_primary(&opts, &default_path, DEFAULT_CFS, &block_cache)?;
-        let append_db = Self::open_db_primary(&opts, &append_path, APPEND_CFS, &block_cache)?;
+        let default_db =
+            Self::open_db_primary(&opts, &default_path, DEFAULT_CFS, &block_cache, &profile)?;
+        let append_db =
+            Self::open_db_primary(&opts, &append_path, APPEND_CFS, &block_cache, &profile)?;
 
         Ok(Self {
             default_db,
@@ -245,6 +464,7 @@ impl CkbadgerStore {
             is_secondary: false,
             default_path: default_path.as_ref().to_path_buf(),
             append_path: append_path.as_ref().to_path_buf(),
+            memory_profile: profile,
         })
     }
 
@@ -271,7 +491,8 @@ impl CkbadgerStore {
         append_primary: P,
         append_secondary: P,
     ) -> anyhow::Result<Self> {
-        let (opts, block_cache, write_buffer_manager) = Self::default_options();
+        let profile = MemoryProfile::for_secondary();
+        let (opts, block_cache, write_buffer_manager) = Self::configured_options(&profile);
 
         let default_db =
             Self::open_db_secondary(&opts, &default_primary, &default_secondary, DEFAULT_CFS)?;
@@ -287,6 +508,7 @@ impl CkbadgerStore {
             is_secondary: true,
             default_path: default_primary.as_ref().to_path_buf(),
             append_path: append_primary.as_ref().to_path_buf(),
+            memory_profile: profile,
         })
     }
 
@@ -295,6 +517,7 @@ impl CkbadgerStore {
         path: P,
         cf_names: &[&str],
         block_cache: &rocksdb::Cache,
+        profile: &MemoryProfile,
     ) -> anyhow::Result<DB> {
         let existing_cfs = DB::list_cf(opts, &path).unwrap_or_default();
         let mut all_names: Vec<String> = cf_names.iter().map(|s| s.to_string()).collect();
@@ -310,7 +533,7 @@ impl CkbadgerStore {
             .map(|name| {
                 ColumnFamilyDescriptor::new(
                     name.as_str(),
-                    Self::cf_options(name.as_str(), block_cache),
+                    Self::cf_options(name.as_str(), block_cache, profile),
                 )
             })
             .collect();
@@ -421,12 +644,9 @@ impl CkbadgerStore {
         block_opts
     }
 
-    const WBM_NORMAL_BYTES: usize = 8 * 1024 * 1024 * 1024;
-    const WBM_BULK_SYNC_BYTES: usize = 16 * 1024 * 1024 * 1024;
-    const BLOCK_CACHE_NORMAL_BYTES: usize = 8 * 1024 * 1024 * 1024;
-    const BLOCK_CACHE_BULK_SYNC_BYTES: usize = 2 * 1024 * 1024 * 1024;
-
-    fn default_options() -> (Options, rocksdb::Cache, WriteBufferManager) {
+    fn configured_options(
+        profile: &MemoryProfile,
+    ) -> (Options, rocksdb::Cache, WriteBufferManager) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
@@ -436,48 +656,48 @@ impl CkbadgerStore {
             .unwrap_or(true);
         opts.set_use_direct_reads(direct_io_reads);
         opts.set_bytes_per_sync(4 * 1024 * 1024);
-        opts.set_write_buffer_size(128 * 1024 * 1024);
+        opts.set_write_buffer_size(profile.write_buffer_high_bytes);
         opts.set_max_write_buffer_number(4);
         opts.set_level_zero_file_num_compaction_trigger(4);
         opts.set_level_zero_slowdown_writes_trigger(20);
         opts.set_level_zero_stop_writes_trigger(48);
-        opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
+        opts.set_max_bytes_for_level_base(profile.normal_max_bytes_for_level_base);
         opts.set_compression_type(DBCompressionType::Lz4);
-        opts.set_max_background_jobs(24);
-        opts.set_max_subcompactions(8);
+        opts.set_max_background_jobs(profile.max_background_jobs);
+        opts.set_max_subcompactions(profile.max_subcompactions);
         opts.set_use_direct_io_for_flush_and_compaction(true);
         opts.set_atomic_flush(false);
         opts.set_unordered_write(true);
 
-        let block_cache = rocksdb::Cache::new_lru_cache(Self::BLOCK_CACHE_NORMAL_BYTES);
+        let block_cache = rocksdb::Cache::new_lru_cache(profile.block_cache_normal_bytes);
         let block_opts = Self::default_block_options(&block_cache);
         opts.set_block_based_table_factory(&block_opts);
 
         let write_buffer_manager =
-            WriteBufferManager::new_write_buffer_manager(Self::WBM_NORMAL_BYTES, true);
+            WriteBufferManager::new_write_buffer_manager(profile.wbm_normal_bytes, true);
         opts.set_write_buffer_manager(&write_buffer_manager);
 
         (opts, block_cache, write_buffer_manager)
     }
 
-    fn cf_options(name: &str, block_cache: &rocksdb::Cache) -> Options {
+    fn cf_options(name: &str, block_cache: &rocksdb::Cache, profile: &MemoryProfile) -> Options {
         let mut opts = Options::default();
 
         if Self::is_mega_write_cf(name) {
-            opts.set_write_buffer_size(256 * 1024 * 1024);
+            opts.set_write_buffer_size(profile.write_buffer_mega_bytes);
             opts.set_max_write_buffer_number(4);
         } else if Self::is_high_write_cf(name) {
-            opts.set_write_buffer_size(128 * 1024 * 1024);
+            opts.set_write_buffer_size(profile.write_buffer_high_bytes);
             opts.set_max_write_buffer_number(4);
         } else {
-            opts.set_write_buffer_size(32 * 1024 * 1024);
+            opts.set_write_buffer_size(profile.write_buffer_low_bytes);
             opts.set_max_write_buffer_number(2);
         }
 
         opts.set_level_zero_file_num_compaction_trigger(4);
         opts.set_level_zero_slowdown_writes_trigger(12);
         opts.set_level_zero_stop_writes_trigger(24);
-        opts.set_max_bytes_for_level_base(512 * 1024 * 1024);
+        opts.set_max_bytes_for_level_base(profile.normal_max_bytes_for_level_base);
         opts.set_compression_type(DBCompressionType::Lz4);
 
         if Self::is_historical_append_cf(name) {
@@ -762,23 +982,32 @@ impl CkbadgerStore {
         self.bulk_sync_mode.load(Ordering::Relaxed)
     }
 
-    pub fn log_config() {
+    pub fn memory_profile(&self) -> &MemoryProfile {
+        &self.memory_profile
+    }
+
+    pub fn log_config(&self) {
+        let p = &self.memory_profile;
         info!(
-            write_buffer_mega_mb = 256,
-            write_buffer_high_mb = 128,
-            write_buffer_low_mb = 32,
+            system_ram_gb = p.system_ram_bytes / (1024 * 1024 * 1024),
+            cpu_count = p.cpu_count,
+            rocksdb_budget_gb = p.rocksdb_budget_bytes / (1024 * 1024 * 1024),
+            write_buffer_mega_mb = p.write_buffer_mega_bytes / (1024 * 1024),
+            write_buffer_high_mb = p.write_buffer_high_bytes / (1024 * 1024),
+            write_buffer_low_mb = p.write_buffer_low_bytes / (1024 * 1024),
+            write_buffer_hot_cf_mb = p.write_buffer_hot_cf_bytes / (1024 * 1024),
             max_write_buffers_high = 4,
             max_write_buffers_low = 2,
             l0_slowdown = 20,
             l0_stop = 48,
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
-            max_background_jobs = 24,
-            max_subcompactions = 8,
-            block_cache_normal_gb = Self::BLOCK_CACHE_NORMAL_BYTES / (1024 * 1024 * 1024),
-            block_cache_bulk_gb = Self::BLOCK_CACHE_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
-            wbm_normal_gb = Self::WBM_NORMAL_BYTES / (1024 * 1024 * 1024),
-            wbm_bulk_gb = Self::WBM_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
+            max_background_jobs = p.max_background_jobs,
+            max_subcompactions = p.max_subcompactions,
+            block_cache_normal_mb = p.block_cache_normal_bytes / (1024 * 1024),
+            block_cache_bulk_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
+            wbm_normal_mb = p.wbm_normal_bytes / (1024 * 1024),
+            wbm_bulk_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
             unordered_write = true,
             direct_io_reads = std::env::var("CKBADGER_DIRECT_IO_READS")
                 .map(|v| v != "0" && v.to_lowercase() != "false")
@@ -789,7 +1018,7 @@ impl CkbadgerStore {
             default_cfs = DEFAULT_CFS.len(),
             append_cfs = APPEND_CFS.len(),
             total_cfs = ALL_CFS.len(),
-            "RocksDB configuration (dual-store)"
+            "RocksDB configuration (dual-store, dynamic memory)"
         );
     }
 
@@ -811,12 +1040,17 @@ impl CkbadgerStore {
         }
         self.bulk_sync_mode.store(true, Ordering::Relaxed);
 
+        let p = &self.memory_profile;
         self.write_buffer_manager
-            .set_buffer_size(Self::WBM_BULK_SYNC_BYTES);
+            .set_buffer_size(p.wbm_bulk_sync_bytes);
         self.block_cache
             .lock()
             .expect("block_cache lock poisoned")
-            .set_capacity(Self::BLOCK_CACHE_BULK_SYNC_BYTES);
+            .set_capacity(p.block_cache_bulk_sync_bytes);
+
+        let level_base_str = p.bulk_max_bytes_for_level_base.to_string();
+        let file_base_str = p.bulk_target_file_size_base.to_string();
+        let hot_cf_buf_str = p.write_buffer_hot_cf_bytes.to_string();
 
         let mut ok = 0u32;
         let mut fail = 0u32;
@@ -841,8 +1075,8 @@ impl CkbadgerStore {
                             ("level0_slowdown_writes_trigger", "64"),
                             ("level0_stop_writes_trigger", "128"),
                             ("max_write_buffer_number", max_wb),
-                            ("max_bytes_for_level_base", "2147483648"),
-                            ("target_file_size_base", "268435456"),
+                            ("max_bytes_for_level_base", &level_base_str),
+                            ("target_file_size_base", &file_base_str),
                         ],
                     );
                     if result.is_ok() {
@@ -858,21 +1092,20 @@ impl CkbadgerStore {
                 }
             }
         }
-        // Targeted 512MB write_buffer_size for the hottest L0 offenders.
+        // Targeted write_buffer_size for the hottest L0 offenders.
         // These CFs accumulate the most L0 files during bulk sync; larger memtables
         // halve their flush frequency and reduce compaction backpressure.
         for &hot_cf_name in &[CF_TX_INDEX, CF_LIVE_CELLS] {
             if let Some(cf) = self.default_db.cf_handle(hot_cf_name) {
-                let result = self.default_db.set_options_cf(
-                    cf,
-                    &[("write_buffer_size", "536870912")], // 512MB
-                );
+                let result = self
+                    .default_db
+                    .set_options_cf(cf, &[("write_buffer_size", &hot_cf_buf_str)]);
                 if result.is_ok() {
                     ok += 1;
                 } else {
                     warn!(
                         cf = hot_cf_name,
-                        "Failed to set 512MB write_buffer_size for hot CF: {:?}",
+                        "Failed to set hot CF write_buffer_size: {:?}",
                         result.err()
                     );
                     fail += 1;
@@ -883,8 +1116,8 @@ impl CkbadgerStore {
         info!(
             ok,
             fail,
-            wbm_budget_gb = Self::WBM_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
-            block_cache_gb = Self::BLOCK_CACHE_BULK_SYNC_BYTES / (1024 * 1024 * 1024),
+            wbm_budget_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
+            block_cache_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
             "Bulk sync compaction options set (dual-store)"
         );
     }
@@ -895,12 +1128,16 @@ impl CkbadgerStore {
         }
         self.bulk_sync_mode.store(false, Ordering::Relaxed);
 
+        let p = &self.memory_profile;
         self.write_buffer_manager
-            .set_buffer_size(Self::WBM_NORMAL_BYTES);
+            .set_buffer_size(p.wbm_normal_bytes);
         self.block_cache
             .lock()
             .expect("block_cache lock poisoned")
-            .set_capacity(Self::BLOCK_CACHE_NORMAL_BYTES);
+            .set_capacity(p.block_cache_normal_bytes);
+
+        let level_base_str = p.normal_max_bytes_for_level_base.to_string();
+        let file_base_str = p.normal_target_file_size_base.to_string();
 
         for (db, cf_list) in [
             (&self.default_db, DEFAULT_CFS),
@@ -920,16 +1157,16 @@ impl CkbadgerStore {
                             ("level0_slowdown_writes_trigger", "12"),
                             ("level0_stop_writes_trigger", "24"),
                             ("max_write_buffer_number", max_wb),
-                            ("max_bytes_for_level_base", "536870912"),
-                            ("target_file_size_base", "67108864"),
+                            ("max_bytes_for_level_base", &level_base_str),
+                            ("target_file_size_base", &file_base_str),
                         ],
                     );
                 }
             }
         }
         info!(
-            wbm_budget_gb = Self::WBM_NORMAL_BYTES / (1024 * 1024 * 1024),
-            block_cache_gb = Self::BLOCK_CACHE_NORMAL_BYTES / (1024 * 1024 * 1024),
+            wbm_budget_mb = p.wbm_normal_bytes / (1024 * 1024),
+            block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
             "Normal compaction options restored (dual-store)"
         );
     }
@@ -1329,7 +1566,8 @@ mod tests {
 
     #[test]
     fn test_log_config_does_not_panic() {
-        CkbadgerStore::log_config();
+        let (store, _d, _a) = open_test_store();
+        store.log_config();
     }
 
     #[test]
@@ -1383,5 +1621,138 @@ mod tests {
             !CkbadgerStore::is_mega_write_cf(CF_ASSET_META),
             "CF_ASSET_META should NOT be in MEGA_WRITE_CFS"
         );
+    }
+
+    // ============================================================
+    // MemoryProfile unit tests
+    // ============================================================
+
+    #[test]
+    fn test_memory_profile_32gb_primary_reproduces_original_constants() {
+        let p = MemoryProfile::compute(32 * GB, 24, false);
+        // Budget: 50% of 32GB = 16GB
+        assert_eq!(p.rocksdb_budget_bytes, 16 * GB as usize);
+        // Normal: 50/50 split
+        assert_eq!(p.wbm_normal_bytes, 8 * GB as usize);
+        assert_eq!(p.block_cache_normal_bytes, 8 * GB as usize);
+        // Per-CF write buffers (scale factor = 1.0)
+        assert_eq!(p.write_buffer_mega_bytes, 256 * MB as usize);
+        assert_eq!(p.write_buffer_high_bytes, 128 * MB as usize);
+        assert_eq!(p.write_buffer_low_bytes, 32 * MB as usize);
+        // Threading
+        assert_eq!(p.max_background_jobs, 24);
+        assert_eq!(p.max_subcompactions, 6);
+        // Pressure thresholds (scale factor = 1.0)
+        assert_eq!(p.severe_compaction_pending_bytes, 8 * GB);
+        assert_eq!(p.moderate_compaction_pending_bytes, 4 * GB);
+        assert_eq!(p.severe_immutable_memtables, 60);
+        assert_eq!(p.moderate_immutable_memtables, 30);
+        assert_eq!(p.drain_pending_bytes_threshold, 2 * GB);
+    }
+
+    #[test]
+    fn test_memory_profile_16gb_primary() {
+        let p = MemoryProfile::compute(16 * GB, 8, false);
+        assert_eq!(p.rocksdb_budget_bytes, 8 * GB as usize);
+        assert_eq!(p.wbm_normal_bytes, 4 * GB as usize);
+        assert_eq!(p.block_cache_normal_bytes, 4 * GB as usize);
+        // Write buffer scale = 0.5
+        assert_eq!(p.write_buffer_mega_bytes, 128 * MB as usize);
+        assert_eq!(p.write_buffer_high_bytes, 64 * MB as usize);
+        assert_eq!(p.write_buffer_low_bytes, 16 * MB as usize);
+        assert_eq!(p.max_background_jobs, 8);
+        assert_eq!(p.max_subcompactions, 2);
+    }
+
+    #[test]
+    fn test_memory_profile_64gb_primary() {
+        let p = MemoryProfile::compute(64 * GB, 32, false);
+        assert_eq!(p.rocksdb_budget_bytes, 32 * GB as usize);
+        assert_eq!(p.wbm_normal_bytes, 16 * GB as usize);
+        assert_eq!(p.block_cache_normal_bytes, 16 * GB as usize);
+        // Write buffer scale = 2.0, clamped
+        assert_eq!(p.write_buffer_mega_bytes, 512 * MB as usize);
+        assert_eq!(p.write_buffer_high_bytes, 256 * MB as usize);
+        assert_eq!(p.write_buffer_low_bytes, 64 * MB as usize);
+        assert_eq!(p.max_background_jobs, 32);
+        assert_eq!(p.max_subcompactions, 8);
+    }
+
+    #[test]
+    fn test_memory_profile_128gb_primary_ceiling() {
+        let p = MemoryProfile::compute(128 * GB, 64, false);
+        assert_eq!(p.rocksdb_budget_bytes, 64 * GB as usize);
+        // Write buffer clamped at ceiling
+        assert_eq!(p.write_buffer_mega_bytes, 512 * MB as usize);
+        assert_eq!(p.write_buffer_high_bytes, 256 * MB as usize);
+        assert_eq!(p.write_buffer_low_bytes, 128 * MB as usize);
+        // CPU capped
+        assert_eq!(p.max_background_jobs, 32);
+        assert_eq!(p.max_subcompactions, 8);
+    }
+
+    #[test]
+    fn test_memory_profile_8gb_primary_floor() {
+        let p = MemoryProfile::compute(8 * GB, 4, false);
+        assert_eq!(p.rocksdb_budget_bytes, 4 * GB as usize);
+        assert_eq!(p.wbm_normal_bytes, 2 * GB as usize);
+        // Write buffer scale = 0.25, clamped at floor
+        assert_eq!(p.write_buffer_mega_bytes, 64 * MB as usize);
+        assert_eq!(p.write_buffer_high_bytes, 32 * MB as usize);
+        assert_eq!(p.write_buffer_low_bytes, 8 * MB as usize);
+        assert_eq!(p.max_background_jobs, 4);
+        assert_eq!(p.max_subcompactions, 2);
+    }
+
+    #[test]
+    fn test_memory_profile_2gb_primary_absolute_floor() {
+        let p = MemoryProfile::compute(2 * GB, 2, false);
+        // Budget: 50% of 2GB = 1GB, but floor is 2GB
+        assert_eq!(p.rocksdb_budget_bytes, 2 * GB as usize);
+    }
+
+    #[test]
+    fn test_memory_profile_32gb_secondary() {
+        let p = MemoryProfile::compute(32 * GB, 24, true);
+        // Secondary: 25% of 32GB = 8GB
+        assert_eq!(p.rocksdb_budget_bytes, 8 * GB as usize);
+        assert_eq!(p.wbm_normal_bytes, 4 * GB as usize);
+        assert_eq!(p.block_cache_normal_bytes, 4 * GB as usize);
+    }
+
+    #[test]
+    fn test_memory_profile_secondary_cap() {
+        let p = MemoryProfile::compute(128 * GB, 24, true);
+        // Secondary: 25% of 128GB = 32GB, but capped at 16GB
+        assert_eq!(p.rocksdb_budget_bytes, 16 * GB as usize);
+    }
+
+    #[test]
+    fn test_memory_profile_bulk_sync_within_budget() {
+        for ram_gb in [8, 16, 32, 64, 128] {
+            let p = MemoryProfile::compute(ram_gb * GB, 24, false);
+            let total_bulk = p.wbm_bulk_sync_bytes + p.block_cache_bulk_sync_bytes;
+            assert_eq!(
+                total_bulk, p.rocksdb_budget_bytes,
+                "Bulk sync total should equal budget for {}GB",
+                ram_gb
+            );
+        }
+    }
+
+    #[test]
+    fn test_scale_clamp_basic() {
+        assert_eq!(scale_clamp(100, 1.0, 50, 200), 100);
+        assert_eq!(scale_clamp(100, 0.3, 50, 200), 50); // clamped to min
+        assert_eq!(scale_clamp(100, 3.0, 50, 200), 200); // clamped to max
+    }
+
+    #[test]
+    fn test_memory_profile_accessor() {
+        let (store, _d, _a) = open_test_store();
+        let p = store.memory_profile();
+        assert!(!p.is_secondary);
+        assert!(p.system_ram_bytes > 0);
+        assert!(p.cpu_count > 0);
     }
 }

@@ -329,7 +329,7 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     info!("Opening ckbadger-store at: {}", config.data_path);
     let store = Arc::new(CkbadgerStore::open(&config.data_path)?);
-    CkbadgerStore::log_config();
+    store.log_config();
 
     // One-time backfill: populate code_hash indexes if they are empty
     if !store.code_hash_indexes_populated() {
