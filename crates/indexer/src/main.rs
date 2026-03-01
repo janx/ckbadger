@@ -345,7 +345,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         config.derived_data_path
     );
     let derived_store = Arc::new(CkbadgerStore::open(&config.derived_data_path)?);
-    CkbadgerStore::log_config();
+    store.log_config();
 
     // One-time backfill: populate code_hash indexes if they are empty
     if !store.code_hash_indexes_populated() {
