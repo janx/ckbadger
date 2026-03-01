@@ -3273,6 +3273,13 @@ impl Indexer {
         );
 
         if bulk_sync_mode {
+            if !self.is_direct_db_read() {
+                bail!(
+                    "bulk sync requires CKB_DATA_PATH for direct RocksDB reads. \
+                     Set CKB_DATA_PATH to the CKB node data directory (e.g. CKB_DATA_PATH=/path/to/ckb/data). \
+                     JSON-RPC fallback is not supported during bulk sync"
+                );
+            }
             info!(
                 run_id = %self.run_id,
                 "Bulk sync auto-enabled: {} blocks behind > {} threshold",
