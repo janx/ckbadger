@@ -103,7 +103,7 @@ reset:
 		exit 1; \
 	fi
 	-$(COMPOSE) stop redis api indexer frontend >/dev/null 2>&1 || true
-	rm -rf "$(CKBADGER_DATA_PATH)" "$(CKBADGER_DATA_PATH)-api-secondary"
+	rm -rf "$(CKBADGER_DATA_PATH)" "$(CKBADGER_DATA_PATH)-append" "$(CKBADGER_DATA_PATH)-api-secondary" "$(CKBADGER_DATA_PATH)-api-secondary-append"
 	@if command -v docker >/dev/null 2>&1; then \
 		project="$${COMPOSE_PROJECT_NAME:-$(COMPOSE_PROJECT)}"; \
 		rocksdb_vols=$$(docker volume ls -q --filter "label=com.docker.compose.project=$$project" --filter "label=com.docker.compose.volume=ckbadger-data"); \

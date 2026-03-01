@@ -446,7 +446,7 @@ impl CkbadgerStore {
         opts.set_max_background_jobs(24);
         opts.set_max_subcompactions(8);
         opts.set_use_direct_io_for_flush_and_compaction(true);
-        opts.set_atomic_flush(true);
+        opts.set_atomic_flush(false);
         opts.set_unordered_write(true);
 
         let block_cache = rocksdb::Cache::new_lru_cache(Self::BLOCK_CACHE_NORMAL_BYTES);
@@ -858,6 +858,28 @@ impl CkbadgerStore {
                 }
             }
         }
+        // Targeted 512MB write_buffer_size for the hottest L0 offenders.
+        // These CFs accumulate the most L0 files during bulk sync; larger memtables
+        // halve their flush frequency and reduce compaction backpressure.
+        for &hot_cf_name in &[CF_TX_INDEX, CF_LIVE_CELLS] {
+            if let Some(cf) = self.default_db.cf_handle(hot_cf_name) {
+                let result = self.default_db.set_options_cf(
+                    cf,
+                    &[("write_buffer_size", "536870912")], // 512MB
+                );
+                if result.is_ok() {
+                    ok += 1;
+                } else {
+                    warn!(
+                        cf = hot_cf_name,
+                        "Failed to set 512MB write_buffer_size for hot CF: {:?}",
+                        result.err()
+                    );
+                    fail += 1;
+                }
+            }
+        }
+
         info!(
             ok,
             fail,

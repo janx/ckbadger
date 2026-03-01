@@ -27,20 +27,43 @@ impl<'a> StoreBatch<'a> {
     }
 
     /// Commit all accumulated writes. Append batch first (idempotent), then default.
+    /// Sequential to preserve append-first ordering guarantee for live sync.
     pub fn commit(self) -> anyhow::Result<()> {
         if !self.append_batch.is_empty() {
             self.store.append_write_batch(self.append_batch)?;
         }
-        self.store.write_batch(self.batch)
+        if !self.batch.is_empty() {
+            self.store.write_batch(self.batch)?;
+        }
+        Ok(())
     }
 
     /// Commit with WAL disabled. Use during bulk sync where crash recovery
     /// re-syncs from the last committed block header.
+    /// When both batches are non-empty, commits them in parallel since they
+    /// target independent RocksDB instances and ordering is not required.
     pub fn commit_no_wal(self) -> anyhow::Result<()> {
-        if !self.append_batch.is_empty() {
-            self.store.append_write_batch_no_wal(self.append_batch)?;
+        let has_append = !self.append_batch.is_empty();
+        let has_default = !self.batch.is_empty();
+
+        match (has_append, has_default) {
+            (true, true) => {
+                let (append_res, default_res) = rayon::join(
+                    || self.store.append_write_batch_no_wal(self.append_batch),
+                    || self.store.write_batch_no_wal(self.batch),
+                );
+                append_res?;
+                default_res?;
+            }
+            (true, false) => {
+                self.store.append_write_batch_no_wal(self.append_batch)?;
+            }
+            (false, true) => {
+                self.store.write_batch_no_wal(self.batch)?;
+            }
+            (false, false) => {}
         }
-        self.store.write_batch_no_wal(self.batch)
+        Ok(())
     }
 
     /// Get the number of operations in the batch (both stores combined).

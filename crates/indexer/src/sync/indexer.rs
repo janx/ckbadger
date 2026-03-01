@@ -2053,7 +2053,7 @@ impl PipelinePerfStats {
     }
 }
 
-const CELL_CACHE_CAPACITY: usize = 200_000;
+const CELL_CACHE_CAPACITY: usize = 500_000;
 const UDT_CELL_CACHE_CAPACITY: usize = 100_000;
 const STARTUP_CONTINUITY_WINDOW_BLOCKS: i64 = 512;
 const PARSER_UNRESOLVED_RETRY_DELAY_MS: u64 = 500;
@@ -10619,11 +10619,10 @@ impl Indexer {
         // Finalization: block headers + stats commit
         let t_finalize = Instant::now();
         {
-            let mut core_batch = StoreBatch::new(self.writer.store());
+            let mut finalize_batch = StoreBatch::new(self.writer.store());
             self.writer
-                .insert_blocks_batch(&block_refs, &mut core_batch)?;
-            let mut derived_batch = StoreBatch::new(self.writer.store());
-            self.write_batch_stats_to_batch(&batch_stats, &mut derived_batch)?;
+                .insert_blocks_batch(&block_refs, &mut finalize_batch)?;
+            self.write_batch_stats_to_batch(&batch_stats, &mut finalize_batch)?;
             debug!(
                 phase = "finalize_headers_stats",
                 batch_start = first_block,
@@ -10633,28 +10632,16 @@ impl Indexer {
             );
             let finalize_commit_started = Instant::now();
             if bulk_sync_mode {
-                core_batch.commit_no_wal().with_context(|| {
+                finalize_batch.commit_no_wal().with_context(|| {
                     format!(
-                        "core finalize commit_no_wal failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-                derived_batch.commit_no_wal().with_context(|| {
-                    format!(
-                        "derived finalize commit_no_wal failed for blocks {}-{}",
+                        "finalize commit_no_wal failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;
             } else {
-                core_batch.commit().with_context(|| {
+                finalize_batch.commit().with_context(|| {
                     format!(
-                        "core finalize commit failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-                derived_batch.commit().with_context(|| {
-                    format!(
-                        "derived finalize commit failed for blocks {}-{}",
+                        "finalize commit failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;
