@@ -20,6 +20,9 @@ fn build_dao_cache_entry(
         capacity: deposit.capacity,
         deposit_block_number: block_number,
         lock_script_hash: deposit.lock_script_hash.clone(),
+        lock_code_hash: deposit.lock_code_hash.clone(),
+        lock_hash_type: deposit.lock_hash_type,
+        lock_args: deposit.lock_args.clone(),
         deposit_ar,
         status: 0,
         withdraw_request_tx: None,
@@ -811,6 +814,9 @@ mod tests {
             tx_hash: vec![0x11; 32],
             output_index: 7,
             lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
             capacity: 123_456,
         };
         let entry = build_dao_cache_entry(&deposit, 42, 9876);
@@ -818,6 +824,9 @@ mod tests {
         assert_eq!(entry.capacity, deposit.capacity);
         assert_eq!(entry.deposit_block_number, 42);
         assert_eq!(entry.lock_script_hash, deposit.lock_script_hash);
+        assert_eq!(entry.lock_code_hash, deposit.lock_code_hash);
+        assert_eq!(entry.lock_hash_type, deposit.lock_hash_type);
+        assert_eq!(entry.lock_args, deposit.lock_args);
         assert_eq!(entry.deposit_ar, 9876);
         assert_eq!(entry.status, 0);
         assert!(entry.withdraw_request_tx.is_none());
@@ -836,6 +845,9 @@ mod tests {
             capacity: 999,
             deposit_block_number: 77,
             lock_script_hash: vec![0x33; 32],
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
             deposit_ar: 123,
             status: 1,
             withdraw_request_tx: Some(vec![0x44; 32]),
@@ -1006,6 +1018,9 @@ mod tests {
                 capacity: deposit_capacity,
                 deposit_block_number: deposit_block,
                 lock_script_hash: vec![0xBB; 32],
+                lock_code_hash: vec![],
+                lock_hash_type: 0,
+                lock_args: vec![],
                 deposit_ar: 10000000000000000,
                 status: 0,
                 withdraw_request_tx: None,
@@ -1066,6 +1081,9 @@ mod tests {
                 capacity: 100_00000000,
                 deposit_block_number: 100,
                 lock_script_hash: vec![0xBB; 32],
+                lock_code_hash: vec![],
+                lock_hash_type: 0,
+                lock_args: vec![],
                 deposit_ar: 10,
                 status: 1,
                 withdraw_request_tx: Some(vec![0xDD; 32]),
@@ -1120,6 +1138,9 @@ mod tests {
             capacity: 500_00000000,
             deposit_block_number: 100,
             lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
             deposit_ar: 10,
             status: 1,
             withdraw_request_tx: Some(vec![0xCC; 32]),
@@ -1178,6 +1199,9 @@ mod tests {
             capacity: 500_00000000,
             deposit_block_number: 100,
             lock_script_hash: vec![0xBC; 32],
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
             deposit_ar: 10,
             status: 1,
             withdraw_request_tx: Some(vec![0xCD; 32]),
@@ -1246,6 +1270,9 @@ mod tests {
             capacity: 500_00000000,
             deposit_block_number: 100,
             lock_script_hash: target_lock_hash.clone(),
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
             deposit_ar: 10,
             status: 1,
             withdraw_request_tx: Some(request_tx_hash.clone()),
@@ -1329,6 +1356,9 @@ mod tests {
             capacity: deposit_capacity,
             deposit_block_number: deposit_block,
             lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
             deposit_ar: 10000000000000000,
             status: 0,
             withdraw_request_tx: None,

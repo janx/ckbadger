@@ -1421,6 +1421,7 @@ enum ReorgAction {
 #[derive(Default)]
 struct BatchStats {
     sync_totals: (i64, i64, i64),
+    first_block_number: Option<i64>,
     last_block: Option<(i64, Vec<u8>)>,
     hourly_stats: HashMap<DateTime<Utc>, (i32, i32, i32, i32, i128)>,
     daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
@@ -6894,6 +6895,9 @@ impl Indexer {
             batch_stats.sync_totals.0 += parsed.transactions_count as i64;
             batch_stats.sync_totals.1 += cells_created as i64;
             batch_stats.sync_totals.2 += cells_consumed as i64;
+            if batch_stats.first_block_number.is_none() {
+                batch_stats.first_block_number = Some(parsed.number);
+            }
             batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
 
             {
@@ -8436,6 +8440,9 @@ impl Indexer {
                                 capacity: deposit.capacity,
                                 deposit_block_number: *block_number,
                                 lock_script_hash: deposit.lock_script_hash.clone(),
+                                lock_code_hash: deposit.lock_code_hash.clone(),
+                                lock_hash_type: deposit.lock_hash_type,
+                                lock_args: deposit.lock_args.clone(),
                                 deposit_ar: *ar,
                                 status: 0,
                                 withdraw_request_tx: None,
@@ -9582,6 +9589,9 @@ impl Indexer {
                             capacity: deposit.capacity,
                             deposit_block_number: *block_number,
                             lock_script_hash: deposit.lock_script_hash.clone(),
+                            lock_code_hash: deposit.lock_code_hash.clone(),
+                            lock_hash_type: deposit.lock_hash_type,
+                            lock_args: deposit.lock_args.clone(),
                             deposit_ar: *ar,
                             status: 0,
                             withdraw_request_tx: None,
@@ -10965,9 +10975,9 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.new_deposits)
                     .unwrap_or(0);
-                let running_total_withdrawal_count =
+                let mut running_total_withdrawal_count =
                     latest_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
-                let running_total_compensation = latest_snapshot
+                let mut running_total_compensation = latest_snapshot
                     .as_ref()
                     .map(|s| s.compensation)
                     .unwrap_or(0);
@@ -10992,14 +11002,72 @@ impl Indexer {
                     .map(|s| s.secondary_pool)
                     .unwrap_or(0);
 
-                // Build active depositor set from committed DB state (before this batch).
-                // Each lock_script_hash maps to its count of active deposits.
+                // Build active depositor set from committed DB state.
+                // DB state is END-of-batch (DAO writes already committed), so we must
+                // reverse this batch's deltas to reconstruct the PRE-batch state,
+                // then apply forward per day in the loop below.
                 let mut active_depositors: HashMap<Vec<u8>, i64> = HashMap::new();
                 if stats.dao_deltas_computed {
                     for (_, entry) in self.writer.store().list_active_dao_deposits()? {
                         *active_depositors
                             .entry(entry.lock_script_hash.clone())
                             .or_insert(0) += 1;
+                    }
+
+                    // Reverse ALL batch deltas (in reverse date order) to undo the
+                    // already-committed DAO writes and recover the pre-batch depositor
+                    // state.
+                    for date in snapshot_dates.iter().rev() {
+                        // Undo withdrawals: re-add their lock hashes
+                        if let Some(hashes) = stats.dao_daily_withdrawal_lock_hashes.get(date) {
+                            for h in hashes {
+                                *active_depositors.entry(h.clone()).or_insert(0) += 1;
+                            }
+                        }
+                        // Undo deposits: remove their lock hashes
+                        if let Some(hashes) = stats.dao_daily_deposit_lock_hashes.get(date) {
+                            for h in hashes {
+                                if let Some(count) = active_depositors.get_mut(h) {
+                                    *count -= 1;
+                                    if *count <= 0 {
+                                        active_depositors.remove(h);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Build per-day phase-2 withdrawal completion counts and compensation
+                // by scanning completed deposits whose withdraw_block is in this
+                // batch's block range.
+                let mut daily_phase2_count: HashMap<NaiveDate, i64> = HashMap::new();
+                let mut daily_phase2_compensation: HashMap<NaiveDate, i128> = HashMap::new();
+                if stats.dao_deltas_computed {
+                    let first_block = stats.first_block_number.unwrap_or(0);
+                    let last_block = stats
+                        .last_block
+                        .as_ref()
+                        .map(|(n, _)| *n)
+                        .unwrap_or(i64::MAX);
+                    for (_, entry) in self.writer.store().list_dao_deposits()? {
+                        if entry.status == 2 {
+                            if let Some(wb) = entry.withdraw_block {
+                                if wb >= first_block && wb <= last_block {
+                                    if let Ok(Some(header)) =
+                                        self.writer.store().get_block_header(wb)
+                                    {
+                                        let date =
+                                            ckbadger_common::block_date_from_ms(header.timestamp);
+                                        *daily_phase2_count.entry(date).or_default() += 1;
+                                        if let Some(c) = entry.compensation {
+                                            *daily_phase2_compensation.entry(date).or_default() +=
+                                                c as i128;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -11016,6 +11084,10 @@ impl Indexer {
                         .get(date)
                         .copied()
                         .unwrap_or(0);
+                    running_total_withdrawal_count +=
+                        daily_phase2_count.get(date).copied().unwrap_or(0);
+                    running_total_compensation +=
+                        daily_phase2_compensation.get(date).copied().unwrap_or(0);
 
                     // Apply depositor changes from this batch
                     if let Some(hashes) = stats.dao_daily_deposit_lock_hashes.get(date) {
@@ -14125,5 +14197,138 @@ mod tests {
         // Exit again
         store.restore_normal_compaction_options();
         assert!(!store.is_bulk_sync_mode());
+    }
+
+    /// Verify that the reverse-delta approach for depositor counting correctly
+    /// reconstructs pre-batch state from end-of-batch DB state.
+    ///
+    /// Scenario: end-of-batch DB has depositors {A:2, B:1}. This batch added
+    /// deposit for A on day1 and a withdrawal for B on day2. After reversing
+    /// all batch deltas, pre-batch state should be {A:1, B:2}. Then applying
+    /// forward per day should produce correct per-day counts.
+    #[test]
+    fn test_depositor_reverse_delta_reconstructs_pre_batch_state() {
+        let a = vec![0xAAu8; 32];
+        let b = vec![0xBBu8; 32];
+
+        // End-of-batch DB state: A has 2 active deposits, B has 1
+        let mut active_depositors: HashMap<Vec<u8>, i64> = HashMap::new();
+        active_depositors.insert(a.clone(), 2);
+        active_depositors.insert(b.clone(), 1);
+
+        let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let day2 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+        let mut deposit_lock_hashes: HashMap<NaiveDate, Vec<Vec<u8>>> = HashMap::new();
+        deposit_lock_hashes.insert(day1, vec![a.clone()]); // A got a new deposit on day1
+
+        let mut withdrawal_lock_hashes: HashMap<NaiveDate, Vec<Vec<u8>>> = HashMap::new();
+        withdrawal_lock_hashes.insert(day2, vec![b.clone()]); // B had a withdrawal on day2
+
+        let snapshot_dates = [&day1, &day2];
+
+        // Reverse ALL batch deltas (in reverse date order)
+        for date in snapshot_dates.iter().rev() {
+            // Undo withdrawals: re-add
+            if let Some(hashes) = withdrawal_lock_hashes.get(date) {
+                for h in hashes {
+                    *active_depositors.entry(h.clone()).or_insert(0) += 1;
+                }
+            }
+            // Undo deposits: remove
+            if let Some(hashes) = deposit_lock_hashes.get(date) {
+                for h in hashes {
+                    if let Some(count) = active_depositors.get_mut(h) {
+                        *count -= 1;
+                        if *count <= 0 {
+                            active_depositors.remove(h);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pre-batch state: A had 1 deposit (we reversed the day1 addition),
+        // B had 2 deposits (we reversed the day2 withdrawal)
+        assert_eq!(active_depositors.get(&a), Some(&1));
+        assert_eq!(active_depositors.get(&b), Some(&2));
+        assert_eq!(active_depositors.len(), 2);
+
+        // Now apply forward per day (same as the real code)
+        // Day 1: A gets a deposit → A=2, B=2 → 2 unique depositors
+        if let Some(hashes) = deposit_lock_hashes.get(&day1) {
+            for h in hashes {
+                *active_depositors.entry(h.clone()).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(active_depositors.len(), 2);
+        assert_eq!(active_depositors.get(&a), Some(&2));
+
+        // Day 2: B has a withdrawal → B goes from 2 to 1 → still 2 unique depositors
+        if let Some(hashes) = withdrawal_lock_hashes.get(&day2) {
+            for h in hashes {
+                if let Some(count) = active_depositors.get_mut(h) {
+                    *count -= 1;
+                    if *count <= 0 {
+                        active_depositors.remove(h);
+                    }
+                }
+            }
+        }
+        assert_eq!(active_depositors.len(), 2);
+        assert_eq!(active_depositors.get(&b), Some(&1));
+    }
+
+    /// Verify that when a depositor's last deposit is withdrawn, they are
+    /// correctly removed from the set during reverse-delta reconstruction.
+    #[test]
+    fn test_depositor_reverse_delta_handles_complete_withdrawal() {
+        let a = vec![0xAAu8; 32];
+
+        // End-of-batch: A has no active deposits (was removed by withdrawal)
+        let mut active_depositors: HashMap<Vec<u8>, i64> = HashMap::new();
+
+        let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let snapshot_dates = [&day1];
+
+        let mut withdrawal_lock_hashes: HashMap<NaiveDate, Vec<Vec<u8>>> = HashMap::new();
+        withdrawal_lock_hashes.insert(day1, vec![a.clone()]);
+        let deposit_lock_hashes: HashMap<NaiveDate, Vec<Vec<u8>>> = HashMap::new();
+
+        // Reverse: undo day1 withdrawal → re-add A
+        for date in snapshot_dates.iter().rev() {
+            if let Some(hashes) = withdrawal_lock_hashes.get(date) {
+                for h in hashes {
+                    *active_depositors.entry(h.clone()).or_insert(0) += 1;
+                }
+            }
+            if let Some(hashes) = deposit_lock_hashes.get(date) {
+                for h in hashes {
+                    if let Some(count) = active_depositors.get_mut(h) {
+                        *count -= 1;
+                        if *count <= 0 {
+                            active_depositors.remove(h);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pre-batch: A had 1 deposit
+        assert_eq!(active_depositors.get(&a), Some(&1));
+        assert_eq!(active_depositors.len(), 1);
+
+        // Apply forward: day1 withdrawal removes A entirely
+        if let Some(hashes) = withdrawal_lock_hashes.get(&day1) {
+            for h in hashes {
+                if let Some(count) = active_depositors.get_mut(h) {
+                    *count -= 1;
+                    if *count <= 0 {
+                        active_depositors.remove(h);
+                    }
+                }
+            }
+        }
+        assert_eq!(active_depositors.len(), 0);
     }
 }

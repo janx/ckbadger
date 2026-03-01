@@ -171,12 +171,29 @@ fn deposit_to_response(
         .as_ref()
         .map(|tx| format!("0x{}", hex::encode(tx)));
 
+    let address = if !entry.lock_code_hash.is_empty() {
+        crate::utils::script_to_address(
+            &entry.lock_code_hash,
+            entry.lock_hash_type,
+            &entry.lock_args,
+            &state.ckb_network,
+        )
+        .ok()
+    } else {
+        None
+    };
+    let lock_code_hash = if !entry.lock_code_hash.is_empty() {
+        Some(format!("0x{}", hex::encode(&entry.lock_code_hash)))
+    } else {
+        None
+    };
+
     DaoDepositResponse {
         tx_hash: format!("0x{}", hex::encode(&tx_hash_bytes)),
         output_index: output_index as i32,
         lock_script_hash: format!("0x{}", hex::encode(&entry.lock_script_hash)),
-        address: None,
-        lock_code_hash: None,
+        address,
+        lock_code_hash,
         capacity: entry.capacity.to_string(),
         deposit_block_number: entry.deposit_block_number,
         deposit_timestamp,

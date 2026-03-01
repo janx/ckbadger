@@ -261,6 +261,12 @@ pub struct DaoDeposit {
     pub capacity: i64,
     pub deposit_block_number: i64,
     pub lock_script_hash: Vec<u8>,
+    #[serde(default)]
+    pub lock_code_hash: Vec<u8>,
+    #[serde(default)]
+    pub lock_hash_type: i16,
+    #[serde(default)]
+    pub lock_args: Vec<u8>,
     pub deposit_ar: i64,
     pub status: i16,
     pub withdraw_request_tx: Option<Vec<u8>>,
@@ -1378,6 +1384,9 @@ mod tests {
             capacity: 100_000_000_000,
             deposit_block_number: 5000,
             lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0xBB; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0xCC; 20],
             deposit_ar: 1_000_000,
             status: 0,
             withdraw_request_tx: None,
@@ -1403,6 +1412,9 @@ mod tests {
             capacity: 0,
             deposit_block_number: 0,
             lock_script_hash: vec![],
+            lock_code_hash: vec![],
+            lock_hash_type: 0,
+            lock_args: vec![],
             deposit_ar: 0,
             status: 0,
             withdraw_request_tx: None,

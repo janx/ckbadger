@@ -24,6 +24,9 @@ pub struct ParsedDaoDeposit {
     pub tx_hash: Vec<u8>,
     pub output_index: i32,
     pub lock_script_hash: Vec<u8>,
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
     pub capacity: i64,
 }
 
@@ -109,6 +112,9 @@ impl DaoParser {
                     tx_hash: tx_hash.to_vec(),
                     output_index: idx as i32,
                     lock_script_hash: dao_cell.lock_script_hash,
+                    lock_code_hash: parse_hex_to_bytes(&output.lock.code_hash),
+                    lock_hash_type: ScriptParser::hash_type_to_i16(&output.lock.hash_type),
+                    lock_args: parse_hex_to_bytes(&output.lock.args),
                     capacity: dao_cell.capacity,
                 })
             })
@@ -138,6 +144,9 @@ impl DaoParser {
                     tx_hash: tx_hash.to_vec(),
                     output_index: idx as i32,
                     lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_hash_type: cell.lock_hash_type,
+                    lock_args: cell.lock_args.clone(),
                     capacity: cell.capacity,
                 })
             })
