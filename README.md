@@ -14,6 +14,11 @@
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
 
+### Local First (Expanded)
+
+- Local-first aligns with Web5 and Unix philosophy. Files and executable binaries are the foundation of composability, and ckbadger is designed around files and executable binaries.
+- Local-first means ckbadger optimizes for writes (building data indexes), not reads (serving API and web page requests), unlike typical blockchain explorers. This enables extremely fast database sync, so local experiments remain cheap: if the DB is broken, rebuild it instead of protecting a 60-hour sync artifact. DB reads remain very fast, just not the top optimization target.
+
 ## Coding Principles
 
 - **Fail Fast, Fail Early** - Never hide invariant violations with silent fallbacks, lower-bound clamps, or default-zero repairs; fail immediately with actionable context
