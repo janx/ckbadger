@@ -93,8 +93,8 @@ impl DotbitParser {
             None
         };
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedDotbitAccount {
             account_id,

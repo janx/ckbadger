@@ -41,7 +41,9 @@ impl BatchWriter {
                 inputs_count: tx.5,
                 outputs_count: tx.6,
                 fee: tx.12,
-                tx_size: tx.13.unwrap_or(0),
+                tx_size: tx.13.ok_or_else(|| {
+                    anyhow::anyhow!("missing tx_size for transaction 0x{}", hex::encode(tx.0))
+                })?,
                 cycles: tx.14,
             };
             batch.put_tx_index(tx.1, tx.3, &entry);

@@ -145,13 +145,13 @@ impl UdtParser {
         let data = parse_hex_to_bytes(data_hex);
         let amount = Self::parse_amount(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
-        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock);
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
+        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedUdtCell {
             type_script_hash,
             type_code_hash: parse_hex_to_bytes(&type_script.code_hash),
-            type_hash_type: ScriptParser::hash_type_to_i16(&type_script.hash_type),
+            type_hash_type: ScriptParser::hash_type_to_i16(&type_script.hash_type).ok()?,
             type_args: parse_hex_to_bytes(&type_script.args),
             lock_script_hash,
             amount,

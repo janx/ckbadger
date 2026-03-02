@@ -1,3 +1,5 @@
+use anyhow::Result;
+
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
@@ -20,7 +22,7 @@ pub struct ParsedCell {
 pub struct CellParser;
 
 impl CellParser {
-    pub fn parse_outputs(tx: &TransactionView) -> Vec<ParsedCell> {
+    pub fn parse_outputs(tx: &TransactionView) -> Result<Vec<ParsedCell>> {
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -28,28 +30,28 @@ impl CellParser {
             .collect()
     }
 
-    pub fn parse_output(output: &CellOutput, data_hex: &str) -> ParsedCell {
+    pub fn parse_output(output: &CellOutput, data_hex: &str) -> Result<ParsedCell> {
         let data = parse_hex_to_bytes(data_hex);
         let data_hash = ScriptParser::compute_data_hash(&data);
 
-        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock);
+        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock)?;
 
         let (type_code_hash, type_hash_type, type_args, type_script_hash) =
             if let Some(ref type_script) = output.type_ {
                 (
                     Some(parse_hex_to_bytes(&type_script.code_hash)),
-                    Some(ScriptParser::hash_type_to_i16(&type_script.hash_type)),
+                    Some(ScriptParser::hash_type_to_i16(&type_script.hash_type)?),
                     Some(parse_hex_to_bytes(&type_script.args)),
-                    Some(ScriptParser::compute_script_hash(type_script)),
+                    Some(ScriptParser::compute_script_hash(type_script)?),
                 )
             } else {
                 (None, None, None, None)
             };
 
-        ParsedCell {
+        Ok(ParsedCell {
             capacity: Self::parse_capacity_i64(&output.capacity),
             lock_code_hash: parse_hex_to_bytes(&output.lock.code_hash),
-            lock_hash_type: ScriptParser::hash_type_to_i16(&output.lock.hash_type),
+            lock_hash_type: ScriptParser::hash_type_to_i16(&output.lock.hash_type)?,
             lock_args: parse_hex_to_bytes(&output.lock.args),
             lock_script_hash,
             type_code_hash,
@@ -59,7 +61,7 @@ impl CellParser {
             data_hash,
             data_size: data.len() as i32,
             data,
-        }
+        })
     }
 
     fn parse_capacity_i64(capacity_hex: &str) -> i64 {
@@ -173,7 +175,7 @@ mod tests {
     fn test_parse_output_without_type_script() {
         let output = create_cell_output("0x174876e800", false);
         let data_hex = "0x";
-        let parsed = CellParser::parse_output(&output, data_hex);
+        let parsed = CellParser::parse_output(&output, data_hex).unwrap();
 
         assert_eq!(parsed.capacity, 100_000_000_000);
         assert_eq!(parsed.lock_code_hash.len(), 32);
@@ -191,7 +193,7 @@ mod tests {
     fn test_parse_output_with_type_script() {
         let output = create_cell_output("0x2540be400", true);
         let data_hex = "0xdeadbeef";
-        let parsed = CellParser::parse_output(&output, data_hex);
+        let parsed = CellParser::parse_output(&output, data_hex).unwrap();
 
         assert_eq!(parsed.capacity, 10_000_000_000);
         assert!(parsed.type_code_hash.is_some());
@@ -208,7 +210,7 @@ mod tests {
     fn test_parse_output_computes_data_hash() {
         let output = create_cell_output("0x174876e800", false);
         let data_hex = "0xdeadbeef";
-        let parsed = CellParser::parse_output(&output, data_hex);
+        let parsed = CellParser::parse_output(&output, data_hex).unwrap();
 
         assert_eq!(parsed.data_hash.len(), 32);
         assert_ne!(parsed.data_hash, vec![0u8; 32]);
@@ -217,7 +219,7 @@ mod tests {
     #[test]
     fn test_parse_output_computes_lock_script_hash() {
         let output = create_cell_output("0x174876e800", false);
-        let parsed = CellParser::parse_output(&output, "0x");
+        let parsed = CellParser::parse_output(&output, "0x").unwrap();
 
         assert_eq!(parsed.lock_script_hash.len(), 32);
         assert_ne!(parsed.lock_script_hash, vec![0u8; 32]);
@@ -226,7 +228,7 @@ mod tests {
     #[test]
     fn test_parse_outputs_multiple() {
         let tx = create_test_tx();
-        let parsed = CellParser::parse_outputs(&tx);
+        let parsed = CellParser::parse_outputs(&tx).unwrap();
 
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].capacity, 100_000_000_000);
@@ -247,7 +249,7 @@ mod tests {
             outputs_data: vec![],
             witnesses: vec![],
         };
-        let parsed = CellParser::parse_outputs(&tx);
+        let parsed = CellParser::parse_outputs(&tx).unwrap();
         assert!(parsed.is_empty());
     }
 
@@ -286,15 +288,21 @@ mod tests {
         };
 
         assert_eq!(
-            CellParser::parse_output(&output_type, "0x").lock_hash_type,
+            CellParser::parse_output(&output_type, "0x")
+                .unwrap()
+                .lock_hash_type,
             1
         );
         assert_eq!(
-            CellParser::parse_output(&output_data, "0x").lock_hash_type,
+            CellParser::parse_output(&output_data, "0x")
+                .unwrap()
+                .lock_hash_type,
             0
         );
         assert_eq!(
-            CellParser::parse_output(&output_data1, "0x").lock_hash_type,
+            CellParser::parse_output(&output_data1, "0x")
+                .unwrap()
+                .lock_hash_type,
             2
         );
     }

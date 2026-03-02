@@ -78,9 +78,9 @@ impl MnftParser {
         let data = parse_hex_to_bytes(data_hex);
         let issuer_data = Self::parse_issuer_data(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
         let issuer_id = type_script_hash[..20].to_vec();
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedMnftIssuer {
             issuer_id,
@@ -111,8 +111,8 @@ impl MnftParser {
         let data = parse_hex_to_bytes(data_hex);
         let class_data = Self::parse_class_data(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedMnftClass {
             // mNFT class identity is issuer_id(20B) + class_index(4B).
@@ -150,8 +150,8 @@ impl MnftParser {
         let data = parse_hex_to_bytes(data_hex);
         let token_data = Self::parse_token_data(&data)?;
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock);
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
 
         Some(ParsedMnftToken {
             token_id: args,

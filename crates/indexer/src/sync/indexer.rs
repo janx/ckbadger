@@ -376,7 +376,12 @@ where
             continue;
         };
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script);
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).unwrap_or_else(|e| {
+            panic!(
+                "compute_script_hash failed for type script in tx {}: {}",
+                tx.hash, e
+            )
+        });
         let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
             cached.clone()
         } else {
@@ -2732,7 +2737,14 @@ fn parse_blocks_parallel(
                                 e
                             )
                         })?;
-                        let cells = CellParser::parse_outputs(tx);
+                        let cells = CellParser::parse_outputs(tx).map_err(|e| {
+                            anyhow!(
+                                "failed to parse tx outputs for tx {} in block {}: {}",
+                                tx.hash,
+                                parsed.number,
+                                e
+                            )
+                        })?;
                         let witnesses: Vec<String> = tx.witnesses.clone();
                         let outputs_data: Vec<String> = tx.outputs_data.clone();
                         let total_output_capacity: i64 = cells.iter().map(|c| c.capacity).sum();

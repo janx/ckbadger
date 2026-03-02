@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 use crate::rpc::{parse_hex_to_bytes, TransactionView};
 
@@ -197,8 +197,13 @@ impl TransactionParser {
                     out_point_tx_hash,
                     out_point_index,
                     dep_type: match cell_dep.dep_type.as_str() {
+                        "code" => 0,
                         "dep_group" => 1,
-                        _ => 0,
+                        other => bail!(
+                            "invalid cell dep #{}: unknown dep_type '{}'",
+                            dep_idx,
+                            other
+                        ),
                     },
                 })
             })
@@ -552,5 +557,17 @@ mod tests {
         tx.cell_deps[0].out_point.index = "0x10000".to_string();
         let err = TransactionParser::parse_cell_deps(&tx).unwrap_err();
         assert!(err.to_string().contains("exceeds i16 range"));
+    }
+
+    #[test]
+    fn test_parse_cell_deps_errors_on_unknown_dep_type() {
+        let mut tx = create_normal_tx();
+        tx.cell_deps[0].dep_type = "unknown_type".to_string();
+        let err = TransactionParser::parse_cell_deps(&tx).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown dep_type 'unknown_type'"),
+            "expected unknown dep_type error, got: {}",
+            err
+        );
     }
 }
