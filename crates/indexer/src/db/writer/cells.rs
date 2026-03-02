@@ -302,40 +302,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn get_cell_info(
-        &self,
-        tx_hash: &[u8],
-        output_index: i16,
-    ) -> Result<Option<(i64, i64, Vec<u8>)>> {
-        let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-
-        // Check live cells first
-        if self
-            .store
-            .get_cf(self.store.cf_live_cells(), &outpoint_key)?
-            .is_some()
-        {
-            if let Some(info) = self.store.get_cell_by_outpoint_key(&outpoint_key)? {
-                return Ok(Some((
-                    info.capacity,
-                    info.created_at_block,
-                    info.lock_script_hash,
-                )));
-            }
-        }
-
-        // Check consumed cells
-        if let Some(info) = self.store.get_consumed_cell_info(tx_hash, output_index)? {
-            return Ok(Some((
-                info.cell.capacity,
-                info.cell.created_at_block,
-                info.cell.lock_script_hash,
-            )));
-        }
-
-        Ok(None)
-    }
-
     pub fn get_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],

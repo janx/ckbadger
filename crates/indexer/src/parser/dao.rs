@@ -95,26 +95,6 @@ impl DaoParser {
         })
     }
 
-    pub fn parse_deposits(tx: &TransactionView, tx_hash: &[u8]) -> Vec<ParsedDaoDeposit> {
-        tx.outputs
-            .iter()
-            .zip(tx.outputs_data.iter())
-            .enumerate()
-            .filter_map(|(idx, (output, data_hex))| {
-                let dao_cell = Self::parse_dao_cell(output, data_hex)?;
-                if dao_cell.state != DaoState::Deposit {
-                    return None;
-                }
-                Some(ParsedDaoDeposit {
-                    tx_hash: tx_hash.to_vec(),
-                    output_index: idx as i32,
-                    lock_script_hash: dao_cell.lock_script_hash,
-                    capacity: dao_cell.capacity,
-                })
-            })
-            .collect()
-    }
-
     pub fn parse_deposits_from_cells(
         tx_hash: &[u8],
         cells: &[super::cell::ParsedCell],

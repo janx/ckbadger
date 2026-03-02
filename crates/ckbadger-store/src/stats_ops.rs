@@ -211,44 +211,6 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    // ---- Block time distribution ----
-
-    pub fn put_block_time_dist(&self, bucket: i32, count: i32) -> anyhow::Result<()> {
-        let key = keys::encode_stats_key(stats_prefix::BLOCK_TIME_DIST, &bucket.to_be_bytes());
-        self.put_cf(self.cf_stats_chain(), &key, &count.to_le_bytes())
-    }
-
-    pub fn get_block_time_dist(&self, bucket: i32) -> anyhow::Result<Option<i32>> {
-        let key = keys::encode_stats_key(stats_prefix::BLOCK_TIME_DIST, &bucket.to_be_bytes());
-        match self.get_cf(self.cf_stats_chain(), &key)? {
-            Some(value) if value.len() == 4 => {
-                Ok(Some(i32::from_le_bytes(value[..4].try_into().unwrap())))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// List all block time distribution buckets.
-    pub fn list_block_time_dist(&self) -> anyhow::Result<Vec<(i32, i32)>> {
-        let prefix = [stats_prefix::BLOCK_TIME_DIST];
-        let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
-        let mut results = Vec::new();
-
-        for item in iter.flatten() {
-            let (key, value) = item;
-            if !key.starts_with(&prefix) {
-                break;
-            }
-            // Key is prefix(1) + bucket(4 BE)
-            if key.len() == 5 && value.len() == 4 {
-                let bucket = i32::from_be_bytes(key[1..5].try_into().unwrap());
-                let count = i32::from_le_bytes(value[..4].try_into().unwrap());
-                results.push((bucket, count));
-            }
-        }
-        Ok(results)
-    }
-
     // ---- Epoch time distribution ----
 
     pub fn put_epoch_time_dist(&self, bucket: i32, count: i32) -> anyhow::Result<()> {

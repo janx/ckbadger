@@ -15,11 +15,6 @@ impl CkbadgerStore {
         }
     }
 
-    pub fn put_nft_direct(&self, id: &[u8], entry: &NftEntry) -> anyhow::Result<()> {
-        let value = bincode::serialize(entry)?;
-        self.put_cf(self.cf_nft_data(), id, &value)
-    }
-
     /// List all NFTs.
     pub fn list_nfts(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, NftEntry)>> {
         let iter = self.iterator_cf(self.cf_nft_data(), rocksdb::IteratorMode::Start);

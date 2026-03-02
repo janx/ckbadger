@@ -55,19 +55,6 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// Get daily stats for an address for a single date.
-    pub fn get_addr_daily_stats(
-        &self,
-        lock_hash: &[u8],
-        date_yyyymmdd: u32,
-    ) -> anyhow::Result<Option<AddressDailyStats>> {
-        let key = keys::encode_addr_daily_stats_key(lock_hash, date_yyyymmdd);
-        match self.get_cf(self.cf_addr_daily_stats(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
-    }
-
     /// List daily stats for an address in a date range (inclusive).
     /// Returns (date_yyyymmdd, stats) tuples in ascending date order.
     pub fn list_addr_daily_stats(

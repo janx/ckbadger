@@ -339,17 +339,6 @@ impl CkbadgerStore {
             status.deep_fork_info = None;
         })
     }
-
-    /// Check if bulk sync is active by looking at block timestamps.
-    pub fn is_bulk_sync_active_by_timestamp(&self) -> anyhow::Result<bool> {
-        if let Some((_, header)) = self.get_sync_tip_block()? {
-            let now = chrono::Utc::now().timestamp();
-            let block_time = header.timestamp / 1000; // ms -> s
-            Ok(now - block_time > 3600)
-        } else {
-            Ok(true)
-        }
-    }
 }
 
 #[cfg(test)]

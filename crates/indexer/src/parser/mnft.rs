@@ -173,14 +173,6 @@ impl MnftParser {
             .collect()
     }
 
-    pub fn parse_classes(tx: &TransactionView) -> Vec<ParsedMnftClass> {
-        tx.outputs
-            .iter()
-            .zip(tx.outputs_data.iter())
-            .filter_map(|(output, data_hex)| Self::parse_class_cell(output, data_hex))
-            .collect()
-    }
-
     pub fn parse_classes_with_output_indices(
         tx: &TransactionView,
     ) -> Vec<(usize, ParsedMnftClass)> {
@@ -191,14 +183,6 @@ impl MnftParser {
             .filter_map(|(output_index, (output, data_hex))| {
                 Self::parse_class_cell(output, data_hex).map(|class| (output_index, class))
             })
-            .collect()
-    }
-
-    pub fn parse_tokens(tx: &TransactionView) -> Vec<ParsedMnftToken> {
-        tx.outputs
-            .iter()
-            .zip(tx.outputs_data.iter())
-            .filter_map(|(output, data_hex)| Self::parse_token_cell(output, data_hex))
             .collect()
     }
 

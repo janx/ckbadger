@@ -251,12 +251,6 @@ impl<'a> StoreBatch<'a> {
         );
     }
 
-    pub fn delete_block_header(&mut self, block_number: i64, hash: &[u8]) {
-        let key = keys::encode_block_num(block_number);
-        self.batch.delete_cf(self.store.cf_block_headers(), key);
-        self.batch.delete_cf(self.store.cf_block_hash_index(), hash);
-    }
-
     // ---- Transaction index ----
 
     pub fn put_tx_index(&mut self, block_num: i64, tx_idx: i32, entry: &TxIndexEntry) {
@@ -275,18 +269,6 @@ impl<'a> StoreBatch<'a> {
         ]);
         self.batch
             .put_cf(self.store.cf_tx_hash_map(), tx_hash, &value);
-    }
-
-    pub fn delete_tx_index(&mut self, block_num: i64, tx_idx: i32) {
-        let key = keys::encode_composite(&[
-            &keys::encode_block_num(block_num),
-            &keys::encode_tx_idx(tx_idx),
-        ]);
-        self.batch.delete_cf(self.store.cf_tx_index(), &key);
-    }
-
-    pub fn delete_tx_hash_map(&mut self, tx_hash: &[u8]) {
-        self.batch.delete_cf(self.store.cf_tx_hash_map(), tx_hash);
     }
 
     // ---- Address balance ----
@@ -414,13 +396,6 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_stats_spore(), rev_key, &[] as &[u8]);
     }
 
-    pub fn delete_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
-        let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_stats_spore(), key);
-        let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_stats_spore(), rev_key);
-    }
-
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
         self.batch.put_cf(self.store.cf_stats_nft(), key, class_id);
@@ -488,11 +463,6 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_nft_by_collection(), key, []);
     }
 
-    pub fn delete_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
-        let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
-        self.batch.delete_cf(self.store.cf_nft_by_collection(), key);
-    }
-
     // ---- Cluster aggregates ----
 
     pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {
@@ -553,20 +523,6 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_nft_collection_activities(), key, &value);
     }
 
-    // ---- Address daily stats ----
-
-    pub fn put_addr_daily_stats(
-        &mut self,
-        lock_hash: &[u8],
-        date_yyyymmdd: u32,
-        stats: &AddressDailyStats,
-    ) {
-        let key = keys::encode_addr_daily_stats_key(lock_hash, date_yyyymmdd);
-        let value = bincode::serialize(stats).expect("serialize AddressDailyStats");
-        self.batch
-            .put_cf(self.store.cf_addr_daily_stats(), key, &value);
-    }
-
     // ---- Statistics ----
 
     pub fn put_stats(&mut self, key: &[u8], value: &[u8]) {
@@ -603,11 +559,6 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {
         self.batch.put_cf(self.store.cf_sync_meta(), key, value);
-    }
-
-    /// Get mutable access to the underlying WriteBatch for direct operations.
-    pub fn raw_batch(&mut self) -> &mut WriteBatch {
-        &mut self.batch
     }
 }
 

@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    decode_consumed_cell_info, decode_consumed_cell_meta, ConsumedCellInfo, ConsumedCellMeta,
-    LiveCellInfo,
+    decode_consumed_cell_info, decode_consumed_cell_meta, ConsumedCellInfo, LiveCellInfo,
 };
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -46,21 +45,6 @@ impl CkbadgerStore {
             return Ok(None);
         }
         self.get_cell_by_outpoint_key(outpoint_key)
-    }
-
-    pub fn get_consumed_cell_meta_by_outpoint_key(
-        &self,
-        outpoint_key: &[u8],
-    ) -> anyhow::Result<Option<ConsumedCellMeta>> {
-        match self.get_cf(self.cf_consumed_cells(), outpoint_key)? {
-            Some(value) => decode_consumed_cell_meta(&value).map(Some).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "failed to decode consumed cell meta: outpoint=0x{}",
-                    bytes_to_hex(outpoint_key)
-                )
-            }),
-            None => Ok(None),
-        }
     }
 
     pub fn get_cell(

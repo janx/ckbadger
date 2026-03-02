@@ -10,9 +10,6 @@ use super::script::ScriptParser;
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
 
-pub const DOTBIT_DAS_LOCK_TYPE_ID: &str =
-    "0x9376c3b5811942960a846691e16e477cf43d7c7fa654067c9948dfcd09a32137";
-
 const HASH_BYTES_LEN: usize = 32;
 const ACCOUNT_ID_LEN: usize = 20;
 const DAS_WITNESS_HEADER_LEN: usize = 7; // "das"(3) + action_data_type(4)
@@ -42,11 +39,6 @@ pub struct DotbitParser;
 impl DotbitParser {
     pub fn is_account_cell_type_script(code_hash: &[u8]) -> bool {
         let hash = parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
-        code_hash == hash.as_slice()
-    }
-
-    pub fn is_das_lock_script(code_hash: &[u8]) -> bool {
-        let hash = parse_hex_to_bytes(DOTBIT_DAS_LOCK_TYPE_ID);
         code_hash == hash.as_slice()
     }
 

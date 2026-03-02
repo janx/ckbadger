@@ -1,12 +1,8 @@
 //! DAO operations.
 
-use std::collections::BTreeMap;
-
-use chrono::DateTime;
-
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{CachedBlockHeader, DaoDepositCacheEntry, SecondaryIssuance};
+use crate::types::{DaoDepositCacheEntry, SecondaryIssuance};
 
 impl CkbadgerStore {
     pub fn get_dao_deposit(
@@ -61,66 +57,5 @@ impl CkbadgerStore {
     pub fn list_active_dao_deposits(&self) -> anyhow::Result<Vec<(Vec<u8>, DaoDepositCacheEntry)>> {
         let all = self.list_dao_deposits()?;
         Ok(all.into_iter().filter(|(_, e)| e.status == 0).collect())
-    }
-
-    /// Aggregate secondary issuance by date.
-    ///
-    /// Iterates all block headers and looks up the per-block secondary issuance,
-    /// returning cumulative (dao_reward, miner_reward, treasury) per date sorted
-    /// chronologically.
-    pub fn list_daily_secondary_issuance(&self) -> anyhow::Result<Vec<(String, i128, i128, i128)>> {
-        let iter = self.iterator_cf(self.cf_block_headers(), rocksdb::IteratorMode::Start);
-        // date -> (dao_reward_sum, miner_reward_sum, treasury_sum)
-        let mut daily: BTreeMap<String, (i128, i128, i128)> = BTreeMap::new();
-
-        for item in iter.flatten() {
-            let (key, value) = item;
-            if key.len() != 8 {
-                continue;
-            }
-            let block_num = keys::decode_block_num(&key);
-            let header: CachedBlockHeader = match bincode::deserialize(&value) {
-                Ok(h) => h,
-                Err(_) => continue,
-            };
-
-            let issuance = match self.get_cf(self.cf_block_issuance(), &key)? {
-                Some(v) => match bincode::deserialize::<SecondaryIssuance>(&v) {
-                    Ok(i) => i,
-                    Err(_) => continue,
-                },
-                // genesis / early blocks may have no issuance entry
-                None if block_num == 0 => continue,
-                None => continue,
-            };
-
-            let date = DateTime::from_timestamp_millis(header.timestamp)
-                .map(|dt| dt.format("%Y-%m-%d").to_string())
-                .unwrap_or_default();
-            if date.is_empty() {
-                continue;
-            }
-
-            let entry = daily.entry(date).or_insert((0, 0, 0));
-            entry.0 += i128::from(issuance.dao_reward);
-            entry.1 += i128::from(issuance.miner_reward);
-            entry.2 += i128::from(issuance.treasury);
-        }
-
-        // Convert to cumulative
-        let mut cum_dao: i128 = 0;
-        let mut cum_miner: i128 = 0;
-        let mut cum_treasury: i128 = 0;
-        let results: Vec<_> = daily
-            .into_iter()
-            .map(|(date, (d, m, t))| {
-                cum_dao += d;
-                cum_miner += m;
-                cum_treasury += t;
-                (date, cum_dao, cum_miner, cum_treasury)
-            })
-            .collect();
-
-        Ok(results)
     }
 }

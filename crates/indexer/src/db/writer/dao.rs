@@ -177,20 +177,6 @@ impl BatchWriter {
         Ok(None)
     }
 
-    pub fn insert_dao_deposit(
-        &self,
-        deposit: &ParsedDaoDeposit,
-        block_number: i64,
-        _timestamp: DateTime<Utc>,
-        deposit_ar: i64,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let entry = build_dao_cache_entry(deposit, block_number, deposit_ar);
-        let outpoint_key = keys::encode_outpoint(&deposit.tx_hash, deposit.output_index as i16);
-        batch.put_dao_deposit(&outpoint_key, &entry);
-        Ok(())
-    }
-
     pub fn update_dao_withdraw_request(
         &self,
         request: &ParsedDaoWithdrawRequest,
@@ -216,43 +202,6 @@ impl BatchWriter {
                 batch.put_dao_deposit(&outpoint_key, &entry);
                 // Update the withdraw_tx -> outpoint index
                 batch.put_dao_by_withdraw_tx(&request.tx_hash, &outpoint_key);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn complete_dao_withdrawal(
-        &self,
-        withdraw_request_tx_hash: &[u8],
-        block_number: i64,
-        tx_hash: &[u8],
-        _timestamp: DateTime<Utc>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        // Get deposits linked via withdraw_request_tx
-        if let Some(outpoint_key) = self
-            .store
-            .get_cf(self.store.cf_dao_by_withdraw_tx(), withdraw_request_tx_hash)?
-        {
-            if let Some(value) = self
-                .store
-                .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
-            {
-                if let Ok(mut entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                    let request_block = entry.withdraw_request_block.unwrap_or(block_number);
-                    let compensation = self.calculate_dao_compensation(
-                        entry.capacity,
-                        entry.deposit_block_number,
-                        request_block,
-                    )?;
-
-                    entry.status = 2;
-                    entry.withdraw_block = Some(block_number);
-                    entry.withdraw_tx = Some(tx_hash.to_vec());
-                    entry.withdraw_to_output_index = None;
-                    entry.compensation = Some(compensation);
-                    batch.put_dao_deposit(&outpoint_key, &entry);
-                }
             }
         }
         Ok(())

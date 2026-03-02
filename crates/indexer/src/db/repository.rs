@@ -83,11 +83,6 @@ impl Repository {
         Ok(header.map(|h| h.hash))
     }
 
-    pub fn get_block_transaction_count(&self, block_number: i64) -> Result<Option<i32>> {
-        let header = self.store.get_block_header(block_number)?;
-        Ok(header.map(|h| h.transactions_count))
-    }
-
     pub fn has_unresolved_deep_fork(&self) -> Result<bool> {
         self.store.has_unresolved_deep_fork()
     }

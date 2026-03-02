@@ -41,21 +41,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn consume_mnft_issuer(
-        &self,
-        issuer_id: &[u8],
-        _block_number: i64,
-        _tx_hash: &[u8],
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        if let Some(mut entry) = self.store.get_nft(issuer_id)? {
-            entry.is_live = false;
-            entry.owner_lock_hash = None;
-            batch.put_nft(issuer_id, &entry);
-        }
-        Ok(())
-    }
-
     pub fn insert_mnft_class(
         &self,
         class: &ParsedMnftClass,
@@ -95,21 +80,6 @@ impl BatchWriter {
         agg.standard = NftStandard::MnftClass;
         batch.put_nft_collection_aggregate(&class.class_id, &agg);
         batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
-        Ok(())
-    }
-
-    pub fn consume_mnft_class(
-        &self,
-        class_id: &[u8],
-        _block_number: i64,
-        _tx_hash: &[u8],
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        if let Some(mut entry) = self.store.get_nft(class_id)? {
-            entry.is_live = false;
-            entry.owner_lock_hash = None;
-            batch.put_nft(class_id, &entry);
-        }
         Ok(())
     }
 

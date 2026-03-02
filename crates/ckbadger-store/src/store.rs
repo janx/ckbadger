@@ -853,11 +853,6 @@ impl CkbadgerStore {
         self.put_cf(cf, key, value)
     }
 
-    pub fn delete_stats_key(&self, key: &[u8]) -> anyhow::Result<()> {
-        let cf = self.cf_for_stats_key(key)?;
-        self.delete_cf(cf, key)
-    }
-
     /// Iterate over a CF starting from a specific key.
     pub fn iterator_cf(
         &self,
@@ -874,11 +869,6 @@ impl CkbadgerStore {
         prefix: &[u8],
     ) -> impl Iterator<Item = KvResult> + '_ {
         self.db.prefix_iterator_cf(cf, prefix)
-    }
-
-    /// Get the underlying DB ref for WriteBatch operations.
-    pub fn raw_db(&self) -> &DB {
-        &self.db
     }
 
     // ---- Bulk sync mode ----

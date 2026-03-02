@@ -1,9 +1,11 @@
 //! Spore/DOB-specific store operations.
 
-use crate::batch::StoreBatch;
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{ClusterDailyDelta, SporeDailyDelta, SporeEntry, SporeTypeIndex};
+
+#[cfg(test)]
+use crate::batch::StoreBatch;
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
@@ -313,44 +315,6 @@ impl CkbadgerStore {
         }
 
         Ok(results)
-    }
-
-    /// Backfill the spore-by-cluster secondary index from existing spore data.
-    #[allow(clippy::manual_is_multiple_of)]
-    /// Gated by a marker key in sync_meta to ensure it only runs once.
-    pub fn migrate_spore_by_cluster_index(&self) -> anyhow::Result<u64> {
-        let marker = b"migration:spore_by_cluster";
-        if self.get_cf(self.cf_sync_meta(), marker)?.is_some() {
-            return Ok(0); // Already migrated
-        }
-
-        let spores = self.list_spores(1_000_000)?;
-        let mut count = 0u64;
-        let mut batch = StoreBatch::new(self);
-
-        for (spore_id, entry) in &spores {
-            if entry.standard.is_cluster() {
-                continue;
-            }
-            if let Some(ref cluster_id) = entry.collection_id {
-                if cluster_id.len() >= 32 && spore_id.len() >= 32 {
-                    batch.put_spore_by_cluster(cluster_id, spore_id);
-                    count += 1;
-
-                    // Commit in chunks to avoid huge batches
-                    if count % 10_000 == 0 {
-                        batch.commit()?;
-                        batch = StoreBatch::new(self);
-                    }
-                }
-            }
-        }
-
-        // Write migration marker
-        batch.put_sync_meta(marker, b"done");
-        batch.commit()?;
-
-        Ok(count)
     }
 }
 

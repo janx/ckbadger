@@ -1,5 +1,3 @@
-use super::cell::ParsedCell;
-
 // Mainnet code hashes
 pub const RGBPP_LOCK_CODE_HASH_MAINNET: &str =
     "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936";
@@ -91,27 +89,6 @@ impl RgbppParser {
         btc_txid.reverse();
 
         Some(hex::encode(btc_txid))
-    }
-
-    pub fn count_rgbpp_cells(cells: &[ParsedCell], is_mainnet: bool) -> (usize, usize, usize) {
-        let mut rgbpp_count = 0;
-        let mut btc_time_count = 0;
-        let mut other_count = 0;
-
-        for cell in cells {
-            if cell.type_script_hash.is_none() {
-                continue;
-            }
-
-            let lock_type = Self::detect_lock_type(&cell.lock_code_hash, is_mainnet);
-            match lock_type {
-                RgbppLockType::RgbppLock => rgbpp_count += 1,
-                RgbppLockType::BtcTimeLock => btc_time_count += 1,
-                RgbppLockType::Other => other_count += 1,
-            }
-        }
-
-        (rgbpp_count, btc_time_count, other_count)
     }
 }
 

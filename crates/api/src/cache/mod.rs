@@ -106,10 +106,6 @@ impl CacheKeys {
     pub const NETWORK_STATS: &'static str = "ckbadger:stats:network";
     pub const LATEST_BLOCKS: &'static str = "ckbadger:blocks:latest";
 
-    pub fn block_by_number(number: i64) -> String {
-        format!("ckbadger:block:{}", number)
-    }
-
     pub fn block_by_hash(hash: &str) -> String {
         format!("ckbadger:block:hash:{}", hash)
     }

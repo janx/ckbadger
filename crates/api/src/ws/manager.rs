@@ -124,10 +124,6 @@ impl WsManager {
         let _ = self.block_sender.send(msg);
     }
 
-    pub fn broadcast_transaction(&self, msg: BroadcastMessage) {
-        let _ = self.tx_sender.send(msg);
-    }
-
     pub fn broadcast_reorg(&self, msg: BroadcastMessage) {
         let _ = self.reorg_sender.send(msg);
     }
