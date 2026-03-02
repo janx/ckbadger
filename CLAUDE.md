@@ -29,7 +29,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 ## Principle Alignment
 
-- CKB Native: / Unrivaled Speed: / Local First: / Agent Friendly:
+- CKB Native: / Local First: / Agent Friendly:
 
 ## Scope
 
@@ -41,7 +41,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 ## Result
 
-- Behavior change summary / Re-sync required: yes/no / Follow-up items (if any)
+- Behavior change summary / Re-sync required: yes/no / Next items on plan (if any) / What to do next suggestions (think deep think broad)
 ```
 
 **Principle Sync Rule**: If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
