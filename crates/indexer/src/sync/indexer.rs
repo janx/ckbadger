@@ -797,6 +797,39 @@ fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished
     parser_finished || fetcher_finished
 }
 
+fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> bool {
+    blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
+}
+
+fn record_worker_exit_reason(
+    slot: &Arc<std::sync::Mutex<Option<String>>>,
+    reason: impl Into<String>,
+) {
+    if let Ok(mut guard) = slot.lock() {
+        if guard.is_none() {
+            *guard = Some(reason.into());
+        }
+    }
+}
+
+fn get_worker_exit_reason(slot: &Arc<std::sync::Mutex<Option<String>>>) -> Option<String> {
+    slot.lock().ok().and_then(|guard| guard.clone())
+}
+
+fn format_pipeline_worker_termination_message(
+    parser_finished: bool,
+    fetcher_finished: bool,
+    parser_exit_reason: Option<&str>,
+    fetcher_exit_reason: Option<&str>,
+) -> String {
+    let parser_reason = parser_exit_reason.unwrap_or("unknown");
+    let fetcher_reason = fetcher_exit_reason.unwrap_or("unknown");
+    format!(
+        "parser_finished={}, fetcher_finished={}, parser_reason={}, fetcher_reason={}",
+        parser_finished, fetcher_finished, parser_reason, fetcher_reason
+    )
+}
+
 fn should_log_pipeline_idle_timeout(consecutive_idle_timeouts: u64) -> bool {
     consecutive_idle_timeouts <= 3 || consecutive_idle_timeouts.is_multiple_of(10)
 }
@@ -2950,6 +2983,7 @@ fn parse_blocks_parallel(
 }
 
 const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
+const CHART_INVALIDATION_MAX_LIVE_LAG: u64 = 100;
 const SECONDARY_ISSUANCE_BACKFILL_THRESHOLD: u64 = 1000;
 
 pub struct Indexer {
@@ -3708,6 +3742,8 @@ impl Indexer {
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
         let (parse_tx, mut parse_rx) = mpsc::channel::<ParsedBatch>(self.config.pipeline_buffer);
         let parse_tx_pending_txs = Arc::new(AtomicU64::new(0));
+        let parser_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
+        let fetcher_exit_reason = Arc::new(std::sync::Mutex::new(None::<String>));
         let committed_tip_for_cache = Arc::new(AtomicI64::new(self.repo.get_sync_tip().await?.0));
         self.pipeline_perf
             .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
@@ -3727,6 +3763,7 @@ impl Indexer {
         let parse_tx_for_fetcher_depth = parse_tx.clone();
         let parse_tx_pending_txs_for_parser = Arc::clone(&parse_tx_pending_txs);
         let parse_tx_pending_txs_for_writer = Arc::clone(&parse_tx_pending_txs);
+        let fetcher_exit_reason_for_fetcher = Arc::clone(&fetcher_exit_reason);
 
         // === Fetcher task ===
         let fetcher = tokio::spawn(async move {
@@ -3882,6 +3919,13 @@ impl Indexer {
                 } else {
                     let blocks_behind = chain_tip.saturating_sub(start_block);
                     if is_bulk_sync_active_by_lag(blocks_behind, config.bulk_sync_threshold) {
+                        record_worker_exit_reason(
+                            &fetcher_exit_reason_for_fetcher,
+                            format!(
+                                "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set: range={}-{}, chain_tip={}",
+                                start_block, end_block, chain_tip
+                            ),
+                        );
                         error!(
                             "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set \
                              (blocks {}-{}). Set CKB_DATA_PATH to the CKB node data directory",
@@ -3914,7 +3958,7 @@ impl Indexer {
                     adaptive_snapshot.target_batch_txs,
                     adaptive_snapshot.min_target_batch_txs,
                 );
-                let mut send_failed = false;
+                let mut send_failed_reason: Option<String> = None;
                 let tx_counts: Vec<usize> = blocks
                     .iter()
                     .map(|block| block.block.transactions.len())
@@ -3933,7 +3977,13 @@ impl Indexer {
                             actual = sub_blocks.len(),
                             "Fetcher: planned sub-batch size mismatch"
                         );
-                        send_failed = true;
+                        send_failed_reason = Some(format!(
+                            "planned sub-batch size mismatch: expected={}, actual={}, range={}-{}",
+                            sub_block_count,
+                            sub_blocks.len(),
+                            start_block,
+                            end_block
+                        ));
                         break;
                     }
 
@@ -3958,19 +4008,26 @@ impl Indexer {
                         .await
                         .is_err()
                     {
-                        send_failed = true;
+                        send_failed_reason = Some(format!(
+                            "failed to send fetched sub-batch to parser: sub_range={}-{}, chain_tip={}, pipeline_epoch={}",
+                            sub_start_block, sub_end_block, chain_tip, fetch_cycle_epoch
+                        ));
                         break;
                     }
 
                     sub_start_block = sub_end_block + 1;
                 }
 
-                if !send_failed && block_iter.next().is_some() {
+                if send_failed_reason.is_none() && block_iter.next().is_some() {
                     error!("Fetcher: leftover blocks after planned sub-batch splitting");
-                    send_failed = true;
+                    send_failed_reason = Some(format!(
+                        "leftover blocks after planned sub-batch splitting: range={}-{}",
+                        start_block, end_block
+                    ));
                 }
 
-                if send_failed {
+                if let Some(reason) = send_failed_reason {
+                    record_worker_exit_reason(&fetcher_exit_reason_for_fetcher, reason);
                     break;
                 }
 
@@ -3992,6 +4049,7 @@ impl Indexer {
         let committed_tip_for_cache_for_parser = Arc::clone(&committed_tip_for_cache);
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
+        let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -4023,12 +4081,26 @@ impl Indexer {
                                 start_block,
                                 end_block, "Parser: parse_blocks_parallel failed: {}", e
                             );
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "parse_blocks_parallel failed for range {}-{}: {}",
+                                    start_block, end_block, e
+                                ),
+                            );
                             return;
                         }
                         Err(e) => {
                             error!(
                                 start_block,
                                 end_block, "Parser: parse_blocks_parallel task panicked: {}", e
+                            );
+                            record_worker_exit_reason(
+                                &parser_exit_reason_for_parser,
+                                format!(
+                                    "parse_blocks_parallel task panicked for range {}-{}: {}",
+                                    start_block, end_block, e
+                                ),
                             );
                             return;
                         }
@@ -4227,6 +4299,17 @@ impl Indexer {
                             unresolved_rpc_probe = %unresolved_rpc_probe,
                             "Parser: unresolved input cells persisted after max retries; stopping parser task"
                         );
+                        record_worker_exit_reason(
+                            &parser_exit_reason_for_parser,
+                            format!(
+                                "unresolved input cells after max retries for range {}-{}: retries={}, unresolved_count={}, db_lookup_failed={}",
+                                start_block,
+                                end_block,
+                                unresolved_retry_count,
+                                unresolved_outpoints.len(),
+                                db_lookup_failed
+                            ),
+                        );
                         return;
                     }
 
@@ -4264,6 +4347,16 @@ impl Indexer {
                                             "Parser: token metadata lookup failed while parsing UDT output hint: {}",
                                             e
                                         );
+                                        record_worker_exit_reason(
+                                            &parser_exit_reason_for_parser,
+                                            format!(
+                                                "token metadata lookup failed while parsing UDT output hint: block={}, tx=0x{}, output_index={}, error={}",
+                                                tx_data.block_number,
+                                                hex::encode(tx_data.hash),
+                                                output_index,
+                                                e
+                                            ),
+                                        );
                                         return;
                                     }
                                 };
@@ -4288,6 +4381,16 @@ impl Indexer {
                                     output_index,
                                     "Parser: {}",
                                     e
+                                );
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "failed to parse UDT amount while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash),
+                                        output_index,
+                                        e
+                                    ),
                                 );
                                 return;
                             }
@@ -4363,6 +4466,17 @@ impl Indexer {
                                     "Parser: invalid tx fee accounting: {}",
                                     err
                                 );
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "invalid tx fee accounting: range {}-{}, block={}, tx=0x{}, error={}",
+                                        start_block,
+                                        end_block,
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash),
+                                        err
+                                    ),
+                                );
                                 return;
                             }
                         };
@@ -4412,6 +4526,16 @@ impl Indexer {
                                             "Parser: token metadata lookup failed while updating UDT cache hint: {}",
                                             e
                                         );
+                                        record_worker_exit_reason(
+                                            &parser_exit_reason_for_parser,
+                                            format!(
+                                                "token metadata lookup failed while updating UDT cache hint: block={}, tx=0x{}, output_index={}, error={}",
+                                                tx_data.block_number,
+                                                hex::encode(tx_data.hash),
+                                                output_index,
+                                                e
+                                            ),
+                                        );
                                         return;
                                     }
                                 };
@@ -4436,6 +4560,16 @@ impl Indexer {
                                     output_index,
                                     "Parser: {}",
                                     e
+                                );
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "failed to parse UDT amount while updating parser cache: block={}, tx=0x{}, output_index={}, error={}",
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash),
+                                        output_index,
+                                        e
+                                    ),
                                 );
                                 return;
                             }
@@ -4829,6 +4963,13 @@ impl Indexer {
                                     "Parser: get_spores_batch failed while preloading cluster descriptions: {}",
                                     e
                                 );
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "get_spores_batch failed while preloading cluster descriptions for range {}-{}: {}",
+                                        start_block, end_block, e
+                                    ),
+                                );
                                 return;
                             }
                         };
@@ -4911,6 +5052,15 @@ impl Indexer {
                                         "Parser: DotBit parse_accounts failed at block {}, tx 0x{}: {}",
                                         parsed.number, hex::encode(tx_data.hash), e
                                     );
+                                    record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "DotBit parse_accounts failed: block={}, tx=0x{}, error={}",
+                                            parsed.number,
+                                            hex::encode(tx_data.hash),
+                                            e
+                                        ),
+                                    );
                                     return;
                                 }
                             };
@@ -4919,6 +5069,10 @@ impl Indexer {
                                     Ok(order) => order,
                                     Err(e) => {
                                         error!("Parser: dotbit_create_event_order overflow: {}", e);
+                                        record_worker_exit_reason(
+                                            &parser_exit_reason_for_parser,
+                                            format!("dotbit_create_event_order overflow: {}", e),
+                                        );
                                         return;
                                     }
                                 };
@@ -4967,6 +5121,10 @@ impl Indexer {
                                         error!(
                                             "Parser: dotbit_consume_event_order overflow: {}",
                                             e
+                                        );
+                                        record_worker_exit_reason(
+                                            &parser_exit_reason_for_parser,
+                                            format!("dotbit_consume_event_order overflow: {}", e),
                                         );
                                         return;
                                     }
@@ -5126,6 +5284,13 @@ impl Indexer {
                     .await
                     .is_err()
                 {
+                    record_worker_exit_reason(
+                        &parser_exit_reason_for_parser,
+                        format!(
+                            "failed to send parsed batch to writer: range={}-{}, chain_tip={}, pipeline_epoch={}",
+                            start_block, end_block, chain_tip, batch_epoch
+                        ),
+                    );
                     break;
                 }
                 parse_tx_pending_txs_for_parser.fetch_add(batch_tx_count_u64, Ordering::Relaxed);
@@ -5602,9 +5767,19 @@ impl Indexer {
                     self.perf.report_and_reset();
                 }
                 Ok(None) => {
+                    let parser_reason = get_worker_exit_reason(&parser_exit_reason);
+                    let fetcher_reason = get_worker_exit_reason(&fetcher_exit_reason);
                     fetcher.abort();
                     parser.abort();
-                    return Err(anyhow::anyhow!("Pipeline channel closed"));
+                    return Err(anyhow::anyhow!(
+                        "Pipeline channel closed: {}",
+                        format_pipeline_worker_termination_message(
+                            parser.is_finished(),
+                            fetcher.is_finished(),
+                            parser_reason.as_deref(),
+                            fetcher_reason.as_deref(),
+                        )
+                    ));
                 }
                 Err(_timeout) => {
                     // Idle timeout - no pending batches. If any worker exited, fail fast
@@ -5653,16 +5828,20 @@ impl Indexer {
                         }
                     }
                     if should_abort_pipeline_on_idle_timeout(parser_finished, fetcher_finished) {
+                        let parser_reason = get_worker_exit_reason(&parser_exit_reason);
+                        let fetcher_reason = get_worker_exit_reason(&fetcher_exit_reason);
                         let incident_id = self.report_incident(
                             "pipeline_worker_terminated",
                             format!(
-                                "idle_timeouts={} parser_finished={} fetcher_finished={} writer_queue_depth={} current={} target={}",
+                                "idle_timeouts={} parser_finished={} fetcher_finished={} writer_queue_depth={} current={} target={} parser_reason={} fetcher_reason={}",
                                 consecutive_idle_timeouts,
                                 parser_finished,
                                 fetcher_finished,
                                 writer_queue_depth,
                                 self.progress.current(),
-                                self.progress.target()
+                                self.progress.target(),
+                                parser_reason.as_deref().unwrap_or("unknown"),
+                                fetcher_reason.as_deref().unwrap_or("unknown")
                             ),
                         );
                         fetcher.abort();
@@ -5674,13 +5853,19 @@ impl Indexer {
                             idle_timeouts = consecutive_idle_timeouts,
                             parser_finished,
                             fetcher_finished,
+                            parser_exit_reason = ?parser_reason,
+                            fetcher_exit_reason = ?fetcher_reason,
                             writer_queue_depth,
                             "Pipeline worker terminated unexpectedly after idle timeout"
                         );
                         return Err(anyhow::anyhow!(
-                            "Pipeline worker terminated unexpectedly (parser_finished={}, fetcher_finished={})",
-                            parser_finished,
-                            fetcher_finished
+                            "Pipeline worker terminated unexpectedly: {}",
+                            format_pipeline_worker_termination_message(
+                                parser_finished,
+                                fetcher_finished,
+                                parser_reason.as_deref(),
+                                fetcher_reason.as_deref(),
+                            )
                         ));
                     }
                 }
@@ -5751,7 +5936,7 @@ impl Indexer {
             return;
         }
         let blocks_remaining = self.progress.blocks_remaining();
-        if blocks_remaining < 100 {
+        if !should_invalidate_chart_caches_for_lag(blocks_remaining) {
             return;
         }
         let mut last_invalidation = self.last_cache_invalidation.lock().await;
@@ -12445,6 +12630,42 @@ mod tests {
     }
 
     #[test]
+    fn test_should_invalidate_chart_caches_for_lag_only_near_tip() {
+        assert!(should_invalidate_chart_caches_for_lag(0));
+        assert!(should_invalidate_chart_caches_for_lag(
+            CHART_INVALIDATION_MAX_LIVE_LAG
+        ));
+        assert!(!should_invalidate_chart_caches_for_lag(
+            CHART_INVALIDATION_MAX_LIVE_LAG + 1
+        ));
+    }
+
+    #[test]
+    fn test_record_worker_exit_reason_keeps_first_reason() {
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        record_worker_exit_reason(&slot, "first failure");
+        record_worker_exit_reason(&slot, "second failure");
+        assert_eq!(
+            get_worker_exit_reason(&slot).as_deref(),
+            Some("first failure")
+        );
+    }
+
+    #[test]
+    fn test_format_pipeline_worker_termination_message_includes_context() {
+        let msg = format_pipeline_worker_termination_message(
+            true,
+            false,
+            Some("parser exploded"),
+            Some("fetcher okay"),
+        );
+        assert!(msg.contains("parser_finished=true"));
+        assert!(msg.contains("fetcher_finished=false"));
+        assert!(msg.contains("parser_reason=parser exploded"));
+        assert!(msg.contains("fetcher_reason=fetcher okay"));
+    }
+
+    #[test]
     fn test_should_log_pipeline_idle_timeout_policy() {
         assert!(should_log_pipeline_idle_timeout(1));
         assert!(should_log_pipeline_idle_timeout(2));
@@ -13982,7 +14203,7 @@ mod tests {
         assert!(daily_active_delta.is_empty());
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
-        assert!(daily_withdrawals_delta.is_empty());
+        assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
     }
 
     #[test]

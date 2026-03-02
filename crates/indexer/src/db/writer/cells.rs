@@ -280,46 +280,48 @@ impl BatchWriter {
             (tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _),
         ) in consumptions.iter().enumerate()
         {
-            if let Some(info) = infos_by_pos.get(&idx) {
-                // Move to consumed cells
-                batch.put_consumed_cell_with_consumer(
-                    tx_hash,
-                    *output_index,
-                    info,
-                    *consumed_at_block,
-                    Some(*consumed_by_tx),
+            let Some(info) = infos_by_pos.get(&idx) else {
+                bail!(
+                    "missing live cell info during consumption: outpoint=0x{}:{}, consumed_by_tx=0x{}, consumed_at_block={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    hex::encode(consumed_by_tx),
+                    consumed_at_block
                 );
-                // Remove from live cells
-                batch.delete_cell(tx_hash, *output_index);
-                // Remove cell indexes
-                batch.delete_cell_by_lock(
-                    &info.lock_script_hash,
+            };
+            // Move to consumed cells
+            batch.put_consumed_cell_with_consumer(
+                tx_hash,
+                *output_index,
+                info,
+                *consumed_at_block,
+                Some(*consumed_by_tx),
+            );
+            // Remove from live cells
+            batch.delete_cell(tx_hash, *output_index);
+            // Remove cell indexes
+            batch.delete_cell_by_lock(
+                &info.lock_script_hash,
+                info.created_at_block,
+                tx_hash,
+                *output_index,
+            );
+            batch.delete_cell_by_lock_code(
+                &info.lock_code_hash,
+                info.created_at_block,
+                tx_hash,
+                *output_index,
+            );
+            if let Some(ref type_hash) = info.type_script_hash {
+                batch.delete_cell_by_type(type_hash, info.created_at_block, tx_hash, *output_index);
+            }
+            if let Some(ref type_code_hash) = info.type_code_hash {
+                batch.delete_cell_by_type_code(
+                    type_code_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
                 );
-                batch.delete_cell_by_lock_code(
-                    &info.lock_code_hash,
-                    info.created_at_block,
-                    tx_hash,
-                    *output_index,
-                );
-                if let Some(ref type_hash) = info.type_script_hash {
-                    batch.delete_cell_by_type(
-                        type_hash,
-                        info.created_at_block,
-                        tx_hash,
-                        *output_index,
-                    );
-                }
-                if let Some(ref type_code_hash) = info.type_code_hash {
-                    batch.delete_cell_by_type_code(
-                        type_code_hash,
-                        info.created_at_block,
-                        tx_hash,
-                        *output_index,
-                    );
-                }
             }
         }
 
@@ -488,44 +490,54 @@ impl BatchWriter {
                 .get(&key)
                 .or_else(|| same_batch_cells.get(&key));
 
-            if let Some(info) = info {
-                batch.put_consumed_cell_with_consumer(
+            let Some(info) = info else {
+                bail!(
+                    "missing preloaded cell info during consumption: outpoint=0x{}:{}, consumed_by_tx=0x{}, consumed_at_block={}, preloaded_size={}, same_batch_size={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    hex::encode(consumed_by_tx),
+                    consumed_at_block,
+                    preloaded_cells.len(),
+                    same_batch_cells.len()
+                );
+            };
+
+            batch.put_consumed_cell_with_consumer(
+                tx_hash,
+                *output_index,
+                info,
+                *consumed_at_block,
+                Some(*consumed_by_tx),
+            );
+            batch.delete_cell(tx_hash, *output_index);
+            if !skip_cell_indices {
+                batch.delete_cell_by_lock(
+                    &info.lock_script_hash,
+                    info.created_at_block,
                     tx_hash,
                     *output_index,
-                    info,
-                    *consumed_at_block,
-                    Some(*consumed_by_tx),
                 );
-                batch.delete_cell(tx_hash, *output_index);
-                if !skip_cell_indices {
-                    batch.delete_cell_by_lock(
-                        &info.lock_script_hash,
+                batch.delete_cell_by_lock_code(
+                    &info.lock_code_hash,
+                    info.created_at_block,
+                    tx_hash,
+                    *output_index,
+                );
+                if let Some(ref type_hash) = info.type_script_hash {
+                    batch.delete_cell_by_type(
+                        type_hash,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
                     );
-                    batch.delete_cell_by_lock_code(
-                        &info.lock_code_hash,
+                }
+                if let Some(ref type_code_hash) = info.type_code_hash {
+                    batch.delete_cell_by_type_code(
+                        type_code_hash,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
                     );
-                    if let Some(ref type_hash) = info.type_script_hash {
-                        batch.delete_cell_by_type(
-                            type_hash,
-                            info.created_at_block,
-                            tx_hash,
-                            *output_index,
-                        );
-                    }
-                    if let Some(ref type_code_hash) = info.type_code_hash {
-                        batch.delete_cell_by_type_code(
-                            type_code_hash,
-                            info.created_at_block,
-                            tx_hash,
-                            *output_index,
-                        );
-                    }
                 }
             }
         }
@@ -626,6 +638,60 @@ mod tests {
             err.to_string()
                 .contains("failed to deserialize live cell info"),
             "expected deserialization error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_consume_cells_batch_errors_on_missing_live_cell_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let tx_hash = vec![0xEE; 32];
+        let consumed_by = [0xAB_u8; 32];
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+            vec![(tx_hash.as_slice(), 1, 10, consumed_by.as_slice(), 11, 0)];
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .consume_cells_batch(&consumptions, &mut batch)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing live cell info during consumption"),
+            "expected missing-live-cell error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_consume_cells_batch_preloaded_errors_on_missing_cell_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let tx_hash = vec![0xFA; 32];
+        let consumed_by = [0xBC_u8; 32];
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+            vec![(tx_hash.as_slice(), 2, 20, consumed_by.as_slice(), 21, 0)];
+        let preloaded_cells: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
+        let same_batch_cells: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .consume_cells_batch_preloaded(
+                &consumptions,
+                &preloaded_cells,
+                &same_batch_cells,
+                &mut batch,
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing preloaded cell info during consumption"),
+            "expected missing-preloaded-cell error, got: {}",
             err
         );
     }

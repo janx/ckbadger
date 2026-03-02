@@ -550,8 +550,22 @@ impl BatchWriter {
 
             if existing.is_none() {
                 // New spore: increment counts
-                agg.total_count = agg.total_count.saturating_add(1);
-                agg.live_count = agg.live_count.saturating_add(1);
+                agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cluster total_count overflow while inserting spore: cluster_id=0x{}, spore_id=0x{}, current={}",
+                        hex::encode(cluster_id),
+                        hex::encode(&spore.spore_id),
+                        agg.total_count
+                    )
+                })?;
+                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cluster live_count overflow while inserting spore: cluster_id=0x{}, spore_id=0x{}, current={}",
+                        hex::encode(cluster_id),
+                        hex::encode(&spore.spore_id),
+                        agg.live_count
+                    )
+                })?;
                 self.adjust_cluster_tier_count(
                     cluster_id,
                     &mut agg,
@@ -561,7 +575,14 @@ impl BatchWriter {
                 )?;
             } else if !was_live || old_cluster.as_ref() != Some(cluster_id) {
                 // Re-activate consumed spore or move a live spore to another cluster.
-                agg.live_count = agg.live_count.saturating_add(1);
+                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "cluster live_count overflow while reactivating/moving spore: cluster_id=0x{}, spore_id=0x{}, current={}",
+                        hex::encode(cluster_id),
+                        hex::encode(&spore.spore_id),
+                        agg.live_count
+                    )
+                })?;
                 self.adjust_cluster_tier_count(
                     cluster_id,
                     &mut agg,
@@ -574,7 +595,15 @@ impl BatchWriter {
                 let hour_bucket = timestamp_ms / 3_600_000;
                 let key = ckbadger_store::keys::encode_spore_hourly_key(cluster_id, hour_bucket);
                 let current = state.get_spore_hourly_transfer(self.store.as_ref(), &key)?;
-                let next = current.saturating_add(1);
+                let next = current.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "spore hourly transfer overflow: cluster_id=0x{}, hour_bucket={}, current={}, spore_id=0x{}",
+                        hex::encode(cluster_id),
+                        hour_bucket,
+                        current,
+                        hex::encode(&spore.spore_id)
+                    )
+                })?;
                 batch.put_spore_hourly_transfer(cluster_id, hour_bucket, next);
                 state.put_spore_hourly_transfer(key, next);
                 if old_live_tier != new_live_tier {
@@ -1376,5 +1405,98 @@ mod tests {
             .unwrap();
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.total_count, 1);
+    }
+
+    #[test]
+    fn test_insert_spore_cell_errors_on_cluster_total_count_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let cluster_id = vec![0xB1; 32];
+        let spore_id = vec![0xB2; 32];
+        let owner = vec![0xB3; 32];
+
+        {
+            let mut seed = StoreBatch::new(&store);
+            seed.put_cluster_aggregate(
+                &cluster_id,
+                &ClusterAggregate {
+                    total_count: i64::MAX,
+                    live_count: 0,
+                    ..Default::default()
+                },
+            );
+            seed.commit().unwrap();
+        }
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        let err = writer
+            .insert_spore_cell(
+                &make_parsed_spore(&spore_id, &cluster_id, &owner),
+                &[0x31; 32],
+                0,
+                400,
+                14_400_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("cluster total_count overflow"),
+            "expected overflow error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_insert_spore_cell_errors_on_spore_hourly_transfer_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let cluster_id = vec![0xC1; 32];
+        let spore_id = vec![0xC2; 32];
+        let owner = vec![0xC3; 32];
+        let hour_bucket = 8i64;
+        let timestamp_ms = hour_bucket * 3_600_000;
+
+        {
+            let mut seed = StoreBatch::new(&store);
+            seed.put_spore(&spore_id, &make_spore_entry(&cluster_id, &owner));
+            seed.put_cluster_aggregate(
+                &cluster_id,
+                &ClusterAggregate {
+                    total_count: 1,
+                    live_count: 1,
+                    owner_count: 1,
+                    fully_onchain_count: 1,
+                    ..Default::default()
+                },
+            );
+            seed.put_cluster_owner_count(&cluster_id, &owner, 1);
+            seed.put_spore_hourly_transfer(&cluster_id, hour_bucket, i64::MAX);
+            seed.commit().unwrap();
+        }
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        let err = writer
+            .insert_spore_cell(
+                &make_parsed_spore(&spore_id, &cluster_id, &owner),
+                &[0x41; 32],
+                0,
+                500,
+                timestamp_ms,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("spore hourly transfer overflow"),
+            "expected hourly overflow error, got: {}",
+            err
+        );
     }
 }
