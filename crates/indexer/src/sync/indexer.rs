@@ -21,7 +21,7 @@ use tracing::{debug, error, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    AddressBalance, CachedBlockHeader, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+    AddressBalance, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -251,20 +251,35 @@ struct IncidentReport {
     recent_events: Vec<FlightEvent>,
 }
 
-fn should_rebuild_hodl_tracker_state(state: Option<&HodlTrackerState>, tip_block: i64) -> bool {
+fn ensure_hodl_tracker_state_consistent(
+    state: Option<&HodlTrackerState>,
+    tip_block: i64,
+) -> Result<()> {
     if tip_block <= 0 {
-        return false;
+        return Ok(());
     }
-    match state {
-        None => true,
-        Some(state) => {
-            state.date_transitions.is_empty()
-                || state
-                    .date_transitions
-                    .last()
-                    .is_some_and(|(last_block, _)| *last_block > tip_block)
+    let state = state.ok_or_else(|| {
+        anyhow!(
+            "missing HODL tracker state at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            tip_block
+        )
+    })?;
+    if state.date_transitions.is_empty() {
+        bail!(
+            "invalid HODL tracker state: empty date_transitions at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            tip_block
+        );
+    }
+    if let Some((last_block, _)) = state.date_transitions.last() {
+        if *last_block > tip_block {
+            bail!(
+                "invalid HODL tracker state: last transition block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                last_block,
+                tip_block
+            );
         }
     }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -322,6 +337,20 @@ fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> Str
         .join(", ")
 }
 
+fn checked_usize_to_i16(value: usize, label: &str) -> Result<i16> {
+    i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
+}
+
+fn tx_hash_key32(tx_hash: &[u8], context: &str) -> Result<[u8; 32]> {
+    tx_hash.try_into().map_err(|_| {
+        anyhow!(
+            "{} tx hash must be 32 bytes, got {}",
+            context,
+            tx_hash.len()
+        )
+    })
+}
+
 fn parse_udt_cells_with_store_fallback_inner<F>(
     tx: &crate::rpc::TransactionView,
     mut standard_lookup: F,
@@ -336,7 +365,10 @@ where
         tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
     {
         if let Some(cell) = UdtParser::parse_udt_cell(output, data_hex) {
-            parsed.push((output_index as i16, cell));
+            let output_index_i16 =
+                checked_usize_to_i16(output_index, "UDT output index while parsing outputs")
+                    .unwrap_or_else(|e| panic!("{}", e));
+            parsed.push((output_index_i16, cell));
             continue;
         }
 
@@ -360,7 +392,12 @@ where
         if let Some(cell) =
             UdtParser::parse_udt_cell_with_standard_hint(output, data_hex, Some(&standard_hint))
         {
-            parsed.push((output_index as i16, cell));
+            let output_index_i16 = checked_usize_to_i16(
+                output_index,
+                "UDT output index while parsing hinted outputs",
+            )
+            .unwrap_or_else(|e| panic!("{}", e));
+            parsed.push((output_index_i16, cell));
         }
     }
 
@@ -406,7 +443,10 @@ fn resolve_input_udt_info_from_live_cells(
     let db_results = writer.get_udt_cells_info_batch(&outpoint_refs)?;
 
     for ((tx_hash, idx), (tsh, tch, tht, ta, lsh, am, std)) in &db_results {
-        let key: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+        let key = tx_hash_key32(
+            tx_hash,
+            "resolve_input_udt_info_from_live_cells cache insert",
+        )?;
         udt_cache.insert(
             (key, *idx),
             CachedUdtCellInfo {
@@ -1628,6 +1668,21 @@ fn parse_prefixed_hex_u64(field: &str, label: &str) -> Result<u64> {
         .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
 }
 
+fn parse_dao_field_for_secondary_issuance(
+    dao_hex: &str,
+    block_number: i64,
+    block_hash: &str,
+) -> Result<DaoField> {
+    DaoField::from_hex(dao_hex).ok_or_else(|| {
+        anyhow!(
+            "invalid DAO field hex while updating secondary issuance: block_number={}, block_hash={}, dao_hex={}",
+            block_number,
+            block_hash,
+            dao_hex
+        )
+    })
+}
+
 fn parse_outpoint_index_i16(field: &str, label: &str) -> Result<i16> {
     let value = parse_prefixed_hex_u32(field, label)?;
     i16::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i16 range: {}", label, value))
@@ -2699,11 +2754,51 @@ fn parse_blocks_parallel(
                             block_hash: parsed.hash.clone(),
                             tx_index: tx_index as i32,
                             version: parsed_tx.version,
-                            inputs_count: parsed_tx.inputs_count as i16,
-                            outputs_count: parsed_tx.outputs_count as i16,
-                            witnesses_count: parsed_tx.witnesses_count as i16,
-                            cell_deps_count: parsed_tx.cell_deps_count as i16,
-                            header_deps_count: parsed_tx.header_deps_count as i16,
+                            inputs_count: i16::try_from(parsed_tx.inputs_count).map_err(|_| {
+                                anyhow!(
+                                    "tx inputs count exceeds i16 range: tx_hash=0x{}, block={}, inputs_count={}",
+                                    hex::encode(parsed_tx.hash),
+                                    parsed.number,
+                                    parsed_tx.inputs_count
+                                )
+                            })?,
+                            outputs_count: i16::try_from(parsed_tx.outputs_count).map_err(|_| {
+                                anyhow!(
+                                    "tx outputs count exceeds i16 range: tx_hash=0x{}, block={}, outputs_count={}",
+                                    hex::encode(parsed_tx.hash),
+                                    parsed.number,
+                                    parsed_tx.outputs_count
+                                )
+                            })?,
+                            witnesses_count: i16::try_from(parsed_tx.witnesses_count).map_err(
+                                |_| {
+                                    anyhow!(
+                                        "tx witnesses count exceeds i16 range: tx_hash=0x{}, block={}, witnesses_count={}",
+                                        hex::encode(parsed_tx.hash),
+                                        parsed.number,
+                                        parsed_tx.witnesses_count
+                                    )
+                                },
+                            )?,
+                            cell_deps_count: i16::try_from(parsed_tx.cell_deps_count).map_err(
+                                |_| {
+                                    anyhow!(
+                                        "tx cell_deps count exceeds i16 range: tx_hash=0x{}, block={}, cell_deps_count={}",
+                                        hex::encode(parsed_tx.hash),
+                                        parsed.number,
+                                        parsed_tx.cell_deps_count
+                                    )
+                                },
+                            )?,
+                            header_deps_count: i16::try_from(parsed_tx.header_deps_count)
+                                .map_err(|_| {
+                                    anyhow!(
+                                        "tx header_deps count exceeds i16 range: tx_hash=0x{}, block={}, header_deps_count={}",
+                                        hex::encode(parsed_tx.hash),
+                                        parsed.number,
+                                        parsed_tx.header_deps_count
+                                    )
+                                })?,
                             is_cellbase: parsed_tx.is_cellbase,
                             inputs,
                             cells,
@@ -2740,10 +2835,17 @@ fn parse_blocks_parallel(
         for tx_data in &tx_data_list {
             if !tx_data.is_cellbase {
                 for input in &tx_data.inputs {
-                    all_input_outpoints.push((
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    ));
+                    let previous_output_index =
+                        i16::try_from(input.previous_output_index).map_err(|_| {
+                            anyhow!(
+                                "input previous_output_index exceeds i16 range while collecting outpoints: tx_hash=0x{}, block={}, previous_output_index={}",
+                                hex::encode(tx_data.hash),
+                                tx_data.block_number,
+                                input.previous_output_index
+                            )
+                        })?;
+                    all_input_outpoints
+                        .push((input.previous_tx_hash.to_vec(), previous_output_index));
                 }
             }
         }
@@ -3847,7 +3949,10 @@ impl Indexer {
                 let mut batch_cells: HashMap<(Vec<u8>, i16), ()> = HashMap::new();
                 for td in &all_tx_data {
                     for (idx, _) in td.cells.iter().enumerate() {
-                        batch_cells.insert((td.hash.to_vec(), idx as i16), ());
+                        let output_index =
+                            checked_usize_to_i16(idx, "pipeline parser batch cell output index")
+                                .unwrap_or_else(|e| panic!("{}", e));
+                        batch_cells.insert((td.hash.to_vec(), output_index), ());
                     }
                 }
 
@@ -3875,7 +3980,9 @@ impl Indexer {
                     let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> =
                         HashMap::new();
                     for (tx_hash, idx) in &all_input_outpoints {
-                        let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+                        let hash_arr =
+                            tx_hash_key32(tx_hash, "pipeline parser input cell cache lookup")
+                                .unwrap_or_else(|e| panic!("{}", e));
                         let key = (hash_arr, *idx as i32);
                         if let Some(cached) = cell_cache_for_parser.get(&key) {
                             attempt_cache_hits += 1;
@@ -5150,19 +5257,28 @@ impl Indexer {
                                 })?,
                             ) {
                                 error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-                            } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
-                                i64::try_from(start_block).map_err(|_| {
+                            } else {
+                                let cleanup_tip = i64::try_from(start_block).map_err(|_| {
                                     anyhow!(
-                                    "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
-                                    start_block
-                                )
-                                })? - 1,
-                            ) {
-                                error!(
-                                    "Failed to rebuild HODL tracker after batch cleanup: {:?}",
-                                    rebuild_err
-                                );
-                                return Err(rebuild_err);
+                                        "batch cleanup start_block exceeds i64 for hodl consistency check: {}",
+                                        start_block
+                                    )
+                                })? - 1;
+                                if let Err(consistency_err) =
+                                    self.reconcile_hodl_tracker_with_tip(cleanup_tip)
+                                {
+                                    error!(
+                                        cleanup_tip,
+                                        "HODL tracker consistency check failed after batch cleanup: {:?}",
+                                        consistency_err
+                                    );
+                                    return Err(consistency_err).with_context(|| {
+                                        format!(
+                                            "HODL tracker inconsistent after batch cleanup to tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                                            cleanup_tip
+                                        )
+                                    });
+                                }
                             }
                             self.request_pipeline_reset("batch write failed", None, None, None);
                             let drained = Self::drain_channel(&mut parse_rx).await;
@@ -5595,19 +5711,27 @@ impl Indexer {
                     })?,
                 ) {
                     error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-                } else if let Err(rebuild_err) = self.rebuild_hodl_tracker_from_store(
-                    i64::try_from(start_block).map_err(|_| {
+                } else {
+                    let cleanup_tip = i64::try_from(start_block).map_err(|_| {
                         anyhow!(
-                            "batch cleanup start_block exceeds i64 for hodl rebuild: {}",
+                            "batch cleanup start_block exceeds i64 for hodl consistency check: {}",
                             start_block
                         )
-                    })? - 1,
-                ) {
-                    error!(
-                        "Failed to rebuild HODL tracker after batch cleanup: {:?}",
-                        rebuild_err
-                    );
-                    return Err(rebuild_err);
+                    })? - 1;
+                    if let Err(consistency_err) = self.reconcile_hodl_tracker_with_tip(cleanup_tip)
+                    {
+                        error!(
+                            cleanup_tip,
+                            "HODL tracker consistency check failed after batch cleanup: {:?}",
+                            consistency_err
+                        );
+                        return Err(consistency_err).with_context(|| {
+                            format!(
+                                "HODL tracker inconsistent after batch cleanup to tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                                cleanup_tip
+                            )
+                        });
+                    }
                 }
                 return Err(e).with_context(|| {
                     format!(
@@ -5890,6 +6014,8 @@ impl Indexer {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let output_index_i16 =
+                    checked_usize_to_i16(output_index, "sync batch output index")?;
                 let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
                     if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
                         return cached.clone();
@@ -5907,7 +6033,7 @@ impl Indexer {
                 let udt_amount = parse_parsed_cell_udt_amount(
                     cell,
                     &tx_data.hash,
-                    output_index as i16,
+                    output_index_i16,
                     standard_hint.as_deref(),
                 )?;
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
@@ -5919,7 +6045,7 @@ impl Indexer {
                 let occupied_capacity =
                     (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
                 batch_cell_infos.insert(
-                    (tx_data.hash.to_vec(), output_index as i16),
+                    (tx_data.hash.to_vec(), output_index_i16),
                     LiveCellInfo {
                         capacity: cell.capacity,
                         created_at_block: tx_data.block_number,
@@ -5940,7 +6066,7 @@ impl Indexer {
 
         let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for (tx_hash, idx) in &all_input_outpoints {
-            let hash_arr: [u8; 32] = tx_hash.as_slice().try_into().unwrap_or([0u8; 32]);
+            let hash_arr = tx_hash_key32(tx_hash, "sync batch input cell cache lookup")?;
             let key = (hash_arr, *idx as i32);
             if let Some(cached) = self.cell_cache.get(&key) {
                 input_cell_info.insert(
@@ -6031,6 +6157,8 @@ impl Indexer {
 
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let output_index_i16 =
+                    checked_usize_to_i16(output_index, "sync batch output index for cache insert")?;
                 let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
                     if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
                         return cached.clone();
@@ -6048,7 +6176,7 @@ impl Indexer {
                 let udt_amount = parse_parsed_cell_udt_amount(
                     cell,
                     &tx_data.hash,
-                    output_index as i16,
+                    output_index_i16,
                     standard_hint.as_deref(),
                 )?;
                 let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
@@ -7126,8 +7254,19 @@ impl Indexer {
                 let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                     .inputs
                     .iter()
-                    .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
-                    .collect();
+                    .map(|i| {
+                        let previous_output_index =
+                            i16::try_from(i.previous_output_index).map_err(|_| {
+                                anyhow!(
+                                    "UDT input previous_output_index exceeds i16 range: tx_hash=0x{}, block={}, previous_output_index={}",
+                                    hex::encode(tx_data.hash),
+                                    parsed.number,
+                                    i.previous_output_index
+                                )
+                            })?;
+                        Ok((i.previous_tx_hash.to_vec(), previous_output_index))
+                    })
+                    .collect::<Result<_>>()?;
                 all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
                 all_tx_infos_for_udt.push(TxInfoForUdt {
                     tx_hash: tx_data.hash.to_vec(),
@@ -7997,10 +8136,18 @@ impl Indexer {
                                         .inputs
                                         .iter()
                                         .map(|i| {
-                                            (
-                                                i.previous_tx_hash.to_vec(),
-                                                i.previous_output_index as i16,
+                                            let previous_output_index = i16::try_from(
+                                                i.previous_output_index,
                                             )
+                                            .unwrap_or_else(|_| {
+                                                panic!(
+                                                    "UDT prefetch input previous_output_index exceeds i16 range: tx_hash=0x{}, block={}, previous_output_index={}",
+                                                    hex::encode(tx_data.hash),
+                                                    parsed.number,
+                                                    i.previous_output_index
+                                                )
+                                            });
+                                            (i.previous_tx_hash.to_vec(), previous_output_index)
                                         })
                                         .collect();
                                     all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
@@ -9658,8 +9805,19 @@ impl Indexer {
                         let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                             .inputs
                             .iter()
-                            .map(|i| (i.previous_tx_hash.to_vec(), i.previous_output_index as i16))
-                            .collect();
+                            .map(|i| {
+                                let previous_output_index =
+                                    i16::try_from(i.previous_output_index).map_err(|_| {
+                                        anyhow!(
+                                            "UDT input previous_output_index exceeds i16 range: tx_hash=0x{}, block={}, previous_output_index={}",
+                                            hex::encode(tx_data.hash),
+                                            parsed.number,
+                                            i.previous_output_index
+                                        )
+                                    })?;
+                                Ok((i.previous_tx_hash.to_vec(), previous_output_index))
+                            })
+                            .collect::<Result<_>>()?;
                         all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
                         all_tx_infos_for_udt.push(TxInfoForUdt {
                             tx_hash: tx_data.hash.to_vec(),
@@ -10911,148 +11069,7 @@ impl Indexer {
 
     fn reconcile_hodl_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
         let state = self.writer.store().get_hodl_tracker_state()?;
-        if should_rebuild_hodl_tracker_state(state.as_ref(), tip_block) {
-            info!(
-                tip_block,
-                "HODL tracker state is out of sync with DB tip, rebuilding from store"
-            );
-            self.rebuild_hodl_tracker_from_store(tip_block)?;
-        }
-
-        Ok(())
-    }
-
-    fn rebuild_hodl_tracker_from_store(&self, tip_block: i64) -> Result<()> {
-        let store = self.writer.store();
-        if tip_block < 0 {
-            let tracker = HodlWaveTracker::new();
-            store.put_hodl_tracker_state(&tracker.to_state())?;
-            let mut guard = self.hodl_tracker.lock().unwrap();
-            *guard = tracker;
-            info!("Rebuilt HODL tracker from empty state (tip before genesis)");
-            return Ok(());
-        }
-
-        let mut transitions: Vec<(i64, NaiveDate)> = Vec::new();
-        let mut headers_scanned = 0u64;
-        let header_iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
-        for item in header_iter.flatten() {
-            let (key, value) = item;
-            if key.len() < 8 {
-                continue;
-            }
-            let block_number = ckbadger_store::keys::decode_block_num(&key[..8]);
-            if block_number > tip_block {
-                break;
-            }
-            let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize block header while rebuilding HODL tracker: block={}, error={}",
-                    block_number,
-                    e
-                )
-            })?;
-            let block_date = chrono::DateTime::<Utc>::from_timestamp_millis(header.timestamp)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "invalid block timestamp while rebuilding HODL tracker: block={}, timestamp_ms={}",
-                        block_number,
-                        header.timestamp
-                    )
-                })?
-                .date_naive();
-            match transitions.last() {
-                Some((_, last_date)) if *last_date == block_date => {}
-                _ => transitions.push((block_number, block_date)),
-            }
-            headers_scanned += 1;
-        }
-
-        if transitions.is_empty() {
-            bail!(
-                "cannot rebuild HODL tracker: no block-date transitions up to tip {}",
-                tip_block
-            );
-        }
-
-        let mut capacity_by_date: HashMap<NaiveDate, i128> = HashMap::new();
-        let mut live_cells_scanned = 0u64;
-        let live_iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for item in live_iter.flatten() {
-            let (key, _) = item;
-            let info: LiveCellInfo = store
-                .get_cell_by_outpoint_key(&key)?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing canonical cell for live marker while rebuilding HODL tracker: outpoint=0x{}",
-                        hex::encode(&key)
-                    )
-                })?;
-            if info.created_at_block > tip_block {
-                continue;
-            }
-
-            let idx = transitions.partition_point(|(b, _)| *b <= info.created_at_block);
-            let creation_date = if idx == 0 {
-                transitions[0].1
-            } else {
-                transitions[idx - 1].1
-            };
-            *capacity_by_date.entry(creation_date).or_insert(0) += info.capacity as i128;
-            live_cells_scanned += 1;
-        }
-
-        let mut holder_count = 0i64;
-        let mut balances_scanned = 0u64;
-        let balances_iter =
-            store.iterator_cf(store.cf_addr_balance(), rocksdb::IteratorMode::Start);
-        for item in balances_iter.flatten() {
-            let (_key, value) = item;
-            let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize address balance while rebuilding HODL tracker: error={}",
-                    e
-                )
-            })?;
-            balances_scanned += 1;
-            if balance.live_cells_count > 0 {
-                holder_count += 1;
-            }
-        }
-
-        let mut capacity_by_date_vec: Vec<(String, i128)> = capacity_by_date
-            .into_iter()
-            .map(|(date, cap)| (date.format("%Y%m%d").to_string(), cap))
-            .collect();
-        capacity_by_date_vec.sort_by(|a, b| a.0.cmp(&b.0));
-        let date_transitions = transitions
-            .iter()
-            .map(|(block, date)| (*block, date.format("%Y%m%d").to_string()))
-            .collect();
-        let last_snapshot_date = transitions
-            .last()
-            .map(|(_, d)| d.format("%Y%m%d").to_string());
-
-        let state = HodlTrackerState {
-            capacity_by_date: capacity_by_date_vec,
-            date_transitions,
-            holder_count,
-            last_snapshot_date,
-        };
-        store.put_hodl_tracker_state(&state)?;
-
-        let mut tracker = self.hodl_tracker.lock().unwrap();
-        *tracker = HodlWaveTracker::from_state(state);
-
-        info!(
-            tip_block,
-            headers_scanned,
-            live_cells_scanned,
-            balances_scanned,
-            holder_count,
-            "Rebuilt HODL tracker from store after rollback"
-        );
-        Ok(())
+        ensure_hodl_tracker_state_consistent(state.as_ref(), tip_block)
     }
 
     /// Feed parsed block data into the HODL wave tracker and write snapshots at day boundaries.
@@ -11320,13 +11337,16 @@ impl Indexer {
 
         let economic_state = match rpc.get_block_economic_state(block_hash).await? {
             Some(state) => state,
-            None => return Ok(()),
+            None => {
+                bail!(
+                    "missing economic state for block: block_number={}, block_hash={}",
+                    block_number,
+                    block_hash
+                );
+            }
         };
 
-        let dao_field = match DaoField::from_hex(dao_hex) {
-            Some(f) => f,
-            None => return Ok(()),
-        };
+        let dao_field = parse_dao_field_for_secondary_issuance(dao_hex, block_number, block_hash)?;
 
         let secondary_issuance: u128 =
             parse_prefixed_hex_u128(&economic_state.issuance.secondary, "secondary issuance")?;
@@ -13133,6 +13153,28 @@ mod tests {
     }
 
     #[test]
+    fn test_checked_usize_to_i16_errors_on_overflow() {
+        let err = checked_usize_to_i16((i16::MAX as usize) + 1, "output_index").unwrap_err();
+        assert!(err.to_string().contains("output_index exceeds i16 range"));
+    }
+
+    #[test]
+    fn test_tx_hash_key32_errors_on_invalid_length() {
+        let err = tx_hash_key32(&[0x11; 31], "cache lookup").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cache lookup tx hash must be 32 bytes"));
+    }
+
+    #[test]
+    fn test_parse_dao_field_for_secondary_issuance_errors_on_invalid_hex() {
+        let err = parse_dao_field_for_secondary_issuance("0x1234", 42, "0xabcd").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid DAO field hex while updating secondary issuance"));
+    }
+
+    #[test]
     fn test_parse_tx_cycles_treats_zero_as_missing() {
         let raw = "0x0".to_string();
         let cycles = parse_tx_cycles(Some(&raw), "0xabc", 200).unwrap();
@@ -13831,9 +13873,10 @@ mod tests {
     }
 
     #[test]
-    fn test_should_rebuild_hodl_tracker_state_rules() {
-        assert!(!should_rebuild_hodl_tracker_state(None, 0));
-        assert!(should_rebuild_hodl_tracker_state(None, 1));
+    fn test_ensure_hodl_tracker_state_consistency_rules() {
+        assert!(ensure_hodl_tracker_state_consistent(None, 0).is_ok());
+        let missing = ensure_hodl_tracker_state_consistent(None, 1).unwrap_err();
+        assert!(missing.to_string().contains("missing HODL tracker state"));
 
         let empty = HodlTrackerState {
             capacity_by_date: vec![],
@@ -13841,7 +13884,8 @@ mod tests {
             holder_count: 0,
             last_snapshot_date: None,
         };
-        assert!(should_rebuild_hodl_tracker_state(Some(&empty), 100));
+        let empty_err = ensure_hodl_tracker_state_consistent(Some(&empty), 100).unwrap_err();
+        assert!(empty_err.to_string().contains("empty date_transitions"));
 
         let aligned = HodlTrackerState {
             capacity_by_date: vec![("20240101".to_string(), 1)],
@@ -13849,7 +13893,7 @@ mod tests {
             holder_count: 1,
             last_snapshot_date: Some("20240102".to_string()),
         };
-        assert!(!should_rebuild_hodl_tracker_state(Some(&aligned), 100));
+        assert!(ensure_hodl_tracker_state_consistent(Some(&aligned), 100).is_ok());
 
         let ahead = HodlTrackerState {
             capacity_by_date: vec![("20240101".to_string(), 1)],
@@ -13857,7 +13901,8 @@ mod tests {
             holder_count: 1,
             last_snapshot_date: Some("20240102".to_string()),
         };
-        assert!(should_rebuild_hodl_tracker_state(Some(&ahead), 100));
+        let ahead_err = ensure_hodl_tracker_state_consistent(Some(&ahead), 100).unwrap_err();
+        assert!(ahead_err.to_string().contains("ahead of sync tip"));
     }
 
     #[test]
