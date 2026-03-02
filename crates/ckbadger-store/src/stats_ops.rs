@@ -4,6 +4,16 @@ use crate::keys::{self, stats_prefix};
 use crate::store::CkbadgerStore;
 use crate::types::*;
 
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
 impl CkbadgerStore {
     // ---- Daily stats ----
 
@@ -31,9 +41,14 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(stats) = bincode::deserialize::<DailyStats>(&value) {
-                results.push(stats);
-            }
+            let stats: DailyStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize daily stats in list_daily_stats: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push(stats);
         }
         Ok(results)
     }
@@ -65,11 +80,16 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(stats) = bincode::deserialize::<DailyStats>(&value) {
-                // Key is prefix(1) + date_string
-                let date = String::from_utf8_lossy(&key[1..]).to_string();
-                results.push((date, stats));
-            }
+            let stats: DailyStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize daily stats in list_daily_stats_with_dates: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            // Key is prefix(1) + date_string
+            let date = String::from_utf8_lossy(&key[1..]).to_string();
+            results.push((date, stats));
         }
         Ok(results)
     }
@@ -85,10 +105,15 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(stats) = bincode::deserialize::<HourlyStats>(&value) {
-                let hour_key = String::from_utf8_lossy(&key[1..]).to_string();
-                results.push((hour_key, stats));
-            }
+            let stats: HourlyStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize hourly stats in list_hourly_stats_with_keys: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let hour_key = String::from_utf8_lossy(&key[1..]).to_string();
+            results.push((hour_key, stats));
         }
         Ok(results)
     }
@@ -120,9 +145,14 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(stats) = bincode::deserialize::<EpochStats>(&value) {
-                results.push(stats);
-            }
+            let stats: EpochStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize epoch stats in list_epoch_stats: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push(stats);
         }
         Ok(results)
     }
@@ -152,9 +182,14 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(stats) = bincode::deserialize::<MinerStats>(&value) {
-                results.push(stats);
-            }
+            let stats: MinerStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize miner stats in list_miner_stats: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push(stats);
         }
         Ok(results)
     }
@@ -186,10 +221,15 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(stats) = bincode::deserialize::<DailyBlockStats>(&value) {
-                let date = String::from_utf8_lossy(&key[1..]).to_string();
-                results.push((date, stats));
-            }
+            let stats: DailyBlockStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize daily block stats in list_daily_block_stats: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let date = String::from_utf8_lossy(&key[1..]).to_string();
+            results.push((date, stats));
         }
         Ok(results)
     }
@@ -233,9 +273,14 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(snapshot) = bincode::deserialize::<DaoDailySnapshot>(&value) {
-                results.push(snapshot);
-            }
+            let snapshot: DaoDailySnapshot = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize dao daily snapshot in list_dao_daily_snapshots: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push(snapshot);
         }
         Ok(results)
     }
@@ -274,10 +319,15 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 break;
             }
-            if let Ok(wave) = bincode::deserialize::<DailyHodlWave>(&value) {
-                let date = String::from_utf8_lossy(&key[1..]).to_string();
-                results.push((date, wave));
-            }
+            let wave: DailyHodlWave = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize hodl wave in list_hodl_waves: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            let date = String::from_utf8_lossy(&key[1..]).to_string();
+            results.push((date, wave));
         }
         Ok(results)
     }
@@ -371,9 +421,16 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            if let Ok(delta) = bincode::deserialize::<ScriptDailyDelta>(&value) {
-                results.push((date, delta));
-            }
+            let delta: ScriptDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize script daily delta in list_script_daily_deltas_in_range: code_hash=0x{}, is_type={}, date={}, error={}",
+                    bytes_to_hex(code_hash),
+                    is_type,
+                    date,
+                    e
+                )
+            })?;
+            results.push((date, delta));
         }
 
         Ok(results)
@@ -415,9 +472,14 @@ impl CkbadgerStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<ScriptInfo>(&value) {
-                results.push((key.to_vec(), info));
-            }
+            let info: ScriptInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize script info in list_script_infos: code_hash=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push((key.to_vec(), info));
         }
         Ok(results)
     }
@@ -922,6 +984,21 @@ mod tests {
     }
 
     #[test]
+    fn test_list_hodl_waves_fails_on_invalid_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, b"20240115");
+        store
+            .put_cf(store.cf_stats_hodl(), &key, b"invalid-hodl-wave")
+            .unwrap();
+
+        let err = store.list_hodl_waves().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize hodl wave in list_hodl_waves"));
+    }
+
+    #[test]
     fn test_hodl_tracker_state_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
@@ -1112,6 +1189,21 @@ mod tests {
         assert_eq!(unused_after.type_live_cells_count, 0);
         assert_eq!(unused_after.cells_count, 0);
         assert_eq!(unused_after.capacity_used, 0);
+    }
+
+    #[test]
+    fn test_list_script_infos_fails_on_invalid_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let code_hash = vec![0xAB; 32];
+        store
+            .put_cf(store.cf_script_info(), &code_hash, b"invalid-script-info")
+            .unwrap();
+
+        let err = store.list_script_infos().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize script info in list_script_infos"));
     }
 
     #[test]

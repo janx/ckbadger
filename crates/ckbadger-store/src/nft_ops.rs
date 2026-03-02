@@ -7,6 +7,16 @@ use crate::types::{
     NftTypeIndex,
 };
 
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
 impl CkbadgerStore {
     pub fn get_nft(&self, id: &[u8]) -> anyhow::Result<Option<NftEntry>> {
         match self.get_cf(self.cf_nft_data(), id)? {
@@ -22,11 +32,16 @@ impl CkbadgerStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(entry) = bincode::deserialize::<NftEntry>(&value) {
-                results.push((key.to_vec(), entry));
-                if results.len() >= limit {
-                    break;
-                }
+            let entry: NftEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize nft entry in list_nfts: nft_id=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push((key.to_vec(), entry));
+            if results.len() >= limit {
+                break;
             }
         }
         Ok(results)
@@ -52,9 +67,14 @@ impl CkbadgerStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(agg) = bincode::deserialize::<NftCollectionAggregate>(&value) {
-                results.push((key.to_vec(), agg));
-            }
+            let agg: NftCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize nft collection aggregate in list_nft_collection_aggregates: collection_id=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push((key.to_vec(), agg));
         }
         Ok(results)
     }
@@ -139,9 +159,15 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            if let Ok(delta) = bincode::deserialize::<NftDailyDelta>(&value) {
-                results.push((date, delta));
-            }
+            let delta: NftDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize nft daily delta in list_nft_daily_deltas_in_range: collection_id=0x{}, date={}, error={}",
+                    bytes_to_hex(collection_id),
+                    date,
+                    e
+                )
+            })?;
+            results.push((date, delta));
         }
 
         Ok(results)
@@ -380,6 +406,36 @@ mod tests {
     }
 
     #[test]
+    fn test_list_nfts_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        store
+            .put_cf(store.cf_nft_data(), &[0x11; 32], b"invalid-nft-payload")
+            .unwrap();
+
+        let err = store.list_nfts(10).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize nft entry in list_nfts"));
+    }
+
+    #[test]
+    fn test_list_nft_collection_aggregates_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        store
+            .put_cf(
+                store.cf_nft_collection_agg(),
+                &[0x22; 32],
+                b"invalid-nft-collection-agg",
+            )
+            .unwrap();
+
+        let err = store.list_nft_collection_aggregates().unwrap_err();
+        assert!(err.to_string().contains(
+            "failed to deserialize nft collection aggregate in list_nft_collection_aggregates"
+        ));
+    }
+
+    #[test]
     fn test_nft_type_index_and_nft_daily_delta_roundtrip() {
         let (_dir, store) = test_store();
         let type_script_hash = [0x66u8; 32];
@@ -425,6 +481,21 @@ mod tests {
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20260219);
+    }
+
+    #[test]
+    fn test_list_nft_daily_deltas_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let collection_id = [0x77u8; 24];
+        let key = keys::encode_nft_daily_key(&collection_id, 20260219);
+        store
+            .put_cf(store.cf_stats_nft(), &key, b"invalid-nft-daily")
+            .unwrap();
+
+        let err = store.list_nft_daily_deltas(&collection_id).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize nft daily delta in list_nft_daily_deltas_in_range"));
     }
 
     #[test]

@@ -252,7 +252,10 @@ async fn get_cell_graph(
             if !inputs.is_empty() {
                 let outpoints: Vec<(&[u8], i16)> =
                     inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-                let cell_map = state.store.get_cells_batch(&outpoints);
+                let cell_map = state
+                    .store
+                    .get_cells_batch(&outpoints)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in &inputs {
                     let prev_cell_id = format!("cell-0x{}-{}", hex::encode(prev_tx_hash), prev_idx);
@@ -351,8 +354,14 @@ async fn get_tx_graph(
                 let outpoints: Vec<(&[u8], i16)> =
                     inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
 
-                let live_map = state.store.get_cells_batch(&outpoints);
-                let consumed_map = state.store.get_consumed_cells_batch(&outpoints);
+                let live_map = state
+                    .store
+                    .get_cells_batch(&outpoints)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                let consumed_map = state
+                    .store
+                    .get_consumed_cells_batch(&outpoints)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in inputs {
                     let prev_tx_hex = format!("0x{}", hex::encode(&prev_tx_hash));

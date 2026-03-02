@@ -337,7 +337,7 @@ impl BatchWriter {
 
         let mut result = HashMap::with_capacity(outpoints.len());
 
-        let live_cells = self.store.get_cells_batch(outpoints);
+        let live_cells = self.store.get_cells_batch(outpoints)?;
         for ((tx_hash, output_index), info) in live_cells {
             result.insert(
                 (tx_hash, output_index),

@@ -4,6 +4,16 @@ use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::ClusterAggregate;
 
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
 impl CkbadgerStore {
     /// Get pre-aggregated data for a cluster.
     pub fn get_cluster_aggregate(
@@ -23,9 +33,14 @@ impl CkbadgerStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(agg) = bincode::deserialize::<ClusterAggregate>(&value) {
-                results.push((key.to_vec(), agg));
-            }
+            let agg: ClusterAggregate = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize cluster aggregate in list_cluster_aggregates: cluster_id=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push((key.to_vec(), agg));
         }
         Ok(results)
     }
@@ -36,6 +51,18 @@ impl CkbadgerStore {
         cluster_id: &[u8],
         lock_hash: &[u8],
     ) -> anyhow::Result<i64> {
+        if cluster_id.len() != 32 {
+            anyhow::bail!(
+                "invalid cluster_id length in get_cluster_owner_count: expected 32, got {}",
+                cluster_id.len()
+            );
+        }
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "invalid lock_hash length in get_cluster_owner_count: expected 32, got {}",
+                lock_hash.len()
+            );
+        }
         let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
         match self.get_cf(self.cf_stats_spore(), &key)? {
             Some(value) if value.len() == 8 => {
@@ -50,6 +77,12 @@ impl CkbadgerStore {
         &self,
         cluster_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
+        if cluster_id.len() != 32 {
+            anyhow::bail!(
+                "invalid cluster_id length in list_cluster_owner_counts: expected 32, got {}",
+                cluster_id.len()
+            );
+        }
         let prefix = keys::encode_cluster_owner_prefix(cluster_id);
         let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
         let mut results = Vec::new();
@@ -241,5 +274,27 @@ mod tests {
         assert_eq!(agg.total_count, 0);
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.owner_count, 0);
+    }
+
+    #[test]
+    fn test_list_cluster_owner_counts_rejects_invalid_cluster_id_length() {
+        let (_dir, store) = test_store();
+        let err = store.list_cluster_owner_counts(&[0x11; 31]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid cluster_id length in list_cluster_owner_counts"));
+    }
+
+    #[test]
+    fn test_list_cluster_aggregates_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        store
+            .put_cf(store.cf_cluster_agg(), &[0x01; 32], b"invalid-cluster-agg")
+            .unwrap();
+
+        let err = store.list_cluster_aggregates().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize cluster aggregate in list_cluster_aggregates"));
     }
 }

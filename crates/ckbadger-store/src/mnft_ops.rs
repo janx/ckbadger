@@ -7,6 +7,17 @@ use crate::store::CkbadgerStore;
 
 pub(crate) type MnftLiveOutpoint = (Vec<u8>, i16);
 pub(crate) type MnftLiveOutpointMap = HashMap<Vec<u8>, MnftLiveOutpoint>;
+pub(crate) type MnftOutpointLookup = (Vec<u8>, i16, Vec<u8>);
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
 
 impl CkbadgerStore {
     pub fn get_mnft_class_id_by_outpoint(
@@ -36,7 +47,7 @@ impl CkbadgerStore {
     pub fn get_mnft_token_ids_by_outpoints_batch(
         &self,
         outpoints: &[(&[u8], i16)],
-    ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
+    ) -> anyhow::Result<Vec<MnftOutpointLookup>> {
         let cf = self.cf_stats_nft();
         let keys: Vec<[u8; keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
@@ -48,14 +59,30 @@ impl CkbadgerStore {
 
         let mut results = Vec::new();
         for (i, value_result) in values.into_iter().enumerate() {
-            if let Ok(Some(value)) = value_result {
-                if !value.is_empty() {
-                    let (tx_hash, idx) = outpoints[i];
+            let (tx_hash, idx) = outpoints[i];
+            match value_result {
+                Ok(Some(value)) => {
+                    if value.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "empty mnft token id in get_mnft_token_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}",
+                            bytes_to_hex(tx_hash),
+                            idx
+                        ));
+                    }
                     results.push((tx_hash.to_vec(), idx, value));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_mnft_token_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}, error={}",
+                        bytes_to_hex(tx_hash),
+                        idx,
+                        e
+                    ));
                 }
             }
         }
-        results
+        Ok(results)
     }
 
     /// Resolve live mNFT token outpoints by token IDs.
@@ -188,11 +215,29 @@ mod tests {
         assert_eq!(token_id, mnft_token_id.to_vec());
 
         let mnft_outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 4), (&tx_a, 9)];
-        let mnft_results = store.get_mnft_token_ids_by_outpoints_batch(&mnft_outpoints);
+        let mnft_results = store
+            .get_mnft_token_ids_by_outpoints_batch(&mnft_outpoints)
+            .unwrap();
         assert_eq!(mnft_results.len(), 1);
         assert_eq!(mnft_results[0].0, tx_a.to_vec());
         assert_eq!(mnft_results[0].1, 4);
         assert_eq!(mnft_results[0].2, mnft_token_id.to_vec());
+    }
+
+    #[test]
+    fn test_get_mnft_token_ids_by_outpoints_batch_fails_on_empty_value() {
+        let (_dir, store) = test_store();
+        let tx_a = [0xC1u8; 32];
+        let key = keys::encode_mnft_token_outpoint_key(&tx_a, 4);
+        store.put_cf(store.cf_stats_nft(), &key, b"").unwrap();
+
+        let mnft_outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 4)];
+        let err = store
+            .get_mnft_token_ids_by_outpoints_batch(&mnft_outpoints)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("empty mnft token id in get_mnft_token_ids_by_outpoints_batch"));
     }
 
     #[test]

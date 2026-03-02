@@ -220,7 +220,7 @@ impl BatchWriter {
             .zip(output_indices.iter())
             .map(|(hash, idx)| (hash.as_slice(), *idx))
             .collect();
-        Ok(self.store.get_mnft_token_ids_by_outpoints_batch(&outpoints))
+        self.store.get_mnft_token_ids_by_outpoints_batch(&outpoints)
     }
 
     pub fn update_nft_type_index_batch(

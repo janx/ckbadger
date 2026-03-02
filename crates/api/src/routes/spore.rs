@@ -139,6 +139,19 @@ fn normalize_cluster_activity_action_filter(
     }
 }
 
+fn parse_fixed_len_hex(
+    raw: &str,
+    expected_len: usize,
+    err_msg: &'static str,
+) -> Result<Vec<u8>, (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
+        .map_err(|_| ApiError::bad_request(err_msg))?;
+    if bytes.len() != expected_len {
+        return Err(ApiError::bad_request(err_msg));
+    }
+    Ok(bytes)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterStorageProfileResponse {
@@ -1248,8 +1261,7 @@ async fn get_cluster_holders(
 ) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
     ensure_derived_ready(state.as_ref())?;
 
-    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
-        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let id = parse_fixed_len_hex(&cluster_id, 32, "Invalid cluster ID")?;
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
         .cursor
@@ -2047,5 +2059,11 @@ mod tests {
         assert!(svg.contains("<svg "));
         assert!(svg.contains("fill='blue'"));
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn test_parse_fixed_len_hex_rejects_non_32_bytes() {
+        let err = parse_fixed_len_hex("0x1234", 32, "Invalid cluster ID").unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
     }
 }

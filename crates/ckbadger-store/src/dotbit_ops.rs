@@ -7,6 +7,17 @@ use crate::store::CkbadgerStore;
 
 pub(crate) type DotbitLiveOutpoint = (Vec<u8>, i16);
 pub(crate) type DotbitLiveOutpointMap = HashMap<Vec<u8>, DotbitLiveOutpoint>;
+pub(crate) type DotbitOutpointLookup = (Vec<u8>, i16, Vec<u8>);
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
 
 impl CkbadgerStore {
     pub fn get_dotbit_account_id_by_outpoint(
@@ -24,7 +35,7 @@ impl CkbadgerStore {
     pub fn get_dotbit_account_ids_by_outpoints_batch(
         &self,
         outpoints: &[(&[u8], i16)],
-    ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
+    ) -> anyhow::Result<Vec<DotbitOutpointLookup>> {
         let cf = self.cf_stats_nft();
         let keys: Vec<[u8; keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
@@ -36,14 +47,30 @@ impl CkbadgerStore {
 
         let mut results = Vec::new();
         for (i, value_result) in values.into_iter().enumerate() {
-            if let Ok(Some(value)) = value_result {
-                if !value.is_empty() {
-                    let (tx_hash, idx) = outpoints[i];
+            let (tx_hash, idx) = outpoints[i];
+            match value_result {
+                Ok(Some(value)) => {
+                    if value.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "empty dotbit account id in get_dotbit_account_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}",
+                            bytes_to_hex(tx_hash),
+                            idx
+                        ));
+                    }
                     results.push((tx_hash.to_vec(), idx, value));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_dotbit_account_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}, error={}",
+                        bytes_to_hex(tx_hash),
+                        idx,
+                        e
+                    ));
                 }
             }
         }
-        results
+        Ok(results)
     }
 
     /// Resolve live dotbit account outpoints by account IDs.
@@ -169,11 +196,29 @@ mod tests {
         assert_eq!(dotbit_id, dotbit_account_id.to_vec());
 
         let dotbit_outpoints: Vec<(&[u8], i16)> = vec![(&tx_b, 5), (&tx_b, 8)];
-        let dotbit_results = store.get_dotbit_account_ids_by_outpoints_batch(&dotbit_outpoints);
+        let dotbit_results = store
+            .get_dotbit_account_ids_by_outpoints_batch(&dotbit_outpoints)
+            .unwrap();
         assert_eq!(dotbit_results.len(), 1);
         assert_eq!(dotbit_results[0].0, tx_b.to_vec());
         assert_eq!(dotbit_results[0].1, 5);
         assert_eq!(dotbit_results[0].2, dotbit_account_id.to_vec());
+    }
+
+    #[test]
+    fn test_get_dotbit_account_ids_by_outpoints_batch_fails_on_empty_value() {
+        let (_dir, store) = test_store();
+        let tx_b = [0xC2u8; 32];
+        let key = keys::encode_dotbit_account_outpoint_key(&tx_b, 5);
+        store.put_cf(store.cf_stats_nft(), &key, b"").unwrap();
+
+        let dotbit_outpoints: Vec<(&[u8], i16)> = vec![(&tx_b, 5)];
+        let err = store
+            .get_dotbit_account_ids_by_outpoints_batch(&dotbit_outpoints)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("empty dotbit account id in get_dotbit_account_ids_by_outpoints_batch"));
     }
 
     #[test]

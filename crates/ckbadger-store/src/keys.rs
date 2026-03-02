@@ -594,7 +594,8 @@ pub fn decode_addr_daily_stats_key(key: &[u8]) -> (Vec<u8>, u32) {
 pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
     let date = ckbadger_common::block_date_from_ms(timestamp_ms);
     let s = date.format("%Y%m%d").to_string();
-    s.parse::<u32>().unwrap_or(0)
+    s.parse::<u32>()
+        .expect("timestamp_ms_to_date: formatted date must parse into u32")
 }
 
 /// NFT collection activity key: collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes

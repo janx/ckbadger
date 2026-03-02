@@ -6,6 +6,16 @@ use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{AddressBalance, LiveCellInfo};
 
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
 impl CkbadgerStore {
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
         match self.get_cf(self.cf_addr_balance(), lock_hash)? {
@@ -30,9 +40,14 @@ impl CkbadgerStore {
         let mut all: Vec<(Vec<u8>, AddressBalance)> = Vec::new();
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(balance) = bincode::deserialize::<AddressBalance>(&value) {
-                all.push((key.to_vec(), balance));
-            }
+            let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize address balance in top_addresses: lock_hash=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            all.push((key.to_vec(), balance));
         }
 
         all.sort_by(|a, b| b.1.balance.cmp(&a.1.balance));
@@ -122,10 +137,21 @@ impl CkbadgerStore {
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = match self.get_cell_by_outpoint_key(&key) {
-                Ok(Some(v)) => v,
-                _ => continue,
-            };
+            let info: LiveCellInfo = self
+                .get_cell_by_outpoint_key(&key)
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to load canonical cell during addr balance rebuild: outpoint=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing canonical cell for live marker during addr balance rebuild: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
             let tx_hash = key[..32].to_vec();
 
             let entry = agg_by_lock
@@ -324,5 +350,37 @@ mod tests {
 
         let err = store.rebuild_addr_balances_from_live_cells().unwrap_err();
         assert!(err.to_string().contains("negative aggregate"));
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_fails_when_live_marker_missing_canonical_cell() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let outpoint = keys::encode_outpoint(&[0x11; 32], 0);
+        store.put_cf(store.cf_live_cells(), &outpoint, b"").unwrap();
+
+        let err = store.rebuild_addr_balances_from_live_cells().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing canonical cell for live marker during addr balance rebuild"));
+    }
+
+    #[test]
+    fn test_top_addresses_fails_on_invalid_payload() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock_hash = [0xAA; 32];
+        store
+            .put_cf(
+                store.cf_addr_balance(),
+                &lock_hash,
+                b"invalid-address-balance",
+            )
+            .unwrap();
+
+        let err = store.top_addresses(10).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize address balance in top_addresses"));
     }
 }

@@ -331,11 +331,25 @@ impl CkbadgerStore {
         );
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
-                batch.delete_cf(self.cf_block_headers(), &key);
-                batch.delete_cf(self.cf_block_hash_index(), &header.hash);
-                blocks_removed += 1;
+            if key.len() != 8 {
+                anyhow::bail!(
+                    "invalid block header key length during rollback cleanup: key_len={}, key=0x{}",
+                    key.len(),
+                    bytes_to_hex(&key)
+                );
             }
+            let block_num = keys::decode_block_num(&key);
+            let header: CachedBlockHeader = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize block header during rollback cleanup: block_num={}, key=0x{}, error={}",
+                    block_num,
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            batch.delete_cf(self.cf_block_headers(), &key);
+            batch.delete_cf(self.cf_block_hash_index(), &header.hash);
+            blocks_removed += 1;
             stage.tick(blocks_removed);
         }
         stage.finish(blocks_removed);
@@ -1507,6 +1521,26 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let err = store.rollback_to_block(-2).unwrap_err();
         assert!(err.to_string().contains("expected >= -1"));
+    }
+
+    #[test]
+    fn test_rollback_to_block_fails_on_invalid_block_header_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let key = keys::encode_block_num(1);
+        store
+            .put_cf(
+                store.cf_block_headers(),
+                &key,
+                b"invalid-block-header-payload",
+            )
+            .unwrap();
+
+        let err = store.rollback_to_block(-1).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize block header during rollback cleanup"));
     }
 
     #[test]

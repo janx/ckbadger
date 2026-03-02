@@ -1369,7 +1369,7 @@ fn load_activity_token_info_cache(
 
     let type_hash_vec: Vec<Vec<u8>> = type_hashes.into_iter().collect();
     let mut token_info_cache: HashMap<Vec<u8>, (Option<String>, Option<u8>)> = HashMap::new();
-    for (type_hash, info) in store.get_tokens_batch(&type_hash_vec) {
+    for (type_hash, info) in store.get_tokens_batch(&type_hash_vec)? {
         let Some(info) = info else {
             continue;
         };
@@ -4713,10 +4713,22 @@ impl Indexer {
                     if !missing_cluster_ids.is_empty() {
                         missing_cluster_ids.sort();
                         missing_cluster_ids.dedup();
-                        for (id, entry) in writer_for_parser
+                        let stored_clusters = match writer_for_parser
                             .store()
                             .get_spores_batch(&missing_cluster_ids)
                         {
+                            Ok(rows) => rows,
+                            Err(e) => {
+                                error!(
+                                    start_block,
+                                    end_block,
+                                    "Parser: get_spores_batch failed while preloading cluster descriptions: {}",
+                                    e
+                                );
+                                return;
+                            }
+                        };
+                        for (id, entry) in stored_clusters {
                             let desc = entry.and_then(|e| {
                                 if e.standard == ckbadger_store::types::DobStandard::SporeCluster {
                                     e.description

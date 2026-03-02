@@ -88,9 +88,25 @@ impl CkbadgerStore {
         let values = self.multi_get_cf(cf_keys);
 
         for (i, value_result) in values.into_iter().enumerate() {
-            if let Ok(Some(value)) = value_result {
-                if let Ok(header) = bincode::deserialize::<CachedBlockHeader>(&value) {
+            match value_result {
+                Ok(Some(value)) => {
+                    let header: CachedBlockHeader =
+                        bincode::deserialize(&value).map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to deserialize block header in get_dao_fields_batch: block_number={}, error={}",
+                                block_numbers[i],
+                                e
+                            )
+                        })?;
                     result.insert(block_numbers[i], header.dao);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_dao_fields_batch: block_number={}, error={}",
+                        block_numbers[i],
+                        e
+                    ));
                 }
             }
         }
@@ -261,5 +277,20 @@ mod tests {
         assert_eq!(store.find_day_start_block(2).unwrap(), Some(0));
         assert_eq!(store.find_day_start_block(3).unwrap(), Some(3));
         assert_eq!(store.find_day_start_block(999).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_dao_fields_batch_fails_on_invalid_block_header_payload() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let key = keys::encode_block_num(42);
+        store
+            .put_cf(store.cf_block_headers(), &key, b"invalid-header-payload")
+            .unwrap();
+
+        let err = store.get_dao_fields_batch(&[42]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize block header in get_dao_fields_batch"));
     }
 }

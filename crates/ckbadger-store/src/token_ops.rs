@@ -88,25 +88,41 @@ impl CkbadgerStore {
     }
 
     /// Batch-fetch multiple tokens by type_script_hash in a single RocksDB multi_get.
-    pub fn get_tokens_batch(&self, type_hashes: &[Vec<u8>]) -> Vec<(Vec<u8>, Option<TokenInfo>)> {
+    pub fn get_tokens_batch(
+        &self,
+        type_hashes: &[Vec<u8>],
+    ) -> anyhow::Result<Vec<(Vec<u8>, Option<TokenInfo>)>> {
         if type_hashes.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let cf = self.cf_tokens();
         let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             type_hashes.iter().map(|h| (cf, h.as_slice())).collect();
         let values = self.multi_get_cf(cf_keys);
-        type_hashes
-            .iter()
-            .zip(values)
-            .map(|(hash, result)| {
-                let info = result
-                    .ok()
-                    .flatten()
-                    .and_then(|v| bincode::deserialize::<TokenInfo>(&v).ok());
-                (hash.clone(), info)
-            })
-            .collect()
+        let mut result = Vec::with_capacity(type_hashes.len());
+        for (hash, value_result) in type_hashes.iter().zip(values) {
+            let info = match value_result {
+                Ok(Some(value)) => Some(bincode::deserialize::<TokenInfo>(&value).map_err(
+                    |e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize token info in get_tokens_batch: type_hash=0x{}, error={}",
+                            bytes_to_hex(hash),
+                            e
+                        )
+                    },
+                )?),
+                Ok(None) => None,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_tokens_batch: type_hash=0x{}, error={}",
+                        bytes_to_hex(hash),
+                        e
+                    ));
+                }
+            };
+            result.push((hash.clone(), info));
+        }
+        Ok(result)
     }
 
     pub fn put_token_direct(&self, type_hash: &[u8], info: &TokenInfo) -> anyhow::Result<()> {
@@ -121,9 +137,14 @@ impl CkbadgerStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<TokenInfo>(&value) {
-                results.push((key.to_vec(), info));
-            }
+            let info: TokenInfo = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize token info in list_tokens: type_hash=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push((key.to_vec(), info));
         }
         Ok(results)
     }
@@ -237,9 +258,15 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            if let Ok(delta) = bincode::deserialize::<TokenDailyDelta>(&value) {
-                results.push((date, delta));
-            }
+            let delta: TokenDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize token daily delta in list_token_daily_deltas_in_range: type_hash=0x{}, date={}, error={}",
+                    bytes_to_hex(type_hash),
+                    date,
+                    e
+                )
+            })?;
+            results.push((date, delta));
         }
 
         Ok(results)
@@ -1036,6 +1063,36 @@ mod tests {
     }
 
     #[test]
+    fn test_get_tokens_batch_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let type_hash = vec![0xAA; 32];
+        store
+            .put_cf(store.cf_tokens(), &type_hash, b"invalid-token-payload")
+            .unwrap();
+
+        let err = store
+            .get_tokens_batch(std::slice::from_ref(&type_hash))
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize token info in get_tokens_batch"));
+    }
+
+    #[test]
+    fn test_list_tokens_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let type_hash = vec![0xAB; 32];
+        store
+            .put_cf(store.cf_tokens(), &type_hash, b"invalid-token-payload")
+            .unwrap();
+
+        let err = store.list_tokens().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize token info in list_tokens"));
+    }
+
+    #[test]
     fn test_token_transfers_count_accumulates() {
         let (_dir, store) = test_store();
         let type_hash = [0x02u8; 32];
@@ -1149,6 +1206,21 @@ mod tests {
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20240116);
+    }
+
+    #[test]
+    fn test_list_token_daily_deltas_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x06u8; 32];
+        let key = keys::encode_token_daily_key(&type_hash, 20240115);
+        store
+            .put_cf(store.cf_stats_token(), &key, b"invalid-token-daily")
+            .unwrap();
+
+        let err = store.list_token_daily_deltas(&type_hash).unwrap_err();
+        assert!(err.to_string().contains(
+            "failed to deserialize token daily delta in list_token_daily_deltas_in_range"
+        ));
     }
 
     #[test]

@@ -412,9 +412,8 @@ impl BatchWriter {
             .zip(output_indices.iter())
             .map(|(hash, idx)| (hash.as_slice(), *idx))
             .collect();
-        Ok(self
-            .store
-            .get_dotbit_account_ids_by_outpoints_batch(&outpoints))
+        self.store
+            .get_dotbit_account_ids_by_outpoints_batch(&outpoints)
     }
 }
 

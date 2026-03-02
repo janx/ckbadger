@@ -7,6 +7,19 @@ use crate::types::{ClusterDailyDelta, SporeDailyDelta, SporeEntry, SporeTypeInde
 #[cfg(test)]
 use crate::batch::StoreBatch;
 
+pub(crate) type SporeBatchEntry = (Vec<u8>, Option<SporeEntry>);
+pub(crate) type SporeOutpointLookup = (Vec<u8>, i16, Vec<u8>);
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
         match self.get_cf(self.cf_spore_data(), id)? {
@@ -16,24 +29,38 @@ impl CkbadgerStore {
     }
 
     /// Batch-fetch multiple spore/DOB entries by ID in a single RocksDB multi_get.
-    pub fn get_spores_batch(&self, ids: &[Vec<u8>]) -> Vec<(Vec<u8>, Option<SporeEntry>)> {
+    pub fn get_spores_batch(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<SporeBatchEntry>> {
         if ids.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let cf = self.cf_spore_data();
         let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             ids.iter().map(|id| (cf, id.as_slice())).collect();
         let values = self.multi_get_cf(cf_keys);
-        ids.iter()
-            .zip(values)
-            .map(|(id, result)| {
-                let entry = result
-                    .ok()
-                    .flatten()
-                    .and_then(|v| bincode::deserialize::<SporeEntry>(&v).ok());
-                (id.clone(), entry)
-            })
-            .collect()
+        let mut result = Vec::with_capacity(ids.len());
+        for (id, value_result) in ids.iter().zip(values) {
+            let entry = match value_result {
+                Ok(Some(value)) => Some(bincode::deserialize::<SporeEntry>(&value).map_err(
+                    |e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize spore entry in get_spores_batch: spore_id=0x{}, error={}",
+                            bytes_to_hex(id),
+                            e
+                        )
+                    },
+                )?),
+                Ok(None) => None,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_spores_batch: spore_id=0x{}, error={}",
+                        bytes_to_hex(id),
+                        e
+                    ));
+                }
+            };
+            result.push((id.clone(), entry));
+        }
+        Ok(result)
     }
 
     pub fn put_spore_direct(&self, id: &[u8], entry: &SporeEntry) -> anyhow::Result<()> {
@@ -48,11 +75,16 @@ impl CkbadgerStore {
 
         for item in iter.flatten() {
             let (key, value) = item;
-            if let Ok(entry) = bincode::deserialize::<SporeEntry>(&value) {
-                results.push((key.to_vec(), entry));
-                if results.len() >= limit {
-                    break;
-                }
+            let entry: SporeEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize spore entry in list_spores: spore_id=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            results.push((key.to_vec(), entry));
+            if results.len() >= limit {
+                break;
             }
         }
         Ok(results)
@@ -75,7 +107,7 @@ impl CkbadgerStore {
             // Key: cluster_id(32B) + spore_id(32B) = 64 bytes
             if key.len() == 64 {
                 let spore_id = key[32..64].to_vec();
-                if let Ok(Some(entry)) = self.get_spore(&spore_id) {
+                if let Some(entry) = self.get_spore(&spore_id)? {
                     results.push((spore_id, entry));
                     if results.len() >= limit {
                         break;
@@ -137,7 +169,7 @@ impl CkbadgerStore {
     pub fn get_spore_ids_by_outpoints_batch(
         &self,
         outpoints: &[(&[u8], i16)],
-    ) -> Vec<(Vec<u8>, i16, Vec<u8>)> {
+    ) -> anyhow::Result<Vec<SporeOutpointLookup>> {
         let cf = self.cf_stats_spore();
         let keys: Vec<[u8; keys::SPORE_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
@@ -149,14 +181,31 @@ impl CkbadgerStore {
 
         let mut results = Vec::new();
         for (i, value_result) in values.into_iter().enumerate() {
-            if let Ok(Some(value)) = value_result {
-                if value.len() >= 32 {
-                    let (tx_hash, idx) = outpoints[i];
+            let (tx_hash, idx) = outpoints[i];
+            match value_result {
+                Ok(Some(value)) => {
+                    if value.len() < 32 {
+                        return Err(anyhow::anyhow!(
+                            "invalid spore outpoint value length in get_spore_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}, value_len={}",
+                            bytes_to_hex(tx_hash),
+                            idx,
+                            value.len()
+                        ));
+                    }
                     results.push((tx_hash.to_vec(), idx, value[..32].to_vec()));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_spore_ids_by_outpoints_batch: tx_hash=0x{}, output_index={}, error={}",
+                        bytes_to_hex(tx_hash),
+                        idx,
+                        e
+                    ));
                 }
             }
         }
-        results
+        Ok(results)
     }
 
     /// List all historical spore outpoints recorded for a spore ID.
@@ -242,9 +291,15 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            if let Ok(delta) = bincode::deserialize::<ClusterDailyDelta>(&value) {
-                results.push((date, delta));
-            }
+            let delta: ClusterDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize cluster daily delta in list_cluster_daily_deltas_in_range: cluster_id=0x{}, date={}, error={}",
+                    bytes_to_hex(cluster_id),
+                    date,
+                    e
+                )
+            })?;
+            results.push((date, delta));
         }
 
         Ok(results)
@@ -309,9 +364,15 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            if let Ok(delta) = bincode::deserialize::<SporeDailyDelta>(&value) {
-                results.push((date, delta));
-            }
+            let delta: SporeDailyDelta = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize spore daily delta in list_spore_daily_deltas_in_range: spore_id=0x{}, date={}, error={}",
+                    bytes_to_hex(spore_id),
+                    date,
+                    e
+                )
+            })?;
+            results.push((date, delta));
         }
 
         Ok(results)
@@ -369,7 +430,7 @@ mod tests {
         assert!(store.get_spore_id_by_outpoint(&tx_a, 9).unwrap().is_none());
 
         let outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 1), (&tx_b, 2), (&tx_a, 9)];
-        let results = store.get_spore_ids_by_outpoints_batch(&outpoints);
+        let results = store.get_spore_ids_by_outpoints_batch(&outpoints).unwrap();
         assert_eq!(results.len(), 2);
         assert!(results
             .iter()
@@ -382,6 +443,68 @@ mod tests {
         spore_outpoints.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         assert_eq!(spore_outpoints.len(), 1);
         assert_eq!(spore_outpoints[0], (tx_a.to_vec(), 1));
+    }
+
+    #[test]
+    fn test_get_spore_ids_by_outpoints_batch_fails_on_short_value() {
+        let (_dir, store) = test_store();
+        let tx_a = [0xA1u8; 32];
+        let key = keys::encode_spore_outpoint_key(&tx_a, 1);
+        store
+            .put_cf(store.cf_stats_spore(), &key, &[0x11; 31])
+            .unwrap();
+
+        let outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 1)];
+        let err = store
+            .get_spore_ids_by_outpoints_batch(&outpoints)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid spore outpoint value length in get_spore_ids_by_outpoints_batch"));
+    }
+
+    #[test]
+    fn test_list_spores_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let spore_id = [0x11u8; 32];
+        store
+            .put_cf(store.cf_spore_data(), &spore_id, b"invalid-spore-payload")
+            .unwrap();
+
+        let err = store.list_spores(10).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize spore entry in list_spores"));
+    }
+
+    #[test]
+    fn test_list_cluster_daily_deltas_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let cluster_id = [0x44u8; 32];
+        let key = keys::encode_cluster_daily_key(&cluster_id, 20260219);
+        store
+            .put_cf(store.cf_stats_spore(), &key, b"invalid-cluster-daily")
+            .unwrap();
+
+        let err = store.list_cluster_daily_deltas(&cluster_id).unwrap_err();
+        assert!(err.to_string().contains(
+            "failed to deserialize cluster daily delta in list_cluster_daily_deltas_in_range"
+        ));
+    }
+
+    #[test]
+    fn test_list_spore_daily_deltas_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let spore_id = [0x55u8; 32];
+        let key = keys::encode_spore_daily_key(&spore_id, 20260219);
+        store
+            .put_cf(store.cf_stats_spore(), &key, b"invalid-spore-daily")
+            .unwrap();
+
+        let err = store.list_spore_daily_deltas(&spore_id).unwrap_err();
+        assert!(err.to_string().contains(
+            "failed to deserialize spore daily delta in list_spore_daily_deltas_in_range"
+        ));
     }
 
     #[test]
