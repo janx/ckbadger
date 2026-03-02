@@ -883,12 +883,6 @@ pub struct MemoryStats {
     pub wbm_budget_bytes: usize,
 }
 
-/// Cursor for pagination over prefix iterators
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Cursor {
-    pub last_key: Vec<u8>,
-}
-
 // ============================================
 // Group I: Activities
 // ============================================

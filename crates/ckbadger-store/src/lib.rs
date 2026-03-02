@@ -22,7 +22,6 @@
 
 pub mod batch;
 pub mod keys;
-pub mod pagination;
 pub mod store;
 pub mod types;
 
@@ -45,7 +44,6 @@ mod tx_ops;
 
 pub use batch::StoreBatch;
 pub use cell_ops::TokenCellStats;
-pub use pagination::PaginatedResult;
 pub use reorg_ops::RollbackResult;
 pub use store::{CkbadgerStore, MemoryProfile, ALL_CFS};
 pub use store::{
