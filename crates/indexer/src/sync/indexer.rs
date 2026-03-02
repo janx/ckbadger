@@ -713,6 +713,23 @@ fn queue_fill_percentage(depth: Option<u64>, capacity: Option<u64>) -> Option<f6
     }
 }
 
+fn parse_queue_capacity_txs(
+    queue_capacity_batches: usize,
+    target_batch_txs: u64,
+    min_target_batch_txs: u64,
+) -> u64 {
+    let queue_capacity_batches =
+        u64::try_from(queue_capacity_batches).expect("parse queue capacity exceeds u64");
+    let per_batch_tx_cap = u64::try_from(adaptive_sub_batch_tx_cap(
+        target_batch_txs,
+        min_target_batch_txs,
+    ))
+    .expect("adaptive sub-batch tx cap exceeds u64");
+    queue_capacity_batches
+        .checked_mul(per_batch_tx_cap)
+        .expect("parse queue tx capacity overflow")
+}
+
 fn cgroup_memory_ratio_pct(snapshot: &CgroupMemorySnapshot) -> Option<f64> {
     match (snapshot.memory_current_bytes, snapshot.memory_max_bytes) {
         (Some(current), Some(max)) if max > 0 => Some((current as f64 / max as f64) * 100.0),
@@ -5213,12 +5230,13 @@ impl Indexer {
                         let adaptive_snapshot_before = self.adaptive_batch_controller.snapshot();
                         let parse_queue_pending_txs =
                             parse_tx_pending_txs_for_writer.load(Ordering::Relaxed);
-                        let parse_queue_capacity_txs =
-                            u64::try_from(parse_tx_for_writer_depth.max_capacity())
-                                .unwrap_or(u64::MAX)
-                                .saturating_mul(adaptive_snapshot_before.target_batch_txs.max(1));
+                        let parse_queue_capacity_txs = parse_queue_capacity_txs(
+                            parse_tx_for_writer_depth.max_capacity(),
+                            adaptive_snapshot_before.target_batch_txs,
+                            adaptive_snapshot_before.min_target_batch_txs,
+                        );
                         // Model queue pressure by pending tx volume to avoid over-reacting to
-                        // temporary small-block bursts with dense transactions.
+                        // temporary bursts with dense transactions.
                         let parse_queue_fill_pct = queue_fill_percentage(
                             Some(parse_queue_pending_txs),
                             Some(parse_queue_capacity_txs),
@@ -12204,6 +12222,25 @@ mod tests {
         assert_eq!(queue_fill_percentage(Some(1), Some(0)), None);
         assert_eq!(queue_fill_percentage(None, Some(10)), None);
         assert_eq!(queue_fill_percentage(Some(1), None), None);
+    }
+
+    #[test]
+    fn test_parse_queue_capacity_txs_uses_sub_batch_cap() {
+        assert_eq!(
+            parse_queue_capacity_txs(8, 40_000, ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS),
+            640_000
+        );
+    }
+
+    #[test]
+    fn test_parse_queue_capacity_txs_respects_floor() {
+        assert_eq!(parse_queue_capacity_txs(4, 2_500, 8_000), 32_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "parse queue tx capacity overflow")]
+    fn test_parse_queue_capacity_txs_panics_on_overflow() {
+        let _ = parse_queue_capacity_txs(usize::MAX, ADAPTIVE_BATCH_MAX_TXS, 10_000);
     }
 
     #[tokio::test]
