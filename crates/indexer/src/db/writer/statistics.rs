@@ -18,6 +18,17 @@ fn checked_add_i128(current: i128, delta: i128, metric: &str) -> Result<i128> {
     })
 }
 
+fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -> Result<T> {
+    bincode::deserialize(raw).map_err(|e| {
+        anyhow!(
+            "failed to deserialize {} from stats CF (len={}): {}",
+            metric,
+            raw.len(),
+            e
+        )
+    })
+}
+
 /// Pre-computed DAO deposit statistics for daily snapshots.
 /// Computed from tracked deposit/withdrawal events rather than block header fields.
 pub struct DaoSnapshotInput {
@@ -62,7 +73,7 @@ impl BatchWriter {
 
         let stats = match existing {
             Some(val) => {
-                let mut s: HourlyStats = bincode::deserialize(&val).unwrap_or_default();
+                let mut s: HourlyStats = deserialize_stats(&val, "hourly stats")?;
                 s.blocks_count += blocks_count;
                 s.transactions_count += transactions_count;
                 s.cells_created += cells_created;
@@ -121,7 +132,7 @@ impl BatchWriter {
 
         let stats = match existing {
             Some(val) => {
-                let mut s: DailyStats = bincode::deserialize(&val).unwrap_or_default();
+                let mut s: DailyStats = deserialize_stats(&val, "daily stats")?;
                 // Compute weighted average block time before updating blocks_count
                 if let Some(new_avg) = avg_block_time_ms {
                     let bt_count = block_time.map(|(_, c)| c).unwrap_or(0);
@@ -215,7 +226,7 @@ impl BatchWriter {
 
         let stats = match existing {
             Some(val) => {
-                let mut s: DailyBlockStats = bincode::deserialize(&val).unwrap_or_default();
+                let mut s: DailyBlockStats = deserialize_stats(&val, "daily block stats")?;
                 let old_total = s.avg_compact_target * s.block_count as f64;
                 s.block_count += block_count;
                 s.avg_compact_target = (old_total + avg_compact_target as f64 * block_count as f64)
@@ -253,7 +264,7 @@ impl BatchWriter {
 
         let stats = match existing {
             Some(val) => {
-                let mut s: MinerStats = bincode::deserialize(&val).unwrap_or_default();
+                let mut s: MinerStats = deserialize_stats(&val, "miner stats")?;
                 s.blocks_count += blocks_count;
                 s.last_block_number = s.last_block_number.max(last_block_number);
                 s
@@ -297,7 +308,7 @@ impl BatchWriter {
                 transactions_count,
             }
         } else if let Some(val) = existing {
-            let mut s: EpochStats = bincode::deserialize(&val).unwrap_or_default();
+            let mut s: EpochStats = deserialize_stats(&val, "epoch stats")?;
             s.end_block = Some(s.end_block.unwrap_or(end_block).max(end_block));
             s.blocks_count = (s.end_block.unwrap_or(end_block) - s.start_block + 1) as i32;
             s.end_timestamp = Some(end_timestamp);
@@ -335,7 +346,13 @@ impl BatchWriter {
 
         let new_count = match existing {
             Some(val) if val.len() == 4 => {
-                i32::from_le_bytes(val.try_into().unwrap_or([0; 4])) + count
+                let existing_count_bytes: [u8; 4] = val.as_slice().try_into().map_err(|_| {
+                    anyhow!(
+                        "invalid block time distribution count bytes length: expected=4 got={}",
+                        val.len()
+                    )
+                })?;
+                i32::from_le_bytes(existing_count_bytes) + count
             }
             _ => count,
         };
@@ -358,7 +375,13 @@ impl BatchWriter {
 
         let new_count = match existing {
             Some(val) if val.len() == 4 => {
-                i32::from_le_bytes(val.try_into().unwrap_or([0; 4])) + count
+                let existing_count_bytes: [u8; 4] = val.as_slice().try_into().map_err(|_| {
+                    anyhow!(
+                        "invalid epoch time distribution count bytes length: expected=4 got={}",
+                        val.len()
+                    )
+                })?;
+                i32::from_le_bytes(existing_count_bytes) + count
             }
             _ => count,
         };
@@ -373,10 +396,14 @@ impl BatchWriter {
         }
 
         if let Some(header) = self.store.get_block_header(block_number - 1)? {
-            return Ok(Some(
-                DateTime::from_timestamp_millis(header.timestamp)
-                    .unwrap_or_else(DateTime::<Utc>::default),
-            ));
+            let ts = DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
+                anyhow!(
+                    "invalid previous block timestamp millis for block {}: {}",
+                    block_number - 1,
+                    header.timestamp
+                )
+            })?;
+            return Ok(Some(ts));
         }
 
         Ok(None)
@@ -741,5 +768,56 @@ mod tests {
         assert!(store.get_stats_key(&mnft_old_key).unwrap().is_none());
         assert!(store.get_stats_key(&mnft_new_key).unwrap().is_some());
         assert!(store.get_stats_key(&dotbit_old_key).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_update_hourly_statistics_errors_on_corrupt_existing_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let hour = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let key = keys::encode_stats_key(
+            keys::STATS_PREFIX_HOURLY,
+            hour.format("%Y%m%d%H").to_string().as_bytes(),
+        );
+        let mut seed = StoreBatch::new(&store);
+        seed.put_stats(&key, &[0xFF, 0xAA, 0x10]); // not a valid HourlyStats payload
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .update_hourly_statistics(hour, 1, 1, 1, 1, 1, &mut batch)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize hourly stats"));
+    }
+
+    #[test]
+    fn test_get_previous_block_timestamp_errors_on_invalid_millis() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(
+            0,
+            &CachedBlockHeader {
+                hash: vec![0x11; 32],
+                timestamp: i64::MAX,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+            },
+        );
+        batch.commit().unwrap();
+
+        let err = writer.get_previous_block_timestamp(1).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid previous block timestamp millis"));
     }
 }
