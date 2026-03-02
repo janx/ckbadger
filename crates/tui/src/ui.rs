@@ -19,6 +19,9 @@ use crate::db::{
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
 const RATE_DROP_RATIO_THRESHOLD: f64 = 0.65;
+const STATUS_MESSAGE_TTL_SECS: u64 = 8;
+const STATUS_MESSAGE_WARM_SECS: u64 = 5;
+const WARNING_DEDUP_WINDOW_SECS: u64 = 30;
 
 const TERMINAL_GREEN: Color = Color::Rgb(0, 255, 65);
 const TERMINAL_DIM: Color = Color::Rgb(0, 204, 51);
@@ -107,6 +110,7 @@ pub struct App {
     last_refresh: Instant,
     last_sample: Instant,
     status_message: Option<(String, Instant)>,
+    last_warning: Option<(String, Instant)>,
     rate_history: VecDeque<f64>,
     tx_rate_history: VecDeque<f64>,
     db_write_history: VecDeque<f64>,
@@ -166,6 +170,7 @@ impl App {
             last_refresh: Instant::now(),
             last_sample: Instant::now(),
             status_message: None,
+            last_warning: None,
             rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             tx_rate_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
             db_write_history: VecDeque::with_capacity(RATE_HISTORY_SIZE),
@@ -297,7 +302,18 @@ impl App {
     }
 
     pub async fn refresh(&mut self) {
-        match self.db.get_sync_status().await {
+        if let Err(e) = self.db.refresh_store().await {
+            self.log_warning(format!("Failed to refresh secondary store: {e}"));
+        }
+
+        let (sync_status_result, memory_stats, (chain_info, api_service), redis_service) = tokio::join!(
+            self.db.get_sync_status(),
+            self.db.get_memory_stats(),
+            self.db.get_chain_info_and_api_service_info(),
+            self.db.get_redis_service_info(),
+        );
+
+        match sync_status_result {
             Ok(status) => self.sync_status = Some(status),
             Err(e) => {
                 self.sync_status = None;
@@ -305,10 +321,9 @@ impl App {
             }
         }
 
-        self.memory_stats = self.db.get_memory_stats().await;
-        let (chain_info, api_service) = self.db.get_chain_info_and_api_service_info().await;
+        self.memory_stats = memory_stats;
         self.chain_info = chain_info;
-        self.redis_service = self.db.get_redis_service_info().await;
+        self.redis_service = redis_service;
         self.api_service = api_service;
         self.runtime_diag = self.db.get_runtime_diag();
         self.last_refresh = Instant::now();
@@ -509,6 +524,12 @@ impl App {
     }
 
     fn log_warning(&mut self, message: String) {
+        if self.last_warning.as_ref().is_some_and(|(prev, ts)| {
+            prev == &message && ts.elapsed().as_secs() < WARNING_DEDUP_WINDOW_SECS
+        }) {
+            return;
+        }
+        self.last_warning = Some((message.clone(), Instant::now()));
         self.status_message = Some((message.clone(), Instant::now()));
         self.push_log(message, LogLevel::Warning);
     }
@@ -538,13 +559,18 @@ impl App {
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
+    let footer_height = if footer_status_message(app.status_message.as_ref()).is_some() {
+        4
+    } else {
+        3
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Min(10),
-            Constraint::Length(3),
+            Constraint::Length(footer_height),
         ])
         .split(f.area());
 
@@ -593,11 +619,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(title, cols[0]);
 
     let now = Local::now();
-    let stale_secs = app
-        .memory_stats
-        .as_ref()
-        .map(|m| (chrono::Utc::now().timestamp() - m.updated_at).max(0))
-        .unwrap_or(0);
+    let stale_secs = stale_age_secs(app.memory_stats.as_ref());
     let right = Paragraph::new(header_right_line(
         stale_secs,
         &now.format("%H:%M:%S").to_string(),
@@ -623,15 +645,25 @@ fn header_title_line(mode_text: &str, mode_color: Color) -> Line<'static> {
     ])
 }
 
-fn header_right_line(stale_secs: i64, clock_text: &str) -> Line<'static> {
+fn header_right_line(stale_secs: Option<i64>, clock_text: &str) -> Line<'static> {
+    let (stale_text, stale_color) = stale_status(stale_secs);
     Line::from(vec![
-        Span::styled(
-            format!("stale {}s", stale_secs),
-            Style::default().fg(if stale_secs > 30 { AMBER } else { TERMINAL_DIM }),
-        ),
+        Span::styled(stale_text, Style::default().fg(stale_color)),
         Span::styled(" │ ", Style::default().fg(SLATE_700)),
         Span::styled(clock_text.to_string(), Style::default().fg(FOREGROUND)),
     ])
+}
+
+fn stale_age_secs(memory_stats: Option<&MemoryStatsData>) -> Option<i64> {
+    memory_stats.map(|m| (chrono::Utc::now().timestamp() - m.updated_at).max(0))
+}
+
+fn stale_status(stale_secs: Option<i64>) -> (String, Color) {
+    match stale_secs {
+        Some(secs) if secs > 30 => (format!("stale {secs}s"), AMBER),
+        Some(secs) => (format!("stale {secs}s"), TERMINAL_DIM),
+        None => ("stale N/A".to_string(), SLATE_500),
+    }
 }
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -916,16 +948,9 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
     let bottleneck = sync_bottleneck(sync.db_write_ms, sync.rpc_fetch_ms);
     let (phase_label, phase_color) = startup_phase_label(sync.startup_phase.as_deref());
 
-    let stale_secs = app
-        .memory_stats
-        .as_ref()
-        .map(|m| (chrono::Utc::now().timestamp() - m.updated_at).max(0))
-        .unwrap_or(0);
-    let stale_style = if stale_secs > 30 {
-        Style::default().fg(AMBER)
-    } else {
-        Style::default().fg(TERMINAL_DIM)
-    };
+    let stale_secs = stale_age_secs(app.memory_stats.as_ref());
+    let (stale_text, stale_color) = stale_status(stale_secs);
+    let stale_style = Style::default().fg(stale_color);
 
     let heartbeat_on = heartbeat_is_on(app.last_refresh.elapsed().as_millis());
     let heartbeat = if heartbeat_on { "●" } else { "○" };
@@ -966,7 +991,7 @@ fn draw_sync_realtime_bar(f: &mut Frame, app: &App, area: Rect) {
             }),
         ),
         Span::styled(" | stale ", Style::default().fg(SLATE_500)),
-        Span::styled(format!("{stale_secs}s"), stale_style),
+        Span::styled(stale_text, stale_style),
     ]);
     f.render_widget(Paragraph::new(line), inner);
 }
@@ -3081,37 +3106,72 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let hint = Line::from(vec![
-        Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" quit  ", Style::default().fg(SLATE_500)),
-        Span::styled("h/l Tab/s", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" switch-tab  ", Style::default().fg(SLATE_500)),
-        Span::styled("c", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" compact  ", Style::default().fg(SLATE_500)),
-        Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" diag-view  ", Style::default().fg(SLATE_500)),
-        Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" help  ", Style::default().fg(SLATE_500)),
-        Span::styled("j/k", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" log-scroll  ", Style::default().fg(SLATE_500)),
-        Span::styled("R", Style::default().fg(TERMINAL_GREEN)),
-        Span::styled(" refresh", Style::default().fg(SLATE_500)),
-    ]);
+    let hint = footer_hint_line(inner.width);
 
     let mut lines = vec![hint];
-    if let Some((msg, ts)) = &app.status_message {
-        let color = if ts.elapsed().as_secs() < 5 {
-            AMBER
-        } else {
-            ERROR_RED
-        };
-        lines.push(Line::from(Span::styled(
-            msg.clone(),
-            Style::default().fg(color),
-        )));
+    if let Some((msg, color)) = footer_status_message(app.status_message.as_ref()) {
+        lines.push(Line::from(Span::styled(msg, Style::default().fg(color))));
     }
 
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Left), inner);
+}
+
+fn footer_hint_line(width: u16) -> Line<'static> {
+    if width < 90 {
+        Line::from(vec![
+            Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" quit  ", Style::default().fg(SLATE_500)),
+            Span::styled("Tab/h/l", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" tabs  ", Style::default().fg(SLATE_500)),
+            Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" help", Style::default().fg(SLATE_500)),
+        ])
+    } else if width < 120 {
+        Line::from(vec![
+            Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" quit  ", Style::default().fg(SLATE_500)),
+            Span::styled("Tab/h/l", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" tabs  ", Style::default().fg(SLATE_500)),
+            Span::styled("j/k", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" scroll  ", Style::default().fg(SLATE_500)),
+            Span::styled("R", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" refresh  ", Style::default().fg(SLATE_500)),
+            Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" help", Style::default().fg(SLATE_500)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("q", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" quit  ", Style::default().fg(SLATE_500)),
+            Span::styled("h/l Tab/s", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" switch-tab  ", Style::default().fg(SLATE_500)),
+            Span::styled("c", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" compact  ", Style::default().fg(SLATE_500)),
+            Span::styled("v", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" diag-view  ", Style::default().fg(SLATE_500)),
+            Span::styled("?", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" help  ", Style::default().fg(SLATE_500)),
+            Span::styled("j/k", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" log-scroll  ", Style::default().fg(SLATE_500)),
+            Span::styled("R", Style::default().fg(TERMINAL_GREEN)),
+            Span::styled(" refresh", Style::default().fg(SLATE_500)),
+        ])
+    }
+}
+
+fn footer_status_message(status_message: Option<&(String, Instant)>) -> Option<(String, Color)> {
+    let (msg, ts) = status_message?;
+    let age_secs = ts.elapsed().as_secs();
+    if age_secs >= STATUS_MESSAGE_TTL_SECS {
+        return None;
+    }
+
+    let color = if age_secs < STATUS_MESSAGE_WARM_SECS {
+        AMBER
+    } else {
+        SLATE_500
+    };
+    Some((msg.clone(), color))
 }
 
 fn push_history_sample(history: &mut VecDeque<f64>, sample: f64) {
@@ -3943,29 +4003,42 @@ mod tests {
         adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
         consumed_cells_source_label, dense_right_lines, derived_status_line, detail_right_lines,
-        diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, format_age_secs,
-        format_hit_rate, format_num, format_num_commas, format_rate_pair, format_ratio,
-        format_signed_num_i128, format_stage_commit_gap_ms, format_ttl, header_right_line,
-        header_title_line, heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop,
-        overview_log_min_height, overview_services_min_height, pipeline_bottleneck,
-        pipeline_flow_state, pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line,
-        redis_max_key_age, runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts,
+        diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
+        footer_status_message, format_age_secs, format_hit_rate, format_num, format_num_commas,
+        format_rate_pair, format_ratio, format_signed_num_i128, format_stage_commit_gap_ms,
+        format_ttl, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
+        overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
+        pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
+        runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts, stale_status,
         startup_phase_label, storage_runtime_columns, sync_bottleneck, sync_chart_specs,
         sync_timing_lines, system_kv_line, trend_delta, trim_for_panel, AdaptiveControlSnapshot,
-        Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        SyncChartKind, CYAN, TERMINAL_DIM,
+        App, Color, CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
-    use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData};
+    use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData, TuiDb};
     use ckbadger_common::MemoryStatsData;
+    use ckbadger_store::CkbadgerStore;
     use ratatui::layout::Rect;
     use ratatui::text::Line;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
     }
 
     #[test]
@@ -3979,11 +4052,18 @@ mod tests {
 
     #[test]
     fn test_header_right_line_does_not_include_elapsed_ms() {
-        let line = header_right_line(12, "10:23:45");
+        let line = header_right_line(Some(12), "10:23:45");
         let text = line_text(&line);
         assert!(text.contains("stale 12s"));
         assert!(text.contains("10:23:45"));
         assert!(!text.contains("ago"));
+    }
+
+    #[test]
+    fn test_header_right_line_without_stale_data() {
+        let line = header_right_line(None, "10:23:45");
+        let text = line_text(&line);
+        assert!(text.contains("stale N/A"));
     }
 
     #[test]
@@ -4661,5 +4741,102 @@ mod tests {
             label == "reads + flush/compact" || label == "flush/compact only",
             "unexpected label: {label}"
         );
+    }
+
+    #[test]
+    fn test_stale_status() {
+        assert_eq!(
+            stale_status(None),
+            ("stale N/A".to_string(), Color::Rgb(160, 174, 192))
+        );
+        assert_eq!(
+            stale_status(Some(12)),
+            ("stale 12s".to_string(), Color::Rgb(0, 204, 51))
+        );
+        assert_eq!(
+            stale_status(Some(31)),
+            ("stale 31s".to_string(), Color::Rgb(255, 176, 0))
+        );
+    }
+
+    #[test]
+    fn test_footer_hint_line_adapts_to_width() {
+        let compact = line_text(&footer_hint_line(80));
+        assert!(compact.contains("q quit"));
+        assert!(compact.contains("Tab/h/l tabs"));
+        assert!(!compact.contains("diag-view"));
+
+        let medium = line_text(&footer_hint_line(100));
+        assert!(medium.contains("j/k scroll"));
+        assert!(!medium.contains("diag-view"));
+
+        let wide = line_text(&footer_hint_line(140));
+        assert!(wide.contains("diag-view"));
+        assert!(wide.contains("log-scroll"));
+    }
+
+    #[test]
+    fn test_footer_status_message_ttl() {
+        let fresh = ("fresh".to_string(), Instant::now());
+        let shown = footer_status_message(Some(&fresh));
+        assert_eq!(shown.as_ref().map(|(msg, _)| msg.as_str()), Some("fresh"));
+
+        let expired = (
+            "expired".to_string(),
+            Instant::now() - std::time::Duration::from_secs(STATUS_MESSAGE_TTL_SECS + 1),
+        );
+        assert!(footer_status_message(Some(&expired)).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_app_refresh_with_secondary_store() {
+        let primary_dir = unique_temp_dir("ckbadger-tui-ui-primary");
+        let secondary_dir = unique_temp_dir("ckbadger-tui-ui-secondary");
+
+        let primary = CkbadgerStore::open(&primary_dir).unwrap();
+        let secondary =
+            Arc::new(CkbadgerStore::open_secondary(&primary_dir, &secondary_dir).unwrap());
+        let db = TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:9/api/v1").await;
+
+        let mut app = App::new(db);
+        app.refresh().await;
+
+        assert!(app.sync_status.is_some());
+
+        drop(app);
+        drop(secondary);
+        drop(primary);
+        let _ = std::fs::remove_dir_all(&secondary_dir);
+        let _ = std::fs::remove_dir_all(&primary_dir);
+    }
+
+    #[tokio::test]
+    async fn test_log_warning_deduplicates_recent_same_message() {
+        let primary_dir = unique_temp_dir("ckbadger-tui-ui-primary-dedup");
+        let secondary_dir = unique_temp_dir("ckbadger-tui-ui-secondary-dedup");
+
+        let primary = CkbadgerStore::open(&primary_dir).unwrap();
+        let secondary =
+            Arc::new(CkbadgerStore::open_secondary(&primary_dir, &secondary_dir).unwrap());
+        let db = TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:9/api/v1").await;
+
+        let mut app = App::new(db);
+        let initial_logs = app.log_entries.len();
+        app.log_warning("repeat warning".to_string());
+        let after_first = app.log_entries.len();
+        app.log_warning("repeat warning".to_string());
+        let after_second = app.log_entries.len();
+        app.log_warning("different warning".to_string());
+        let after_third = app.log_entries.len();
+
+        assert_eq!(after_first, initial_logs + 1);
+        assert_eq!(after_second, after_first);
+        assert_eq!(after_third, after_second + 1);
+
+        drop(app);
+        drop(secondary);
+        drop(primary);
+        let _ = std::fs::remove_dir_all(&secondary_dir);
+        let _ = std::fs::remove_dir_all(&primary_dir);
     }
 }

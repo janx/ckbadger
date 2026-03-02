@@ -10,12 +10,23 @@ pub struct ChartStats {
 
 impl ChartStats {
     pub fn from_history(history: &VecDeque<f64>) -> Option<Self> {
-        if history.is_empty() {
-            return None;
+        let current = *history.back()?;
+        let mut min = f64::INFINITY;
+        let mut max = 0.0_f64;
+        let mut sum = 0.0_f64;
+        let mut count = 0usize;
+
+        for &value in history {
+            if value <= 0.0 {
+                continue;
+            }
+            min = min.min(value);
+            max = max.max(value);
+            sum += value;
+            count += 1;
         }
-        let current = *history.back().unwrap_or(&0.0);
-        let non_zero: Vec<f64> = history.iter().copied().filter(|&v| v > 0.0).collect();
-        if non_zero.is_empty() {
+
+        if count == 0 {
             return Some(Self {
                 min: 0.0,
                 max: 0.0,
@@ -23,14 +34,12 @@ impl ChartStats {
                 avg: 0.0,
             });
         }
-        let min = non_zero.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max = non_zero.iter().cloned().fold(0.0_f64, f64::max);
-        let avg = non_zero.iter().sum::<f64>() / non_zero.len() as f64;
+
         Some(Self {
             min,
             max,
             current,
-            avg,
+            avg: sum / count as f64,
         })
     }
 }
@@ -152,29 +161,25 @@ pub fn render_bar_chart(
     let pixel_width = chart_width * 2;
     let pixel_height = char_height * 4;
 
-    let display_data: Vec<f64> = if data.len() > pixel_width {
-        data.iter()
-            .skip(data.len() - pixel_width)
-            .copied()
-            .collect()
-    } else {
-        data.iter().copied().collect()
-    };
+    let data_len = data.len();
+    let visible_start = data_len.saturating_sub(pixel_width);
+    let visible_len = data_len.saturating_sub(visible_start);
 
-    let max_val = display_data
+    let visible_max = data
         .iter()
-        .cloned()
-        .fold(0.0_f64, f64::max)
-        .max(100.0)
-        * 1.05;
+        .skip(visible_start)
+        .take(visible_len)
+        .fold(0.0_f64, |max_value, &value| max_value.max(value));
+    let max_val = visible_max.max(100.0) * 1.05;
 
-    let start_x = if display_data.len() < pixel_width {
-        pixel_width - display_data.len()
-    } else {
-        0
-    };
+    let start_x = pixel_width.saturating_sub(visible_len);
 
-    for (i, &val) in display_data.iter().enumerate() {
+    for (i, &val) in data
+        .iter()
+        .skip(visible_start)
+        .take(visible_len)
+        .enumerate()
+    {
         let x = start_x + i;
 
         let bar_height = if max_val > 0.0 {

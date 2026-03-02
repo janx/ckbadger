@@ -305,6 +305,14 @@ impl TuiDb {
         }
     }
 
+    pub async fn refresh_store(&self) -> Result<()> {
+        let store = Arc::clone(&self.store);
+        tokio::task::spawn_blocking(move || store.refresh())
+            .await
+            .map_err(|e| anyhow::anyhow!("store refresh task failed: {e}"))??;
+        Ok(())
+    }
+
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
         let progress_data: Option<SyncProgressData> =
             self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
@@ -705,7 +713,18 @@ mod tests {
         ttl_or_none,
     };
     use ckbadger_common::SyncStatusData;
-    use ckbadger_store::RuntimeStatus;
+    use ckbadger_store::{CkbadgerStore, RuntimeStatus};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    }
 
     #[test]
     fn parse_epoch_full() {
@@ -827,5 +846,34 @@ mod tests {
         );
         assert_eq!(diag.last_shutdown_reason.as_deref(), Some("run_error"));
         assert_eq!(diag.last_exit_code, Some(1));
+    }
+
+    #[tokio::test]
+    async fn refresh_store_updates_secondary_view() {
+        let primary_dir = unique_temp_dir("ckbadger-tui-db-primary");
+        let secondary_dir = unique_temp_dir("ckbadger-tui-db-secondary");
+
+        let primary = CkbadgerStore::open(&primary_dir).unwrap();
+        primary
+            .put_cf(primary.cf_sync_meta(), b"sync-key", b"sync-value")
+            .unwrap();
+
+        let secondary =
+            Arc::new(CkbadgerStore::open_secondary(&primary_dir, &secondary_dir).unwrap());
+        let db =
+            super::TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:3001/api/v1").await;
+
+        db.refresh_store().await.unwrap();
+
+        let value = secondary
+            .get_cf(secondary.cf_sync_meta(), b"sync-key")
+            .unwrap();
+        assert_eq!(value.as_deref(), Some(b"sync-value".as_slice()));
+
+        drop(db);
+        drop(secondary);
+        drop(primary);
+        let _ = std::fs::remove_dir_all(&secondary_dir);
+        let _ = std::fs::remove_dir_all(&primary_dir);
     }
 }
