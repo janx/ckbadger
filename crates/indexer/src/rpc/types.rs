@@ -97,7 +97,7 @@ pub struct UncleBlockView {
     pub proposals: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionView {
     pub hash: String,
     pub version: String,
@@ -109,25 +109,25 @@ pub struct TransactionView {
     pub witnesses: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CellDep {
     pub out_point: OutPoint,
     pub dep_type: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutPoint {
     pub tx_hash: String,
     pub index: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CellInput {
     pub since: String,
     pub previous_output: OutPoint,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CellOutput {
     pub capacity: String,
     pub lock: Script,
@@ -135,7 +135,7 @@ pub struct CellOutput {
     pub type_: Option<Script>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Script {
     pub code_hash: String,
     pub hash_type: String,

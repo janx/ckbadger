@@ -48,8 +48,21 @@ impl BatchWriter {
             keyed_changes.into_iter().zip(existing_results.into_iter())
         {
             let mut existing: TokenDailyDelta = match existing_res {
-                Ok(Some(value)) => bincode::deserialize(&value).unwrap_or_default(),
-                _ => TokenDailyDelta::default(),
+                Ok(Some(value)) => bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize token daily delta: key=0x{}, error={}",
+                        hex::encode(&key),
+                        e
+                    )
+                })?,
+                Ok(None) => TokenDailyDelta::default(),
+                Err(e) => {
+                    bail!(
+                        "failed to read token daily delta: key=0x{}, error={}",
+                        hex::encode(&key),
+                        e
+                    );
+                }
             };
             existing.live_capacity_delta = existing
                 .live_capacity_delta
@@ -526,6 +539,30 @@ mod tests {
 
         let delta = store.get_token_daily_delta(&type_hash, 20240115).unwrap();
         assert!(delta.is_none());
+    }
+
+    #[test]
+    fn test_update_token_daily_deltas_batch_fails_on_corrupted_existing_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let type_hash = vec![0xAC; 32];
+        let date = 20240115u32;
+
+        let key = ckbadger_store::keys::encode_token_daily_key(&type_hash, date);
+        store
+            .put_stats_key(&key, b"not-a-valid-bincode-token-delta")
+            .unwrap();
+
+        let mut changes = HashMap::new();
+        changes.insert((type_hash, date), (1i128, 1i128));
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .update_token_daily_deltas_batch(&changes, &mut batch)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize token daily delta"));
     }
 
     #[test]

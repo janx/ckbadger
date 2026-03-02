@@ -525,51 +525,7 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
 
     #[derive(serde::Deserialize)]
     struct TxResult {
-        transaction: Option<TxView>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TxView {
-        cell_deps: Vec<CellDep>,
-        header_deps: Vec<String>,
-        inputs: Vec<CellInput>,
-        outputs: Vec<CellOutput>,
-        outputs_data: Vec<String>,
-        witnesses: Vec<String>,
-    }
-
-    #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
-    struct CellDep {
-        out_point: OutPoint,
-    }
-
-    #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
-    struct OutPoint {
-        tx_hash: String,
-        index: String,
-    }
-
-    #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
-    struct CellInput {
-        previous_output: OutPoint,
-        since: String,
-    }
-
-    #[derive(serde::Deserialize)]
-    #[allow(dead_code)]
-    struct CellOutput {
-        capacity: String,
-        lock: Script,
-        #[serde(rename = "type")]
-        type_: Option<Script>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct Script {
-        args: String,
+        transaction: Option<RpcTxSizeView>,
     }
 
     let client = reqwest::Client::new();
@@ -584,14 +540,73 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     let rpc_response: RpcResponse = response.json().await.ok()?;
     let tx = rpc_response.result?.transaction?;
 
+    Some(calculate_serialized_tx_size(&tx))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RpcTxSizeView {
+    cell_deps: Vec<RpcTxSizeCellDep>,
+    header_deps: Vec<String>,
+    inputs: Vec<RpcTxSizeCellInput>,
+    outputs: Vec<RpcTxSizeCellOutput>,
+    outputs_data: Vec<String>,
+    witnesses: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+struct RpcTxSizeCellDep {
+    out_point: RpcTxSizeOutPoint,
+    #[allow(dead_code)]
+    dep_type: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+struct RpcTxSizeOutPoint {
+    tx_hash: String,
+    index: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+struct RpcTxSizeCellInput {
+    previous_output: RpcTxSizeOutPoint,
+    since: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
+struct RpcTxSizeCellOutput {
+    capacity: String,
+    lock: RpcTxSizeScript,
+    #[serde(rename = "type")]
+    type_: Option<RpcTxSizeScript>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct RpcTxSizeScript {
+    #[allow(dead_code)]
+    code_hash: String,
+    #[allow(dead_code)]
+    hash_type: String,
+    args: String,
+}
+
+fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> i32 {
     const MOLECULE_NUMBER_SIZE: usize = 4;
     const OUTPOINT_SIZE: usize = 36;
     const CELLINPUT_SIZE: usize = 44;
+    const SCRIPT_TABLE_HEADER_SIZE: usize = MOLECULE_NUMBER_SIZE + MOLECULE_NUMBER_SIZE * 3;
+    const SCRIPT_FIXED_FIELDS_SIZE: usize = 32 + 1;
 
     let mut size = MOLECULE_NUMBER_SIZE * 3;
 
     let raw_tx_size = {
         let mut raw_size = MOLECULE_NUMBER_SIZE * 7;
+
+        // version (Uint32)
+        raw_size += MOLECULE_NUMBER_SIZE;
 
         raw_size += MOLECULE_NUMBER_SIZE;
         raw_size += tx.cell_deps.len() * (OUTPOINT_SIZE + 1);
@@ -605,11 +620,17 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
         raw_size += MOLECULE_NUMBER_SIZE;
         for output in &tx.outputs {
             let lock_args = parse_hex_to_bytes(&output.lock.args);
-            let lock_size = MOLECULE_NUMBER_SIZE + 32 + 1 + MOLECULE_NUMBER_SIZE + lock_args.len();
+            let lock_size = SCRIPT_TABLE_HEADER_SIZE
+                + SCRIPT_FIXED_FIELDS_SIZE
+                + MOLECULE_NUMBER_SIZE
+                + lock_args.len();
 
             let type_size = output.type_.as_ref().map_or(0, |type_script| {
                 let type_args = parse_hex_to_bytes(&type_script.args);
-                MOLECULE_NUMBER_SIZE + 32 + 1 + MOLECULE_NUMBER_SIZE + type_args.len()
+                SCRIPT_TABLE_HEADER_SIZE
+                    + SCRIPT_FIXED_FIELDS_SIZE
+                    + MOLECULE_NUMBER_SIZE
+                    + type_args.len()
             });
 
             let output_size = MOLECULE_NUMBER_SIZE * 4 + 8 + lock_size + type_size;
@@ -617,6 +638,7 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
         }
 
         raw_size += MOLECULE_NUMBER_SIZE;
+        raw_size += tx.outputs_data.len() * MOLECULE_NUMBER_SIZE;
         for output_data in &tx.outputs_data {
             let data = parse_hex_to_bytes(output_data);
             raw_size += MOLECULE_NUMBER_SIZE + data.len();
@@ -628,12 +650,13 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     size += raw_tx_size;
 
     size += MOLECULE_NUMBER_SIZE;
+    size += tx.witnesses.len() * MOLECULE_NUMBER_SIZE;
     for witness in &tx.witnesses {
         let witness_data = parse_hex_to_bytes(witness);
         size += MOLECULE_NUMBER_SIZE + witness_data.len();
     }
 
-    Some(size as i32)
+    size as i32
 }
 
 async fn fetch_witnesses_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<Vec<String>> {
@@ -1667,6 +1690,8 @@ async fn get_transaction_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckb_jsonrpc_types::TransactionView as CkbJsonRpcTransactionView;
+    use ckb_types::prelude::Entity;
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 
     #[test]
@@ -1689,6 +1714,85 @@ mod tests {
         assert_eq!(json["inputsCount"], 1);
         assert_eq!(json["outputsCount"], 2);
         assert_eq!(json["isCellbase"], false);
+    }
+
+    #[test]
+    fn test_calculate_serialized_tx_size_matches_canonical_molecule_encoding() {
+        let tx = RpcTxSizeView {
+            cell_deps: vec![RpcTxSizeCellDep {
+                out_point: RpcTxSizeOutPoint {
+                    tx_hash: "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c"
+                        .to_string(),
+                    index: "0x0".to_string(),
+                },
+                dep_type: "code".to_string(),
+            }],
+            header_deps: vec![
+                "0x0000000000000000000000000000000000000000000000000000000000000003".to_string(),
+            ],
+            inputs: vec![RpcTxSizeCellInput {
+                previous_output: RpcTxSizeOutPoint {
+                    tx_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                        .to_string(),
+                    index: "0x0".to_string(),
+                },
+                since: "0x0".to_string(),
+            }],
+            outputs: vec![
+                RpcTxSizeCellOutput {
+                    capacity: "0x174876e800".to_string(),
+                    lock: RpcTxSizeScript {
+                        code_hash:
+                            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                                .to_string(),
+                        hash_type: "type".to_string(),
+                        args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
+                    },
+                    type_: None,
+                },
+                RpcTxSizeCellOutput {
+                    capacity: "0x2540be400".to_string(),
+                    lock: RpcTxSizeScript {
+                        code_hash:
+                            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                                .to_string(),
+                        hash_type: "type".to_string(),
+                        args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
+                    },
+                    type_: Some(RpcTxSizeScript {
+                        code_hash:
+                            "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+                                .to_string(),
+                        hash_type: "type".to_string(),
+                        args: "0x".to_string(),
+                    }),
+                },
+            ],
+            outputs_data: vec!["0x".to_string(), "0xdeadbeef".to_string()],
+            witnesses: vec!["0x55000000".to_string(), "0x".to_string()],
+        };
+
+        let mut value = serde_json::to_value(&tx).expect("serialize tx");
+        let serde_json::Value::Object(ref mut object) = value else {
+            panic!("tx should serialize to object");
+        };
+        object.insert(
+            "hash".to_string(),
+            serde_json::Value::String(
+                "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
+            ),
+        );
+        object.insert(
+            "version".to_string(),
+            serde_json::Value::String("0x0".to_string()),
+        );
+
+        let tx_view: CkbJsonRpcTransactionView =
+            serde_json::from_value(value).expect("deserialize canonical tx view");
+        let packed: ckb_types::packed::Transaction = tx_view.inner.into();
+        let expected = i32::try_from(packed.as_slice().len()).expect("packed tx fits in i32");
+
+        assert_eq!(calculate_serialized_tx_size(&tx), expected);
     }
 
     #[test]

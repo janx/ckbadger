@@ -1,7 +1,8 @@
 /// Parses a hex string (with or without "0x" prefix) to bytes.
 pub fn parse_hex_to_bytes(hex: &str) -> Vec<u8> {
+    let raw = hex;
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    hex::decode(hex).unwrap_or_default()
+    hex::decode(hex).unwrap_or_else(|e| panic!("invalid hex bytes '{}': {}", raw, e))
 }
 
 /// Parses a hex string (with or without "0x" prefix) to a fixed-size 32-byte hash.
@@ -41,7 +42,12 @@ mod tests {
         assert_eq!(parse_hex_to_bytes("0x1234"), vec![0x12, 0x34]);
         assert_eq!(parse_hex_to_bytes("1234"), vec![0x12, 0x34]);
         assert_eq!(parse_hex_to_bytes("0x"), Vec::<u8>::new());
-        assert_eq!(parse_hex_to_bytes("invalid"), Vec::<u8>::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid hex bytes")]
+    fn test_parse_hex_to_bytes_invalid_panics() {
+        let _ = parse_hex_to_bytes("invalid");
     }
 
     #[test]

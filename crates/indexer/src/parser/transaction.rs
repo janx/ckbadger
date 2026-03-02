@@ -65,6 +65,8 @@ impl TransactionParser {
         const MOLECULE_NUMBER_SIZE: usize = 4;
         const OUTPOINT_SIZE: usize = 36;
         const CELLINPUT_SIZE: usize = 44;
+        const SCRIPT_TABLE_HEADER_SIZE: usize = MOLECULE_NUMBER_SIZE + MOLECULE_NUMBER_SIZE * 3;
+        const SCRIPT_FIXED_FIELDS_SIZE: usize = 32 + 1;
 
         let mut size = MOLECULE_NUMBER_SIZE;
 
@@ -92,12 +94,17 @@ impl TransactionParser {
             raw_size += MOLECULE_NUMBER_SIZE;
             for output in &tx.outputs {
                 let lock_args = parse_hex_to_bytes(&output.lock.args);
-                let lock_size =
-                    MOLECULE_NUMBER_SIZE + 32 + 1 + MOLECULE_NUMBER_SIZE + lock_args.len();
+                let lock_size = SCRIPT_TABLE_HEADER_SIZE
+                    + SCRIPT_FIXED_FIELDS_SIZE
+                    + MOLECULE_NUMBER_SIZE
+                    + lock_args.len();
 
                 let type_size = if let Some(type_script) = &output.type_ {
                     let type_args = parse_hex_to_bytes(&type_script.args);
-                    MOLECULE_NUMBER_SIZE + 32 + 1 + MOLECULE_NUMBER_SIZE + type_args.len()
+                    SCRIPT_TABLE_HEADER_SIZE
+                        + SCRIPT_FIXED_FIELDS_SIZE
+                        + MOLECULE_NUMBER_SIZE
+                        + type_args.len()
                 } else {
                     0
                 };
@@ -108,6 +115,7 @@ impl TransactionParser {
             }
 
             raw_size += MOLECULE_NUMBER_SIZE;
+            raw_size += tx.outputs_data.len() * MOLECULE_NUMBER_SIZE;
             for output_data in &tx.outputs_data {
                 let data = parse_hex_to_bytes(output_data);
                 raw_size += MOLECULE_NUMBER_SIZE + data.len();
@@ -119,6 +127,7 @@ impl TransactionParser {
         size += raw_tx_size;
 
         size += MOLECULE_NUMBER_SIZE;
+        size += tx.witnesses.len() * MOLECULE_NUMBER_SIZE;
         for witness in &tx.witnesses {
             let witness_data = parse_hex_to_bytes(witness);
             size += MOLECULE_NUMBER_SIZE + witness_data.len();
@@ -265,6 +274,16 @@ impl TransactionParser {
 mod tests {
     use super::*;
     use crate::rpc::{CellDep, CellInput, CellOutput, OutPoint, Script};
+    use ckb_jsonrpc_types::TransactionView as CkbJsonRpcTransactionView;
+    use ckb_types::prelude::Entity;
+
+    fn canonical_serialized_size(tx: &TransactionView) -> i32 {
+        let value = serde_json::to_value(tx).expect("serialize test tx to json value");
+        let tx_view: CkbJsonRpcTransactionView =
+            serde_json::from_value(value).expect("deserialize into ckb jsonrpc tx view");
+        let packed_tx: ckb_types::packed::Transaction = tx_view.inner.into();
+        i32::try_from(packed_tx.as_slice().len()).expect("packed tx size should fit i32")
+    }
 
     fn create_script() -> Script {
         Script {
@@ -497,6 +516,21 @@ mod tests {
         assert!(
             size > TransactionParser::calculate_serialized_size(&create_cellbase_tx()),
             "normal tx should be larger than cellbase"
+        );
+    }
+
+    #[test]
+    fn test_calculate_serialized_size_matches_canonical_molecule_encoding() {
+        let normal_tx = create_normal_tx();
+        assert_eq!(
+            TransactionParser::calculate_serialized_size(&normal_tx),
+            canonical_serialized_size(&normal_tx)
+        );
+
+        let cellbase_tx = create_cellbase_tx();
+        assert_eq!(
+            TransactionParser::calculate_serialized_size(&cellbase_tx),
+            canonical_serialized_size(&cellbase_tx)
         );
     }
 

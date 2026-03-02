@@ -87,7 +87,7 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
 async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     let core_store = test_store();
     let append_only_store = test_store();
-    append_only_store
+    core_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -274,7 +274,7 @@ async fn test_tx_stats_reads_from_derived_store() {
     );
     core_batch.commit().unwrap();
 
-    append_only_store
+    core_store
         .put_hourly_stats(
             &this_hour.to_string(),
             &HourlyStats {
@@ -287,7 +287,7 @@ async fn test_tx_stats_reads_from_derived_store() {
             },
         )
         .unwrap();
-    append_only_store
+    core_store
         .put_daily_stats(
             &date_str,
             &DailyStats {
@@ -332,8 +332,8 @@ async fn test_epoch_time_charts_read_from_derived_store() {
     let start = chrono::Utc::now() - chrono::Duration::hours(4);
     let end = chrono::Utc::now();
 
-    append_only_store.put_epoch_time_dist(240, 3).unwrap();
-    append_only_store
+    core_store.put_epoch_time_dist(240, 3).unwrap();
+    core_store
         .put_epoch_stats(
             12,
             &EpochStats {
@@ -415,7 +415,7 @@ async fn test_network_stats_reads_derived_statistics() {
     );
     core_batch.commit().unwrap();
 
-    append_only_store
+    core_store
         .put_epoch_stats(
             42,
             &EpochStats {
@@ -430,7 +430,7 @@ async fn test_network_stats_reads_derived_statistics() {
             },
         )
         .unwrap();
-    append_only_store
+    core_store
         .put_daily_stats(
             &today_str,
             &DailyStats {
@@ -450,7 +450,7 @@ async fn test_network_stats_reads_derived_statistics() {
             },
         )
         .unwrap();
-    append_only_store
+    core_store
         .put_daily_stats(
             &yesterday_str,
             &DailyStats {
@@ -470,7 +470,7 @@ async fn test_network_stats_reads_derived_statistics() {
             },
         )
         .unwrap();
-    append_only_store
+    core_store
         .put_daily_block_stats(
             &today_str,
             &DailyBlockStats {
@@ -502,7 +502,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
     let core_store = test_store();
     let append_only_store = test_store();
 
-    append_only_store
+    core_store
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
@@ -513,7 +513,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
             },
         )
         .unwrap();
-    append_only_store
+    core_store
         .put_daily_block_stats(
             "20260102",
             &DailyBlockStats {
@@ -548,7 +548,7 @@ async fn test_miner_distribution_reads_from_derived_store() {
     let append_only_store = test_store();
 
     let miner_hash = vec![0x66; 32];
-    append_only_store
+    core_store
         .put_miner_stats(
             "20260101",
             &miner_hash,
@@ -643,7 +643,7 @@ async fn test_get_block_returns_503_when_derived_store_lags() {
 async fn test_get_block_includes_hardfork_activation() {
     let core_store = test_store();
     let append_only_store = test_store();
-    append_only_store
+    core_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -704,7 +704,7 @@ async fn test_get_block_includes_hardfork_activation() {
 async fn test_blocks_list_includes_hardfork_activation() {
     let core_store = test_store();
     let append_only_store = test_store();
-    append_only_store
+    core_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -3124,7 +3124,7 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
         )
         .unwrap();
 
-    append_only_store
+    core_store
         .put_token_daily_delta(
             &type_hash,
             20240115,
@@ -3333,7 +3333,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
     assert_eq!(json["liveOccupiedCapacity"], "50");
-    assert_eq!(json["mediaProfile"]["tier"], "unknown");
+    assert_eq!(json["storageProfile"]["tier"], "unknown");
 }
 
 #[tokio::test]
@@ -5438,6 +5438,36 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        100,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: mint_tx.clone(),
+            timestamp_ms: 1_700_000_100,
+            actions: vec![AssetAction::Mint],
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        200,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: transfer_tx.clone(),
+            timestamp_ms: 1_700_000_200,
+            actions: vec![AssetAction::Transfer],
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        300,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: burn_tx.clone(),
+            timestamp_ms: 1_700_000_300,
+            actions: vec![AssetAction::Burn],
+        },
+    );
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -6314,7 +6344,6 @@ async fn test_scripts_list_reads_from_derived_store() {
     let append_only_store = test_store();
 
     let core_script_hash = vec![0x11; 32];
-    let derived_script_hash = vec![0x22; 32];
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_script_info(
         &core_script_hash,
@@ -6326,18 +6355,6 @@ async fn test_scripts_list_reads_from_derived_store() {
         },
     );
     core_batch.commit().unwrap();
-
-    let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
-    derived_batch.put_script_info(
-        &derived_script_hash,
-        &ScriptInfo {
-            code_hash: derived_script_hash.clone(),
-            hash_type: 1,
-            name: Some("DerivedOnlyScript".to_string()),
-            ..Default::default()
-        },
-    );
-    derived_batch.commit().unwrap();
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
@@ -6352,5 +6369,5 @@ async fn test_scripts_list_reads_from_derived_store() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0]["name"], "DerivedOnlyScript");
+    assert_eq!(data[0]["name"], "CoreOnlyScript");
 }
