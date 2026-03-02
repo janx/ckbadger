@@ -1,3 +1,4 @@
+use anyhow::{bail, Result};
 use serde::Deserialize;
 
 /// Maximum reorg depth before triggering deep fork handling.
@@ -17,8 +18,6 @@ pub struct Config {
     pub poll_interval_ms: u64,
     #[serde(default)]
     pub start_block: Option<u64>,
-    #[serde(default = "default_confirmations")]
-    pub confirmations: u64,
     #[serde(default = "default_parallel_fetch_size")]
     pub parallel_fetch_size: usize,
     #[serde(default = "default_pipeline_enabled")]
@@ -52,10 +51,6 @@ fn default_poll_interval_ms() -> u64 {
     1000
 }
 
-fn default_confirmations() -> u64 {
-    0
-}
-
 fn default_parallel_fetch_size() -> usize {
     64
 }
@@ -82,6 +77,21 @@ fn default_token_labels_path() -> String {
 
 fn default_force_startup_cleanup() -> bool {
     false
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        if self.batch_size == 0 {
+            bail!("config: batch_size must be > 0");
+        }
+        if self.pipeline_buffer == 0 {
+            bail!("config: pipeline_buffer must be > 0");
+        }
+        if self.parallel_fetch_size == 0 {
+            bail!("config: parallel_fetch_size must be > 0");
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -128,5 +138,54 @@ mod tests {
     #[test]
     fn test_default_force_startup_cleanup() {
         assert!(!default_force_startup_cleanup());
+    }
+
+    fn make_valid_config() -> Config {
+        Config {
+            domain_data_path: "/tmp/test".to_string(),
+            append_only_data_path: "/tmp/test-ao".to_string(),
+            ckb_rpc_url: "http://localhost:8114".to_string(),
+            batch_size: 10000,
+            poll_interval_ms: 1000,
+            start_block: None,
+            parallel_fetch_size: 64,
+            pipeline_enabled: true,
+            pipeline_buffer: 16,
+            redis_url: None,
+            bulk_sync_threshold: 72,
+            fast_sync_mode: true,
+            ckb_data_path: None,
+            token_labels_path: "docs/token-labels".to_string(),
+            force_startup_cleanup: false,
+        }
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_config() {
+        make_valid_config().validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_batch_size() {
+        let mut config = make_valid_config();
+        config.batch_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("batch_size must be > 0"));
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_pipeline_buffer() {
+        let mut config = make_valid_config();
+        config.pipeline_buffer = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("pipeline_buffer must be > 0"));
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_parallel_fetch_size() {
+        let mut config = make_valid_config();
+        config.parallel_fetch_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("parallel_fetch_size must be > 0"));
     }
 }

@@ -359,7 +359,6 @@ async fn run_sync(args: Cli) -> Result<()> {
         batch_size: args.batch_size,
         poll_interval_ms: args.poll_interval_ms,
         start_block: None,
-        confirmations: 24,
         parallel_fetch_size: args.parallel_fetch_size,
         pipeline_enabled: args.pipeline_enabled,
         pipeline_buffer: args.pipeline_buffer,
@@ -370,6 +369,7 @@ async fn run_sync(args: Cli) -> Result<()> {
         token_labels_path: args.token_labels_path,
         force_startup_cleanup: false,
     };
+    config.validate()?;
 
     info!(
         "Opening ckbadger domain store at: {}",
