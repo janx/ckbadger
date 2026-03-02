@@ -325,6 +325,54 @@ fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
+fn flush_append_rollback_batch(
+    store: &CkbadgerStore,
+    batch: &mut rocksdb::WriteBatch,
+    pending: &mut u64,
+) -> Result<()> {
+    if !batch.is_empty() {
+        store.write_batch(std::mem::take(batch))?;
+        *batch = rocksdb::WriteBatch::default();
+        *pending = 0;
+    }
+    Ok(())
+}
+
+fn delete_append_history_cf_entries<F>(
+    store: &CkbadgerStore,
+    cf: &rocksdb::ColumnFamily,
+    cf_name: &str,
+    rollback_to: i64,
+    batch: &mut rocksdb::WriteBatch,
+    pending: &mut u64,
+    mut block_num_from_key: F,
+) -> Result<()>
+where
+    F: FnMut(&[u8]) -> Option<i64>,
+{
+    let iter = store.iterator_cf(cf, rocksdb::IteratorMode::Start);
+    for item in iter {
+        let (key, _) = item.map_err(|e| {
+            anyhow!(
+                "failed to iterate append-only CF '{}' during rollback_to={}: {}",
+                cf_name,
+                rollback_to,
+                e
+            )
+        })?;
+        if let Some(block_num) = block_num_from_key(&key) {
+            if block_num > rollback_to {
+                batch.delete_cf(cf, &key);
+                *pending += 1;
+                if *pending >= APPEND_ROLLBACK_DELETE_BATCH {
+                    flush_append_rollback_batch(store, batch, pending)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> String {
     if outpoints.is_empty() {
         return "none".to_string();
@@ -1855,18 +1903,19 @@ fn accumulate_dao_snapshot_deltas_for_txs(
             continue;
         }
 
-        if !has_withdraw_request_output {
-            for input in &tx_data.inputs {
-                let outpoint = (
-                    input.previous_tx_hash.to_vec(),
-                    input.previous_output_index as i16,
-                );
-                if let Some((_, _, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
-                    if *status == 1 {
-                        *daily_withdrawals_delta.entry(block_date).or_default() += 1;
-                    }
+        for input in &tx_data.inputs {
+            let outpoint = (
+                input.previous_tx_hash.to_vec(),
+                input.previous_output_index as i16,
+            );
+            if let Some((_, _, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
+                if *status == 1 {
+                    *daily_withdrawals_delta.entry(block_date).or_default() += 1;
                 }
             }
+        }
+
+        if !has_withdraw_request_output {
             continue;
         }
 
@@ -8840,6 +8889,7 @@ impl Indexer {
                         }
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
+                        let mut activity_batch = StoreBatch::new(append_only_store);
                         let mut spore_state = writer.new_spore_batch_state();
                         let mut spore_activity_acc = NftCollectionActivityAccumulator::new();
                         let mut block_tx_idx = 0usize;
@@ -8892,9 +8942,17 @@ impl Indexer {
                             }
                             block_tx_idx += tx_count_for_block;
                         }
-                        spore_activity_acc.flush(&mut batch);
-                        let commit_ms =
+                        spore_activity_acc.flush(&mut activity_batch);
+                        let mut commit_ms =
                             commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
+                        if !activity_batch.is_empty() {
+                            commit_ms += commit_phase_no_wal(
+                                "T6a_spore_activity",
+                                first_block,
+                                last_block,
+                                activity_batch,
+                            )?;
+                        }
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     });
 
@@ -8906,6 +8964,7 @@ impl Indexer {
                     let h6b = s.spawn(|| -> Result<(f64, f64)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
+                    let mut activity_batch = StoreBatch::new(append_only_store);
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
 
@@ -9055,12 +9114,20 @@ impl Indexer {
                             activity.block_number,
                             activity.tx_idx,
                             activity.timestamp_ms,
-                            &mut batch,
+                            &mut activity_batch,
                         );
                     }
-                    nft_activity_acc.flush(&mut batch);
-                    let commit_ms =
+                    nft_activity_acc.flush(&mut activity_batch);
+                    let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
+                    if !activity_batch.is_empty() {
+                        commit_ms += commit_phase_no_wal(
+                            "T6b_nft_activity",
+                            first_block,
+                            last_block,
+                            activity_batch,
+                        )?;
+                    }
                     Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                 });
 
@@ -11429,71 +11496,64 @@ impl Indexer {
             );
         }
 
-        let store = &self.append_only_store;
+        let store = self.append_only_store.as_ref();
         let mut batch = rocksdb::WriteBatch::default();
         let mut pending = 0u64;
 
-        let flush_batch = |batch: &mut rocksdb::WriteBatch, pending: &mut u64| -> Result<()> {
-            if !batch.is_empty() {
-                store.write_batch(std::mem::take(batch))?;
-                *batch = rocksdb::WriteBatch::default();
-                *pending = 0;
-            }
-            Ok(())
-        };
-
         // addr_txs: lock_hash(32) + block_num(8) + tx_idx(4)
-        let iter = store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
-            if key.len() == 44 {
-                let block_num = keys::decode_block_num(&key[32..40]);
-                if block_num > rollback_to {
-                    batch.delete_cf(store.cf_addr_txs(), &key);
-                    pending += 1;
-                    if pending >= APPEND_ROLLBACK_DELETE_BATCH {
-                        flush_batch(&mut batch, &mut pending)?;
-                    }
+        delete_append_history_cf_entries(
+            store,
+            store.cf_addr_txs(),
+            "addr_txs",
+            rollback_to,
+            &mut batch,
+            &mut pending,
+            |key| {
+                if key.len() == 44 {
+                    Some(keys::decode_block_num(&key[32..40]))
+                } else {
+                    None
                 }
-            }
-        }
+            },
+        )?;
 
         // activities: lock_hash(32) + block_num_desc(8) + tx_idx(4)
-        let iter = store.iterator_cf(store.cf_activities(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
-            if key.len() == 44 {
-                let (_, block_num, _) = keys::decode_activity_key(&key);
-                if block_num > rollback_to {
-                    batch.delete_cf(store.cf_activities(), &key);
-                    pending += 1;
-                    if pending >= APPEND_ROLLBACK_DELETE_BATCH {
-                        flush_batch(&mut batch, &mut pending)?;
-                    }
+        delete_append_history_cf_entries(
+            store,
+            store.cf_activities(),
+            "activities",
+            rollback_to,
+            &mut batch,
+            &mut pending,
+            |key| {
+                if key.len() == 44 {
+                    let (_, block_num, _) = keys::decode_activity_key(key);
+                    Some(block_num)
+                } else {
+                    None
                 }
-            }
-        }
+            },
+        )?;
 
         // nft_collection_activities: collection_id(32) + block_num_desc(8) + tx_idx(4)
-        let iter = store.iterator_cf(
+        delete_append_history_cf_entries(
+            store,
             store.cf_nft_collection_activities(),
-            rocksdb::IteratorMode::Start,
-        );
-        for item in iter.flatten() {
-            let (key, _) = item;
-            if key.len() == keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
-                let (_, block_num, _) = keys::decode_nft_collection_activity_key(&key);
-                if block_num > rollback_to {
-                    batch.delete_cf(store.cf_nft_collection_activities(), &key);
-                    pending += 1;
-                    if pending >= APPEND_ROLLBACK_DELETE_BATCH {
-                        flush_batch(&mut batch, &mut pending)?;
-                    }
+            "nft_collection_activities",
+            rollback_to,
+            &mut batch,
+            &mut pending,
+            |key| {
+                if key.len() == keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                    let (_, block_num, _) = keys::decode_nft_collection_activity_key(key);
+                    Some(block_num)
+                } else {
+                    None
                 }
-            }
-        }
+            },
+        )?;
 
-        flush_batch(&mut batch, &mut pending)?;
+        flush_append_rollback_batch(store, &mut batch, &mut pending)?;
         Ok(())
     }
 
@@ -12019,6 +12079,51 @@ mod tests {
 
         let missing = collect_missing_input_outpoints(&input_outpoints, &resolved, &same_batch);
         assert_eq!(missing, vec![(vec![0xAA; 32], 0)]);
+    }
+
+    #[test]
+    fn test_delete_append_history_cf_entries_prunes_rows_above_rollback_height() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock_hash = [0x11; 32];
+        let keep_key = keys::encode_addr_tx_key(&lock_hash, 10, 0);
+        let drop_key = keys::encode_addr_tx_key(&lock_hash, 20, 0);
+
+        store
+            .put_cf(store.cf_addr_txs(), &keep_key, &[0xAA])
+            .unwrap();
+        store
+            .put_cf(store.cf_addr_txs(), &drop_key, &[0xBB])
+            .unwrap();
+
+        let mut batch = rocksdb::WriteBatch::default();
+        let mut pending = 0u64;
+        delete_append_history_cf_entries(
+            &store,
+            store.cf_addr_txs(),
+            "addr_txs",
+            15,
+            &mut batch,
+            &mut pending,
+            |key| {
+                if key.len() == 44 {
+                    Some(keys::decode_block_num(&key[32..40]))
+                } else {
+                    None
+                }
+            },
+        )
+        .unwrap();
+        flush_append_rollback_batch(&store, &mut batch, &mut pending).unwrap();
+
+        assert!(store
+            .get_cf(store.cf_addr_txs(), &keep_key)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_addr_txs(), &drop_key)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -13925,6 +14030,52 @@ mod tests {
         assert!(daily_active_delta.is_empty());
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
+    }
+
+    #[test]
+    fn test_accumulate_dao_snapshot_deltas_counts_status1_inputs_in_mixed_tx() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let input_hash_vec = vec![0x34; 32];
+        let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
+
+        // Mixed tx: contains DAO withdraw-request output and consumes a status=1 DAO input.
+        let tx = dummy_tx_data(
+            [0xCD; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: input_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![],
+            vec!["0x0100000000000000".to_string()],
+        );
+
+        let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
+        consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+
+        let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[tx],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
+
         assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
     }
 
