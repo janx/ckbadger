@@ -362,91 +362,154 @@ impl CkbadgerStore {
         }
         stage.finish(txs_removed);
 
-        // 3. Delete live cells created after rollback_to, restore consumed cells
+        // 3. Delete live cells created after rollback_to.
+        // Use block-scoped created-cell index to avoid full live_cells scans.
         let mut stage = RollbackStageProgress::new("delete_live_cells_after_tip");
-        let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
+        let start_key = keys::encode_block_num(rollback_to + 1);
+        let iter = self.iterator_cf(
+            self.cf_reorg_cells_created_by_block(),
+            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
         for item in iter.flatten() {
             let (key, _) = item;
-            if key.len() == keys::OUTPOINT_KEY_SIZE {
-                let Some(info) = self.get_cell_by_outpoint_key(&key)? else {
-                    stage.tick(cells_removed);
-                    continue;
-                };
-                if info.created_at_block > rollback_to {
-                    batch.delete_cf(self.cf_live_cells(), &key);
-                    cells_removed += 1;
+            if key.len() != keys::BLOCK_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid reorg created-cell index key length: key_len={}, expected={}",
+                    key.len(),
+                    keys::BLOCK_OUTPOINT_KEY_SIZE
+                );
+            }
+            let (created_block, tx_hash, output_index) = keys::decode_block_outpoint_key(&key);
+            if created_block <= rollback_to {
+                stage.tick(cells_removed);
+                continue;
+            }
 
-                    // Clean up indexes
-                    let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                    let idx_key = keys::encode_cell_index_key(
-                        &info.lock_script_hash,
-                        info.created_at_block,
-                        &tx_hash,
-                        output_index,
-                    );
-                    batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
-                    let idx_key = keys::encode_cell_index_key(
-                        &info.lock_code_hash,
-                        info.created_at_block,
-                        &tx_hash,
-                        output_index,
-                    );
-                    batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
-                    if let Some(ref type_hash) = info.type_script_hash {
-                        let idx_key = keys::encode_cell_index_key(
-                            type_hash,
-                            info.created_at_block,
-                            &tx_hash,
-                            output_index,
-                        );
-                        batch.delete_cf(self.cf_cell_by_type(), &idx_key);
-                    }
-                    if let Some(ref type_code_hash) = info.type_code_hash {
-                        let idx_key = keys::encode_cell_index_key(
-                            type_code_hash,
-                            info.created_at_block,
-                            &tx_hash,
-                            output_index,
-                        );
-                        batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
-                    }
-                }
+            let outpoint_key = keys::encode_outpoint(&tx_hash, output_index);
+            batch.delete_cf(self.cf_reorg_cells_created_by_block(), &key);
+
+            if self.get_cf(self.cf_live_cells(), &outpoint_key)?.is_none() {
+                stage.tick(cells_removed);
+                continue;
+            }
+
+            let info = self
+                .get_cell_by_outpoint_key(&outpoint_key)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing canonical cell for live outpoint during rollback: outpoint=0x{}:{}",
+                        bytes_to_hex(&tx_hash),
+                        output_index
+                    )
+                })?;
+            if info.created_at_block != created_block {
+                anyhow::bail!(
+                    "created block mismatch in rollback created-cell index: indexed_block={}, cell_created_at_block={}, outpoint=0x{}:{}",
+                    created_block,
+                    info.created_at_block,
+                    bytes_to_hex(&tx_hash),
+                    output_index
+                );
+            }
+
+            batch.delete_cf(self.cf_live_cells(), outpoint_key);
+            cells_removed += 1;
+
+            let idx_key = keys::encode_cell_index_key(
+                &info.lock_script_hash,
+                info.created_at_block,
+                &tx_hash,
+                output_index,
+            );
+            batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
+            let idx_key = keys::encode_cell_index_key(
+                &info.lock_code_hash,
+                info.created_at_block,
+                &tx_hash,
+                output_index,
+            );
+            batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
+            if let Some(ref type_hash) = info.type_script_hash {
+                let idx_key = keys::encode_cell_index_key(
+                    type_hash,
+                    info.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.delete_cf(self.cf_cell_by_type(), &idx_key);
+            }
+            if let Some(ref type_code_hash) = info.type_code_hash {
+                let idx_key = keys::encode_cell_index_key(
+                    type_code_hash,
+                    info.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
             }
             stage.tick(cells_removed);
         }
         stage.finish(cells_removed);
+        if txs_removed > 0 && stage.scanned == 0 {
+            anyhow::bail!(
+                "rollback created-cell index has zero entries while tx_index removed entries: txs_removed={}, rollback_to={}, replay_start={}. Rebuild RocksDB from genesis to populate reorg block indexes.",
+                txs_removed,
+                rollback_to,
+                replay_start
+            );
+        }
 
         // 4. Restore consumed cells that were consumed after rollback_to.
-        //
-        // New schema stores `consumed_at_block` in consumed_cells so rollback can
-        // recover precise state without in-memory history.
+        // Use block-scoped consumed-cell index to avoid full consumed_cells scans.
         let mut stage = RollbackStageProgress::new("restore_consumed_cells");
-        let iter = self.iterator_cf(self.cf_consumed_cells(), IteratorMode::Start);
+        let start_key = keys::encode_block_num(rollback_to + 1);
+        let iter = self.iterator_cf(
+            self.cf_reorg_consumed_cells_by_block(),
+            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
         for item in iter.flatten() {
             let (key, _) = item;
-            if key.len() != keys::OUTPOINT_KEY_SIZE {
-                stage.tick(cells_restored);
-                continue;
+            if key.len() != keys::BLOCK_OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid reorg consumed-cell index key length: key_len={}, expected={}",
+                    key.len(),
+                    keys::BLOCK_OUTPOINT_KEY_SIZE
+                );
             }
-            let (tx_hash, output_index) = keys::decode_outpoint(&key);
-            let Some(consumed) = self.get_consumed_cell_info(&tx_hash, output_index)? else {
-                stage.tick(cells_restored);
-                continue;
-            };
-            if consumed.consumed_at_block <= rollback_to {
+            let (consumed_block, tx_hash, output_index) = keys::decode_block_outpoint_key(&key);
+            if consumed_block <= rollback_to {
                 stage.tick(cells_restored);
                 continue;
             }
 
+            let outpoint_key = keys::encode_outpoint(&tx_hash, output_index);
+            batch.delete_cf(self.cf_reorg_consumed_cells_by_block(), &key);
+            let consumed = self
+                .get_consumed_cell_info(&tx_hash, output_index)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing consumed cell for rollback consumed-cell index: consumed_at_block={}, outpoint=0x{}:{}",
+                        consumed_block,
+                        bytes_to_hex(&tx_hash),
+                        output_index
+                    )
+                })?;
+            if consumed.consumed_at_block != consumed_block {
+                anyhow::bail!(
+                    "consumed block mismatch in rollback consumed-cell index: indexed_block={}, consumed_at_block={}, outpoint=0x{}:{}",
+                    consumed_block,
+                    consumed.consumed_at_block,
+                    bytes_to_hex(&tx_hash),
+                    output_index
+                );
+            }
             // Remove stale consumed record from rolled-back blocks.
-            batch.delete_cf(self.cf_consumed_cells(), &key);
+            batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
 
             // If the cell itself existed before rollback point, restore it to live_cells.
             if consumed.cell.created_at_block <= rollback_to {
-                batch.put_cf(self.cf_live_cells(), &key, []);
+                batch.put_cf(self.cf_live_cells(), outpoint_key, []);
                 cells_restored += 1;
-
-                let (tx_hash, output_index) = keys::decode_outpoint(&key);
                 let idx_key = keys::encode_cell_index_key(
                     &consumed.cell.lock_script_hash,
                     consumed.cell.created_at_block,
@@ -1107,8 +1170,18 @@ mod tests {
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
+        let created_idx_key = keys::encode_block_outpoint_key(1, &tx_hash, 0);
+        let consumed_idx_key = keys::encode_block_outpoint_key(2, &tx_hash, 0);
         assert!(store.get_cell(&tx_hash, 0).unwrap().is_none());
         assert!(store.get_consumed_cell(&tx_hash, 0).unwrap().is_some());
+        assert!(store
+            .get_cf(store.cf_reorg_cells_created_by_block(), &created_idx_key)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_reorg_consumed_cells_by_block(), &consumed_idx_key)
+            .unwrap()
+            .is_some());
 
         store.rollback_to_block(1).unwrap();
 
@@ -1119,6 +1192,153 @@ mod tests {
             .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap();
         assert!(consumed_raw.is_none());
+        assert!(store
+            .get_cf(store.cf_reorg_cells_created_by_block(), &created_idx_key)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_reorg_consumed_cells_by_block(), &consumed_idx_key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_rollback_cleans_reorg_cell_indexes_for_rolled_back_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let keep_cell = LiveCellInfo {
+            capacity: 100,
+            created_at_block: 1,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 100,
+            udt_amount: None,
+        };
+        let drop_live_cell = LiveCellInfo {
+            capacity: 200,
+            created_at_block: 2,
+            lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 200,
+            udt_amount: None,
+        };
+        let drop_consumed_cell = LiveCellInfo {
+            capacity: 300,
+            created_at_block: 2,
+            lock_script_hash: vec![0xCC; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 300,
+            udt_amount: None,
+        };
+
+        let keep_tx = vec![0x10; 32];
+        let drop_live_tx = vec![0x20; 32];
+        let drop_consumed_tx = vec![0x30; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_cell(&keep_tx, 0, &keep_cell);
+        batch.put_cell(&drop_live_tx, 0, &drop_live_cell);
+        batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell);
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 2);
+        batch.delete_cell(&drop_consumed_tx, 0);
+        batch.commit().unwrap();
+
+        let keep_created_idx = keys::encode_block_outpoint_key(1, &keep_tx, 0);
+        let drop_live_created_idx = keys::encode_block_outpoint_key(2, &drop_live_tx, 0);
+        let drop_consumed_created_idx = keys::encode_block_outpoint_key(2, &drop_consumed_tx, 0);
+        let drop_consumed_idx = keys::encode_block_outpoint_key(2, &drop_consumed_tx, 0);
+        assert!(store
+            .get_cf(
+                store.cf_reorg_cells_created_by_block(),
+                &drop_live_created_idx
+            )
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(
+                store.cf_reorg_cells_created_by_block(),
+                &drop_consumed_created_idx
+            )
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_reorg_consumed_cells_by_block(), &drop_consumed_idx)
+            .unwrap()
+            .is_some());
+
+        store.rollback_to_block(1).unwrap();
+
+        assert!(store.get_cell(&keep_tx, 0).unwrap().is_some());
+        assert!(store.get_cell(&drop_live_tx, 0).unwrap().is_none());
+        assert!(store.get_cell(&drop_consumed_tx, 0).unwrap().is_none());
+        assert!(store
+            .get_consumed_cell(&drop_consumed_tx, 0)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cf(store.cf_reorg_cells_created_by_block(), &keep_created_idx)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(
+                store.cf_reorg_cells_created_by_block(),
+                &drop_live_created_idx
+            )
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cf(
+                store.cf_reorg_cells_created_by_block(),
+                &drop_consumed_created_idx
+            )
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cf(store.cf_reorg_consumed_cells_by_block(), &drop_consumed_idx)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

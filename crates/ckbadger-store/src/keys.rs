@@ -8,6 +8,8 @@ pub const OUTPOINT_KEY_SIZE: usize = 34;
 
 /// Block number key: 8 bytes big-endian i64
 pub const BLOCK_NUM_KEY_SIZE: usize = 8;
+/// Block outpoint key: block_number(8B BE) + outpoint(34B) = 42 bytes
+pub const BLOCK_OUTPOINT_KEY_SIZE: usize = BLOCK_NUM_KEY_SIZE + OUTPOINT_KEY_SIZE;
 
 pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; OUTPOINT_KEY_SIZE];
@@ -28,6 +30,23 @@ pub fn encode_block_num(n: i64) -> [u8; BLOCK_NUM_KEY_SIZE] {
 
 pub fn decode_block_num(key: &[u8]) -> i64 {
     i64::from_be_bytes(key[..8].try_into().unwrap_or([0; 8]))
+}
+
+pub fn encode_block_outpoint_key(
+    block_num: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; BLOCK_OUTPOINT_KEY_SIZE] {
+    let mut key = [0u8; BLOCK_OUTPOINT_KEY_SIZE];
+    key[..8].copy_from_slice(&block_num.to_be_bytes());
+    key[8..42].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+pub fn decode_block_outpoint_key(key: &[u8]) -> (i64, Vec<u8>, i16) {
+    let block_num = decode_block_num(&key[..8]);
+    let (tx_hash, output_index) = decode_outpoint(&key[8..42]);
+    (block_num, tx_hash, output_index)
 }
 
 pub fn encode_tx_idx(idx: i32) -> [u8; 4] {
@@ -645,6 +664,20 @@ mod tests {
         for n in [0i64, 1, 100, 1_000_000, i64::MAX] {
             assert_eq!(decode_block_num(&encode_block_num(n)), n);
         }
+    }
+
+    #[test]
+    fn test_block_outpoint_key_roundtrip() {
+        let block_num = 123_456;
+        let tx_hash = [0x55u8; 32];
+        let output_index = 9i16;
+        let key = encode_block_outpoint_key(block_num, &tx_hash, output_index);
+        assert_eq!(key.len(), BLOCK_OUTPOINT_KEY_SIZE);
+
+        let (decoded_block, decoded_hash, decoded_index) = decode_block_outpoint_key(&key);
+        assert_eq!(decoded_block, block_num);
+        assert_eq!(decoded_hash, tx_hash.to_vec());
+        assert_eq!(decoded_index, output_index);
     }
 
     #[test]

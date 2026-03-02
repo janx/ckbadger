@@ -50,9 +50,16 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         let value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        let by_block_key =
+            keys::encode_block_outpoint_key(info.created_at_block, tx_hash, output_index);
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
         self.batch.put_cf(self.store.cf_cells(), key, &value);
         self.batch.put_cf(self.store.cf_live_cells(), key, []);
+        self.batch.put_cf(
+            self.store.cf_reorg_cells_created_by_block(),
+            by_block_key,
+            [],
+        );
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
@@ -87,8 +94,15 @@ impl<'a> StoreBatch<'a> {
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
+        let by_block_key =
+            keys::encode_block_outpoint_key(consumed_at_block, tx_hash, output_index);
         self.batch
             .put_cf(self.store.cf_consumed_cells(), key, &value);
+        self.batch.put_cf(
+            self.store.cf_reorg_consumed_cells_by_block(),
+            by_block_key,
+            [],
+        );
     }
 
     // ---- Cell indexes ----
@@ -674,13 +688,54 @@ mod tests {
         batch.commit().unwrap();
 
         let key = keys::encode_outpoint(&tx_hash, 0);
+        let created_idx_key = keys::encode_block_outpoint_key(info.created_at_block, &tx_hash, 0);
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_some());
+        assert!(store
+            .get_cf(store.cf_reorg_cells_created_by_block(), &created_idx_key)
+            .unwrap()
+            .is_some());
 
         let mut batch = StoreBatch::new(&store);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_none());
+        assert!(store
+            .get_cf(store.cf_reorg_cells_created_by_block(), &created_idx_key)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn test_consumed_cell_writes_reorg_block_index() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let tx_hash = [0x33u8; 32];
+        let info = LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell_with_consumer(&tx_hash, 0, &info, 22, Some(&[0x44; 32]));
+        batch.commit().unwrap();
+
+        let consumed_idx_key = keys::encode_block_outpoint_key(22, &tx_hash, 0);
+        assert!(store
+            .get_cf(store.cf_reorg_consumed_cells_by_block(), &consumed_idx_key)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
