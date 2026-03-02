@@ -630,8 +630,16 @@ impl CkbadgerStore {
                         bytes_to_hex(&key)
                     )
                 })?;
+                let request_output_index = entry.withdraw_request_output_index.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dao deposit missing withdraw_request_output_index while rebuilding dao_by_withdraw_tx: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
                 if request_block <= rollback_to {
-                    batch.put_cf(self.cf_dao_by_withdraw_tx(), &request_tx, &key);
+                    let withdraw_outpoint_key =
+                        keys::encode_outpoint(&request_tx, request_output_index);
+                    batch.put_cf(self.cf_dao_by_withdraw_tx(), withdraw_outpoint_key, &key);
                     dao_withdraw_index_rebuilt += 1;
                 }
             }
@@ -1410,7 +1418,7 @@ mod tests {
                 compensation: None,
             },
         );
-        batch.put_dao_by_withdraw_tx(&request_tx_a, &outpoint_a);
+        batch.put_dao_by_withdraw_tx(&request_tx_a, 0, &outpoint_a);
 
         // withdraw_block > rollback target but request_block <= rollback target,
         // should revert to status=1 and keep withdraw_request mapping.
@@ -1432,7 +1440,7 @@ mod tests {
                 compensation: Some(10),
             },
         );
-        batch.put_dao_by_withdraw_tx(&request_tx_b, &outpoint_b);
+        batch.put_dao_by_withdraw_tx(&request_tx_b, 0, &outpoint_b);
 
         // deposit block > rollback target, should be deleted.
         batch.put_dao_deposit(
@@ -1455,7 +1463,7 @@ mod tests {
         );
 
         // Orphan mapping should be cleared during index rebuild.
-        batch.put_dao_by_withdraw_tx(&orphan_request_tx, &orphan_outpoint);
+        batch.put_dao_by_withdraw_tx(&orphan_request_tx, 0, &orphan_outpoint);
         batch.commit().unwrap();
 
         store.rollback_to_block(1).unwrap();
@@ -1477,18 +1485,18 @@ mod tests {
 
         assert!(store.get_dao_deposit(&outpoint_c).unwrap().is_none());
         assert!(store
-            .get_dao_deposit_by_withdraw_tx(&request_tx_a)
+            .get_dao_deposit_by_withdraw_tx(&request_tx_a, 0)
             .unwrap()
             .is_none());
         assert_eq!(
             store
-                .get_dao_deposit_by_withdraw_tx(&request_tx_b)
+                .get_dao_deposit_by_withdraw_tx(&request_tx_b, 0)
                 .unwrap()
                 .unwrap(),
             outpoint_b
         );
         assert!(store
-            .get_dao_deposit_by_withdraw_tx(&orphan_request_tx)
+            .get_dao_deposit_by_withdraw_tx(&orphan_request_tx, 0)
             .unwrap()
             .is_none());
     }

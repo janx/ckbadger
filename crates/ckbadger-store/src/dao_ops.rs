@@ -26,9 +26,11 @@ impl CkbadgerStore {
 
     pub fn get_dao_deposit_by_withdraw_tx(
         &self,
-        tx_hash: &[u8],
+        withdraw_tx_hash: &[u8],
+        withdraw_output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.get_cf(self.cf_dao_by_withdraw_tx(), tx_hash)
+        let key = keys::encode_outpoint(withdraw_tx_hash, withdraw_output_index);
+        self.get_cf(self.cf_dao_by_withdraw_tx(), &key)
     }
 
     pub fn get_block_issuance(&self, block_num: i64) -> anyhow::Result<Option<SecondaryIssuance>> {

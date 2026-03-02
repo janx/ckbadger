@@ -84,7 +84,8 @@ impl DaoParser {
 
         let data = parse_hex_to_bytes(data_hex);
         let state = Self::parse_dao_state(&data)?;
-        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
+        let lock_script_hash = ScriptParser::compute_script_hash(&output.lock)
+            .unwrap_or_else(|e| panic!("DAO lock script hash failed: {}", e));
         let deposit_block_number = Self::parse_deposit_block_number(&data);
 
         Some(ParsedDaoCell {

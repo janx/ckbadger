@@ -292,9 +292,18 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_dao_deposits(), outpoint_key, &value);
     }
 
-    pub fn put_dao_by_withdraw_tx(&mut self, tx_hash: &[u8], outpoint_key: &[u8]) {
-        self.batch
-            .put_cf(self.store.cf_dao_by_withdraw_tx(), tx_hash, outpoint_key);
+    pub fn put_dao_by_withdraw_tx(
+        &mut self,
+        withdraw_tx_hash: &[u8],
+        withdraw_output_index: i16,
+        deposit_outpoint_key: &[u8],
+    ) {
+        let key = keys::encode_outpoint(withdraw_tx_hash, withdraw_output_index);
+        self.batch.put_cf(
+            self.store.cf_dao_by_withdraw_tx(),
+            key,
+            deposit_outpoint_key,
+        );
     }
 
     pub fn put_block_issuance(&mut self, block_num: i64, issuance: &SecondaryIssuance) {

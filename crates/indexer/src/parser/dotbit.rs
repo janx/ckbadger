@@ -93,8 +93,10 @@ impl DotbitParser {
             None
         };
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script).ok()?;
-        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock).ok()?;
+        let type_script_hash = ScriptParser::compute_script_hash(type_script)
+            .unwrap_or_else(|e| panic!("dotbit type script hash failed: {}", e));
+        let owner_lock_hash = ScriptParser::compute_script_hash(&output.lock)
+            .unwrap_or_else(|e| panic!("dotbit lock script hash failed: {}", e));
 
         Some(ParsedDotbitAccount {
             account_id,

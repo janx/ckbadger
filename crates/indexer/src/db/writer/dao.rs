@@ -48,15 +48,6 @@ fn dao_cache_entry_to_row(
     )
 }
 
-fn dedup_tx_hashes<'a>(tx_hashes: &[&'a [u8]]) -> Vec<&'a [u8]> {
-    let mut seen = std::collections::HashSet::new();
-    tx_hashes
-        .iter()
-        .filter(|h| seen.insert(**h))
-        .copied()
-        .collect()
-}
-
 pub trait DaoWithdrawalContextTrait {
     fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)];
     fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)];
@@ -188,8 +179,6 @@ impl BatchWriter {
         let mut results = Vec::new();
         let mut seen_keys: HashSet<(Vec<u8>, i16)> = HashSet::new();
 
-        let tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| *h).collect();
-
         // Check direct deposits (tx_hash, output_index)
         for (tx_hash, output_index) in inputs {
             let outpoint_key = keys::encode_outpoint(tx_hash, *output_index as i16);
@@ -215,20 +204,22 @@ impl BatchWriter {
             }
         }
 
-        // Check by withdraw_request_tx (Phase 2 withdrawals)
-        let unique_tx_hashes = dedup_tx_hashes(&tx_hashes);
-        for tx_hash in unique_tx_hashes {
-            if let Some(outpoint_key) = self
+        // Check by withdraw_request_tx outpoint (Phase 2 withdrawals).
+        // Each input's (tx_hash, output_index) is the full outpoint of the
+        // withdrawal request cell being consumed.
+        for (tx_hash, output_index) in inputs {
+            let withdraw_outpoint_key = keys::encode_outpoint(tx_hash, *output_index as i16);
+            if let Some(deposit_outpoint_key) = self
                 .store
-                .get_cf(self.store.cf_dao_by_withdraw_tx(), tx_hash)?
+                .get_cf(self.store.cf_dao_by_withdraw_tx(), &withdraw_outpoint_key)?
             {
                 if let Some(value) = self
                     .store
-                    .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
+                    .get_cf(self.store.cf_dao_deposits(), &deposit_outpoint_key)?
                 {
                     let entry: DaoDepositCacheEntry =
                         bincode::deserialize(&value).map_err(|e| {
-                            let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
+                            let (orig_tx, orig_idx) = keys::decode_outpoint(&deposit_outpoint_key);
                             anyhow!(
                                 "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                                 hex::encode(orig_tx),
@@ -237,7 +228,7 @@ impl BatchWriter {
                             )
                         })?;
                     if entry.status == 1 {
-                        let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
+                        let (orig_tx, orig_idx) = keys::decode_outpoint(&deposit_outpoint_key);
                         let key = (orig_tx.clone(), orig_idx);
                         if seen_keys.insert(key) {
                             results.push(dao_cache_entry_to_row(orig_tx, orig_idx, entry));
@@ -310,7 +301,7 @@ impl BatchWriter {
                         entry.withdraw_request_tx = Some(new_tx_hash.clone());
                         entry.withdraw_request_output_index = Some(*new_output_index);
                         batch.put_dao_deposit(&outpoint_key, &entry);
-                        batch.put_dao_by_withdraw_tx(new_tx_hash, &outpoint_key);
+                        batch.put_dao_by_withdraw_tx(new_tx_hash, *new_output_index, &outpoint_key);
                     }
                 }
             } else if *status == 1 {
@@ -449,8 +440,6 @@ impl BatchWriter {
         let mut result_map: HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)> =
             HashMap::new();
 
-        let tx_hashes: Vec<&[u8]> = inputs.iter().map(|(h, _)| *h).collect();
-
         // Direct deposit lookups
         for (tx_hash, output_index) in inputs {
             let outpoint_key = keys::encode_outpoint(tx_hash, *output_index);
@@ -473,20 +462,22 @@ impl BatchWriter {
             }
         }
 
-        // Withdraw request TX lookups
-        let unique_tx_hashes = dedup_tx_hashes(&tx_hashes);
-        for tx_hash in unique_tx_hashes {
-            if let Some(outpoint_key) = self
+        // Withdraw request outpoint lookups (Phase 2 withdrawals).
+        // Each input's (tx_hash, output_index) is the full outpoint of the
+        // withdrawal request cell being consumed.
+        for (tx_hash, output_index) in inputs {
+            let withdraw_outpoint_key = keys::encode_outpoint(tx_hash, *output_index);
+            if let Some(deposit_outpoint_key) = self
                 .store
-                .get_cf(self.store.cf_dao_by_withdraw_tx(), tx_hash)?
+                .get_cf(self.store.cf_dao_by_withdraw_tx(), &withdraw_outpoint_key)?
             {
                 if let Some(value) = self
                     .store
-                    .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
+                    .get_cf(self.store.cf_dao_deposits(), &deposit_outpoint_key)?
                 {
                     let entry: DaoDepositCacheEntry =
                         bincode::deserialize(&value).map_err(|e| {
-                            let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
+                            let (orig_tx, orig_idx) = keys::decode_outpoint(&deposit_outpoint_key);
                             anyhow!(
                                 "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                                 hex::encode(orig_tx),
@@ -495,21 +486,8 @@ impl BatchWriter {
                             )
                         })?;
                     if entry.status == 1 {
-                        let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
-                        // Look up the input that references this tx_hash to get the correct output_index
-                        let input_output_index = inputs
-                            .iter()
-                            .find(|(h, _)| *h == tx_hash)
-                            .map(|(_, idx)| *idx)
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "DAO batch: withdraw tx_hash 0x{} not found in inputs for deposit outpoint=0x{}:{}",
-                                    hex::encode(tx_hash),
-                                    hex::encode(&orig_tx),
-                                    orig_idx
-                                )
-                            })?;
-                        let key = (tx_hash.to_vec(), input_output_index);
+                        let (orig_tx, orig_idx) = keys::decode_outpoint(&deposit_outpoint_key);
+                        let key = (tx_hash.to_vec(), *output_index);
                         result_map
                             .entry(key)
                             .or_insert_with(|| dao_cache_entry_to_row(orig_tx, orig_idx, entry));
@@ -639,7 +617,11 @@ impl BatchWriter {
                             entry.withdraw_request_tx = Some(new_tx_hash.clone());
                             entry.withdraw_request_output_index = Some(*new_output_index);
                             batch.put_dao_deposit(&outpoint_key, &entry);
-                            batch.put_dao_by_withdraw_tx(new_tx_hash, &outpoint_key);
+                            batch.put_dao_by_withdraw_tx(
+                                new_tx_hash,
+                                *new_output_index,
+                                &outpoint_key,
+                            );
                         }
                     }
                 } else if *status == 1 {
@@ -780,6 +762,15 @@ impl BatchWriter {
 mod tests {
     use super::*;
     use ckbadger_store::types::CachedBlockHeader;
+
+    fn dedup_tx_hashes<'a>(tx_hashes: &[&'a [u8]]) -> Vec<&'a [u8]> {
+        let mut seen = std::collections::HashSet::new();
+        tx_hashes
+            .iter()
+            .filter(|h| seen.insert(**h))
+            .copied()
+            .collect()
+    }
 
     #[derive(Clone)]
     struct BatchCtx {
@@ -1428,9 +1419,10 @@ mod tests {
         assert_eq!(entry.withdraw_request_block, Some(withdraw_block));
         assert_eq!(entry.withdraw_request_tx, Some(withdraw_tx_hash.clone()));
 
-        // Also verify the withdraw_tx -> outpoint index was written
+        // Also verify the withdraw_tx outpoint -> deposit outpoint index was written
+        let withdraw_outpoint_key = keys::encode_outpoint(&withdraw_tx_hash, 0);
         let reverse_lookup = store
-            .get_cf(store.cf_dao_by_withdraw_tx(), &withdraw_tx_hash)
+            .get_cf(store.cf_dao_by_withdraw_tx(), &withdraw_outpoint_key)
             .unwrap();
         assert!(
             reverse_lookup.is_some(),
@@ -1618,6 +1610,176 @@ mod tests {
             err.to_string().contains("withdraw_request_block missing"),
             "expected withdraw_request_block missing error, got: {}",
             err
+        );
+    }
+
+    #[test]
+    fn test_multi_deposit_same_withdraw_request_tx() {
+        // Two deposits have their withdrawal requested in the SAME transaction.
+        // Both should be tracked independently via dao_by_withdraw_tx keyed by
+        // the full outpoint (tx_hash + output_index), not just tx_hash.
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let deposit_a_tx = vec![0xA1; 32];
+        let deposit_b_tx = vec![0xA2; 32];
+        let withdraw_request_tx = vec![0xBB; 32];
+        let capacity_a: i64 = 200_00000000;
+        let capacity_b: i64 = 300_00000000;
+        let deposit_block: i64 = 100;
+
+        // Seed two deposits
+        let outpoint_a = keys::encode_outpoint(&deposit_a_tx, 0);
+        let outpoint_b = keys::encode_outpoint(&deposit_b_tx, 0);
+        let mut seed = StoreBatch::new(&store);
+        seed.put_dao_deposit(
+            &outpoint_a,
+            &DaoDepositCacheEntry {
+                capacity: capacity_a,
+                deposit_block_number: deposit_block,
+                lock_script_hash: vec![0xCC; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        seed.put_dao_deposit(
+            &outpoint_b,
+            &DaoDepositCacheEntry {
+                capacity: capacity_b,
+                deposit_block_number: deposit_block,
+                lock_script_hash: vec![0xDD; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        seed.commit().unwrap();
+
+        // Process withdrawal request: SAME tx_hash, different output indices (0 and 1)
+        let new_dao_outputs = vec![
+            (
+                withdraw_request_tx.clone(),
+                0i16,
+                vec![0xEE; 32],
+                capacity_a,
+                deposit_block as u64,
+            ),
+            (
+                withdraw_request_tx.clone(),
+                1i16,
+                vec![0xFF; 32],
+                capacity_b,
+                deposit_block as u64,
+            ),
+        ];
+        let consumed = vec![
+            (
+                0,
+                deposit_a_tx.clone(),
+                0i16,
+                capacity_a.to_string(),
+                deposit_block,
+                0i16,
+            ),
+            (
+                0,
+                deposit_b_tx.clone(),
+                0i16,
+                capacity_b.to_string(),
+                deposit_block,
+                0i16,
+            ),
+        ];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_dao_withdrawals(
+                &consumed,
+                &new_dao_outputs,
+                &[],
+                &[],
+                200,
+                &[0x99; 32],
+                chrono::Utc::now(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Both deposits should now be status=1 with the same withdraw_request_tx
+        let entry_a: DaoDepositCacheEntry = bincode::deserialize(
+            &store
+                .get_cf(store.cf_dao_deposits(), &outpoint_a)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        let entry_b: DaoDepositCacheEntry = bincode::deserialize(
+            &store
+                .get_cf(store.cf_dao_deposits(), &outpoint_b)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(entry_a.status, 1);
+        assert_eq!(entry_b.status, 1);
+        assert_eq!(
+            entry_a.withdraw_request_tx,
+            Some(withdraw_request_tx.clone())
+        );
+        assert_eq!(
+            entry_b.withdraw_request_tx,
+            Some(withdraw_request_tx.clone())
+        );
+        assert_eq!(entry_a.withdraw_request_output_index, Some(0));
+        assert_eq!(entry_b.withdraw_request_output_index, Some(1));
+
+        // The dao_by_withdraw_tx CF should have TWO entries (one per output_index)
+        let lookup_a = store
+            .get_dao_deposit_by_withdraw_tx(&withdraw_request_tx, 0)
+            .unwrap();
+        let lookup_b = store
+            .get_dao_deposit_by_withdraw_tx(&withdraw_request_tx, 1)
+            .unwrap();
+        assert_eq!(
+            lookup_a.unwrap(),
+            outpoint_a,
+            "output_index=0 should map to deposit A"
+        );
+        assert_eq!(
+            lookup_b.unwrap(),
+            outpoint_b,
+            "output_index=1 should map to deposit B"
+        );
+
+        // find_consumed_dao_deposits_batch should find BOTH deposits when
+        // consuming both withdrawal request outputs
+        let inputs: Vec<(&[u8], i16)> = vec![(&withdraw_request_tx, 0), (&withdraw_request_tx, 1)];
+        let found = writer.find_consumed_dao_deposits_batch(&inputs).unwrap();
+        assert_eq!(
+            found.len(),
+            2,
+            "both deposits should be found via their distinct withdrawal request outpoints"
         );
     }
 }

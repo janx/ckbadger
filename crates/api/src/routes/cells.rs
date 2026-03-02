@@ -2165,7 +2165,9 @@ fn lookup_dao_info(
 
     // If not found by outpoint, try by withdraw-request/withdraw-complete tx hash
     let entry = if entry.is_none() {
-        let outpoint_key_data = store.get_dao_deposit_by_withdraw_tx(tx_hash).ok()?;
+        let outpoint_key_data = store
+            .get_dao_deposit_by_withdraw_tx(tx_hash, output_index)
+            .ok()?;
         if let Some(key_data) = outpoint_key_data {
             let candidate = store.get_dao_deposit(&key_data).ok()??;
             let matches_withdraw_request =
@@ -2596,7 +2598,7 @@ async fn get_address_transactions(
                                 let prev_index: u32 = input.previous_output().index().unpack();
                                 // Check if this input is a DAO withdrawal request
                                 if let Ok(Some(outpoint_key)) =
-                                    state.store.get_dao_deposit_by_withdraw_tx(&prev_hash)
+                                    state.store.get_dao_deposit_by_withdraw_tx(&prev_hash, prev_index as i16)
                                 {
                                     if let Ok(Some(entry)) =
                                         state.store.get_dao_deposit(&outpoint_key)

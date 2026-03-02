@@ -202,13 +202,13 @@ Where:
 
 DAO-related state is split across several CFs:
 
-| CF / Data                     | Key                        | Value                  | Purpose                                                                                                                                          |
-| ----------------------------- | -------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `dao_deposits`                | `tx_hash + output_index`   | `DaoDepositCacheEntry` | Deposit lifecycle (active / withdraw requested / completed)                                                                                      |
-| `dao_by_withdraw_tx`          | `withdraw_request_tx_hash` | `deposit_outpoint_key` | Fast lookup on withdraw completion                                                                                                               |
-| `dao_stats`                   | metric key                 | `DaoStats`             | Aggregate DAO counters (`total_deposited`, `total_depositors`, `total_compensation`, `total_deposits`, `total_withdrawals`)                      |
-| `block_issuance`              | block number               | `SecondaryIssuance`    | Per-block secondary issuance split (miner / dao / treasury)                                                                                      |
-| `stats` (DAO snapshot prefix) | date                       | `DaoDailySnapshot`     | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`) |
+| CF / Data                     | Key                       | Value                  | Purpose                                                                                                                                          |
+| ----------------------------- | ------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `dao_deposits`                | `tx_hash + output_index`  | `DaoDepositCacheEntry` | Deposit lifecycle (active / withdraw requested / completed)                                                                                      |
+| `dao_by_withdraw_tx`          | `withdraw_outpoint` (34B) | `deposit_outpoint_key` | Fast lookup on withdraw completion (keyed by withdraw request outpoint)                                                                          |
+| `dao_stats`                   | metric key                | `DaoStats`             | Aggregate DAO counters (`total_deposited`, `total_depositors`, `total_compensation`, `total_deposits`, `total_withdrawals`)                      |
+| `block_issuance`              | block number              | `SecondaryIssuance`    | Per-block secondary issuance split (miner / dao / treasury)                                                                                      |
+| `stats` (DAO snapshot prefix) | date                      | `DaoDailySnapshot`     | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`) |
 
 ## 5. Update Triggers
 
