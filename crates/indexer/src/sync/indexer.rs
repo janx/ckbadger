@@ -13347,7 +13347,6 @@ mod tests {
             extra_hash: vec![],
             proposals_hash: vec![],
             transactions_root: vec![],
-            uncles_hash: vec![],
             proposals: vec![],
         }
     }

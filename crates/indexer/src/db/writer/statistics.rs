@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Result};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
@@ -183,9 +183,29 @@ impl BatchWriter {
                 s
             }
             None => {
-                let net_cells = (cells_created - cells_consumed) as i64;
-                let net_data_size = data_size_added - data_size_consumed;
                 let knowledge_size = dao_field.and_then(calculate_knowledge_size);
+
+                // Carry forward cumulative totals from the previous day
+                let prev_date = date - Duration::days(1);
+                let prev_key = keys::encode_stats_key(
+                    keys::STATS_PREFIX_DAILY,
+                    prev_date.format("%Y%m%d").to_string().as_bytes(),
+                );
+                let prev = self
+                    .store
+                    .get_stats_key(&prev_key)?
+                    .map(|v| deserialize_stats::<DailyStats>(&v, "previous day stats"))
+                    .transpose()?;
+
+                let (prev_live, prev_dead, prev_all, prev_data_size) = match prev {
+                    Some(p) => (
+                        p.total_live_cells,
+                        p.total_dead_cells,
+                        p.total_all_cells,
+                        p.total_data_size,
+                    ),
+                    None => (0, 0, 0, 0),
+                };
 
                 DailyStats {
                     blocks_count,
@@ -195,10 +215,10 @@ impl BatchWriter {
                     capacity_transferred,
                     occupied_capacity_created,
                     occupied_capacity_consumed,
-                    total_live_cells: net_cells,
-                    total_dead_cells: cells_consumed as i64,
-                    total_all_cells: cells_created as i64,
-                    total_data_size: net_data_size,
+                    total_live_cells: prev_live + (cells_created - cells_consumed) as i64,
+                    total_dead_cells: prev_dead + cells_consumed as i64,
+                    total_all_cells: prev_all + cells_created as i64,
+                    total_data_size: prev_data_size + data_size_added - data_size_consumed,
                     knowledge_size,
                     avg_block_time_ms,
                 }
@@ -819,5 +839,57 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid previous block timestamp millis"));
+    }
+
+    #[test]
+    fn test_daily_stats_new_day_carries_forward_cumulative_totals() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let day2 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+        // Day 1: 10 cells created, 3 consumed, 500 data bytes
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_daily_statistics(
+                day1, 10, 50, 10, 3, 1000, 500, 200, 500, 100, None, None, &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Verify day 1 totals
+        let key1 = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAILY,
+            day1.format("%Y%m%d").to_string().as_bytes(),
+        );
+        let d1: DailyStats =
+            bincode::deserialize(&store.get_stats_key(&key1).unwrap().unwrap()).unwrap();
+        assert_eq!(d1.total_live_cells, 7); // 10 - 3
+        assert_eq!(d1.total_dead_cells, 3);
+        assert_eq!(d1.total_all_cells, 10);
+        assert_eq!(d1.total_data_size, 400); // 500 - 100
+
+        // Day 2: 5 cells created, 2 consumed, 200 data bytes
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .update_daily_statistics(
+                day2, 5, 20, 5, 2, 500, 250, 100, 200, 50, None, None, &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Day 2 should carry forward day 1's cumulative totals
+        let key2 = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAILY,
+            day2.format("%Y%m%d").to_string().as_bytes(),
+        );
+        let d2: DailyStats =
+            bincode::deserialize(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
+        assert_eq!(d2.total_live_cells, 7 + 3); // prev 7 + (5 - 2)
+        assert_eq!(d2.total_dead_cells, 3 + 2); // prev 3 + 2
+        assert_eq!(d2.total_all_cells, 10 + 5); // prev 10 + 5
+        assert_eq!(d2.total_data_size, 400 + 150); // prev 400 + (200 - 50)
     }
 }

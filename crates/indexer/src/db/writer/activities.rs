@@ -342,7 +342,11 @@ fn classify_input(
             }
         }
     } else if type_code_hash == hashes.dao {
-        // DAO withdraw request cell consumed as input = withdrawal completing
+        // DAO withdraw request cell consumed as input = withdrawal completing.
+        // Note: data.len() == 8 may not hold during bulk sync when cell data
+        // is not yet available in the prefetch cache. In that case the DAO
+        // withdrawal is silently skipped in the activity feed — this is a known
+        // limitation that does not affect DAO accounting (handled in dao.rs).
         if data.len() == 8 {
             let val = u64::from_le_bytes(data[..8].try_into().unwrap_or([0; 8]));
             if val != 0 {

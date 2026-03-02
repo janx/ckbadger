@@ -20,7 +20,6 @@ pub struct ParsedBlock {
     pub extra_hash: Vec<u8>,
     pub proposals_hash: Vec<u8>,
     pub transactions_root: Vec<u8>,
-    pub uncles_hash: Vec<u8>,
     pub proposals: Vec<Vec<u8>>,
 }
 
@@ -55,7 +54,6 @@ impl BlockParser {
             extra_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
             transactions_root: parse_hex_to_bytes(&header.transactions_root),
-            uncles_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals,
         }
     }
@@ -81,7 +79,6 @@ impl BlockParser {
             extra_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals_hash: parse_hex_to_bytes(&header.proposals_hash),
             transactions_root: parse_hex_to_bytes(&header.transactions_root),
-            uncles_hash: parse_hex_to_bytes(&header.extra_hash),
             proposals: Vec::new(),
         }
     }
