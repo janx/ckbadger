@@ -292,7 +292,9 @@ impl BatchWriter {
         };
         batch.put_nft(&account.account_id, &entry);
         state.put_account(&account.account_id, entry);
-        batch.put_nft_by_collection(&DOTBIT_SENTINEL_COLLECTION, &account.account_id);
+        if !was_live {
+            batch.put_nft_by_collection(&DOTBIT_SENTINEL_COLLECTION, &account.account_id);
+        }
 
         // Update collection aggregate for new account or account re-activation.
         if existing.is_none() {

@@ -741,12 +741,6 @@ impl BatchWriter {
         batch.put_block_issuance(block_number, &issuance);
         Ok(())
     }
-
-    pub fn recalculate_dao_extended_statistics(&self, _current_block: i64) -> Result<()> {
-        // No-op placeholder: full DAO extended statistics recalculation is not implemented
-        // in incremental writer path yet.
-        Ok(())
-    }
 }
 
 #[cfg(test)]

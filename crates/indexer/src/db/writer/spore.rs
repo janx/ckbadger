@@ -451,7 +451,9 @@ impl BatchWriter {
         state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
 
         if new_is_did {
-            batch.put_nft_by_collection(&DID_CKB_SENTINEL_COLLECTION, &spore.spore_id);
+            if !(old_is_did && was_live) {
+                batch.put_nft_by_collection(&DID_CKB_SENTINEL_COLLECTION, &spore.spore_id);
+            }
             let mut agg = state
                 .get_did_collection_aggregate(self.store.as_ref())?
                 .unwrap_or_else(|| NftCollectionAggregate {
@@ -539,7 +541,9 @@ impl BatchWriter {
 
         // Write spore-by-cluster secondary index and update target cluster aggregates.
         if let Some(ref cluster_id) = new_cluster {
-            batch.put_spore_by_cluster(cluster_id, &spore.spore_id);
+            if !(was_live && old_cluster.as_ref() == Some(cluster_id)) {
+                batch.put_spore_by_cluster(cluster_id, &spore.spore_id);
+            }
 
             // Update cluster aggregate
             let mut agg = state.get_cluster_aggregate(self.store.as_ref(), cluster_id)?;
@@ -607,12 +611,6 @@ impl BatchWriter {
             state.put_cluster_aggregate(cluster_id, agg, batch);
         }
 
-        Ok(())
-    }
-
-    pub fn insert_spore_content(&self, _spore_id: &[u8], _content: &[u8]) -> Result<()> {
-        // Spore content is large binary data. We don't store it in the indexer store —
-        // it can be fetched from the CKB node's RocksDB when needed.
         Ok(())
     }
 

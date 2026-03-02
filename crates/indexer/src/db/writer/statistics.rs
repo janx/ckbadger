@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 
 use ckbadger_store::batch::StoreBatch;
@@ -378,21 +378,6 @@ impl BatchWriter {
         Ok(())
     }
 
-    pub fn update_block_time_distribution(&self, _block_time_seconds: i64) -> Result<()> {
-        // No-op: distribution is not maintained incrementally yet.
-        Ok(())
-    }
-
-    pub fn update_epoch_time_distribution(
-        &self,
-        _epoch_number: i64,
-        _epoch_duration_minutes: f64,
-        _batch: &mut StoreBatch,
-    ) -> Result<()> {
-        // No-op: distribution is not maintained incrementally yet.
-        Ok(())
-    }
-
     pub fn update_daily_block_stats_batch(
         &self,
         date: NaiveDate,
@@ -622,23 +607,110 @@ impl BatchWriter {
     }
 
     pub fn refresh_mnft_24h_transfers(&self) -> Result<u64> {
-        // No-op placeholder for future MNFT transfer-window maintenance.
-        Ok(0)
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
+
+        let collections = self.store.list_nft_collection_aggregates()?;
+        let mut total_deleted = 0u64;
+        for (collection_id, agg) in collections {
+            if agg.standard == NftStandard::MnftClass {
+                total_deleted += self
+                    .store
+                    .cleanup_old_nft_hourly_buckets(&collection_id, cutoff_hour)?;
+            }
+        }
+
+        Ok(total_deleted)
     }
 
-    pub fn rebuild_mnft_statistics(&self) -> Result<u64> {
-        // No-op placeholder for future full MNFT statistics rebuild.
-        Ok(0)
-    }
+    pub fn get_dao_deposits_at_block(&self, block_number: i64) -> Result<u128> {
+        if block_number < 0 {
+            bail!(
+                "invalid block number for DAO deposit lookup: block_number={}",
+                block_number
+            );
+        }
 
-    pub fn rebuild_all_statistics(&self) -> Result<()> {
-        // No-op placeholder for future full statistics rebuild.
-        Ok(())
-    }
+        let mut total: u128 = 0;
+        let iter = self
+            .store
+            .iterator_cf(self.store.cf_dao_deposits(), rocksdb::IteratorMode::Start);
 
-    pub fn get_dao_deposits_at_block(&self, _block_number: i64) -> Result<u128> {
-        // Not implemented: requires full DAO deposit aggregation at historical height.
-        Ok(0)
+        for item in iter {
+            let (key, value) = item
+                .map_err(|e| anyhow!("failed to iterate dao_deposits while aggregating: {}", e))?;
+            let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize dao_deposit while aggregating: outpoint=0x{}, error={}",
+                    hex::encode(&key),
+                    e
+                )
+            })?;
+
+            if entry.capacity < 0 {
+                bail!(
+                    "negative dao deposit capacity while aggregating: outpoint=0x{}, capacity={}",
+                    hex::encode(&key),
+                    entry.capacity
+                );
+            }
+
+            if entry.deposit_block_number > block_number {
+                continue;
+            }
+
+            let is_active = if let Some(withdraw_request_block) = entry.withdraw_request_block {
+                if withdraw_request_block < entry.deposit_block_number {
+                    let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                    bail!(
+                        "invalid dao deposit lifecycle while aggregating: deposit outpoint=0x{}:{}, deposit_block={}, withdraw_request_block={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        entry.deposit_block_number,
+                        withdraw_request_block
+                    );
+                }
+                block_number < withdraw_request_block
+            } else {
+                match entry.status {
+                    0 => true,
+                    1 | 2 => {
+                        let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                        bail!(
+                            "dao deposit missing withdraw_request_block while aggregating historical active deposits: outpoint=0x{}:{}, status={}, block_number={}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            entry.status,
+                            block_number
+                        );
+                    }
+                    other => {
+                        let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                        bail!(
+                            "unknown dao deposit status while aggregating: outpoint=0x{}:{}, status={}, block_number={}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            other,
+                            block_number
+                        );
+                    }
+                }
+            };
+
+            if !is_active {
+                continue;
+            }
+
+            total = total.checked_add(entry.capacity as u128).ok_or_else(|| {
+                anyhow!(
+                    "dao deposits total overflow while aggregating: block_number={}, outpoint=0x{}",
+                    block_number,
+                    hex::encode(&key)
+                )
+            })?;
+        }
+
+        Ok(total)
     }
 
     pub fn get_previous_epoch_duration_minutes(&self, epoch_number: i64) -> Result<Option<f64>> {
@@ -654,10 +726,28 @@ impl BatchWriter {
         Ok(None)
     }
 
-    pub fn get_last_epoch_start(&self, _before_block: i64) -> Result<Option<(i64, DateTime<Utc>)>> {
-        // This is complex to implement efficiently without an epoch->block index
-        // The caller should track epoch boundaries during sync
-        Ok(None)
+    pub fn get_last_epoch_start(&self, before_block: i64) -> Result<Option<(i64, DateTime<Utc>)>> {
+        if before_block <= 0 {
+            return Ok(None);
+        }
+
+        let mut best: Option<(i64, i64, DateTime<Utc>)> = None;
+        for epoch in self.store.list_epoch_stats()? {
+            if epoch.start_block >= before_block {
+                continue;
+            }
+            match &best {
+                Some((best_start_block, best_epoch_number, _))
+                    if epoch.start_block < *best_start_block
+                        || (epoch.start_block == *best_start_block
+                            && epoch.epoch_number <= *best_epoch_number) => {}
+                _ => {
+                    best = Some((epoch.start_block, epoch.epoch_number, epoch.start_timestamp));
+                }
+            }
+        }
+
+        Ok(best.map(|(_, epoch_number, ts)| (epoch_number, ts)))
     }
 }
 
@@ -677,6 +767,9 @@ pub fn calculate_knowledge_size(dao_field: &[u8]) -> Option<i128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use ckbadger_store::CkbadgerStore;
 
     const BURN_ADJUSTMENT: i128 = 504_000_000_000_000_000;
 
@@ -710,5 +803,135 @@ mod tests {
 
         let result = calculate_knowledge_size(&dao);
         assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn test_get_dao_deposits_at_block_tracks_lifecycle_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        // deposit A: active from block 10, withdrawn at block 20
+        let outpoint_a = keys::encode_outpoint(&[0x11; 32], 0);
+        store
+            .put_dao_deposit_direct(
+                &outpoint_a,
+                &DaoDepositCacheEntry {
+                    capacity: 100,
+                    deposit_block_number: 10,
+                    lock_script_hash: vec![0xAA; 32],
+                    deposit_ar: 1,
+                    status: 2,
+                    withdraw_request_tx: Some(vec![0x01; 32]),
+                    withdraw_request_output_index: Some(0),
+                    withdraw_request_block: Some(20),
+                    withdraw_request_ar: Some(2),
+                    withdraw_block: Some(25),
+                    withdraw_tx: Some(vec![0x02; 32]),
+                    withdraw_to_output_index: Some(0),
+                    compensation: Some(1),
+                },
+            )
+            .unwrap();
+
+        // deposit B: active from block 15 onward
+        let outpoint_b = keys::encode_outpoint(&[0x22; 32], 1);
+        store
+            .put_dao_deposit_direct(
+                &outpoint_b,
+                &DaoDepositCacheEntry {
+                    capacity: 200,
+                    deposit_block_number: 15,
+                    lock_script_hash: vec![0xBB; 32],
+                    deposit_ar: 1,
+                    status: 0,
+                    withdraw_request_tx: None,
+                    withdraw_request_output_index: None,
+                    withdraw_request_block: None,
+                    withdraw_request_ar: None,
+                    withdraw_block: None,
+                    withdraw_tx: None,
+                    withdraw_to_output_index: None,
+                    compensation: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(writer.get_dao_deposits_at_block(9).unwrap(), 0);
+        assert_eq!(writer.get_dao_deposits_at_block(10).unwrap(), 100);
+        assert_eq!(writer.get_dao_deposits_at_block(19).unwrap(), 300);
+        assert_eq!(writer.get_dao_deposits_at_block(20).unwrap(), 200);
+    }
+
+    #[test]
+    fn test_get_last_epoch_start_returns_latest_start_before_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let mut batch = StoreBatch::new(&store);
+        let ts0 = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let ts1 = DateTime::from_timestamp(1_700_000_800, 0).unwrap();
+        let ts2 = DateTime::from_timestamp(1_700_001_600, 0).unwrap();
+
+        writer
+            .upsert_epoch_statistics_batch(0, 0, 99, 100, ts0, ts0, 10, true, &mut batch)
+            .unwrap();
+        writer
+            .upsert_epoch_statistics_batch(1, 100, 199, 100, ts1, ts1, 10, true, &mut batch)
+            .unwrap();
+        writer
+            .upsert_epoch_statistics_batch(2, 200, 299, 100, ts2, ts2, 10, true, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(writer.get_last_epoch_start(200).unwrap(), Some((1, ts1)));
+        assert_eq!(writer.get_last_epoch_start(250).unwrap(), Some((2, ts2)));
+        assert_eq!(writer.get_last_epoch_start(0).unwrap(), None);
+    }
+
+    #[test]
+    fn test_refresh_mnft_24h_transfers_cleans_only_mnft_collections() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let current_hour = now_ms / 3_600_000;
+        let old_hour = current_hour - 100;
+
+        let mnft_collection = vec![0x10; 32];
+        let dotbit_collection = vec![0x20; 32];
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_nft_collection_aggregate(
+            &mnft_collection,
+            &NftCollectionAggregate {
+                standard: NftStandard::MnftClass,
+                ..Default::default()
+            },
+        );
+        seed.put_nft_collection_aggregate(
+            &dotbit_collection,
+            &NftCollectionAggregate {
+                standard: NftStandard::DotBit,
+                ..Default::default()
+            },
+        );
+        seed.put_nft_hourly_transfer(&mnft_collection, old_hour, 9);
+        seed.put_nft_hourly_transfer(&mnft_collection, current_hour, 3);
+        seed.put_nft_hourly_transfer(&dotbit_collection, old_hour, 7);
+        seed.commit().unwrap();
+
+        let deleted = writer.refresh_mnft_24h_transfers().unwrap();
+        assert_eq!(deleted, 1);
+
+        let mnft_old_key = keys::encode_nft_hourly_key(&mnft_collection, old_hour);
+        let mnft_new_key = keys::encode_nft_hourly_key(&mnft_collection, current_hour);
+        let dotbit_old_key = keys::encode_nft_hourly_key(&dotbit_collection, old_hour);
+
+        assert!(store.get_stats_key(&mnft_old_key).unwrap().is_none());
+        assert!(store.get_stats_key(&mnft_new_key).unwrap().is_some());
+        assert!(store.get_stats_key(&dotbit_old_key).unwrap().is_some());
     }
 }

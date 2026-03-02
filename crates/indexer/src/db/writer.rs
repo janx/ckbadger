@@ -10,7 +10,6 @@ mod core;
 mod dao;
 pub(crate) mod dotbit;
 pub mod hodl_wave;
-mod inputs;
 mod mnft;
 pub(crate) mod nft_activity_acc;
 mod reorg;

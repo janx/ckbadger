@@ -151,7 +151,12 @@ impl BatchWriter {
             },
         };
         batch.put_nft(&token.token_id, &entry);
-        batch.put_nft_by_collection(&token.class_id, &token.token_id);
+        let should_upsert_collection_index = !existing
+            .as_ref()
+            .is_some_and(|e| e.is_live && e.collection_id.as_ref() == Some(&token.class_id));
+        if should_upsert_collection_index {
+            batch.put_nft_by_collection(&token.class_id, &token.token_id);
+        }
 
         // Update collection aggregate if this is a new token
         if existing.is_none() {

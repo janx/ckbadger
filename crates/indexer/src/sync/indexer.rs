@@ -5336,27 +5336,6 @@ impl Indexer {
                             ));
                         }
 
-                        let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-                        if crossed_1000 && !self.is_bulk_sync_active() {
-                            match i64::try_from((end_block / 1000) * 1000) {
-                                Ok(update_block) => {
-                                    let writer = self.writer.clone();
-                                    tokio::spawn(async move {
-                                        if let Err(e) =
-                                            writer.recalculate_dao_extended_statistics(update_block)
-                                        {
-                                            warn!("Failed to recalculate DAO statistics: {}", e);
-                                        }
-                                    });
-                                }
-                                Err(_) => warn!(
-                                    run_id = %self.run_id,
-                                    end_block,
-                                    "Skipping DAO extended statistics recalc: block exceeds i64 range"
-                                ),
-                            }
-                        }
-
                         self.maybe_invalidate_chart_caches(end_block).await;
                         self.check_bulk_sync_completion().await;
                         self.ensure_compaction_mode(blocks_remaining);
@@ -5721,26 +5700,6 @@ impl Indexer {
                     Arc::clone(&self.secondary_issuance_semaphore),
                     issuance_blocks,
                 ));
-            }
-
-            let crossed_1000 = (start_block / 1000) != (end_block / 1000);
-            if crossed_1000 && !self.is_bulk_sync_active() {
-                match i64::try_from((end_block / 1000) * 1000) {
-                    Ok(update_block) => {
-                        let writer = self.writer.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = writer.recalculate_dao_extended_statistics(update_block)
-                            {
-                                warn!("Failed to recalculate DAO statistics: {}", e);
-                            }
-                        });
-                    }
-                    Err(_) => warn!(
-                        run_id = %self.run_id,
-                        end_block,
-                        "Skipping DAO extended statistics recalc: block exceeds i64 range"
-                    ),
-                }
             }
 
             self.maybe_invalidate_chart_caches(end_block).await;
@@ -6190,20 +6149,12 @@ impl Indexer {
         }
         let headers_ms = t_headers.elapsed().as_secs_f64() * 1000.0;
 
-        // Block proposals (no-op in RocksDB but kept for API compatibility)
+        // Block proposals are sourced from ckb-store-reader; only update cache indices here.
         let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
         for parsed_block in &all_parsed_blocks {
-            if !parsed_block.proposals.is_empty() {
-                self.writer
-                    .insert_block_proposals_batch(parsed_block.number, &parsed_block.proposals)?;
-                if !self.is_bulk_sync_active() {
-                    for (idx, proposal_id) in parsed_block.proposals.iter().enumerate() {
-                        batch_proposals.push((
-                            proposal_id.clone(),
-                            parsed_block.number,
-                            idx as i16,
-                        ));
-                    }
+            if !parsed_block.proposals.is_empty() && !self.is_bulk_sync_active() {
+                for (idx, proposal_id) in parsed_block.proposals.iter().enumerate() {
+                    batch_proposals.push((proposal_id.clone(), parsed_block.number, idx as i16));
                 }
             }
         }
@@ -6215,70 +6166,6 @@ impl Indexer {
                 batch_proposals,
                 last_bn,
             ));
-        }
-
-        // Inputs and flows (no-ops in RocksDB model)
-        let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
-            Vec::new();
-        for tx_data in &all_tx_data {
-            if !tx_data.is_cellbase {
-                for (input_index, input) in tx_data.inputs.iter().enumerate() {
-                    all_inputs.push((
-                        tx_data.hash.as_slice(),
-                        tx_data.block_number,
-                        input_index as i16,
-                        input,
-                    ));
-                }
-            }
-        }
-
-        let mut all_flows: Vec<(i64, &[u8], i16, i16, &[u8], i64, i32, Option<&[u8]>)> = Vec::new();
-        for tx_data in &all_tx_data {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                all_flows.push((
-                    tx_data.block_number,
-                    tx_data.hash.as_slice(),
-                    output_index as i16,
-                    0,
-                    cell.lock_script_hash.as_slice(),
-                    cell.capacity,
-                    cell.data_size,
-                    None,
-                ));
-            }
-        }
-        for tx_data in &all_tx_data {
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        all_flows.push((
-                            tx_data.block_number,
-                            input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
-                            1,
-                            info.lock_script_hash.as_slice(),
-                            info.capacity,
-                            info.data_size,
-                            Some(tx_data.hash.as_slice()),
-                        ));
-                    }
-                }
-            }
-        }
-
-        if !all_inputs.is_empty() {
-            self.writer.insert_transaction_inputs_batch(&all_inputs)?;
-        }
-        if !all_flows.is_empty() {
-            self.writer.insert_cell_flows_batch(&all_flows)?;
         }
 
         // Consume cells
@@ -7389,8 +7276,6 @@ impl Indexer {
                                 &mut nft_batch,
                                 &mut spore_state,
                             )?;
-                            self.writer
-                                .insert_spore_content(&spore.spore_id, &spore.content)?;
                             let coll_id = if spore.is_did {
                                 &DID_CKB_SENTINEL_COLLECTION[..]
                             } else if let Some(ref cid) = spore.cluster_id {
@@ -7756,8 +7641,6 @@ impl Indexer {
 
         // Build reference vectors from pre-computed data (Passes 1-3 done in parser)
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
-        let mut all_inputs: Vec<(&[u8], i64, i16, &crate::parser::transaction::ParsedInput)> =
-            Vec::new();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
         let mut txs_for_batch: Vec<_> = Vec::with_capacity(all_tx_data.len());
 
@@ -7792,15 +7675,6 @@ impl Indexer {
             }
 
             if !tx_data.is_cellbase {
-                for (input_index, input) in tx_data.inputs.iter().enumerate() {
-                    all_inputs.push((
-                        tx_data.hash.as_slice(),
-                        tx_data.block_number,
-                        input_index as i16,
-                        input,
-                    ));
-                }
-
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
                         input.previous_tx_hash.to_vec(),
@@ -7950,18 +7824,12 @@ impl Indexer {
             all_parsed_blocks.iter().collect();
 
         // Pass 4: Proposals (iterates all_parsed_blocks, spawns background cache task)
-        let mut all_proposals: Vec<(i64, i16, &[u8])> = Vec::new();
         let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
         let is_bulk = self.is_bulk_sync_active();
         let mut last_proposal_block: i64 = 0;
         for parsed_block in all_parsed_blocks {
             if !parsed_block.proposals.is_empty() {
                 for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
-                    all_proposals.push((
-                        parsed_block.number,
-                        proposal_index as i16,
-                        proposal_id.as_slice(),
-                    ));
                     if !is_bulk {
                         batch_proposals.push((
                             proposal_id.clone(),
@@ -8749,7 +8617,6 @@ impl Indexer {
                                         &mut batch,
                                         &mut spore_state,
                                     )?;
-                                    writer.insert_spore_content(&spore.spore_id, &spore.content)?;
                                     let coll_id = if spore.is_did {
                                         &DID_CKB_SENTINEL_COLLECTION[..]
                                     } else if let Some(ref cid) = spore.cluster_id {
@@ -9345,12 +9212,6 @@ impl Indexer {
                 self.writer
                     .insert_cells_batch(&all_cells, &mut data_batch, false)?;
             }
-            if !all_inputs.is_empty() {
-                self.writer.insert_transaction_inputs_batch(&all_inputs)?;
-            }
-            if !all_proposals.is_empty() {
-                self.writer.insert_proposals_batch(&all_proposals)?;
-            }
             if !all_consumptions.is_empty() {
                 self.writer.consume_cells_batch_preloaded(
                     &all_consumptions,
@@ -9937,8 +9798,6 @@ impl Indexer {
                                     &mut data_batch,
                                     &mut spore_state,
                                 )?;
-                                self.writer
-                                    .insert_spore_content(&spore.spore_id, &spore.content)?;
                                 let coll_id = if spore.is_did {
                                     &DID_CKB_SENTINEL_COLLECTION[..]
                                 } else if let Some(ref cid) = spore.cluster_id {

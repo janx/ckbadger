@@ -820,6 +820,32 @@ impl CkbadgerStore {
         Ok(deleted)
     }
 
+    /// Delete NFT hourly buckets older than the cutoff hour for a collection.
+    pub fn cleanup_old_nft_hourly_buckets(
+        &self,
+        collection_id: &[u8],
+        cutoff_hour: i64,
+    ) -> anyhow::Result<u64> {
+        let prefix = keys::encode_nft_hourly_prefix(collection_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
+        let mut deleted = 0u64;
+
+        for item in iter.flatten() {
+            let (key, _value) = item;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() == 41 {
+                let hour = i64::from_be_bytes(key[33..41].try_into().unwrap());
+                if hour < cutoff_hour {
+                    self.delete_cf(self.cf_stats_nft(), &key)?;
+                    deleted += 1;
+                }
+            }
+        }
+        Ok(deleted)
+    }
+
     /// Migrate transfer stats into TokenInfo.transfers_count for all tokens.
     /// Reads from the stats CF and writes back into the tokens CF.
     pub fn migrate_token_transfer_stats(&self) -> anyhow::Result<u64> {
@@ -1716,6 +1742,32 @@ mod tests {
             store.get_token_24h_transfers(&type_hash, now_ms).unwrap(),
             10 // only current_hour is within 24h window (current_hour - 24 == cutoff, excluded)
         );
+    }
+
+    #[test]
+    fn test_cleanup_old_nft_hourly_buckets() {
+        let (_dir, store) = test_store();
+        let collection_id = [0x16u8; 32];
+        let current_hour = 510_000i64;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_hourly_transfer(&collection_id, current_hour, 10);
+        batch.put_nft_hourly_transfer(&collection_id, current_hour - 24, 20);
+        batch.put_nft_hourly_transfer(&collection_id, current_hour - 100, 30);
+        batch.commit().unwrap();
+
+        let cutoff = current_hour - 48;
+        let deleted = store
+            .cleanup_old_nft_hourly_buckets(&collection_id, cutoff)
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        let keep_key = keys::encode_nft_hourly_key(&collection_id, current_hour);
+        let keep_key2 = keys::encode_nft_hourly_key(&collection_id, current_hour - 24);
+        let deleted_key = keys::encode_nft_hourly_key(&collection_id, current_hour - 100);
+        assert!(store.get_stats_key(&keep_key).unwrap().is_some());
+        assert!(store.get_stats_key(&keep_key2).unwrap().is_some());
+        assert!(store.get_stats_key(&deleted_key).unwrap().is_none());
     }
 
     #[test]

@@ -5,7 +5,7 @@ use tracing::warn;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{TokenDailyDelta, TokenInfo, TokenTransferRecord};
 
-use crate::parser::{ParsedUdtCell, ParsedUdtTransfer};
+use crate::parser::ParsedUdtTransfer;
 
 use super::BatchWriter;
 
@@ -178,24 +178,6 @@ impl BatchWriter {
         Ok(result)
     }
 
-    /// Insert UDT cells into the store. UDT cell data is part of the live_cells CF
-    /// (already written by cells.rs), so this is a no-op for the cell data itself.
-    /// The token-specific metadata is handled by process_udt_transfers_batch.
-    pub fn insert_udt_cells_batch(
-        &self,
-        _cells: &[(&[u8], i16, &ParsedUdtCell, i64)],
-    ) -> Result<()> {
-        // UDT cell data (outpoint → cell info) is already stored in live_cells CF
-        // by the cells writer. No separate UDT cells table needed.
-        Ok(())
-    }
-
-    /// Mark UDT cells as consumed. Already handled by cells.rs consume_cells_batch.
-    pub fn consume_udt_cells_batch(&self, _outpoints: &[(&[u8], i16, i64, &[u8])]) -> Result<()> {
-        // Cell consumption is handled by cells.rs which moves from live_cells to consumed_cells.
-        Ok(())
-    }
-
     /// Process a batch of UDT transfers: upsert tokens and update holder balances.
     /// `block_timestamps` maps block_number → timestamp_ms for hourly bucket computation.
     pub fn process_udt_transfers_batch(
@@ -241,8 +223,9 @@ impl BatchWriter {
             }
         }
 
-        // Step 2: Upsert tokens + transfer counts (merged to avoid double iteration)
-        // Track in-flight token state so Step 5 can update holders on newly-created tokens.
+        // Step 2: Upsert tokens + transfer counts (in-memory first).
+        // Track in-flight token state so Step 5 can update holders on newly-created tokens,
+        // then persist each token once after holder adjustments.
         let mut inflight_tokens: HashMap<Vec<u8>, TokenInfo> = HashMap::new();
 
         for (type_hash, update) in &token_updates {
@@ -293,7 +276,6 @@ impl BatchWriter {
 
             // Embed transfers_count into TokenInfo
             updated.transfers_count = new_total;
-            batch.put_token(type_hash, &updated);
             inflight_tokens.insert(type_hash.clone(), updated);
 
             // Also write to stats CF (source of truth for accumulation)
@@ -396,14 +378,19 @@ impl BatchWriter {
         // Step 5: Update holder counts on tokens using in-flight state
         for (type_hash, holder_delta) in &holder_count_changes {
             if *holder_delta != 0 {
-                // Use in-flight token from Step 2 (handles both new and existing tokens).
-                // Fallback to store for tokens not in this batch (shouldn't happen, but safe).
-                let info = inflight_tokens
-                    .get(type_hash)
-                    .cloned()
-                    .or_else(|| self.store.get_token(type_hash).ok().flatten());
-
-                if let Some(mut info) = info {
+                if let Some(info) = inflight_tokens.get_mut(type_hash) {
+                    let next_holders_count = info.holders_count + holder_delta;
+                    if next_holders_count < 0 {
+                        bail!(
+                            "token holders count underflow: type_hash=0x{}, holders_count={}, delta={}",
+                            hex::encode(type_hash),
+                            info.holders_count,
+                            holder_delta
+                        );
+                    }
+                    info.holders_count = next_holders_count;
+                } else if let Some(mut info) = self.store.get_token(type_hash)? {
+                    // Fallback path for tokens not touched in Step 2 (defensive).
                     let next_holders_count = info.holders_count + holder_delta;
                     if next_holders_count < 0 {
                         bail!(
@@ -417,6 +404,11 @@ impl BatchWriter {
                     batch.put_token(type_hash, &info);
                 }
             }
+        }
+
+        // Persist each in-flight token once after all adjustments.
+        for (type_hash, info) in &inflight_tokens {
+            batch.put_token(type_hash, info);
         }
 
         // Step 6: Write individual transfer records for the token transfers tab.
@@ -853,6 +845,63 @@ mod tests {
         let updated = store.get_token(&type_hash).unwrap().unwrap();
         assert_eq!(updated.total_supply, Some(123));
         assert_eq!(updated.max_supply, Some(1_000));
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_persists_transfer_and_holder_updates_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xAD; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 100,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let to_lock_hash = vec![0x33; 32];
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: to_lock_hash.clone(),
+            amount: 50u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+
+        let tx_hash = [0xEF; 32];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(101i64, 1_700_000_000_000i64);
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 101i64)];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_udt_transfers_batch(&transfers, &HashMap::new(), &block_timestamps, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let updated = store.get_token(&type_hash).unwrap().unwrap();
+        assert_eq!(updated.total_supply, Some(50));
+        assert_eq!(updated.transfers_count, 1);
+        assert_eq!(updated.holders_count, 1);
+        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 1);
     }
 
     #[test]
