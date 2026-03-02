@@ -3568,7 +3568,9 @@ impl Indexer {
                 }
                 Ok(SyncAction::Continue) => {}
                 Ok(SyncAction::ReorgHandled) => {
-                    info!("Reorg handled, continuing sync from fork point");
+                    self.cell_cache.clear();
+                    self.udt_cell_cache.clear();
+                    info!("Reorg handled, caches cleared, continuing sync from fork point");
                 }
                 Ok(SyncAction::DeepForkPaused) => {
                     warn!("Deep fork detected, sync paused");
@@ -5141,6 +5143,8 @@ impl Indexer {
                                     .await?
                                 {
                                     Some(ReorgAction::Handled(_)) => {
+                                        self.cell_cache.clear();
+                                        self.udt_cell_cache.clear();
                                         let current_epoch =
                                             self.pipeline_reset_epoch.load(Ordering::SeqCst);
                                         info!(
@@ -5148,7 +5152,7 @@ impl Indexer {
                                             pipeline_epoch = current_epoch,
                                             db_tip,
                                             chain_tip,
-                                            "Reorg handled, draining stale parsed batches"
+                                            "Reorg handled, caches cleared, draining stale parsed batches"
                                         );
                                         self.request_pipeline_reset(
                                             "reorg handled",
@@ -5456,11 +5460,14 @@ impl Indexer {
                                     )
                                 })
                                 .collect();
+                            let spawned_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
                             tokio::spawn(Self::run_secondary_issuance_batch(
                                 self.rpc.clone(),
                                 self.writer.clone(),
                                 Arc::clone(&self.secondary_issuance_semaphore),
                                 issuance_blocks,
+                                Arc::clone(&self.pipeline_reset_epoch),
+                                spawned_epoch,
                             ));
                         }
 
@@ -5830,11 +5837,14 @@ impl Indexer {
                         block_timestamp,
                     ));
                 }
+                let spawned_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
                 tokio::spawn(Self::run_secondary_issuance_batch(
                     self.rpc.clone(),
                     self.writer.clone(),
                     Arc::clone(&self.secondary_issuance_semaphore),
                     issuance_blocks,
+                    Arc::clone(&self.pipeline_reset_epoch),
+                    spawned_epoch,
                 ));
             }
 
@@ -11421,11 +11431,14 @@ impl Indexer {
 
     /// Run secondary issuance updates for a batch of blocks, gated by the semaphore.
     /// Called from a spawned task — does not require &self.
+    /// The `pipeline_epoch` / `spawned_epoch` pair aborts stale tasks after reorg.
     async fn run_secondary_issuance_batch(
         rpc: CkbRpcClient,
         writer: BatchWriter,
         sem: Arc<tokio::sync::Semaphore>,
         blocks: Vec<(String, String, i64, DateTime<Utc>)>,
+        pipeline_epoch: Arc<AtomicU64>,
+        spawned_epoch: u64,
     ) {
         let _permit = match tokio::time::timeout(Duration::from_secs(5), sem.acquire()).await {
             Ok(Ok(permit)) => permit,
@@ -11439,6 +11452,15 @@ impl Indexer {
             }
         };
         for (hash, dao, number, timestamp) in blocks {
+            if pipeline_epoch.load(Ordering::SeqCst) != spawned_epoch {
+                info!(
+                    "Aborting stale secondary issuance task (epoch changed: spawned={}, current={}), remaining blocks starting at {}",
+                    spawned_epoch,
+                    pipeline_epoch.load(Ordering::SeqCst),
+                    number
+                );
+                return;
+            }
             if let Err(e) =
                 Self::update_secondary_issuance(&rpc, &writer, &hash, &dao, number, timestamp).await
             {
