@@ -11,15 +11,11 @@ use ckbadger_store::CkbadgerStore;
 #[command(name = "ckbadger-api")]
 #[command(about = "API server for ckbadger CKB explorer")]
 struct Args {
-    #[arg(
-        long,
-        env = "CKBADGER_DATA_PATH",
-        default_value = "./data/ckbadger-store"
-    )]
-    data_path: String,
+    #[arg(long = "domain-data-path", env = "CKBADGER_DOMAIN_DATA_PATH")]
+    domain_data_path: Option<String>,
 
-    #[arg(long, env = "CKBADGER_DERIVED_DATA_PATH")]
-    derived_data_path: Option<String>,
+    #[arg(long = "append-only-data-path", env = "CKBADGER_APPEND_ONLY_DATA_PATH")]
+    append_only_data_path: Option<String>,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
@@ -62,28 +58,28 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+    let domain_data_path = resolve_domain_data_path(args.domain_data_path.clone());
+    let append_only_data_path =
+        resolve_append_only_data_path(args.append_only_data_path.clone(), &domain_data_path);
 
     let redis_url = args.redis_url.or_else(|| std::env::var("REDIS_URL").ok());
 
-    let secondary_path = format!("{}-api-secondary", args.data_path);
+    let secondary_path = format!("{}-api-secondary", domain_data_path);
     info!(
-        "Opening ckbadger-store (secondary) at: {} -> {}",
-        args.data_path, secondary_path
+        "Opening ckbadger domain store (secondary) at: {} -> {}",
+        domain_data_path, secondary_path
     );
     let store = Arc::new(CkbadgerStore::open_secondary(
-        &args.data_path,
+        &domain_data_path,
         &secondary_path,
     )?);
-    let derived_data_path = args
-        .derived_data_path
-        .unwrap_or_else(|| format!("{}-derived", args.data_path));
-    let derived_secondary_path = format!("{}-api-secondary", derived_data_path);
+    let derived_secondary_path = format!("{}-api-secondary", append_only_data_path);
     info!(
-        "Opening ckbadger-derived-store (secondary) at: {} -> {}",
-        derived_data_path, derived_secondary_path
+        "Opening ckbadger append-only store (secondary) at: {} -> {}",
+        append_only_data_path, derived_secondary_path
     );
     let derived_store = Arc::new(CkbadgerStore::open_secondary(
-        &derived_data_path,
+        &append_only_data_path,
         &derived_secondary_path,
     )?);
 
@@ -107,4 +103,85 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn resolve_domain_data_path(explicit: Option<String>) -> String {
+    resolve_domain_data_path_from_sources(explicit, std::env::var("CKBADGER_DOMAIN_DATA_PATH").ok())
+}
+
+fn resolve_append_only_data_path(explicit: Option<String>, domain_data_path: &str) -> String {
+    resolve_append_only_data_path_from_sources(
+        explicit,
+        std::env::var("CKBADGER_APPEND_ONLY_DATA_PATH").ok(),
+        domain_data_path,
+    )
+}
+
+fn resolve_domain_data_path_from_sources(
+    explicit: Option<String>,
+    domain_env: Option<String>,
+) -> String {
+    explicit
+        .or(domain_env)
+        .unwrap_or_else(|| "./data/ckbadger-store".to_string())
+}
+
+fn resolve_append_only_data_path_from_sources(
+    explicit: Option<String>,
+    append_only_env: Option<String>,
+    domain_data_path: &str,
+) -> String {
+    explicit
+        .or(append_only_env)
+        .unwrap_or_else(|| format!("{}-append-only", domain_data_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        resolve_append_only_data_path_from_sources, resolve_domain_data_path_from_sources,
+    };
+
+    #[test]
+    fn test_resolve_domain_data_path_from_sources() {
+        assert_eq!(
+            resolve_domain_data_path_from_sources(
+                Some("/explicit/domain".to_string()),
+                Some("/env/domain".to_string()),
+            ),
+            "/explicit/domain"
+        );
+        assert_eq!(
+            resolve_domain_data_path_from_sources(None, Some("/env/domain".to_string())),
+            "/env/domain"
+        );
+        assert_eq!(
+            resolve_domain_data_path_from_sources(None, None),
+            "./data/ckbadger-store"
+        );
+    }
+
+    #[test]
+    fn test_resolve_append_only_data_path_from_sources() {
+        assert_eq!(
+            resolve_append_only_data_path_from_sources(
+                Some("/explicit/append".to_string()),
+                Some("/env/append".to_string()),
+                "/domain",
+            ),
+            "/explicit/append"
+        );
+        assert_eq!(
+            resolve_append_only_data_path_from_sources(
+                None,
+                Some("/env/append".to_string()),
+                "/domain"
+            ),
+            "/env/append"
+        );
+        assert_eq!(
+            resolve_append_only_data_path_from_sources(None, None, "/domain"),
+            "/domain-append-only"
+        );
+    }
 }

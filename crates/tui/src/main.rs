@@ -22,12 +22,8 @@ use ui::App;
 #[command(name = "ckbadger-tui")]
 #[command(about = "Terminal UI for ckbadger sync and memory monitoring")]
 struct Args {
-    #[arg(
-        long,
-        env = "CKBADGER_DATA_PATH",
-        default_value = "./data/ckbadger-store"
-    )]
-    data_path: String,
+    #[arg(long = "domain-data-path", env = "CKBADGER_DOMAIN_DATA_PATH")]
+    domain_data_path: Option<String>,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
@@ -44,8 +40,12 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     let args = Args::parse();
+    let domain_data_path = resolve_domain_data_path(
+        args.domain_data_path,
+        std::env::var("CKBADGER_DOMAIN_DATA_PATH").ok(),
+    );
 
-    let store = Arc::new(CkbadgerStore::open(&args.data_path)?);
+    let store = Arc::new(CkbadgerStore::open(&domain_data_path)?);
     let db = TuiDb::new(store, args.redis_url.as_deref(), &args.api_url).await;
 
     enable_raw_mode()?;
@@ -120,5 +120,35 @@ async fn run_app<B: ratatui::backend::Backend>(
         if app.should_refresh(refresh_interval) {
             app.refresh().await;
         }
+    }
+}
+
+fn resolve_domain_data_path(explicit: Option<String>, domain_env: Option<String>) -> String {
+    explicit
+        .or(domain_env)
+        .unwrap_or_else(|| "./data/ckbadger-store".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_domain_data_path;
+
+    #[test]
+    fn test_resolve_domain_data_path() {
+        assert_eq!(
+            resolve_domain_data_path(
+                Some("/explicit/domain".to_string()),
+                Some("/env/domain".to_string()),
+            ),
+            "/explicit/domain"
+        );
+        assert_eq!(
+            resolve_domain_data_path(None, Some("/env/domain".to_string())),
+            "/env/domain"
+        );
+        assert_eq!(
+            resolve_domain_data_path(None, None),
+            "./data/ckbadger-store"
+        );
     }
 }

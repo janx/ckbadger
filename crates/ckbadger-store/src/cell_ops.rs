@@ -4,7 +4,20 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{decode_consumed_cell_info, ConsumedCellInfo, LiveCellInfo};
+use crate::types::{
+    decode_consumed_cell_info, decode_consumed_cell_meta, ConsumedCellInfo, ConsumedCellMeta,
+    LiveCellInfo,
+};
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
 
 /// Aggregated cell statistics for a token.
 #[derive(Debug, Clone, Default)]
@@ -15,16 +28,48 @@ pub struct TokenCellStats {
 }
 
 impl CkbadgerStore {
+    pub fn get_cell_by_outpoint_key(
+        &self,
+        outpoint_key: &[u8],
+    ) -> anyhow::Result<Option<LiveCellInfo>> {
+        match self.get_cf(self.cf_cells(), outpoint_key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_live_cell_by_outpoint_key(
+        &self,
+        outpoint_key: &[u8],
+    ) -> anyhow::Result<Option<LiveCellInfo>> {
+        if self.get_cf(self.cf_live_cells(), outpoint_key)?.is_none() {
+            return Ok(None);
+        }
+        self.get_cell_by_outpoint_key(outpoint_key)
+    }
+
+    pub fn get_consumed_cell_meta_by_outpoint_key(
+        &self,
+        outpoint_key: &[u8],
+    ) -> anyhow::Result<Option<ConsumedCellMeta>> {
+        match self.get_cf(self.cf_consumed_cells(), outpoint_key)? {
+            Some(value) => decode_consumed_cell_meta(&value).map(Some).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "failed to decode consumed cell meta: outpoint=0x{}",
+                    bytes_to_hex(outpoint_key)
+                )
+            }),
+            None => Ok(None),
+        }
+    }
+
     pub fn get_cell(
         &self,
         tx_hash: &[u8],
         output_index: i16,
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        match self.get_cf(self.cf_live_cells(), &key)? {
-            Some(value) => Ok(bincode::deserialize(&value).ok()),
-            None => Ok(None),
-        }
+        self.get_live_cell_by_outpoint_key(&key)
     }
 
     pub fn get_cells_batch(
@@ -32,21 +77,33 @@ impl CkbadgerStore {
         outpoints: &[(&[u8], i16)],
     ) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
         let mut result = HashMap::with_capacity(outpoints.len());
-        let cf = self.cf_live_cells();
+        let live_cf = self.cf_live_cells();
+        let cells_cf = self.cf_cells();
 
         let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_outpoint(tx_hash, *idx))
             .collect();
 
-        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
-            keys.iter().map(|k| (cf, k.as_slice())).collect();
-        let values = self.multi_get_cf(cf_keys);
+        let live_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (live_cf, k.as_slice())).collect();
+        let live_values = self.multi_get_cf(live_cf_keys);
 
-        for (i, value_result) in values.into_iter().enumerate() {
+        let mut present_indices = Vec::new();
+        let mut cell_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
+        for (i, marker_result) in live_values.into_iter().enumerate() {
+            if matches!(marker_result, Ok(Some(_))) {
+                present_indices.push(i);
+                cell_cf_keys.push((cells_cf, keys[i].as_slice()));
+            }
+        }
+
+        let cell_values = self.multi_get_cf(cell_cf_keys);
+        for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             if let Ok(Some(value)) = value_result {
                 if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                    let (tx_hash, idx) = outpoints[i];
+                    let outpoint_idx = present_indices[batch_idx];
+                    let (tx_hash, idx) = outpoints[outpoint_idx];
                     result.insert((tx_hash.to_vec(), idx), info);
                 }
             }
@@ -70,10 +127,34 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<ConsumedCellInfo>> {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        match self.get_cf(self.cf_consumed_cells(), &key)? {
-            Some(value) => Ok(decode_consumed_cell_info(&value)),
-            None => Ok(None),
+        let Some(value) = self.get_cf(self.cf_consumed_cells(), &key)? else {
+            return Ok(None);
+        };
+
+        // Legacy schema stored full ConsumedCellInfo in consumed_cells.
+        if let Some(info) = decode_consumed_cell_info(&value) {
+            return Ok(Some(info));
         }
+
+        let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "failed to decode consumed cell meta: outpoint=0x{}:{}",
+                bytes_to_hex(tx_hash),
+                output_index
+            )
+        })?;
+        let cell = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing canonical cell for consumed outpoint: outpoint=0x{}:{}",
+                bytes_to_hex(tx_hash),
+                output_index
+            )
+        })?;
+        Ok(Some(ConsumedCellInfo {
+            cell,
+            consumed_at_block: meta.consumed_at_block,
+            consumed_by_tx: meta.consumed_by_tx,
+        }))
     }
 
     pub fn get_consumed_cells_batch(
@@ -81,24 +162,9 @@ impl CkbadgerStore {
         outpoints: &[(&[u8], i16)],
     ) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
         let mut result = HashMap::with_capacity(outpoints.len());
-        let cf = self.cf_consumed_cells();
-
-        let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
-            .iter()
-            .map(|(tx_hash, idx)| keys::encode_outpoint(tx_hash, *idx))
-            .collect();
-
-        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
-            keys.iter().map(|k| (cf, k.as_slice())).collect();
-        let values = self.multi_get_cf(cf_keys);
-
-        for (i, value_result) in values.into_iter().enumerate() {
-            if let Ok(Some(value)) = value_result {
-                let info = decode_consumed_cell_info(&value).map(|c| c.to_live_cell_info());
-                if let Some(info) = info {
-                    let (tx_hash, idx) = outpoints[i];
-                    result.insert((tx_hash.to_vec(), idx), info);
-                }
+        for (tx_hash, idx) in outpoints {
+            if let Ok(Some(info)) = self.get_consumed_cell(tx_hash, *idx) {
+                result.insert((tx_hash.to_vec(), *idx), info);
             }
         }
         result
@@ -257,37 +323,38 @@ impl CkbadgerStore {
 
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                if key.len() == keys::OUTPOINT_KEY_SIZE {
-                    let (tx_hash, output_index) = keys::decode_outpoint(&key);
+            let (key, _) = item;
+            if key.len() == keys::OUTPOINT_KEY_SIZE {
+                let Some(info) = self.get_cell_by_outpoint_key(&key)? else {
+                    continue;
+                };
+                let (tx_hash, output_index) = keys::decode_outpoint(&key);
 
-                    // Index by lock code hash
+                // Index by lock code hash
+                let idx_key = keys::encode_cell_index_key(
+                    &info.lock_code_hash,
+                    info.created_at_block,
+                    &tx_hash,
+                    output_index,
+                );
+                batch.put_cf(self.cf_cell_by_lock_code(), idx_key, []);
+
+                // Index by type code hash (if present)
+                if let Some(ref type_code_hash) = info.type_code_hash {
                     let idx_key = keys::encode_cell_index_key(
-                        &info.lock_code_hash,
+                        type_code_hash,
                         info.created_at_block,
                         &tx_hash,
                         output_index,
                     );
-                    batch.put_cf(self.cf_cell_by_lock_code(), idx_key, []);
+                    batch.put_cf(self.cf_cell_by_type_code(), idx_key, []);
+                }
 
-                    // Index by type code hash (if present)
-                    if let Some(ref type_code_hash) = info.type_code_hash {
-                        let idx_key = keys::encode_cell_index_key(
-                            type_code_hash,
-                            info.created_at_block,
-                            &tx_hash,
-                            output_index,
-                        );
-                        batch.put_cf(self.cf_cell_by_type_code(), idx_key, []);
-                    }
-
-                    count += 1;
-                    #[allow(clippy::manual_is_multiple_of)]
-                    if count % batch_size as u64 == 0 {
-                        self.write_batch(std::mem::take(&mut batch))?;
-                        batch = rocksdb::WriteBatch::default();
-                    }
+                count += 1;
+                #[allow(clippy::manual_is_multiple_of)]
+                if count % batch_size as u64 == 0 {
+                    self.write_batch(std::mem::take(&mut batch))?;
+                    batch = rocksdb::WriteBatch::default();
                 }
             }
         }
@@ -365,12 +432,13 @@ impl CkbadgerStore {
         let mut result = Vec::new();
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                if info.created_at_block > block_number {
-                    let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                    result.push((tx_hash, output_index, info));
-                }
+            let (key, _) = item;
+            let Ok(Some(info)) = self.get_cell_by_outpoint_key(&key) else {
+                continue;
+            };
+            if info.created_at_block > block_number {
+                let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                result.push((tx_hash, output_index, info));
             }
         }
         result
@@ -414,11 +482,14 @@ mod tests {
         type_hash: &[u8],
         cell: &LiveCellInfo,
     ) {
-        // Write to live_cells
+        // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
         let value = bincode::serialize(cell).unwrap();
         store
-            .put_cf(store.cf_live_cells(), &outpoint_key, &value)
+            .put_cf(store.cf_cells(), &outpoint_key, &value)
+            .unwrap();
+        store
+            .put_cf(store.cf_live_cells(), &outpoint_key, &[])
             .unwrap();
 
         // Write to cell_by_type index
@@ -508,6 +579,7 @@ mod tests {
         let consumed_by_tx = [0x22u8; 32];
 
         let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, 0, &consumed_cell);
         batch.put_consumed_cell_with_consumer(
             &tx_hash,
             0,
@@ -515,6 +587,7 @@ mod tests {
             12345,
             Some(&consumed_by_tx),
         );
+        batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
         let info = store.get_consumed_cell_info(&tx_hash, 0).unwrap().unwrap();

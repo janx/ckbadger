@@ -103,21 +103,10 @@ impl BatchWriter {
         let mut result = HashMap::with_capacity(outpoints.len());
 
         for &(tx_hash, output_index) in outpoints {
-            let outpoint_key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
-
             // UDT transfer inputs must come from pre-batch live state.
             // Do not fall back to consumed_cells here: historical consumed entries
             // can reintroduce already-spent cells and produce false negative deltas.
-            let cell_info = if let Some(val) = self
-                .store
-                .get_cf(self.store.cf_live_cells(), &outpoint_key)?
-            {
-                Some(bincode::deserialize::<ckbadger_store::types::LiveCellInfo>(
-                    &val,
-                )?)
-            } else {
-                None
-            };
+            let cell_info = self.store.get_cell(tx_hash, output_index)?;
 
             if let Some(info) = cell_info {
                 // Only include cells that have a type script hash (UDT cells always have one).

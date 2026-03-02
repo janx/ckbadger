@@ -35,7 +35,7 @@ OPTIONS:
   --help                 Show this help message
 
 ENVIRONMENT VARIABLES:
-  CKBADGER_DATA_PATH     Path to ckbadger-store RocksDB data (required)
+  CKBADGER_DOMAIN_DATA_PATH Path to ckbadger-store RocksDB data (required)
   CKB_RPC_URL            CKB node RPC URL (optional, for reference)
   OUTPUT_DIR             Default output directory (overridden by --output-dir)
 
@@ -55,7 +55,7 @@ EXAMPLES:
 NOTES:
   - This script monitors a running indexer process
   - It does NOT start or stop the indexer
-  - Requires CKBADGER_DATA_PATH environment variable
+  - Requires CKBADGER_DOMAIN_DATA_PATH environment variable
   - Requires indexer logs available at /tmp/ckbadger-indexer.log
   - Outputs CSV format with columns:
     checkpoint,blocks_synced,duration_sec,blocks_per_sec,memory_mb
@@ -115,8 +115,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -z "$CKBADGER_DATA_PATH" ]; then
-    log_error "CKBADGER_DATA_PATH environment variable is not set"
+if [ -z "$CKBADGER_DOMAIN_DATA_PATH" ]; then
+    log_error "CKBADGER_DOMAIN_DATA_PATH environment variable is not set"
     exit 1
 fi
 
@@ -181,7 +181,7 @@ log_info "  End Block: $END_BLOCK"
 log_info "  Checkpoints: $CHECKPOINTS"
 log_info "  Output File: $OUTPUT_FILE"
 log_info "  Summary File: $SUMMARY_FILE"
-log_info "  Data Path: $CKBADGER_DATA_PATH"
+log_info "  Data Path: $CKBADGER_DOMAIN_DATA_PATH"
 if [ "$QUICK_MODE" = true ]; then
     log_info "  Mode: QUICK (100K blocks)"
 fi
@@ -277,7 +277,7 @@ fi
     echo ""
     echo "- Run ID: $RUN_ID"
     echo "- Generated at (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "- Data path: \`$CKBADGER_DATA_PATH\`"
+    echo "- Data path: \`$CKBADGER_DOMAIN_DATA_PATH\`"
     echo "- Start tip: $INITIAL_TIP"
     echo "- End tip: $FINAL_TIP"
     echo "- Total blocks synced: $TOTAL_BLOCKS"

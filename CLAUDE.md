@@ -166,7 +166,7 @@ Redis keys: `sync:status` (60s TTL), `sync:progress` (30s), `memory:stats` (30s)
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Two logical RocksDB stores: core (`CKBADGER_DATA_PATH`, default `./data/ckbadger-store`) and derived (`CKBADGER_DERIVED_DATA_PATH`, default `./data/ckbadger-store-derived`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (31 CFs).
+Two logical RocksDB stores: domain (`CKBADGER_DOMAIN_DATA_PATH`, default `./data/ckbadger-store`) and append-only (`CKBADGER_APPEND_ONLY_DATA_PATH`, default `./data/ckbadger-store-append-only`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (31 CFs).
 
 Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 

@@ -7,8 +7,8 @@ use rocksdb::{IteratorMode, WriteBatch};
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    decode_consumed_cell_info, AssetAction, LiveCellInfo, TokenActivityEntry,
-    TokenActivityTransfer, TokenDailyDelta, TokenInfo, TokenTransferRecord,
+    AssetAction, LiveCellInfo, TokenActivityEntry, TokenActivityTransfer, TokenDailyDelta,
+    TokenInfo, TokenTransferRecord,
 };
 
 const TOKEN_REBUILD_BATCH_SIZE: usize = 20_000;
@@ -457,20 +457,21 @@ impl CkbadgerStore {
         // 1) Aggregate live cells: +created
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             result.live_cells_scanned += 1;
 
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
 
-            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize live cell while rebuilding token daily deltas: outpoint=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
-                )
-            })?;
+            let info: LiveCellInfo = self
+                .get_cell_by_outpoint_key(&key)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing canonical cell for live marker while rebuilding token daily deltas: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
             let Some(type_hash) = info.type_script_hash.as_ref() else {
                 continue;
             };
@@ -507,19 +508,22 @@ impl CkbadgerStore {
         // 2) Aggregate consumed cells: +created, -consumed
         let iter = self.iterator_cf(self.cf_consumed_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             result.consumed_cells_scanned += 1;
 
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
 
-            let consumed = decode_consumed_cell_info(&value).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "failed to decode consumed cell while rebuilding token daily deltas: outpoint=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
+            let (tx_hash, output_index) = keys::decode_outpoint(&key);
+            let consumed = self
+                .get_consumed_cell_info(&tx_hash, output_index)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing consumed cell info while rebuilding token daily deltas: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
             let info = consumed.cell;
             let Some(type_hash) = info.type_script_hash.as_ref() else {
                 continue;
@@ -1086,15 +1090,14 @@ impl CkbadgerStore {
         let mut live_aggs: HashMap<Vec<u8>, LiveTokenAgg> = HashMap::new();
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
+            let info: LiveCellInfo = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "failed to deserialize live cell during token rebuild: outpoint=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
+                    "missing canonical cell for live marker during token rebuild: outpoint=0x{}",
+                    bytes_to_hex(&key)
                 )
             })?;
             let Some(type_hash) = info.type_script_hash.as_ref() else {

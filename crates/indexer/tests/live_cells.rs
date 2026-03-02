@@ -49,10 +49,15 @@ fn test_insert_cell_visible_in_live_cells() {
     batch.put_cell(&tx_hash, 0, &cell);
     batch.commit().unwrap();
 
-    // Verify the cell exists in live_cells via raw get_cf
+    // Verify live marker + canonical payload.
     let key = keys::encode_outpoint(&tx_hash, 0);
-    let raw = store.get_cf(store.cf_live_cells(), &key).unwrap();
-    assert!(raw.is_some(), "cell should be present in live_cells CF");
+    let marker = store.get_cf(store.cf_live_cells(), &key).unwrap();
+    assert!(
+        marker.is_some(),
+        "cell should be present in live_cells marker CF"
+    );
+    let raw = store.get_cf(store.cf_cells(), &key).unwrap();
+    assert!(raw.is_some(), "cell payload should be present in cells CF");
 
     let decoded: LiveCellInfo = bincode::deserialize(&raw.unwrap()).unwrap();
     assert_eq!(decoded.capacity, 100_00000000);

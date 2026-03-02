@@ -24,18 +24,18 @@ All current benchmarks must target:
 
 Prerequisites:
 
-- `CKBADGER_DATA_PATH` points to the benchmark database
+- `CKBADGER_DOMAIN_DATA_PATH` points to the benchmark database
 - indexer logs are written to `/tmp/ckbadger-indexer.log`
 
 Commands:
 
 ```bash
 # Example: start indexer and tee logs
-CKBADGER_DATA_PATH=./data/ckbadger-store \
+CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store \
   cargo run -p ckbadger-indexer 2>&1 | tee /tmp/ckbadger-indexer.log
 
 # Run sync benchmark monitor (quick mode)
-CKBADGER_DATA_PATH=./data/ckbadger-store \
+CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store \
   ./scripts/benchmark_sync.sh --quick --output-dir artifacts/perf
 ```
 

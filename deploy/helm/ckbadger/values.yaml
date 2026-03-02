@@ -94,7 +94,8 @@ ingress:
   tls: []
 
 storage:
-  dataPath: /data/ckbadger-store
+  domainDataPath: /data/ckbadger-store
+  appendOnlyDataPath: /data/ckbadger-store-append-only
   persistence:
     enabled: true
     size: 50Gi

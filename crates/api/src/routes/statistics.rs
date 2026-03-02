@@ -1587,10 +1587,17 @@ async fn get_cell_age_vs_occupied_capacity_chart(
         .store
         .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
     for item in iter.flatten() {
-        let (_, value) = item;
-        let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
-            continue;
-        };
+        let (key, _) = item;
+        let cell = state
+            .store
+            .get_cell_by_outpoint_key(&key)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing canonical cell for live marker: outpoint=0x{}",
+                    hex::encode(&key)
+                ))
+            })?;
         let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
             continue;
         };
@@ -1774,10 +1781,17 @@ async fn get_cell_size_distribution_chart(
         .store
         .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
     for item in iter.flatten() {
-        let (_, value) = item;
-        let Ok(cell) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) else {
-            continue;
-        };
+        let (key, _) = item;
+        let cell = state
+            .store
+            .get_cell_by_outpoint_key(&key)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing canonical cell for live marker: outpoint=0x{}",
+                    hex::encode(&key)
+                ))
+            })?;
         let occupied = cell.occupied_capacity as i128;
         if occupied < 0 {
             return Err(ApiError::internal(format!(

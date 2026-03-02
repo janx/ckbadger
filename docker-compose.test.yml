@@ -14,8 +14,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.api
     environment:
-      CKBADGER_DATA_PATH: /data/ckbadger-store
-      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
+      CKBADGER_DOMAIN_DATA_PATH: /data/ckbadger-store
+      CKBADGER_APPEND_ONLY_DATA_PATH: /data/ckbadger-store-append-only
       REDIS_URL: redis://redis-test:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-https://mainnet.ckbapp.dev}
       CKB_NETWORK: mainnet

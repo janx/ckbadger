@@ -427,31 +427,36 @@ async fn get_tx_graph(
             .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
 
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if key.len() >= 34 && &key[..32] == hash_bytes.as_slice() {
                 let output_index = i16::from_be_bytes([key[32], key[33]]);
-                if let Ok(info) = bincode::deserialize::<ckbadger_store::LiveCellInfo>(&value) {
-                    let output_cell_id = format!("cell-{}-{}", hash, output_index);
-                    let capacity_str = info.capacity.to_string();
+                let Some(info) = state
+                    .store
+                    .get_cell_by_outpoint_key(&key)
+                    .map_err(|e| ApiError::internal(e.to_string()))?
+                else {
+                    continue;
+                };
+                let output_cell_id = format!("cell-{}-{}", hash, output_index);
+                let capacity_str = info.capacity.to_string();
 
-                    nodes.push(GraphNode {
-                        id: output_cell_id.clone(),
-                        node_type: "cell".to_string(),
-                        label: format!("{} CKB", parse_capacity(&capacity_str)),
-                        data: serde_json::json!({
-                            "txHash": hash,
-                            "outputIndex": output_index,
-                            "capacity": capacity_str,
-                            "status": "live",
-                        }),
-                    });
+                nodes.push(GraphNode {
+                    id: output_cell_id.clone(),
+                    node_type: "cell".to_string(),
+                    label: format!("{} CKB", parse_capacity(&capacity_str)),
+                    data: serde_json::json!({
+                        "txHash": hash,
+                        "outputIndex": output_index,
+                        "capacity": capacity_str,
+                        "status": "live",
+                    }),
+                });
 
-                    links.push(GraphLink {
-                        source: tx_id.clone(),
-                        target: output_cell_id,
-                        link_type: "output".to_string(),
-                    });
-                }
+                links.push(GraphLink {
+                    source: tx_id.clone(),
+                    target: output_cell_id,
+                    link_type: "output".to_string(),
+                });
             }
         }
     }

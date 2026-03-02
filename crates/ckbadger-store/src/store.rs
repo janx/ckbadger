@@ -1,6 +1,6 @@
 //! Core RocksDB store.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tracing::{info, warn};
@@ -196,6 +196,7 @@ fn detect_system_resources() -> (u64, usize) {
 }
 
 // Column family name constants
+pub const CF_CELLS: &str = "cells";
 pub const CF_LIVE_CELLS: &str = "live_cells";
 pub const CF_CONSUMED_CELLS: &str = "consumed_cells";
 pub const CF_BLOCK_HEADERS: &str = "block_headers";
@@ -229,6 +230,7 @@ pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
+    CF_CELLS,
     CF_LIVE_CELLS,
     CF_CONSUMED_CELLS,
     CF_BLOCK_HEADERS,
@@ -261,6 +263,52 @@ pub const ALL_CFS: &[&str] = &[
     CF_NFT_COLLECTION_ACTIVITIES,
 ];
 
+/// Column families intended for the domain mutable store.
+pub const DOMAIN_CFS: &[&str] = &[
+    CF_LIVE_CELLS,
+    CF_CELL_BY_LOCK,
+    CF_CELL_BY_TYPE,
+    CF_CELL_BY_LOCK_CODE,
+    CF_CELL_BY_TYPE_CODE,
+    CF_ADDR_BALANCE,
+    CF_DAO_DEPOSITS,
+    CF_DAO_BY_WITHDRAW_TX,
+    CF_BLOCK_ISSUANCE,
+    CF_TOKENS,
+    CF_TOKEN_HOLDERS,
+    CF_SPORE_DATA,
+    CF_NFT_DATA,
+    CF_NFT_BY_COLLECTION,
+    CF_STATS,
+    CF_SCRIPT_INFO,
+    CF_SYNC_META,
+    CF_SPORE_BY_CLUSTER,
+    CF_TOKEN_TRANSFERS,
+    CF_ADDR_DAILY_STATS,
+    CF_CLUSTER_AGG,
+    CF_NFT_COLLECTION_AGG,
+];
+
+/// Column families intended for append-only history/archive store.
+pub const APPEND_CFS: &[&str] = &[
+    CF_CELLS,
+    CF_CONSUMED_CELLS,
+    CF_BLOCK_HEADERS,
+    CF_BLOCK_HASH_INDEX,
+    CF_TX_INDEX,
+    CF_TX_HASH_MAP,
+    CF_ADDR_TXS,
+    CF_ACTIVITIES,
+    CF_NFT_COLLECTION_ACTIVITIES,
+];
+
+fn append_path_from_domain(domain_path: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var("CKBADGER_APPEND_ONLY_DATA_PATH") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from(format!("{}-append-only", domain_path.display()))
+}
+
 fn consumed_cf_storage_bytes(
     live_data_bytes: Option<u64>,
     sst_files_bytes: Option<u64>,
@@ -282,6 +330,8 @@ fn consumed_cf_storage_bytes(
 
 pub struct CkbadgerStore {
     db: DB,
+    domain_path: PathBuf,
+    append_path: PathBuf,
     /// Keep block cache alive for the lifetime of the store.
     /// Mutex because `set_capacity()` requires `&mut` (rare mode-transition calls only).
     block_cache: Mutex<rocksdb::Cache>,
@@ -300,6 +350,8 @@ impl CkbadgerStore {
     /// Also opens any legacy CFs that exist on disk but are no longer in ALL_CFS,
     /// so RocksDB doesn't error on "Column families not opened".
     pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let domain_path = path.as_ref().to_path_buf();
+        let append_path = append_path_from_domain(&domain_path);
         let memory_profile = MemoryProfile::for_primary();
         let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
 
@@ -327,6 +379,8 @@ impl CkbadgerStore {
 
         Ok(Self {
             db,
+            domain_path,
+            append_path,
             block_cache: Mutex::new(block_cache),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
@@ -340,6 +394,8 @@ impl CkbadgerStore {
         primary_path: P,
         secondary_path: P,
     ) -> anyhow::Result<Self> {
+        let domain_path = primary_path.as_ref().to_path_buf();
+        let append_path = append_path_from_domain(&domain_path);
         let memory_profile = MemoryProfile::for_secondary();
         let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
 
@@ -355,6 +411,8 @@ impl CkbadgerStore {
 
         Ok(Self {
             db,
+            domain_path,
+            append_path,
             block_cache: Mutex::new(block_cache),
             write_buffer_manager,
             bulk_sync_mode: AtomicBool::new(false),
@@ -375,6 +433,7 @@ impl CkbadgerStore {
     /// 256MB write buffers prevent memtable flush stalls during mega-blocks
     /// (block 12M has ~1.31M txs → ~162MB per CF).
     const MEGA_WRITE_CFS: &'static [&'static str] = &[
+        CF_CELLS,
         CF_LIVE_CELLS,
         CF_CONSUMED_CELLS,
         CF_CELL_BY_LOCK,
@@ -390,6 +449,7 @@ impl CkbadgerStore {
 
     /// High-write column families that benefit from large write buffers (128 MB).
     const HIGH_WRITE_CFS: &'static [&'static str] = &[
+        CF_CELLS,
         CF_LIVE_CELLS,
         CF_CONSUMED_CELLS,
         CF_BLOCK_HEADERS,
@@ -559,6 +619,9 @@ impl CkbadgerStore {
 
     pub fn cf_live_cells(&self) -> &ColumnFamily {
         self.cf(CF_LIVE_CELLS)
+    }
+    pub fn cf_cells(&self) -> &ColumnFamily {
+        self.cf(CF_CELLS)
     }
     pub fn cf_consumed_cells(&self) -> &ColumnFamily {
         self.cf(CF_CONSUMED_CELLS)
@@ -767,6 +830,14 @@ impl CkbadgerStore {
         self.is_secondary
     }
 
+    pub fn domain_path(&self) -> &Path {
+        &self.domain_path
+    }
+
+    pub fn append_path(&self) -> &Path {
+        &self.append_path
+    }
+
     /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
     ///
     /// During bulk sync, parallel writer threads each commit large WriteBatches.
@@ -832,7 +903,7 @@ impl CkbadgerStore {
             }
         }
 
-        for &hot_cf_name in &[CF_TX_INDEX, CF_LIVE_CELLS] {
+        for &hot_cf_name in &[CF_TX_INDEX, CF_CELLS] {
             if let Some(cf) = self.db.cf_handle(hot_cf_name) {
                 let result = self
                     .db
@@ -990,6 +1061,7 @@ impl CkbadgerStore {
     pub fn memory_stats(&self) -> MemoryStats {
         let mut memtable_bytes = 0usize;
         let mut table_readers_bytes = 0usize;
+        let mut cells_count = 0usize;
         let mut live_cells_count = 0usize;
         let mut consumed_cells_count = 0usize;
         let mut consumed_cf_live_data_bytes: Option<u64> = None;
@@ -1034,6 +1106,7 @@ impl CkbadgerStore {
                     .property_int_value_cf(cf, "rocksdb.estimate-num-keys")
                 {
                     match cf_name {
+                        CF_CELLS => cells_count = v as usize,
                         CF_LIVE_CELLS => live_cells_count = v as usize,
                         CF_CONSUMED_CELLS => consumed_cells_count = v as usize,
                         CF_BLOCK_HEADERS => block_headers_count = v as usize,
@@ -1119,7 +1192,7 @@ impl CkbadgerStore {
             consumed_cells_bytes_source,
             block_headers_count,
             addr_balance_count,
-            cells_count: live_cells_count,
+            cells_count,
             memory_bytes,
             memtable_bytes,
             block_cache_bytes,
@@ -1232,6 +1305,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         store
+            .put_cf(store.cf_cells(), b"cell-k1", b"cell-v1")
+            .unwrap();
+        store
             .put_cf(store.cf_live_cells(), b"live-k1", b"live-v1")
             .unwrap();
         store
@@ -1251,6 +1327,7 @@ mod tests {
             .unwrap();
 
         // Flush written keys so RocksDB estimate properties have observable values.
+        store.db.flush_cf(store.cf_cells()).unwrap();
         store.db.flush_cf(store.cf_live_cells()).unwrap();
         store.db.flush_cf(store.cf_consumed_cells()).unwrap();
         store.db.flush_cf(store.cf_block_headers()).unwrap();
@@ -1261,7 +1338,7 @@ mod tests {
         assert!(stats.consumed_cells_count >= 1);
         assert!(stats.block_headers_count >= 1);
         assert!(stats.addr_balance_count >= 1);
-        assert_eq!(stats.cells_count, stats.live_cells_count);
+        assert!(stats.cells_count >= stats.live_cells_count);
         assert!(
             matches!(
                 stats.consumed_cells_bytes_source,
@@ -1336,6 +1413,7 @@ mod tests {
     #[test]
     fn test_mega_write_cfs_expected_members() {
         let expected = &[
+            CF_CELLS,
             CF_LIVE_CELLS,
             CF_CONSUMED_CELLS,
             CF_CELL_BY_LOCK,

@@ -23,15 +23,18 @@ struct Cli {
 
     // ---- Sync args (used when no subcommand or `sync` subcommand) ----
     #[arg(
-        long,
-        env = "CKBADGER_DATA_PATH",
-        default_value = "./data/ckbadger-store",
+        long = "domain-data-path",
+        env = "CKBADGER_DOMAIN_DATA_PATH",
         global = true
     )]
-    data_path: String,
+    domain_data_path: Option<String>,
 
-    #[arg(long, env = "CKBADGER_DERIVED_DATA_PATH", global = true)]
-    derived_data_path: Option<String>,
+    #[arg(
+        long = "append-only-data-path",
+        env = "CKBADGER_APPEND_ONLY_DATA_PATH",
+        global = true
+    )]
+    append_only_data_path: Option<String>,
 
     #[arg(long, env = "CKB_RPC_URL", global = true)]
     ckb_rpc_url: Option<String>,
@@ -110,8 +113,9 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let data_path = cli.data_path.clone();
-    let derived_data_path = cli.derived_data_path.clone();
+    let domain_data_path = resolve_domain_data_path(cli.domain_data_path.clone());
+    let append_only_data_path =
+        resolve_append_only_data_path(cli.append_only_data_path.clone(), &domain_data_path);
     let ckb_data_path = cli.ckb_data_path.clone();
 
     match cli.command {
@@ -124,13 +128,43 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::LabelImport(args)) => {
-            let derived_data_path =
-                derived_data_path.unwrap_or_else(|| format!("{}-derived", data_path));
-            run_label_import_command(data_path, derived_data_path, ckb_data_path, args).await
+            run_label_import_command(domain_data_path, append_only_data_path, ckb_data_path, args)
+                .await
         }
         // Default (no subcommand) or explicit `sync` → run sync daemon
         None | Some(Command::Sync) => run_sync(cli).await,
     }
+}
+
+fn resolve_domain_data_path(explicit: Option<String>) -> String {
+    resolve_domain_data_path_from_sources(explicit, std::env::var("CKBADGER_DOMAIN_DATA_PATH").ok())
+}
+
+fn resolve_append_only_data_path(explicit: Option<String>, domain_data_path: &str) -> String {
+    resolve_append_only_data_path_from_sources(
+        explicit,
+        std::env::var("CKBADGER_APPEND_ONLY_DATA_PATH").ok(),
+        domain_data_path,
+    )
+}
+
+fn resolve_domain_data_path_from_sources(
+    explicit: Option<String>,
+    domain_env: Option<String>,
+) -> String {
+    explicit
+        .or(domain_env)
+        .unwrap_or_else(|| "./data/ckbadger-store".to_string())
+}
+
+fn resolve_append_only_data_path_from_sources(
+    explicit: Option<String>,
+    append_only_env: Option<String>,
+    domain_data_path: &str,
+) -> String {
+    explicit
+        .or(append_only_env)
+        .unwrap_or_else(|| format!("{}-append-only", domain_data_path))
 }
 
 fn queue_fill_pct(depth: Option<u64>, capacity: Option<u64>) -> Option<f64> {
@@ -312,13 +346,12 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
 }
 
 async fn run_sync(args: Cli) -> Result<()> {
-    let derived_data_path = args
-        .derived_data_path
-        .clone()
-        .unwrap_or_else(|| format!("{}-derived", args.data_path));
+    let domain_data_path = resolve_domain_data_path(args.domain_data_path.clone());
+    let append_only_data_path =
+        resolve_append_only_data_path(args.append_only_data_path.clone(), &domain_data_path);
     let mut config = Config {
-        data_path: args.data_path.clone(),
-        derived_data_path: derived_data_path.clone(),
+        domain_data_path: domain_data_path.clone(),
+        append_only_data_path: append_only_data_path.clone(),
         ckb_rpc_url: args
             .ckb_rpc_url
             .or_else(|| std::env::var("CKB_RPC_URL").ok())
@@ -338,13 +371,16 @@ async fn run_sync(args: Cli) -> Result<()> {
         force_startup_cleanup: false,
     };
 
-    info!("Opening ckbadger-store at: {}", config.data_path);
-    let store = Arc::new(CkbadgerStore::open(&config.data_path)?);
     info!(
-        "Opening ckbadger-derived-store at: {}",
-        config.derived_data_path
+        "Opening ckbadger domain store at: {}",
+        config.domain_data_path
     );
-    let derived_store = Arc::new(CkbadgerStore::open(&config.derived_data_path)?);
+    let store = Arc::new(CkbadgerStore::open(&config.domain_data_path)?);
+    info!(
+        "Opening ckbadger append-only store at: {}",
+        config.append_only_data_path
+    );
+    let derived_store = Arc::new(CkbadgerStore::open(&config.append_only_data_path)?);
     store.log_config();
 
     // One-time backfill: populate code_hash indexes if they are empty
@@ -824,15 +860,18 @@ async fn run_sync(args: Cli) -> Result<()> {
 }
 
 async fn run_label_import_command(
-    data_path: String,
-    derived_data_path: String,
+    domain_data_path: String,
+    append_only_data_path: String,
     ckb_data_path: Option<String>,
     args: LabelImportArgs,
 ) -> Result<()> {
-    info!("Opening ckbadger-store at: {}", data_path);
-    let core_store = Arc::new(CkbadgerStore::open(&data_path)?);
-    info!("Opening derived ckbadger-store at: {}", derived_data_path);
-    let derived_store = Arc::new(CkbadgerStore::open(&derived_data_path)?);
+    info!("Opening ckbadger domain store at: {}", domain_data_path);
+    let core_store = Arc::new(CkbadgerStore::open(&domain_data_path)?);
+    info!(
+        "Opening ckbadger append-only store at: {}",
+        append_only_data_path
+    );
+    let derived_store = Arc::new(CkbadgerStore::open(&append_only_data_path)?);
 
     let ckb_store = match ckb_data_path.as_deref() {
         Some(path) => {
@@ -893,7 +932,8 @@ async fn run_label_import_command(
 mod tests {
     use super::{
         classify_unclean_shutdown_hint, monotonic_counter_delta, queue_fill_pct,
-        reconcile_token_daily_deltas_on_startup, should_emit_rate_limited,
+        reconcile_token_daily_deltas_on_startup, resolve_append_only_data_path_from_sources,
+        resolve_domain_data_path_from_sources, should_emit_rate_limited,
         should_force_startup_cleanup, should_warn_progress_stall, startup_cleanup_decision,
     };
     use ckbadger_store::{
@@ -959,6 +999,49 @@ mod tests {
         assert_eq!(monotonic_counter_delta(Some(7), Some(10)), None);
         assert_eq!(monotonic_counter_delta(Some(7), None), None);
         assert_eq!(monotonic_counter_delta(None, Some(7)), None);
+    }
+
+    #[test]
+    fn test_resolve_domain_data_path_from_sources() {
+        assert_eq!(
+            resolve_domain_data_path_from_sources(
+                Some("/explicit/domain".to_string()),
+                Some("/env/domain".to_string()),
+            ),
+            "/explicit/domain"
+        );
+        assert_eq!(
+            resolve_domain_data_path_from_sources(None, Some("/env/domain".to_string())),
+            "/env/domain"
+        );
+        assert_eq!(
+            resolve_domain_data_path_from_sources(None, None),
+            "./data/ckbadger-store"
+        );
+    }
+
+    #[test]
+    fn test_resolve_append_only_data_path_from_sources() {
+        assert_eq!(
+            resolve_append_only_data_path_from_sources(
+                Some("/explicit/append".to_string()),
+                Some("/env/append".to_string()),
+                "/domain",
+            ),
+            "/explicit/append"
+        );
+        assert_eq!(
+            resolve_append_only_data_path_from_sources(
+                None,
+                Some("/env/append".to_string()),
+                "/domain"
+            ),
+            "/env/append"
+        );
+        assert_eq!(
+            resolve_append_only_data_path_from_sources(None, None, "/domain"),
+            "/domain-append-only"
+        );
     }
 
     #[test]

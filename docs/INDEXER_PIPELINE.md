@@ -139,7 +139,7 @@ Block N arrives
 ### Environment Variables
 
 ```bash
-CKBADGER_DATA_PATH=./data/ckbadger-store
+CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store
 CKB_DATA_PATH=/var/lib/ckb/data/db
 CKB_RPC_URL=http://127.0.0.1:8114
 REDIS_URL=redis://localhost:6379

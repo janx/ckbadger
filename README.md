@@ -120,15 +120,15 @@ on localhost deployments:
 
 ## Tech Stack
 
-| Layer             | Technology                               | Purpose                         |
-| ----------------- | ---------------------------------------- | ------------------------------- |
-| **Frontend**      | Next.js 15, TanStack Query, Zustand      | SSR + real-time data            |
-| **UI**            | Tailwind CSS, Custom Components          | Responsive design               |
-| **Visualization** | react-force-graph-2d, D3.js              | Cell relationship graphs        |
-| **API**           | Rust (Axum)                              | High-performance REST/WebSocket |
-| **Indexer**       | Rust (3-stage pipeline)                  | Block parsing, cell tracking    |
-| **Storage**       | RocksDB (core + derived, ckbadger-store) | Embedded dual-store data engine |
-| **Cache**         | Redis                                    | API cache + sync progress       |
+| Layer             | Technology                                     | Purpose                         |
+| ----------------- | ---------------------------------------------- | ------------------------------- |
+| **Frontend**      | Next.js 15, TanStack Query, Zustand            | SSR + real-time data            |
+| **UI**            | Tailwind CSS, Custom Components                | Responsive design               |
+| **Visualization** | react-force-graph-2d, D3.js                    | Cell relationship graphs        |
+| **API**           | Rust (Axum)                                    | High-performance REST/WebSocket |
+| **Indexer**       | Rust (3-stage pipeline)                        | Block parsing, cell tracking    |
+| **Storage**       | RocksDB (domain + append-only, ckbadger-store) | Embedded dual-store data engine |
+| **Cache**         | Redis                                          | API cache + sync progress       |
 
 ## Quick Start
 
@@ -229,7 +229,7 @@ make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 
 `make reset CONFIRM=1` cleanup scope:
 
-- Deletes local RocksDB paths (`CKBADGER_DATA_PATH`, `CKBADGER_DERIVED_DATA_PATH`) and both api secondary paths
+- Deletes local RocksDB paths (`CKBADGER_DOMAIN_DATA_PATH`, `CKBADGER_APPEND_ONLY_DATA_PATH`) and both api secondary paths
 - Deletes compose volumes `ckbadger-data` and `redis-data` (if present)
 - Keeps `ckb-data` volume (CKB chain data is not removed)
 
@@ -251,10 +251,10 @@ CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
 # CKB_RPC_URL=http://172.17.0.1:8114          # Linux
 CKB_NETWORK=mainnet  # mainnet | testnet | devnet
 
-# ckbadger-store RocksDB data path
-CKBADGER_DATA_PATH=./data/ckbadger-store
-# ckbadger-derived-store RocksDB data path
-CKBADGER_DERIVED_DATA_PATH=./data/ckbadger-store-derived
+# ckbadger domain RocksDB data path
+CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store
+# ckbadger append-only RocksDB data path
+CKBADGER_APPEND_ONLY_DATA_PATH=./data/ckbadger-store-append-only
 
 # Redis (optional)
 REDIS_URL=redis://localhost:6379
@@ -289,8 +289,8 @@ cargo run -p ckbadger-indexer -- \
   --bulk-sync-threshold 1000
 
 # Environment variables
-CKBADGER_DATA_PATH=./data/ckbadger-store
-CKBADGER_DERIVED_DATA_PATH=./data/ckbadger-store-derived
+CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store
+CKBADGER_APPEND_ONLY_DATA_PATH=./data/ckbadger-store-append-only
 CKB_RPC_URL=http://localhost:8114
 REDIS_URL=redis://localhost:6379
 TOKEN_LABELS_PATH=docs/token-labels

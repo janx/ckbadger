@@ -33,9 +33,9 @@ Primitive Truth: blocks, transactions, cells, already stored in ckb node rocksdb
 
 Derived Truth: various indices and aggregations on blocks, transactions, cells for fast queries
 
-3 rocksdb for reading: ckb node rocksdb, ckbadger rocksdb default, ckbadger rocksdb append-only
+3 rocksdb for reading: ckb node rocksdb, ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
 
-1 rocksdb for writing: ckbadger rocksdb default, ckbadger rocksdb append-only
+1 rocksdb for writing: ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
 
 # Principles
 

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Local};
 use ckbadger_common::MemoryStatsData;
-use ckbadger_store::{APPEND_CFS, DEFAULT_CFS};
+use ckbadger_store::{APPEND_CFS, DOMAIN_CFS};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -3739,27 +3739,27 @@ fn draw_system_paths(f: &mut Frame, store: &ckbadger_store::CkbadgerStore, area:
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let default_cf_count = DEFAULT_CFS.len();
+    let domain_cf_count = DOMAIN_CFS.len();
     let append_cf_count = APPEND_CFS.len();
 
     let lines = vec![
         system_kv_line(
-            "Default store",
-            store.default_path().display().to_string(),
+            "Domain store",
+            store.domain_path().display().to_string(),
             FOREGROUND,
         ),
         system_kv_line(
-            "Append store",
+            "Append-only store",
             store.append_path().display().to_string(),
             FOREGROUND,
         ),
         system_kv_line(
             "Column families",
             format!(
-                "{} default + {} append = {}",
-                default_cf_count,
+                "{} domain + {} append-only = {}",
+                domain_cf_count,
                 append_cf_count,
-                default_cf_count + append_cf_count
+                domain_cf_count + append_cf_count
             ),
             SLATE_500,
         ),

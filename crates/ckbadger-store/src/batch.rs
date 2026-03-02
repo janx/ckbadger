@@ -50,7 +50,9 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         let value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.batch.put_cf(self.store.cf_live_cells(), key, &value);
+        // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
+        self.batch.put_cf(self.store.cf_cells(), key, &value);
+        self.batch.put_cf(self.store.cf_live_cells(), key, []);
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
@@ -77,12 +79,14 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        let consumed = ConsumedCellInfo::from_live_cell_info_with_consumer(
-            info,
+        // Ensure canonical payload exists even when callers only write consumed entries.
+        let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        self.batch.put_cf(self.store.cf_cells(), key, &cell_value);
+        let consumed = ConsumedCellMeta {
             consumed_at_block,
-            consumed_by_tx,
-        );
-        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellInfo");
+            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
+        };
+        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
         self.batch
             .put_cf(self.store.cf_consumed_cells(), key, &value);
     }

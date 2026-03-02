@@ -9,8 +9,12 @@ endif
 
 COMPOSE ?= docker compose
 CKB_NODE_MODE ?= $(if $(findstring internal,$(COMPOSE_PROFILES)),internal,external)
-CKBADGER_DATA_PATH ?= ./data/ckbadger-store
-CKBADGER_DERIVED_DATA_PATH ?= $(CKBADGER_DATA_PATH)-derived
+ifndef CKBADGER_DOMAIN_DATA_PATH
+CKBADGER_DOMAIN_DATA_PATH := ./data/ckbadger-store
+endif
+ifndef CKBADGER_APPEND_ONLY_DATA_PATH
+CKBADGER_APPEND_ONLY_DATA_PATH := $(CKBADGER_DOMAIN_DATA_PATH)-append-only
+endif
 COMPOSE_PROJECT ?= $(notdir $(CURDIR))
 VERIFY_API_URL ?= $(or $(CKBADGER_API_URL),http://localhost:3001/api/v1)
 VERIFY_DEPTH ?= fast
@@ -104,8 +108,8 @@ reset:
 		exit 1; \
 	fi
 	-$(COMPOSE) stop redis api indexer frontend >/dev/null 2>&1 || true
-	rm -rf "$(CKBADGER_DATA_PATH)" "$(CKBADGER_DATA_PATH)-api-secondary"
-	rm -rf "$(CKBADGER_DERIVED_DATA_PATH)" "$(CKBADGER_DERIVED_DATA_PATH)-api-secondary"
+	rm -rf "$(CKBADGER_DOMAIN_DATA_PATH)" "$(CKBADGER_DOMAIN_DATA_PATH)-api-secondary"
+	rm -rf "$(CKBADGER_APPEND_ONLY_DATA_PATH)" "$(CKBADGER_APPEND_ONLY_DATA_PATH)-api-secondary"
 	@if command -v docker >/dev/null 2>&1; then \
 		project="$${COMPOSE_PROJECT_NAME:-$(COMPOSE_PROJECT)}"; \
 		rocksdb_vols=$$(docker volume ls -q --filter "label=com.docker.compose.project=$$project" --filter "label=com.docker.compose.volume=ckbadger-data"); \
@@ -114,8 +118,8 @@ reset:
 			docker volume rm $$rocksdb_vols $$redis_vols >/dev/null || true; \
 		fi; \
 	fi
-	@echo "Deleted local data path: $(CKBADGER_DATA_PATH)"
-	@echo "Deleted local derived path: $(CKBADGER_DERIVED_DATA_PATH)"
+	@echo "Deleted local domain path: $(CKBADGER_DOMAIN_DATA_PATH)"
+	@echo "Deleted local append-only path: $(CKBADGER_APPEND_ONLY_DATA_PATH)"
 	@echo "Deleted Docker volumes (if present): ckbadger-data, redis-data"
 
 verify:

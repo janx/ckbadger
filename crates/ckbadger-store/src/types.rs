@@ -80,6 +80,12 @@ pub struct ConsumedCellInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsumedCellMeta {
+    pub consumed_at_block: i64,
+    pub consumed_by_tx: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LegacyConsumedCellInfoV2 {
     pub cell: LiveCellInfo,
     pub consumed_at_block: i64,
@@ -145,6 +151,40 @@ impl From<LegacyConsumedCellInfoV2> for ConsumedCellInfo {
             consumed_by_tx: None,
         }
     }
+}
+
+/// Decode consumed cell metadata across storage schema versions.
+///
+/// Order:
+/// 1. `ConsumedCellMeta` (current compact schema)
+/// 2. `ConsumedCellInfo` (legacy schema with embedded cell)
+/// 3. `LegacyConsumedCellInfoV2` (older schema, consumed_at_block only)
+/// 4. `CompactConsumedCellInfo` / `LiveCellInfo` (very old schemas, no consume metadata)
+pub fn decode_consumed_cell_meta(value: &[u8]) -> Option<ConsumedCellMeta> {
+    if let Ok(meta) = bincode::deserialize::<ConsumedCellMeta>(value) {
+        return Some(meta);
+    }
+    if let Ok(v3) = bincode::deserialize::<ConsumedCellInfo>(value) {
+        return Some(ConsumedCellMeta {
+            consumed_at_block: v3.consumed_at_block,
+            consumed_by_tx: v3.consumed_by_tx,
+        });
+    }
+    if let Ok(v2) = bincode::deserialize::<LegacyConsumedCellInfoV2>(value) {
+        return Some(ConsumedCellMeta {
+            consumed_at_block: v2.consumed_at_block,
+            consumed_by_tx: None,
+        });
+    }
+    if bincode::deserialize::<CompactConsumedCellInfo>(value).is_ok()
+        || bincode::deserialize::<LiveCellInfo>(value).is_ok()
+    {
+        return Some(ConsumedCellMeta {
+            consumed_at_block: 0,
+            consumed_by_tx: None,
+        });
+    }
+    None
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -815,7 +855,7 @@ pub struct MemoryStats {
     pub block_headers_count: usize,
     /// Estimated number of address entries in addr_balance column family.
     pub addr_balance_count: usize,
-    /// Backward-compatible alias for live cell count.
+    /// Estimated number of canonical cells in `cells` column family.
     pub cells_count: usize,
     pub memory_bytes: usize,
     pub memtable_bytes: usize,
@@ -1014,6 +1054,28 @@ mod tests {
 
         assert_eq!(decoded.cell.capacity, info.capacity);
         assert_eq!(decoded.consumed_at_block, 777);
+        assert_eq!(decoded.consumed_by_tx, None);
+    }
+
+    #[test]
+    fn test_decode_consumed_cell_meta_current_schema() {
+        let meta = ConsumedCellMeta {
+            consumed_at_block: 456,
+            consumed_by_tx: Some(vec![0xAB; 32]),
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded = decode_consumed_cell_meta(&bytes).unwrap();
+        assert_eq!(decoded.consumed_at_block, 456);
+        assert_eq!(decoded.consumed_by_tx, Some(vec![0xAB; 32]));
+    }
+
+    #[test]
+    fn test_decode_consumed_cell_meta_legacy_info_schema() {
+        let info = sample_live_cell_info();
+        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 888, None);
+        let bytes = bincode::serialize(&legacy).unwrap();
+        let decoded = decode_consumed_cell_meta(&bytes).unwrap();
+        assert_eq!(decoded.consumed_at_block, 888);
         assert_eq!(decoded.consumed_by_tx, None);
     }
 

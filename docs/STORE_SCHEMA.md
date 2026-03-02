@@ -2,8 +2,8 @@
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Core store** (`CKBADGER_DATA_PATH`) — canonical chain state
-- **Derived store** (`CKBADGER_DERIVED_DATA_PATH`) — derived/query-optimized datasets
+- **Domain store** (`CKBADGER_DOMAIN_DATA_PATH`) — mutable canonical/query state
+- **Append-only store** (`CKBADGER_APPEND_ONLY_DATA_PATH`) — immutable history/index archives
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode.
 
@@ -11,8 +11,9 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 
 | Column Family               | Key                          | Value                        | Purpose                                  |
 | --------------------------- | ---------------------------- | ---------------------------- | ---------------------------------------- |
-| `live_cells`                | tx_hash + output_index (34B) | LiveCellInfo                 | O(1) lookup for unspent cells            |
-| `consumed_cells`            | tx_hash + output_index (34B) | LiveCellInfo                 | Recently consumed cells                  |
+| `cells`                     | tx_hash + output_index (34B) | LiveCellInfo                 | Canonical append-only cell payload store |
+| `live_cells`                | tx_hash + output_index (34B) | empty                        | Live UTXO pointer set                    |
+| `consumed_cells`            | tx_hash + output_index (34B) | ConsumedCellMeta             | Consumed pointer + consume metadata      |
 | `block_headers`             | block_number (8B)            | CachedBlockHeader            | Block header + DAO field cache           |
 | `block_hash_index`          | block_hash (32B)             | block_number (8B)            | Reverse lookup: hash -> number           |
 | `cell_by_lock`              | lock_script_hash + outpoint  | empty                        | Cell index by lock script                |
@@ -26,7 +27,6 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `addr_daily_stats`          | lock_hash + date             | AddressDailyStats            | Per-address daily aggregates             |
 | `dao_deposits`              | tx_hash + output_index (34B) | DaoDepositCacheEntry         | DAO deposit lifecycle cache              |
 | `dao_by_withdraw_tx`        | withdraw_tx_hash (32B)       | deposit outpoint             | Reverse lookup: withdraw -> deposit      |
-| `dao_stats`                 | prefixed keys                | DaoStats                     | DAO aggregate statistics                 |
 | `block_issuance`            | block_number (8B)            | BlockIssuance                | Per-block issuance data                  |
 | `tokens`                    | type_script_hash (32B)       | TokenInfo                    | UDT token metadata                       |
 | `token_holders`             | type_hash + lock_hash        | balance                      | Token holder balances                    |
@@ -45,8 +45,8 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 
 ## Key Design
 
-- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands (core + derived)
-- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API (core + derived)
+- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands (domain + append-only)
+- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API (domain + append-only)
 - All store operations are synchronous (RocksDB reads are fast)
 
 ## Memory Considerations
@@ -58,17 +58,17 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 
 ## Environment Variables
 
-| Parameter                    | Default                         | Description                    |
-| ---------------------------- | ------------------------------- | ------------------------------ |
-| `CKBADGER_DATA_PATH`         | `./data/ckbadger-store`         | Core RocksDB data directory    |
-| `CKBADGER_DERIVED_DATA_PATH` | `./data/ckbadger-store-derived` | Derived RocksDB data directory |
+| Parameter                        | Default                             | Description                        |
+| -------------------------------- | ----------------------------------- | ---------------------------------- |
+| `CKBADGER_DOMAIN_DATA_PATH`      | `./data/ckbadger-store`             | Domain RocksDB data directory      |
+| `CKBADGER_APPEND_ONLY_DATA_PATH` | `./data/ckbadger-store-append-only` | Append-only RocksDB data directory |
 
 ```bash
 # Default: uses ./data/ckbadger-store
 cargo run -p ckbadger-indexer
 
 # Custom paths
-CKBADGER_DATA_PATH=/ssd/ckbadger-store \
-CKBADGER_DERIVED_DATA_PATH=/ssd/ckbadger-store-derived \
+CKBADGER_DOMAIN_DATA_PATH=/ssd/ckbadger-store \
+CKBADGER_APPEND_ONLY_DATA_PATH=/ssd/ckbadger-store-append-only \
 cargo run -p ckbadger-indexer
 ```

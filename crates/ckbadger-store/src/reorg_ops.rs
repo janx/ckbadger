@@ -366,47 +366,49 @@ impl CkbadgerStore {
         let mut stage = RollbackStageProgress::new("delete_live_cells_after_tip");
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
-            if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
+            let (key, _) = item;
+            if key.len() == keys::OUTPOINT_KEY_SIZE {
+                let Some(info) = self.get_cell_by_outpoint_key(&key)? else {
+                    stage.tick(cells_removed);
+                    continue;
+                };
                 if info.created_at_block > rollback_to {
                     batch.delete_cf(self.cf_live_cells(), &key);
                     cells_removed += 1;
 
                     // Clean up indexes
-                    if key.len() == 34 {
-                        let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                    let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                    let idx_key = keys::encode_cell_index_key(
+                        &info.lock_script_hash,
+                        info.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
+                    batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
+                    let idx_key = keys::encode_cell_index_key(
+                        &info.lock_code_hash,
+                        info.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
+                    batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
+                    if let Some(ref type_hash) = info.type_script_hash {
                         let idx_key = keys::encode_cell_index_key(
-                            &info.lock_script_hash,
+                            type_hash,
                             info.created_at_block,
                             &tx_hash,
                             output_index,
                         );
-                        batch.delete_cf(self.cf_cell_by_lock(), &idx_key);
+                        batch.delete_cf(self.cf_cell_by_type(), &idx_key);
+                    }
+                    if let Some(ref type_code_hash) = info.type_code_hash {
                         let idx_key = keys::encode_cell_index_key(
-                            &info.lock_code_hash,
+                            type_code_hash,
                             info.created_at_block,
                             &tx_hash,
                             output_index,
                         );
-                        batch.delete_cf(self.cf_cell_by_lock_code(), &idx_key);
-                        if let Some(ref type_hash) = info.type_script_hash {
-                            let idx_key = keys::encode_cell_index_key(
-                                type_hash,
-                                info.created_at_block,
-                                &tx_hash,
-                                output_index,
-                            );
-                            batch.delete_cf(self.cf_cell_by_type(), &idx_key);
-                        }
-                        if let Some(ref type_code_hash) = info.type_code_hash {
-                            let idx_key = keys::encode_cell_index_key(
-                                type_code_hash,
-                                info.created_at_block,
-                                &tx_hash,
-                                output_index,
-                            );
-                            batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
-                        }
+                        batch.delete_cf(self.cf_cell_by_type_code(), &idx_key);
                     }
                 }
             }
@@ -421,12 +423,13 @@ impl CkbadgerStore {
         let mut stage = RollbackStageProgress::new("restore_consumed_cells");
         let iter = self.iterator_cf(self.cf_consumed_cells(), IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 stage.tick(cells_restored);
                 continue;
             }
-            let Some(consumed) = crate::types::decode_consumed_cell_info(&value) else {
+            let (tx_hash, output_index) = keys::decode_outpoint(&key);
+            let Some(consumed) = self.get_consumed_cell_info(&tx_hash, output_index)? else {
                 stage.tick(cells_restored);
                 continue;
             };
@@ -440,8 +443,7 @@ impl CkbadgerStore {
 
             // If the cell itself existed before rollback point, restore it to live_cells.
             if consumed.cell.created_at_block <= rollback_to {
-                let encoded = bincode::serialize(&consumed.cell)?;
-                batch.put_cf(self.cf_live_cells(), &key, &encoded);
+                batch.put_cf(self.cf_live_cells(), &key, []);
                 cells_restored += 1;
 
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);

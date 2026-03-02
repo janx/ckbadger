@@ -48,8 +48,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      CKBADGER_DATA_PATH: /data/ckbadger-store
-      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
+      CKBADGER_DOMAIN_DATA_PATH: /data/ckbadger-store
+      CKBADGER_APPEND_ONLY_DATA_PATH: /data/ckbadger-store-append-only
       CKBADGER_DIRECT_IO_READS: 'false'
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
@@ -76,8 +76,8 @@ services:
       redis:
         condition: service_healthy
     environment:
-      CKBADGER_DATA_PATH: /data/ckbadger-store
-      CKBADGER_DERIVED_DATA_PATH: /data/ckbadger-store-derived
+      CKBADGER_DOMAIN_DATA_PATH: /data/ckbadger-store
+      CKBADGER_APPEND_ONLY_DATA_PATH: /data/ckbadger-store-append-only
       REDIS_URL: redis://redis:6379
       CKB_RPC_URL: ${CKB_RPC_URL:-http://ckb-node:8114}
       CKB_DATA_PATH: /var/lib/ckb/data/db

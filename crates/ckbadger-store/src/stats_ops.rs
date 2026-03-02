@@ -1147,14 +1147,15 @@ impl CkbadgerStore {
         let mut seen_consumed_outpoints: HashSet<Vec<u8>> = HashSet::new();
         let live_iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in live_iter.flatten() {
-            let (key, value) = item;
-            let cell: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize live cell while rebuilding script info: outpoint=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
-                )
-            })?;
+            let (key, _) = item;
+            let cell: LiveCellInfo = self
+                .get_cell_by_outpoint_key(&key)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing canonical cell for live marker while rebuilding script info: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
 
             let lock_code_hash = cell.lock_code_hash.clone();
             let lock_info = info_by_code_hash
@@ -1191,16 +1192,19 @@ impl CkbadgerStore {
         let consumed_iter =
             self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
         for item in consumed_iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if !seen_consumed_outpoints.insert(key.to_vec()) {
                 continue;
             }
-            let consumed = decode_consumed_cell_info(&value).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "failed to decode consumed cell while rebuilding script info: outpoint=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
+            let (tx_hash, output_index) = keys::decode_outpoint(&key);
+            let consumed = self
+                .get_consumed_cell_info(&tx_hash, output_index)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing consumed cell info while rebuilding script info: outpoint=0x{}",
+                        bytes_to_hex(&key)
+                    )
+                })?;
             let cell = consumed.cell;
 
             let lock_code_hash = cell.lock_code_hash.clone();

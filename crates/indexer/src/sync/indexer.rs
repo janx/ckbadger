@@ -2834,7 +2834,7 @@ impl Indexer {
             }
         };
 
-        let incident_dir = PathBuf::from(&config.data_path).join("incidents");
+        let incident_dir = PathBuf::from(&config.domain_data_path).join("incidents");
 
         Ok(Self {
             run_id,
@@ -11102,13 +11102,15 @@ impl Indexer {
         let mut live_cells_scanned = 0u64;
         let live_iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in live_iter.flatten() {
-            let (_key, value) = item;
-            let info: LiveCellInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize live cell while rebuilding HODL tracker: error={}",
-                    e
-                )
-            })?;
+            let (key, _) = item;
+            let info: LiveCellInfo = store
+                .get_cell_by_outpoint_key(&key)?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing canonical cell for live marker while rebuilding HODL tracker: outpoint=0x{}",
+                        hex::encode(&key)
+                    )
+                })?;
             if info.created_at_block > tip_block {
                 continue;
             }

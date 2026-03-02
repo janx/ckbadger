@@ -139,7 +139,6 @@ impl CkbadgerStore {
     /// Returns the number of index entries written.
     pub fn backfill_addr_txs(&self) -> anyhow::Result<u64> {
         use crate::keys;
-        use crate::types::{decode_consumed_cell_info, LiveCellInfo};
         use std::collections::{HashMap, HashSet};
 
         let mut count = 0u64;
@@ -149,39 +148,36 @@ impl CkbadgerStore {
         // Collect (tx_hash, lock_script_hash) pairs from live cells
         // Group by tx_hash to batch tx_idx lookups
         let mut tx_addresses: HashMap<Vec<u8>, HashSet<Vec<u8>>> = HashMap::new();
-        let mut tx_blocks: HashMap<Vec<u8>, i64> = HashMap::new();
 
         // Phase 1: Scan live cells
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                    let tx_hash = key[..32].to_vec();
-                    tx_addresses
-                        .entry(tx_hash.clone())
-                        .or_default()
-                        .insert(info.lock_script_hash);
-                    tx_blocks.entry(tx_hash).or_insert(info.created_at_block);
-                }
+                let Some(info) = self.get_cell_by_outpoint_key(&key)? else {
+                    continue;
+                };
+                let tx_hash = key[..32].to_vec();
+                tx_addresses
+                    .entry(tx_hash.clone())
+                    .or_default()
+                    .insert(info.lock_script_hash);
             }
         }
 
         // Phase 2: Scan consumed cells
         let iter = self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                let lock_hash = decode_consumed_cell_info(&value)
-                    .map(|c| (c.cell.lock_script_hash, c.cell.created_at_block));
-                if let Some((lock_hash, created_at_block)) = lock_hash {
-                    let tx_hash = key[..32].to_vec();
-                    tx_addresses
-                        .entry(tx_hash.clone())
-                        .or_default()
-                        .insert(lock_hash);
-                    tx_blocks.entry(tx_hash).or_insert(created_at_block);
-                }
+                let (tx_hash, output_index) = keys::decode_outpoint(&key);
+                let Some(info) = self.get_consumed_cell_info(&tx_hash, output_index)? else {
+                    continue;
+                };
+                tx_addresses
+                    .entry(tx_hash.clone())
+                    .or_default()
+                    .insert(info.cell.lock_script_hash);
             }
         }
 
@@ -255,13 +251,13 @@ impl CkbadgerStore {
         let mut agg_by_lock: HashMap<Vec<u8>, Agg> = HashMap::new();
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in iter.flatten() {
-            let (key, value) = item;
+            let (key, _) = item;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = match bincode::deserialize(&value) {
-                Ok(v) => v,
-                Err(_) => continue,
+            let info: LiveCellInfo = match self.get_cell_by_outpoint_key(&key) {
+                Ok(Some(v)) => v,
+                _ => continue,
             };
             let tx_hash = key[..32].to_vec();
 

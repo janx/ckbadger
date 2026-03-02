@@ -6,10 +6,10 @@ pub const DEEP_FORK_DEPTH: u64 = 36;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// Path to ckbadger-store RocksDB data directory
-    pub data_path: String,
-    /// Path to ckbadger-derived RocksDB data directory
-    pub derived_data_path: String,
+    /// Path to ckbadger domain RocksDB data directory.
+    pub domain_data_path: String,
+    /// Path to ckbadger append-only RocksDB data directory.
+    pub append_only_data_path: String,
     pub ckb_rpc_url: String,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
@@ -48,8 +48,8 @@ fn default_batch_size() -> usize {
     10000
 }
 
-fn default_derived_data_path() -> String {
-    "./data/ckbadger-store-derived".to_string()
+fn default_append_only_data_path() -> String {
+    "./data/ckbadger-store-append-only".to_string()
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -95,7 +95,7 @@ impl Config {
             .set_default("batch_size", default_batch_size() as i64)?
             .set_default("poll_interval_ms", default_poll_interval_ms() as i64)?
             .set_default("confirmations", default_confirmations() as i64)?
-            .set_default("derived_data_path", default_derived_data_path())?
+            .set_default("append_only_data_path", default_append_only_data_path())?
             .build()?
             .try_deserialize()
     }
@@ -148,7 +148,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_derived_data_path() {
-        assert_eq!(default_derived_data_path(), "./data/ckbadger-store-derived");
+    fn test_default_append_only_data_path() {
+        assert_eq!(
+            default_append_only_data_path(),
+            "./data/ckbadger-store-append-only"
+        );
     }
 }
