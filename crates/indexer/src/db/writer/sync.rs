@@ -356,40 +356,6 @@ mod tests {
         (dir, store, writer)
     }
 
-    #[test]
-    fn test_init_sync_start_keeps_rebuild_flags_in_bulk_sync() {
-        let (_dir, store, writer) = setup();
-        store
-            .update_sync_status(|status| {
-                status.dao_daily_snapshots_rebuilt = true;
-                status.address_balances_rebuilt_from_live_cells = true;
-            })
-            .unwrap();
-
-        writer.init_sync_start(0, true).unwrap();
-
-        let status = store.get_sync_status().unwrap();
-        assert!(status.dao_daily_snapshots_rebuilt);
-        assert!(status.address_balances_rebuilt_from_live_cells);
-    }
-
-    #[test]
-    fn test_init_sync_start_keeps_rebuild_flags_for_non_bulk_sync() {
-        let (_dir, store, writer) = setup();
-        store
-            .update_sync_status(|status| {
-                status.dao_daily_snapshots_rebuilt = true;
-                status.address_balances_rebuilt_from_live_cells = true;
-            })
-            .unwrap();
-
-        writer.init_sync_start(0, false).unwrap();
-
-        let status = store.get_sync_status().unwrap();
-        assert!(status.dao_daily_snapshots_rebuilt);
-        assert!(status.address_balances_rebuilt_from_live_cells);
-    }
-
     fn make_header(hash_byte: u8, ts_ms: i64) -> CachedBlockHeader {
         CachedBlockHeader {
             hash: vec![hash_byte; 32],

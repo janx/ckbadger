@@ -393,7 +393,6 @@ async fn run_sync(args: Cli) -> Result<()> {
     // addr_txs is derived-only and written inline during sync.
     // We do not run startup backfill against derived because it has no live/consumed cell tables.
 
-    // One-time backfill: rebuild avg_block_time_ms from block headers
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
     let rollback_cleanup_in_progress = store.is_rollback_cleanup_in_progress()?;
@@ -423,19 +422,6 @@ async fn run_sync(args: Cli) -> Result<()> {
             "Forcing startup rollback cleanup to reconcile derived state"
         );
     }
-    if !sync_status.avg_block_time_rebuilt && sync_status.tip_block_number > 0 {
-        info!("avg_block_time migration: rebuilding from block headers...");
-        let updated = store.rebuild_avg_block_times()?;
-        info!(
-            "avg_block_time migration complete: {} daily stats updated",
-            updated
-        );
-        store.update_sync_status(|s| {
-            s.avg_block_time_rebuilt = true;
-        })?;
-        sync_status = store.get_sync_status()?;
-    }
-
     reconcile_token_daily_deltas_on_startup(&derived_store)?;
 
     let repo = Repository::new(store.clone());

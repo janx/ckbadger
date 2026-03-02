@@ -1646,7 +1646,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_does_not_rebuild_token_daily_deltas_from_cells() {
+    fn test_rollback_keeps_token_daily_deltas_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
