@@ -70,11 +70,6 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// Get DAO field for a block.
-    pub fn get_dao_field(&self, block_number: i64) -> anyhow::Result<Option<Vec<u8>>> {
-        Ok(self.get_block_header(block_number)?.map(|h| h.dao))
-    }
-
     /// Batch get DAO fields.
     pub fn get_dao_fields_batch(
         &self,

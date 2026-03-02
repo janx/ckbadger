@@ -1101,33 +1101,6 @@ impl CkbadgerStore {
         info!("Auto-compactions disabled for bulk sync");
     }
 
-    /// Re-enable auto-compactions on all column families.
-    pub fn enable_auto_compactions(&self) {
-        for cf_name in ALL_CFS {
-            if let Some(cf) = self.db.cf_handle(cf_name) {
-                if let Err(e) = self
-                    .db
-                    .set_options_cf(cf, &[("disable_auto_compactions", "false")])
-                {
-                    tracing::warn!(cf = cf_name, error = %e, "Failed to enable auto compactions");
-                }
-            }
-        }
-        info!("Auto-compactions re-enabled");
-    }
-
-    /// Trigger manual compaction on all column families.
-    /// Should be called after bulk sync completes and auto-compactions are re-enabled.
-    pub fn trigger_full_compaction(&self) {
-        info!("Starting manual compaction across all column families");
-        for cf_name in ALL_CFS {
-            if let Some(cf) = self.db.cf_handle(cf_name) {
-                self.db.compact_range_cf(cf, None::<&[u8]>, None::<&[u8]>);
-            }
-        }
-        info!("Manual compaction completed");
-    }
-
     // ---- Memory stats ----
 
     /// Lightweight compaction pressure snapshot for the adaptive batch controller.

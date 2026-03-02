@@ -410,23 +410,6 @@ impl CkbadgerStore {
             stats.total_occupied_capacity += cell.occupied_capacity as i128;
         }
     }
-
-    /// Return cells created after a given block number.
-    pub fn cells_created_since(&self, block_number: i64) -> Vec<(Vec<u8>, i16, LiveCellInfo)> {
-        let mut result = Vec::new();
-        let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
-            let Ok(Some(info)) = self.get_cell_by_outpoint_key(&key) else {
-                continue;
-            };
-            if info.created_at_block > block_number {
-                let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                result.push((tx_hash, output_index, info));
-            }
-        }
-        result
-    }
 }
 
 #[cfg(test)]

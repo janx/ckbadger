@@ -48,10 +48,6 @@ fn default_batch_size() -> usize {
     10000
 }
 
-fn default_append_only_data_path() -> String {
-    "./data/ckbadger-store-append-only".to_string()
-}
-
 fn default_poll_interval_ms() -> u64 {
     1000
 }
@@ -86,19 +82,6 @@ fn default_token_labels_path() -> String {
 
 fn default_force_startup_cleanup() -> bool {
     false
-}
-
-impl Config {
-    pub fn from_env() -> Result<Self, config::ConfigError> {
-        config::Config::builder()
-            .add_source(config::Environment::default().separator("_"))
-            .set_default("batch_size", default_batch_size() as i64)?
-            .set_default("poll_interval_ms", default_poll_interval_ms() as i64)?
-            .set_default("confirmations", default_confirmations() as i64)?
-            .set_default("append_only_data_path", default_append_only_data_path())?
-            .build()?
-            .try_deserialize()
-    }
 }
 
 #[cfg(test)]
@@ -145,13 +128,5 @@ mod tests {
     #[test]
     fn test_default_force_startup_cleanup() {
         assert!(!default_force_startup_cleanup());
-    }
-
-    #[test]
-    fn test_default_append_only_data_path() {
-        assert_eq!(
-            default_append_only_data_path(),
-            "./data/ckbadger-store-append-only"
-        );
     }
 }

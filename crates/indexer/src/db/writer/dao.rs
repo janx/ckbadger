@@ -5,7 +5,7 @@ use ckbadger_store::keys;
 use ckbadger_store::types::DaoDepositCacheEntry;
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::{ParsedDaoDeposit, ParsedDaoWithdrawRequest};
+use crate::parser::ParsedDaoDeposit;
 
 use super::BatchWriter;
 
@@ -175,36 +175,6 @@ impl BatchWriter {
             }
         }
         Ok(None)
-    }
-
-    pub fn update_dao_withdraw_request(
-        &self,
-        request: &ParsedDaoWithdrawRequest,
-        block_number: i64,
-        _timestamp: DateTime<Utc>,
-        withdraw_ar: i64,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let outpoint_key = keys::encode_outpoint(
-            &request.original_tx_hash,
-            request.original_output_index as i16,
-        );
-        if let Some(value) = self
-            .store
-            .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
-        {
-            if let Ok(mut entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                entry.status = 1;
-                entry.withdraw_request_block = Some(block_number);
-                entry.withdraw_request_tx = Some(request.tx_hash.clone());
-                entry.withdraw_request_output_index = Some(request.output_index as i16);
-                entry.withdraw_request_ar = Some(withdraw_ar);
-                batch.put_dao_deposit(&outpoint_key, &entry);
-                // Update the withdraw_tx -> outpoint index
-                batch.put_dao_by_withdraw_tx(&request.tx_hash, &outpoint_key);
-            }
-        }
-        Ok(())
     }
 
     pub fn find_consumed_dao_deposits(

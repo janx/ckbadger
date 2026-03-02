@@ -23,16 +23,6 @@ impl CkbadgerStore {
         self.put_cf(self.cf_addr_balance(), lock_hash, &value)
     }
 
-    /// Update address balance with read-modify-write.
-    pub fn update_addr_balance<F>(&self, lock_hash: &[u8], update_fn: F) -> anyhow::Result<()>
-    where
-        F: FnOnce(&mut AddressBalance),
-    {
-        let mut balance = self.get_addr_balance(lock_hash)?.unwrap_or_default();
-        update_fn(&mut balance);
-        self.put_addr_balance_direct(lock_hash, &balance)
-    }
-
     /// List top addresses by balance (full scan, sorted).
     pub fn top_addresses(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, AddressBalance)>> {
         let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);

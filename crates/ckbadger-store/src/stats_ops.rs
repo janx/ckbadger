@@ -54,23 +54,6 @@ impl CkbadgerStore {
         self.put_cf(self.cf_stats_chain(), &key, &value)
     }
 
-    pub fn list_hourly_stats(&self) -> anyhow::Result<Vec<HourlyStats>> {
-        let prefix = [stats_prefix::HOURLY];
-        let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
-        let mut results = Vec::new();
-
-        for item in iter.flatten() {
-            let (key, value) = item;
-            if !key.starts_with(&prefix) {
-                break;
-            }
-            if let Ok(stats) = bincode::deserialize::<HourlyStats>(&value) {
-                results.push(stats);
-            }
-        }
-        Ok(results)
-    }
-
     /// List daily stats with their date keys (date is in the key, not the value).
     pub fn list_daily_stats_with_dates(&self) -> anyhow::Result<Vec<(String, DailyStats)>> {
         let prefix = [stats_prefix::DAILY];

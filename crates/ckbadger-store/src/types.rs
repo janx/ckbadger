@@ -883,12 +883,6 @@ pub struct MemoryStats {
     pub wbm_budget_bytes: usize,
 }
 
-impl MemoryStats {
-    pub fn total_mb(&self) -> usize {
-        self.memory_bytes / (1024 * 1024)
-    }
-}
-
 /// Cursor for pagination over prefix iterators
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cursor {
