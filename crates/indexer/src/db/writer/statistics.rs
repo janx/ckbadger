@@ -100,6 +100,13 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Update daily statistics for a given date. Returns the final DailyStats
+    /// so the caller can thread cumulative totals forward when multiple dates
+    /// are processed in the same batch.
+    ///
+    /// `prev_day_stats`: if the caller already has the previous day's stats
+    /// in memory (because it was computed in the same batch), pass them here
+    /// to avoid reading stale data from the not-yet-committed DB.
     pub fn update_daily_statistics(
         &self,
         date: NaiveDate,
@@ -114,8 +121,9 @@ impl BatchWriter {
         data_size_consumed: i64,
         dao_field: Option<&[u8]>,
         block_time: Option<(i64, i32)>, // (sum_ms, count)
+        prev_day_stats: Option<&DailyStats>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<DailyStats> {
         let key = keys::encode_stats_key(
             keys::STATS_PREFIX_DAILY,
             date.format("%Y%m%d").to_string().as_bytes(),
@@ -185,27 +193,37 @@ impl BatchWriter {
             None => {
                 let knowledge_size = dao_field.and_then(calculate_knowledge_size);
 
-                // Carry forward cumulative totals from the previous day
-                let prev_date = date - Duration::days(1);
-                let prev_key = keys::encode_stats_key(
-                    keys::STATS_PREFIX_DAILY,
-                    prev_date.format("%Y%m%d").to_string().as_bytes(),
-                );
-                let prev = self
-                    .store
-                    .get_stats_key(&prev_key)?
-                    .map(|v| deserialize_stats::<DailyStats>(&v, "previous day stats"))
-                    .transpose()?;
-
-                let (prev_live, prev_dead, prev_all, prev_data_size) = match prev {
-                    Some(p) => (
-                        p.total_live_cells,
-                        p.total_dead_cells,
-                        p.total_all_cells,
-                        p.total_data_size,
-                    ),
-                    None => (0, 0, 0, 0),
-                };
+                // Carry forward cumulative totals from the previous day.
+                // Prefer in-memory stats (from same batch) over DB to handle
+                // cross-day batches where the previous day isn't committed yet.
+                let (prev_live, prev_dead, prev_all, prev_data_size) =
+                    if let Some(p) = prev_day_stats {
+                        (
+                            p.total_live_cells,
+                            p.total_dead_cells,
+                            p.total_all_cells,
+                            p.total_data_size,
+                        )
+                    } else {
+                        let prev_date = date - Duration::days(1);
+                        let prev_key = keys::encode_stats_key(
+                            keys::STATS_PREFIX_DAILY,
+                            prev_date.format("%Y%m%d").to_string().as_bytes(),
+                        );
+                        self.store
+                            .get_stats_key(&prev_key)?
+                            .map(|v| deserialize_stats::<DailyStats>(&v, "previous day stats"))
+                            .transpose()?
+                            .map(|p| {
+                                (
+                                    p.total_live_cells,
+                                    p.total_dead_cells,
+                                    p.total_all_cells,
+                                    p.total_data_size,
+                                )
+                            })
+                            .unwrap_or((0, 0, 0, 0))
+                    };
 
                 DailyStats {
                     blocks_count,
@@ -227,7 +245,7 @@ impl BatchWriter {
 
         let value = bincode::serialize(&stats)?;
         batch.put_stats(&key, &value);
-        Ok(())
+        Ok(stats)
     }
 
     pub fn update_daily_block_stats_batch(
@@ -854,7 +872,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .update_daily_statistics(
-                day1, 10, 50, 10, 3, 1000, 500, 200, 500, 100, None, None, &mut batch,
+                day1, 10, 50, 10, 3, 1000, 500, 200, 500, 100, None, None, None, &mut batch,
             )
             .unwrap();
         batch.commit().unwrap();
@@ -875,7 +893,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .update_daily_statistics(
-                day2, 5, 20, 5, 2, 500, 250, 100, 200, 50, None, None, &mut batch,
+                day2, 5, 20, 5, 2, 500, 250, 100, 200, 50, None, None, None, &mut batch,
             )
             .unwrap();
         batch.commit().unwrap();
@@ -891,5 +909,70 @@ mod tests {
         assert_eq!(d2.total_dead_cells, 3 + 2); // prev 3 + 2
         assert_eq!(d2.total_all_cells, 10 + 5); // prev 10 + 5
         assert_eq!(d2.total_data_size, 400 + 150); // prev 400 + (200 - 50)
+    }
+
+    #[test]
+    fn test_daily_stats_cross_day_same_batch_uses_in_memory_prev() {
+        // When a single WriteBatch spans multiple calendar days,
+        // the second day must carry forward from the in-memory first day
+        // (not the DB, which hasn't been committed yet).
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let day1 = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
+        let day2 = NaiveDate::from_ymd_opt(2024, 3, 2).unwrap();
+
+        // Single batch, both days — NOT committed between them
+        let mut batch = StoreBatch::new(&store);
+
+        // Day 1: 20 created, 5 consumed, 800 data added, 100 consumed
+        let d1 = writer
+            .update_daily_statistics(
+                day1, 8, 40, 20, 5, 2000, 1000, 400, 800, 100, None, None, None, &mut batch,
+            )
+            .unwrap();
+        assert_eq!(d1.total_live_cells, 15); // 20 - 5
+        assert_eq!(d1.total_dead_cells, 5);
+        assert_eq!(d1.total_all_cells, 20);
+        assert_eq!(d1.total_data_size, 700); // 800 - 100
+
+        // Day 2: pass d1 as prev_day_stats (in-memory, batch not yet committed)
+        let d2 = writer
+            .update_daily_statistics(
+                day2,
+                4,
+                10,
+                6,
+                2,
+                500,
+                300,
+                100,
+                200,
+                50,
+                None,
+                None,
+                Some(&d1),
+                &mut batch,
+            )
+            .unwrap();
+
+        // Day 2 cumulative totals should carry forward from d1
+        assert_eq!(d2.total_live_cells, 15 + 4); // prev 15 + (6 - 2)
+        assert_eq!(d2.total_dead_cells, 5 + 2); // prev 5 + 2
+        assert_eq!(d2.total_all_cells, 20 + 6); // prev 20 + 6
+        assert_eq!(d2.total_data_size, 700 + 150); // prev 700 + (200 - 50)
+
+        batch.commit().unwrap();
+
+        // Verify persisted values match
+        let key2 = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAILY,
+            day2.format("%Y%m%d").to_string().as_bytes(),
+        );
+        let persisted: DailyStats =
+            bincode::deserialize(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
+        assert_eq!(persisted.total_live_cells, d2.total_live_cells);
+        assert_eq!(persisted.total_all_cells, d2.total_all_cells);
     }
 }

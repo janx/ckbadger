@@ -3570,7 +3570,11 @@ impl Indexer {
                 Ok(SyncAction::ReorgHandled) => {
                     self.cell_cache.clear();
                     self.udt_cell_cache.clear();
-                    info!("Reorg handled, caches cleared, continuing sync from fork point");
+                    let new_epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
+                    info!(
+                        epoch = new_epoch,
+                        "Reorg handled, caches cleared, epoch bumped, continuing sync from fork point"
+                    );
                 }
                 Ok(SyncAction::DeepForkPaused) => {
                     warn!("Deep fork detected, sync paused");
@@ -10871,10 +10875,14 @@ impl Indexer {
             )?;
         }
 
-        // Daily statistics (with block time data folded in)
-        for (
-            date,
-            (
+        // Daily statistics (with block time data folded in).
+        // Sort dates so cumulative totals are threaded forward correctly
+        // when a batch spans multiple calendar days.
+        let mut sorted_dates: Vec<_> = stats.daily_stats.keys().copied().collect();
+        sorted_dates.sort();
+        let mut prev_day_stats: Option<ckbadger_store::types::DailyStats> = None;
+        for date in &sorted_dates {
+            let (
                 blocks,
                 txs,
                 created,
@@ -10884,26 +10892,26 @@ impl Indexer {
                 occupied_consumed,
                 data_size_added,
                 data_size_consumed,
-            ),
-        ) in &stats.daily_stats
-        {
+            ) = stats.daily_stats[date];
             let dao_field = stats.daily_dao_fields.get(date);
             let block_time = stats.daily_block_times.get(date).copied();
-            self.derived_writer.update_daily_statistics(
+            let result = self.derived_writer.update_daily_statistics(
                 *date,
-                *blocks,
-                *txs,
-                *created,
-                *consumed,
-                *capacity,
-                *occupied_created,
-                *occupied_consumed,
-                *data_size_added,
-                *data_size_consumed,
+                blocks,
+                txs,
+                created,
+                consumed,
+                capacity,
+                occupied_created,
+                occupied_consumed,
+                data_size_added,
+                data_size_consumed,
                 dao_field.map(|v| v.as_slice()),
                 block_time,
+                prev_day_stats.as_ref(),
                 batch,
             )?;
+            prev_day_stats = Some(result);
         }
 
         // Daily block stats

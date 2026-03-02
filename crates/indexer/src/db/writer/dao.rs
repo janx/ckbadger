@@ -501,7 +501,14 @@ impl BatchWriter {
                             .iter()
                             .find(|(h, _)| *h == tx_hash)
                             .map(|(_, idx)| *idx)
-                            .unwrap_or(0);
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "DAO batch: withdraw tx_hash 0x{} not found in inputs for deposit outpoint=0x{}:{}",
+                                    hex::encode(tx_hash),
+                                    hex::encode(&orig_tx),
+                                    orig_idx
+                                )
+                            })?;
                         let key = (tx_hash.to_vec(), input_output_index);
                         result_map
                             .entry(key)
