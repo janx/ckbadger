@@ -99,7 +99,7 @@ else
 endif
 
 tui:
-	cargo run -p ckbadger-tui $(if $(strip $(TUI_ARGS)),-- $(TUI_ARGS),)
+	TUI_ARGS="$(TUI_ARGS)" ./scripts/run_tui.sh
 
 reset:
 	@if [ "$(CONFIRM)" != "1" ]; then \
