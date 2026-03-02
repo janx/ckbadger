@@ -293,21 +293,11 @@ async fn resolve_deep_fork(
     }
 
     match req.action.as_str() {
-        "dismiss" => {
-            state
-                .store
-                .clear_deep_fork()
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            ok(ResolveDeepForkResponse {
-                success: true,
-                action: "dismiss".to_string(),
-                message: "Deep fork dismissed. Sync will resume but data may be inconsistent."
-                    .to_string(),
-            })
-        }
+        "dismiss" => Err(ApiError::bad_request(
+            "Deep fork cannot be resolved via API. Stop indexer, delete RocksDB data, and re-sync from genesis.",
+        )),
         _ => Err(ApiError::bad_request(
-            "Invalid action. Supported: dismiss. For rollback/reset, use CLI tools.",
+            "Invalid action. Supported: dismiss. Deep fork in-place resolution is disabled; rebuild RocksDB and re-sync from genesis.",
         )),
     }
 }

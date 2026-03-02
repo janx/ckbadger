@@ -9,9 +9,9 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DobEntry, DobExtra, DobStandard, EpochStats, HourlyStats,
-    LiveCellInfo, MinerStats, NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta,
-    NftEntry, NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    DailyBlockStats, DailyStats, DeepForkInfo, DobEntry, DobExtra, DobStandard, EpochStats,
+    HourlyStats, LiveCellInfo, MinerStats, NftCollectionActivityEntry, NftCollectionAggregate,
+    NftDailyDelta, NftEntry, NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
     SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
@@ -40,6 +40,29 @@ fn test_config_with_append_only(
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        if let Some(value) = &self.original {
+            std::env::set_var(self.key, value);
+        } else {
+            std::env::remove_var(self.key);
+        }
+    }
 }
 
 #[tokio::test]
@@ -177,6 +200,50 @@ async fn test_hardforks_endpoint_returns_503_when_derived_store_lags() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "derived_syncing");
+}
+
+#[tokio::test]
+async fn test_resolve_deep_fork_rejects_dismiss_and_keeps_flag() {
+    let _admin_token_guard = EnvVarGuard::set("ADMIN_TOKEN", "test-admin-token");
+
+    let store = test_store();
+    store
+        .set_deep_fork(DeepForkInfo {
+            db_tip: 100,
+            db_tip_hash: vec![0x11; 32],
+            chain_tip: 160,
+            chain_tip_hash: vec![0x22; 32],
+            depth: 60,
+            fork_point: 100,
+        })
+        .unwrap();
+
+    let config = test_config(store.clone());
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/admin/resolve-deep-fork")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"action":"dismiss","adminToken":"test-admin-token"}"#,
+        ))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "bad_request");
+    assert_eq!(
+        json["message"],
+        "Deep fork cannot be resolved via API. Stop indexer, delete RocksDB data, and re-sync from genesis."
+    );
+
+    let status = store.get_sync_status().unwrap();
+    assert!(status.deep_fork_detected);
+    assert!(status.deep_fork_info.is_some());
 }
 
 #[tokio::test]

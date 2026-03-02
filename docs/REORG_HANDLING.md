@@ -115,9 +115,11 @@ Returns current deep-fork status and optional synthetic reorg object when deep f
 
 ### `POST /api/v1/admin/resolve-deep-fork`
 
-Clears deep-fork status with action `dismiss` (requires `ADMIN_TOKEN`).
+`dismiss` action is intentionally rejected (requires `ADMIN_TOKEN`) and returns an error that
+in-place deep-fork resolution is disabled.
 
-`dismiss` only unblocks the paused indexer loop; it is not the correctness recovery path for deep forks.
+This endpoint exists as an explicit fail-fast guardrail so operators do not resume from a known
+inconsistent fork state.
 
 ## WebSocket Events
 
@@ -162,7 +164,6 @@ When a deep fork is detected:
 1. Investigate node/network state
 2. Verify canonical chain
 3. Stop indexer, delete RocksDB data, and re-sync from genesis
-4. Use API `dismiss` only for operational cleanup (for example clearing stale deep-fork status), not as a data-correctness fix
 
 After rebuild + re-sync, indexer resumes normal bounded reorg handling (`depth <= DEEP_FORK_DEPTH`).
 
