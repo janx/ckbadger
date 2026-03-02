@@ -112,17 +112,17 @@ impl CkbRpcClient {
         number: u64,
     ) -> Result<Option<BlockResponseWithCycles>> {
         let hex_number = format!("0x{:x}", number);
-        self.call("get_block_by_number", (hex_number, Some("0x2"), Some(true)))
+        self.call_optional("get_block_by_number", (hex_number, Some("0x2"), Some(true)))
             .await
     }
 
     pub async fn get_block_hash(&self, number: u64) -> Result<Option<String>> {
         let hex_number = format!("0x{:x}", number);
-        self.call("get_block_hash", (hex_number,)).await
+        self.call_optional("get_block_hash", (hex_number,)).await
     }
 
     pub async fn get_block(&self, hash: &str) -> Result<Option<BlockView>> {
-        self.call("get_block", (hash,)).await
+        self.call_optional("get_block", (hash,)).await
     }
 
     pub async fn get_block_economic_state(&self, hash: &str) -> Result<Option<BlockEconomicState>> {
@@ -131,7 +131,7 @@ impl CkbRpcClient {
     }
 
     pub async fn get_transaction(&self, hash: &str) -> Result<Option<TransactionWithStatus>> {
-        self.call("get_transaction", (hash,)).await
+        self.call_optional("get_transaction", (hash,)).await
     }
 
     pub async fn get_tx_pool_info(&self) -> Result<TxPoolInfo> {
@@ -207,4 +207,84 @@ pub struct TxStatus {
 fn parse_hex_u64(hex: &str) -> Result<u64> {
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
     u64::from_str_radix(hex, 16).map_err(|e| anyhow!("Failed to parse hex: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn get_block_by_number_returns_none_on_null_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_block_by_number"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "result":null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = CkbRpcClient::new(server.uri());
+        let result = client.get_block_by_number(123).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_block_hash_returns_none_on_null_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_block_hash"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "result":null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = CkbRpcClient::new(server.uri());
+        let result = client.get_block_hash(123).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_block_returns_none_on_null_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_block"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "result":null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = CkbRpcClient::new(server.uri());
+        let result = client.get_block("0x11").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_transaction_returns_none_on_null_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_transaction"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "result":null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = CkbRpcClient::new(server.uri());
+        let result = client.get_transaction("0x22").await.unwrap();
+        assert!(result.is_none());
+    }
 }

@@ -283,6 +283,19 @@ fn ensure_hodl_tracker_state_consistent(
     Ok(())
 }
 
+fn rebuild_hodl_tracker_from_state(
+    state: Option<HodlTrackerState>,
+    tip_block: i64,
+) -> Result<HodlWaveTracker> {
+    ensure_hodl_tracker_state_consistent(state.as_ref(), tip_block)?;
+    if tip_block <= 0 {
+        return Ok(HodlWaveTracker::new());
+    }
+    Ok(state
+        .map(HodlWaveTracker::from_state)
+        .unwrap_or_else(HodlWaveTracker::new))
+}
+
 #[allow(dead_code)]
 fn get_partition_index(block_number: u64) -> usize {
     (block_number / PARTITION_SIZE) as usize
@@ -866,7 +879,44 @@ fn is_bulk_sync_active_by_lag(blocks_behind: u64, bulk_sync_threshold: u64) -> b
 }
 
 fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_threshold: u64) -> bool {
-    chain_tip.saturating_sub(batch_end) > bulk_sync_threshold
+    let blocks_behind = chain_tip.checked_sub(batch_end).unwrap_or_else(|| {
+        panic!(
+            "invalid bulk-sync batch range: batch_end={} exceeds chain_tip={}",
+            batch_end, chain_tip
+        )
+    });
+    blocks_behind > bulk_sync_threshold
+}
+
+fn require_non_negative_block_number(value: i64, context: &str) -> Result<u64> {
+    u64::try_from(value).map_err(|_| anyhow!("negative block number in {}: {}", context, value))
+}
+
+fn next_start_block_from_db_tip(
+    db_tip: i64,
+    db_tip_hash: &Option<Vec<u8>>,
+    context: &str,
+) -> Result<u64> {
+    if db_tip == 0 && db_tip_hash.is_none() {
+        return Ok(0);
+    }
+
+    let db_tip_u64 = require_non_negative_block_number(db_tip, context)?;
+    db_tip_u64
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("db_tip overflow in {}: {}", context, db_tip))
+}
+
+fn blocks_behind_tip(chain_tip: u64, base_tip: i64, context: &str) -> Result<u64> {
+    let base_tip_u64 = require_non_negative_block_number(base_tip, context)?;
+    chain_tip.checked_sub(base_tip_u64).ok_or_else(|| {
+        anyhow!(
+            "invalid tip ordering in {}: base_tip={} exceeds chain_tip={}",
+            context,
+            base_tip,
+            chain_tip
+        )
+    })
 }
 
 fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
@@ -911,6 +961,29 @@ fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished
 
 fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> bool {
     blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
+}
+
+fn mempool_short_tx_id(tx_hash: &str) -> Result<&str> {
+    let raw_hash = tx_hash.strip_prefix("0x").ok_or_else(|| {
+        anyhow!(
+            "mempool tx hash missing 0x prefix in proposal cache: tx_hash={}",
+            tx_hash
+        )
+    })?;
+    if raw_hash.len() < 20 {
+        bail!(
+            "mempool tx hash too short in proposal cache: tx_hash={}, hex_len={}",
+            tx_hash,
+            raw_hash.len()
+        );
+    }
+    if !raw_hash.is_ascii() {
+        bail!(
+            "mempool tx hash must be ASCII hex in proposal cache: tx_hash={}",
+            tx_hash
+        );
+    }
+    Ok(&raw_hash[..20])
 }
 
 fn record_worker_exit_reason(
@@ -3198,7 +3271,9 @@ impl Indexer {
             rpc.get_tip_block_number().await?
         };
 
-        let progress = Arc::new(SyncProgress::new(tip_number as u64, chain_tip));
+        let tip_number_u64 =
+            require_non_negative_block_number(tip_number, "indexer startup sync tip")?;
+        let progress = Arc::new(SyncProgress::new(tip_number_u64, chain_tip));
         progress.start_refresher();
         let cell_cache = Arc::new(DashMap::with_capacity(CELL_CACHE_CAPACITY));
         let udt_cell_cache = Arc::new(DashMap::with_capacity(UDT_CELL_CACHE_CAPACITY));
@@ -3840,10 +3915,13 @@ impl Indexer {
                 Ok(SyncAction::ReorgHandled) => {
                     self.cell_cache.clear();
                     self.udt_cell_cache.clear();
+                    let (reorg_tip, _) = self.repo.get_sync_tip().await?;
+                    self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
                     let new_epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
                     info!(
                         epoch = new_epoch,
-                        "Reorg handled, caches cleared, epoch bumped, continuing sync from fork point"
+                        reorg_tip,
+                        "Reorg handled, caches cleared, HODL tracker reconciled, epoch bumped, continuing sync from fork point"
                     );
                 }
                 Ok(SyncAction::DeepForkPaused) => {
@@ -3996,10 +4074,17 @@ impl Indexer {
                                 continue;
                             }
                         };
-                        if db_tip == 0 && db_tip_hash.is_none() {
-                            0
-                        } else {
-                            (db_tip + 1) as u64
+                        match next_start_block_from_db_tip(
+                            db_tip,
+                            &db_tip_hash,
+                            "pipeline fetcher start_block",
+                        ) {
+                            Ok(start) => start,
+                            Err(e) => {
+                                error!("Failed to compute fetch start block: {}", e);
+                                sleep(Duration::from_secs(5)).await;
+                                continue;
+                            }
                         }
                     }
                 };
@@ -5566,17 +5651,21 @@ impl Indexer {
                     }
                     let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
                     committed_tip_for_cache_for_writer.store(db_tip, Ordering::SeqCst);
-                    let expected_start = if db_tip == 0 && db_tip_hash.is_none() {
-                        0
-                    } else {
-                        (db_tip + 1) as u64
-                    };
+                    let expected_start = next_start_block_from_db_tip(
+                        db_tip,
+                        &db_tip_hash,
+                        "pipeline writer expected_start",
+                    )?;
 
                     if start_block != expected_start {
                         let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
                         let pipeline = self.pipeline_perf.snapshot();
-                        let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                        let blocks_behind = blocks_behind_tip(
+                            chain_tip,
+                            db_tip,
+                            "pipeline mismatch blocks_behind",
+                        )?;
                         if let Some(repeat) = self.repeated_warning_snapshot(
                             "pipeline_batch_mismatch",
                             Duration::from_secs(5),
@@ -5618,17 +5707,21 @@ impl Indexer {
                         continue;
                     }
 
-                    let blocks_behind = chain_tip.saturating_sub(db_tip as u64);
+                    let blocks_behind =
+                        blocks_behind_tip(chain_tip, db_tip, "pipeline writer reorg check")?;
                     if blocks_behind <= self.config.bulk_sync_threshold {
                         if let Some(ref stored_hash) = db_tip_hash {
                             if db_tip > 0 {
-                                match self
-                                    .check_and_handle_reorg(db_tip as u64, stored_hash)
-                                    .await?
-                                {
+                                let db_tip_u64 = require_non_negative_block_number(
+                                    db_tip,
+                                    "pipeline writer reorg tip",
+                                )?;
+                                match self.check_and_handle_reorg(db_tip_u64, stored_hash).await? {
                                     Some(ReorgAction::Handled(_)) => {
                                         self.cell_cache.clear();
                                         self.udt_cell_cache.clear();
+                                        let (reorg_tip, _) = self.repo.get_sync_tip().await?;
+                                        self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
                                         let current_epoch =
                                             self.pipeline_reset_epoch.load(Ordering::SeqCst);
                                         info!(
@@ -5636,7 +5729,8 @@ impl Indexer {
                                             pipeline_epoch = current_epoch,
                                             db_tip,
                                             chain_tip,
-                                            "Reorg handled, caches cleared, draining stale parsed batches"
+                                            reorg_tip,
+                                            "Reorg handled, caches cleared, HODL tracker reconciled, draining stale parsed batches"
                                         );
                                         self.request_pipeline_reset(
                                             "reorg handled",
@@ -6151,11 +6245,8 @@ impl Indexer {
         self.progress.update_target(chain_tip);
 
         let (db_tip, db_tip_hash) = self.repo.get_sync_tip().await?;
-        let start_block = if db_tip == 0 && db_tip_hash.is_none() {
-            0
-        } else {
-            (db_tip + 1) as u64
-        };
+        let start_block =
+            next_start_block_from_db_tip(db_tip, &db_tip_hash, "sequential sync start_block")?;
 
         if start_block > chain_tip {
             return Ok(SyncAction::CaughtUp);
@@ -6165,10 +6256,9 @@ impl Indexer {
         if blocks_behind <= self.config.bulk_sync_threshold {
             if let Some(ref stored_hash) = db_tip_hash {
                 if db_tip > 0 {
-                    match self
-                        .check_and_handle_reorg(db_tip as u64, stored_hash)
-                        .await?
-                    {
+                    let db_tip_u64 =
+                        require_non_negative_block_number(db_tip, "sequential reorg tip")?;
+                    match self.check_and_handle_reorg(db_tip_u64, stored_hash).await? {
                         Some(ReorgAction::Handled(_)) => return Ok(SyncAction::ReorgHandled),
                         Some(ReorgAction::DeepForkPaused) => return Ok(SyncAction::DeepForkPaused),
                         None => {}
@@ -7976,12 +8066,13 @@ impl Indexer {
                                 output_index
                             )
                         })?;
-                        self.writer.insert_mnft_class(
+                        self.writer.insert_mnft_class_with_state(
                             &class,
                             &tx_data.hash,
                             output_index,
                             parsed.number,
                             &mut nft_batch,
+                            &mut mnft_state,
                         )?;
                     }
                     for (output_index, token) in MnftParser::parse_tokens_with_output_indices(tx) {
@@ -9414,12 +9505,13 @@ impl Indexer {
                                 output_index
                             )
                         })?;
-                        writer.insert_mnft_class(
+                        writer.insert_mnft_class_with_state(
                             class,
                             &all_tx_data[tx_gi].hash,
                             output_index,
                             block_number,
                             &mut batch,
+                            &mut mnft_state,
                         )?;
                     }
                     for &(tx_gi, output_index, ref token) in &pre_parsed_nft_data.mnft_tokens {
@@ -10588,12 +10680,13 @@ impl Indexer {
                                     output_index
                                 )
                             })?;
-                            self.writer.insert_mnft_class(
+                            self.writer.insert_mnft_class_with_state(
                                 &class,
                                 &tx_data.hash,
                                 output_index,
                                 parsed.number,
                                 &mut data_batch,
+                                &mut mnft_state,
                             )?;
                         }
                         for (output_index, token) in
@@ -11664,7 +11757,11 @@ impl Indexer {
 
     fn reconcile_hodl_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
         let state = self.writer.store().get_hodl_tracker_state()?;
-        ensure_hodl_tracker_state_consistent(state.as_ref(), tip_block)
+        let rebuilt = rebuild_hodl_tracker_from_state(state, tip_block)?;
+
+        let mut tracker = self.hodl_tracker.lock().unwrap();
+        *tracker = rebuilt;
+        Ok(())
     }
 
     /// Feed parsed block data into the HODL wave tracker and write snapshots at day boundaries.
@@ -11801,7 +11898,70 @@ impl Indexer {
             "Reorg detected at current DB tip"
         );
 
-        let (fork_point, fork_hash) = self.find_fork_point(db_tip).await?;
+        let bounded_floor = db_tip.saturating_sub(DEEP_FORK_DEPTH);
+        if bounded_floor > 0 {
+            let bounded_floor_i64 = i64::try_from(bounded_floor)
+                .map_err(|_| anyhow!("fork-search floor exceeds i64 range: {}", bounded_floor))?;
+            let db_floor_hash = self
+                .repo
+                .get_block_hash_at_height(bounded_floor_i64)?
+                .ok_or_else(|| anyhow!("Block {} not found in DB", bounded_floor))?;
+            let chain_floor_hash = self.get_chain_block_hash(bounded_floor).await?;
+
+            if db_floor_hash != chain_floor_hash {
+                let chain_tip = self.get_chain_tip().await?;
+                let chain_tip_hash_bytes = self.get_chain_block_hash(chain_tip).await?;
+                let depth_lower_bound = DEEP_FORK_DEPTH
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("deep fork depth lower-bound overflow"))?;
+
+                error!(
+                    run_id = %self.run_id,
+                    db_tip,
+                    chain_tip,
+                    bounded_floor,
+                    depth_lower_bound,
+                    deep_fork_limit = DEEP_FORK_DEPTH,
+                    "DEEP FORK DETECTED by bounded probe! Manual intervention required."
+                );
+
+                let fork_point_i64 = i64::try_from(bounded_floor).map_err(|_| {
+                    anyhow!(
+                        "fork point exceeds i64 range for deep fork probe: fork_point={}",
+                        bounded_floor
+                    )
+                })?;
+                let db_tip_i64 = i64::try_from(db_tip).map_err(|_| {
+                    anyhow!("db tip exceeds i64 range for deep fork: db_tip={}", db_tip)
+                })?;
+                let chain_tip_i64 = i64::try_from(chain_tip).map_err(|_| {
+                    anyhow!(
+                        "chain tip exceeds i64 range for deep fork: chain_tip={}",
+                        chain_tip
+                    )
+                })?;
+                let depth_i64 = i64::try_from(depth_lower_bound).map_err(|_| {
+                    anyhow!(
+                        "reorg depth lower bound exceeds i64 range: depth_lower_bound={}",
+                        depth_lower_bound
+                    )
+                })?;
+
+                self.writer.record_deep_fork(
+                    fork_point_i64,
+                    &db_floor_hash,
+                    db_tip_i64,
+                    stored_hash,
+                    chain_tip_i64,
+                    &chain_tip_hash_bytes,
+                    depth_i64,
+                )?;
+
+                return Ok(Some(ReorgAction::DeepForkPaused));
+            }
+        }
+
+        let (fork_point, fork_hash) = self.find_fork_point(db_tip, bounded_floor).await?;
         let depth = db_tip - fork_point;
 
         info!(
@@ -11891,7 +12051,7 @@ impl Indexer {
         rollback_append_only_history_store(self.append_only_store.as_ref(), rollback_to)
     }
 
-    async fn find_fork_point(&self, db_tip: u64) -> Result<(u64, Vec<u8>)> {
+    async fn find_fork_point(&self, db_tip: u64, min_height: u64) -> Result<(u64, Vec<u8>)> {
         let mut height = db_tip;
 
         loop {
@@ -11911,6 +12071,14 @@ impl Indexer {
             if height == 0 {
                 return Err(anyhow::anyhow!(
                     "No common ancestor found - genesis mismatch!"
+                ));
+            }
+
+            if height == min_height {
+                return Err(anyhow!(
+                    "No common ancestor found within bounded reorg search window: db_tip={}, min_height={}",
+                    db_tip,
+                    min_height
                 ));
             }
 
@@ -12082,8 +12250,14 @@ impl Indexer {
 
         let mut all_mempool_txs: HashMap<String, &crate::rpc::TxPoolEntry> = HashMap::new();
         for (tx_hash, entry) in mempool.pending.iter().chain(mempool.proposed.iter()) {
-            let short_id = &tx_hash[2..22];
-            all_mempool_txs.insert(short_id.to_string(), entry);
+            match mempool_short_tx_id(tx_hash) {
+                Ok(short_id) => {
+                    all_mempool_txs.insert(short_id.to_string(), entry);
+                }
+                Err(e) => {
+                    warn!(tx_hash, error = %e, "Skipping malformed mempool tx hash in proposal cache");
+                }
+            }
         }
 
         let mut cached_proposals = Vec::with_capacity(proposals.len());
@@ -12547,7 +12721,12 @@ mod tests {
     fn test_is_bulk_sync_batch_uses_tip_distance() {
         assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
         assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
-        assert!(!is_bulk_sync_batch(100, 150, 1000));
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid bulk-sync batch range")]
+    fn test_is_bulk_sync_batch_panics_when_batch_end_exceeds_tip() {
+        let _ = is_bulk_sync_batch(100, 150, 1000);
     }
 
     #[test]
@@ -12590,6 +12769,28 @@ mod tests {
         assert_eq!(first, Some(7));
         assert_eq!(second, Some(7));
         assert_eq!(load_calls, 1);
+    }
+
+    #[test]
+    fn test_next_start_block_from_db_tip_rejects_negative_tip() {
+        let err = next_start_block_from_db_tip(-1, &Some(vec![0x11; 32]), "unit-test").unwrap_err();
+        assert!(err.to_string().contains("negative block number"));
+    }
+
+    #[test]
+    fn test_blocks_behind_tip_rejects_inverted_tip_order() {
+        let err = blocks_behind_tip(100, 101, "unit-test").unwrap_err();
+        assert!(err.to_string().contains("exceeds chain_tip"));
+    }
+
+    #[test]
+    fn test_mempool_short_tx_id_validates_shape() {
+        assert_eq!(
+            mempool_short_tx_id("0x1234567890abcdef123456").unwrap(),
+            "1234567890abcdef1234"
+        );
+        assert!(mempool_short_tx_id("1234").is_err());
+        assert!(mempool_short_tx_id("0x1234").is_err());
     }
 
     #[test]
@@ -14964,6 +15165,40 @@ mod tests {
         };
         let ahead_err = ensure_hodl_tracker_state_consistent(Some(&ahead), 100).unwrap_err();
         assert!(ahead_err.to_string().contains("ahead of sync tip"));
+    }
+
+    #[test]
+    fn test_rebuild_hodl_tracker_from_state_resets_when_tip_is_zero() {
+        let stale = HodlTrackerState {
+            capacity_by_date: vec![("20240101".to_string(), 10)],
+            date_transitions: vec![(200, "20240101".to_string())],
+            holder_count: 7,
+            last_snapshot_date: Some("20240101".to_string()),
+        };
+
+        let tracker = rebuild_hodl_tracker_from_state(Some(stale), 0).unwrap();
+        let state = tracker.to_state();
+        assert!(state.capacity_by_date.is_empty());
+        assert!(state.date_transitions.is_empty());
+        assert_eq!(state.holder_count, 0);
+        assert!(state.last_snapshot_date.is_none());
+    }
+
+    #[test]
+    fn test_rebuild_hodl_tracker_from_state_restores_when_tip_is_positive() {
+        let persisted = HodlTrackerState {
+            capacity_by_date: vec![("20240101".to_string(), 10)],
+            date_transitions: vec![(1, "20240101".to_string())],
+            holder_count: 3,
+            last_snapshot_date: Some("20240101".to_string()),
+        };
+
+        let tracker = rebuild_hodl_tracker_from_state(Some(persisted), 1).unwrap();
+        let state = tracker.to_state();
+        assert_eq!(state.capacity_by_date.len(), 1);
+        assert_eq!(state.date_transitions.len(), 1);
+        assert_eq!(state.holder_count, 3);
+        assert_eq!(state.last_snapshot_date, Some("20240101".to_string()));
     }
 
     #[test]

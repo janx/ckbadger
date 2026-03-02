@@ -133,7 +133,27 @@ impl BatchWriter {
         block_number: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let existing = self.store.get_nft(&class.class_id)?;
+        let mut state = self.new_mnft_batch_state();
+        self.insert_mnft_class_with_state(
+            class,
+            tx_hash,
+            output_index,
+            block_number,
+            batch,
+            &mut state,
+        )
+    }
+
+    pub(crate) fn insert_mnft_class_with_state(
+        &self,
+        class: &ParsedMnftClass,
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        batch: &mut StoreBatch,
+        state: &mut MnftBatchState,
+    ) -> Result<()> {
+        let existing = state.get_token(self.store.as_ref(), &class.class_id)?;
         let entry = NftEntry {
             standard: NftStandard::MnftClass,
             collection_id: Some(class.issuer_id.clone()),
@@ -154,15 +174,15 @@ impl BatchWriter {
             },
         };
         batch.put_nft(&class.class_id, &entry);
+        state.put_token(&class.class_id, entry);
 
         // Create/update NFT collection aggregate
-        let mut agg = self
-            .store
-            .get_nft_collection_aggregate(&class.class_id)?
+        let mut agg = state
+            .get_collection_aggregate(self.store.as_ref(), &class.class_id)?
             .unwrap_or_default();
         agg.name = class.name.clone();
         agg.standard = NftStandard::MnftClass;
-        batch.put_nft_collection_aggregate(&class.class_id, &agg);
+        state.put_collection_aggregate(&class.class_id, agg, batch);
         batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
         Ok(())
     }
@@ -646,6 +666,49 @@ mod tests {
         let value = writer.store().get_stats_key(&key).unwrap().unwrap();
         let transfer_count = i64::from_le_bytes(value[..8].try_into().unwrap());
         assert_eq!(transfer_count, 2);
+    }
+
+    #[test]
+    fn test_insert_mnft_class_with_state_preserves_inflight_collection_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = sample_class();
+        let token_a = sample_token(0x12, class.class_id.clone(), 0x42);
+        let token_b = sample_token(0x13, class.class_id.clone(), 0x43);
+        let tx_hash = vec![0x51; 32];
+
+        // Seed class with one token so the DB aggregate starts at 1.
+        let mut seed = StoreBatch::new(writer.store());
+        let mut seed_state = writer.new_mnft_batch_state();
+        writer
+            .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
+            .unwrap();
+        writer
+            .insert_mnft_token_with_state(&token_a, &tx_hash, 8, 1, 0, &mut seed, &mut seed_state)
+            .unwrap();
+        seed.commit().unwrap();
+
+        // In one uncommitted batch, add a new token then re-write class metadata.
+        // Class upsert must not clobber collection counts already updated in this batch.
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_mnft_batch_state();
+        writer
+            .insert_mnft_token_with_state(&token_b, &tx_hash, 9, 2, 0, &mut batch, &mut state)
+            .unwrap();
+        writer
+            .insert_mnft_class_with_state(&class, &tx_hash, 7, 2, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = writer
+            .store()
+            .get_nft_collection_aggregate(&class.class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 2);
     }
 
     #[test]

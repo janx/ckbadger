@@ -560,11 +560,21 @@ fn decode_dob0_trait_value(pattern: &Dob0PatternElement, dna_slice: &[u8]) -> Va
     }
 }
 
-fn selector_matches(selector: &Value, trait_value: &str) -> bool {
+fn selector_matches_exact(selector: &Value, trait_value: &str) -> bool {
     match selector {
-        Value::String(s) if s == "*" => true,
-        Value::Array(items) => items.iter().any(|item| selector_matches(item, trait_value)),
+        Value::String(s) => s != "*" && s == trait_value,
+        Value::Array(items) => items
+            .iter()
+            .any(|item| selector_matches_exact(item, trait_value)),
         _ => format_json_value(selector) == trait_value,
+    }
+}
+
+fn selector_contains_wildcard(selector: &Value) -> bool {
+    match selector {
+        Value::String(s) => s == "*",
+        Value::Array(items) => items.iter().any(selector_contains_wildcard),
+        _ => false,
     }
 }
 
@@ -600,10 +610,10 @@ fn resolve_dob1_snippet(
         } else {
             continue;
         };
-        if selector_matches(selector, "*") {
+        if selector_contains_wildcard(selector) {
             wildcard = Some(snippet.to_string());
         }
-        if selector_matches(selector, &trait_value) {
+        if selector_matches_exact(selector, &trait_value) {
             return Some(snippet.to_string());
         }
     }
@@ -713,5 +723,24 @@ mod tests {
             .sources
             .iter()
             .any(|source| source.uri.contains("btcfs://goodasseti0")));
+    }
+
+    #[test]
+    fn dob_options_prefers_exact_selector_over_wildcard_even_when_wildcard_comes_first() {
+        let pattern = Dob1PatternElement {
+            image_name: "IMAGE.0".to_string(),
+            svg_fields: "elements".to_string(),
+            trait_name: "Background".to_string(),
+            pattern_type: "options".to_string(),
+            trait_args: Some(serde_json::json!([
+                ["*", "<image href='http://fallback.example/fallback.png' />"],
+                ["rare", "<image href='btcfs://rareasseti0' />"]
+            ])),
+        };
+        let mut traits = HashMap::new();
+        traits.insert("Background".to_string(), "rare".to_string());
+
+        let snippet = resolve_dob1_snippet(&pattern, &traits).unwrap();
+        assert!(snippet.contains("btcfs://rareasseti0"));
     }
 }
