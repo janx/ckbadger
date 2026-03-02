@@ -324,25 +324,25 @@ impl<'a> StoreBatch<'a> {
     pub fn put_token_transfers_count(&mut self, type_hash: &[u8], count: i64) {
         let key = keys::encode_token_transfers_key(type_hash);
         self.batch
-            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+            .put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
     }
 
     pub fn put_token_hourly_transfer(&mut self, type_hash: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_token_hourly_key(type_hash, hour_bucket);
         self.batch
-            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+            .put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
     }
 
     pub fn put_spore_hourly_transfer(&mut self, cluster_id: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_spore_hourly_key(cluster_id, hour_bucket);
         self.batch
-            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+            .put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
     }
 
     pub fn put_nft_hourly_transfer(&mut self, collection_id: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_nft_hourly_key(collection_id, hour_bucket);
         self.batch
-            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+            .put_cf(self.store.cf_stats_nft(), key, count.to_le_bytes());
     }
 
     pub fn put_nft_daily_delta(
@@ -353,13 +353,13 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize NftDailyDelta");
-        self.batch.put_cf(self.store.cf_stats(), key, &value);
+        self.batch.put_cf(self.store.cf_stats_nft(), key, &value);
     }
 
     pub fn put_nft_type_index(&mut self, type_script_hash: &[u8], index: &NftTypeIndex) {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         let value = bincode::serialize(index).expect("serialize NftTypeIndex");
-        self.batch.put_cf(self.store.cf_stats(), key, &value);
+        self.batch.put_cf(self.store.cf_stats_nft(), key, &value);
     }
 
     pub fn put_cluster_daily_delta(
@@ -370,7 +370,7 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize ClusterDailyDelta");
-        self.batch.put_cf(self.store.cf_stats(), key, &value);
+        self.batch.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_daily_delta(
@@ -381,39 +381,40 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize SporeDailyDelta");
-        self.batch.put_cf(self.store.cf_stats(), key, &value);
+        self.batch.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_type_index(&mut self, type_script_hash: &[u8], index: &SporeTypeIndex) {
         let key = keys::encode_spore_type_index_key(type_script_hash);
         let value = bincode::serialize(index).expect("serialize SporeTypeIndex");
-        self.batch.put_cf(self.store.cf_stats(), key, &value);
+        self.batch.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_stats(), key, spore_id);
+        self.batch
+            .put_cf(self.store.cf_stats_spore(), key, spore_id);
         // Reverse index: spore_id → outpoints
         let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
         self.batch
-            .put_cf(self.store.cf_stats(), rev_key, &[] as &[u8]);
+            .put_cf(self.store.cf_stats_spore(), rev_key, &[] as &[u8]);
     }
 
     pub fn delete_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_stats(), key);
+        self.batch.delete_cf(self.store.cf_stats_spore(), key);
         let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_stats(), rev_key);
+        self.batch.delete_cf(self.store.cf_stats_spore(), rev_key);
     }
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_stats(), key, class_id);
+        self.batch.put_cf(self.store.cf_stats_nft(), key, class_id);
     }
 
     pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_stats(), key, token_id);
+        self.batch.put_cf(self.store.cf_stats_nft(), key, token_id);
     }
 
     pub fn put_dotbit_account_outpoint(
@@ -423,7 +424,8 @@ impl<'a> StoreBatch<'a> {
         account_id: &[u8],
     ) {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_stats(), key, account_id);
+        self.batch
+            .put_cf(self.store.cf_stats_nft(), key, account_id);
     }
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
@@ -488,12 +490,12 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cluster_owner_count(&mut self, cluster_id: &[u8], lock_hash: &[u8], count: i64) {
         let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
         self.batch
-            .put_cf(self.store.cf_stats(), key, count.to_le_bytes());
+            .put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
     }
 
     pub fn delete_cluster_owner(&mut self, cluster_id: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
-        self.batch.delete_cf(self.store.cf_stats(), key);
+        self.batch.delete_cf(self.store.cf_stats_spore(), key);
     }
 
     // ---- NFT collection aggregates ----
@@ -554,11 +556,27 @@ impl<'a> StoreBatch<'a> {
     // ---- Statistics ----
 
     pub fn put_stats(&mut self, key: &[u8], value: &[u8]) {
-        self.batch.put_cf(self.store.cf_stats(), key, value);
+        let cf = self.store.cf_for_stats_key(key).unwrap_or_else(|e| {
+            let prefix = key.first().copied().unwrap_or(0xFF);
+            panic!(
+                "failed to resolve stats CF: prefix=0x{prefix:02x}, key_len={}, error={}",
+                key.len(),
+                e
+            )
+        });
+        self.batch.put_cf(cf, key, value);
     }
 
     pub fn delete_stats(&mut self, key: &[u8]) {
-        self.batch.delete_cf(self.store.cf_stats(), key);
+        let cf = self.store.cf_for_stats_key(key).unwrap_or_else(|e| {
+            let prefix = key.first().copied().unwrap_or(0xFF);
+            panic!(
+                "failed to resolve stats CF: prefix=0x{prefix:02x}, key_len={}, error={}",
+                key.len(),
+                e
+            )
+        });
+        self.batch.delete_cf(cf, key);
     }
 
     pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
@@ -676,7 +694,7 @@ mod tests {
         batch.commit().unwrap();
 
         let key = keys::encode_token_transfers_key(&type_hash);
-        let val = store.get_cf(store.cf_stats(), &key).unwrap().unwrap();
+        let val = store.get_cf(store.cf_stats_token(), &key).unwrap().unwrap();
         assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 123);
     }
 
@@ -691,7 +709,7 @@ mod tests {
         batch.commit().unwrap();
 
         let key = keys::encode_token_hourly_key(&type_hash, 500_000);
-        let val = store.get_cf(store.cf_stats(), &key).unwrap().unwrap();
+        let val = store.get_cf(store.cf_stats_token(), &key).unwrap().unwrap();
         assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 7);
     }
 

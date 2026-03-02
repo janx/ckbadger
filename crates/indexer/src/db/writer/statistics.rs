@@ -58,7 +58,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_HOURLY,
             hour.format("%Y%m%d%H").to_string().as_bytes(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -109,7 +109,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let avg_block_time_ms = block_time.and_then(|(sum_ms, count)| {
             if count > 0 {
@@ -210,7 +210,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY_BLOCK,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -246,7 +246,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_MINER,
             &[date_key.as_bytes(), lock_script_hash].concat(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -278,7 +278,7 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch_number.to_be_bytes());
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -330,7 +330,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        if let Some(val) = self.store.get_cf(self.store.cf_stats(), &key)? {
+        if let Some(val) = self.store.get_stats_key(&key)? {
             if let Ok(mut s) = bincode::deserialize::<DailyStats>(&val) {
                 s.avg_block_time_ms = match s.avg_block_time_ms {
                     Some(existing) => {
@@ -361,7 +361,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        if let Some(val) = self.store.get_cf(self.store.cf_stats(), &key)? {
+        if let Some(val) = self.store.get_stats_key(&key)? {
             if let Ok(mut s) = bincode::deserialize::<DailyStats>(&val) {
                 s.avg_block_time_ms = match s.avg_block_time_ms {
                     Some(existing) => {
@@ -405,7 +405,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY_BLOCK,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -443,7 +443,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_MINER,
             &[date_key.as_bytes(), lock_script_hash].concat(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -477,7 +477,7 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch_number.to_be_bytes());
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let stats = if is_new {
             EpochStats {
@@ -525,7 +525,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_BLOCK_TIME_DIST,
             &bucket_seconds.to_be_bytes(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let new_count = match existing {
             Some(val) if val.len() == 4 => {
@@ -548,7 +548,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_EPOCH_TIME_DIST,
             &bucket_minutes.to_be_bytes(),
         );
-        let existing = self.store.get_cf(self.store.cf_stats(), &key)?;
+        let existing = self.store.get_stats_key(&key)?;
 
         let new_count = match existing {
             Some(val) if val.len() == 4 => {
@@ -643,7 +643,7 @@ impl BatchWriter {
 
     pub fn get_previous_epoch_duration_minutes(&self, epoch_number: i64) -> Result<Option<f64>> {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch_number.to_be_bytes());
-        if let Some(val) = self.store.get_cf(self.store.cf_stats(), &key)? {
+        if let Some(val) = self.store.get_stats_key(&key)? {
             if let Ok(s) = bincode::deserialize::<EpochStats>(&val) {
                 if let Some(end_ts) = s.end_timestamp {
                     let duration = end_ts - s.start_timestamp;

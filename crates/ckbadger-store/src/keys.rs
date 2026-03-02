@@ -497,7 +497,7 @@ pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
 }
 
 /// Cluster owner key: prefix(1B) + cluster_id(32B) + lock_hash(32B) = 65 bytes
-/// Stored in the stats CF. Value is i64 LE (live spore count for this owner).
+/// Stored in the stats_spore CF. Value is i64 LE (live spore count for this owner).
 pub const CLUSTER_OWNER_KEY_SIZE: usize = 65;
 
 pub fn encode_cluster_owner_key(

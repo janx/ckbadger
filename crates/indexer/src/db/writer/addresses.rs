@@ -527,8 +527,11 @@ impl BatchWriter {
 
         let cf_keys: Vec<_> = keyed_changes
             .iter()
-            .map(|(key, _, _)| (self.store.cf_stats(), key.as_slice()))
-            .collect();
+            .map(|(key, _, _)| {
+                let cf = self.store.cf_for_stats_key(key)?;
+                Ok((cf, key.as_slice()))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let existing_results = self.store.multi_get_cf(cf_keys);
 
         for ((key, live_cap_delta, live_occupied_delta), existing_res) in

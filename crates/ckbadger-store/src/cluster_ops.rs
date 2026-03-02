@@ -37,7 +37,7 @@ impl CkbadgerStore {
         lock_hash: &[u8],
     ) -> anyhow::Result<i64> {
         let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_cf(self.cf_stats_spore(), &key)? {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
             }
@@ -51,7 +51,7 @@ impl CkbadgerStore {
         cluster_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
         let prefix = keys::encode_cluster_owner_prefix(cluster_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
         let mut results = Vec::new();
 
         for item in iter.flatten() {

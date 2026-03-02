@@ -183,7 +183,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
-        let cf = store.cf_stats();
+        let cf = store.cf_stats_chain();
         for i in 0u32..10 {
             let key = [&[0x01u8][..], &i.to_be_bytes()].concat();
             store.put_cf(cf, &key, &i.to_le_bytes()).unwrap();

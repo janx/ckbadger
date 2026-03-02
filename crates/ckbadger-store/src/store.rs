@@ -10,6 +10,7 @@ use rocksdb::{
     Options, UniversalCompactOptions, WriteBatch, WriteBufferManager, DB,
 };
 
+use crate::keys;
 use crate::types::MemoryStats;
 
 /// Type alias for RocksDB iterator items to avoid complex type lint.
@@ -215,7 +216,13 @@ pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_SPORE_DATA: &str = "spore_data";
 pub const CF_NFT_DATA: &str = "nft_data";
 pub const CF_NFT_BY_COLLECTION: &str = "nft_by_collection";
-pub const CF_STATS: &str = "stats";
+pub const CF_STATS_CHAIN: &str = "stats_chain";
+pub const CF_STATS_DAO: &str = "stats_dao";
+pub const CF_STATS_HODL: &str = "stats_hodl";
+pub const CF_STATS_SCRIPT: &str = "stats_script";
+pub const CF_STATS_TOKEN: &str = "stats_token";
+pub const CF_STATS_SPORE: &str = "stats_spore";
+pub const CF_STATS_NFT: &str = "stats_nft";
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
@@ -251,7 +258,13 @@ pub const ALL_CFS: &[&str] = &[
     CF_SPORE_DATA,
     CF_NFT_DATA,
     CF_NFT_BY_COLLECTION,
-    CF_STATS,
+    CF_STATS_CHAIN,
+    CF_STATS_DAO,
+    CF_STATS_HODL,
+    CF_STATS_SCRIPT,
+    CF_STATS_TOKEN,
+    CF_STATS_SPORE,
+    CF_STATS_NFT,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
@@ -279,7 +292,13 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_SPORE_DATA,
     CF_NFT_DATA,
     CF_NFT_BY_COLLECTION,
-    CF_STATS,
+    CF_STATS_CHAIN,
+    CF_STATS_DAO,
+    CF_STATS_HODL,
+    CF_STATS_SCRIPT,
+    CF_STATS_TOKEN,
+    CF_STATS_SPORE,
+    CF_STATS_NFT,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
@@ -462,6 +481,11 @@ impl CkbadgerStore {
         CF_ADDR_TXS,
         CF_DAO_DEPOSITS,
         CF_ACTIVITIES,
+        CF_STATS_CHAIN,
+        CF_STATS_SCRIPT,
+        CF_STATS_TOKEN,
+        CF_STATS_SPORE,
+        CF_STATS_NFT,
     ];
 
     /// Historical append-heavy CFs.
@@ -674,8 +698,26 @@ impl CkbadgerStore {
     pub fn cf_nft_by_collection(&self) -> &ColumnFamily {
         self.cf(CF_NFT_BY_COLLECTION)
     }
-    pub fn cf_stats(&self) -> &ColumnFamily {
-        self.cf(CF_STATS)
+    pub fn cf_stats_chain(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_CHAIN)
+    }
+    pub fn cf_stats_dao(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_DAO)
+    }
+    pub fn cf_stats_hodl(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_HODL)
+    }
+    pub fn cf_stats_script(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_SCRIPT)
+    }
+    pub fn cf_stats_token(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_TOKEN)
+    }
+    pub fn cf_stats_spore(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_SPORE)
+    }
+    pub fn cf_stats_nft(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_NFT)
     }
     pub fn cf_script_info(&self) -> &ColumnFamily {
         self.cf(CF_SCRIPT_INFO)
@@ -742,6 +784,62 @@ impl CkbadgerStore {
         let mut opts = rocksdb::WriteOptions::default();
         opts.disable_wal(true);
         Ok(self.db.write_opt(batch, &opts)?)
+    }
+
+    /// Resolve the target stats CF by stats key prefix.
+    pub fn stats_cf_by_prefix(&self, prefix: u8) -> anyhow::Result<&ColumnFamily> {
+        match prefix {
+            keys::STATS_PREFIX_DAILY
+            | keys::STATS_PREFIX_HOURLY
+            | keys::STATS_PREFIX_EPOCH
+            | keys::STATS_PREFIX_MINER
+            | keys::STATS_PREFIX_BLOCK_TIME_DIST
+            | keys::STATS_PREFIX_EPOCH_TIME_DIST
+            | keys::STATS_PREFIX_DAILY_BLOCK => Ok(self.cf_stats_chain()),
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT => Ok(self.cf_stats_dao()),
+            keys::STATS_PREFIX_HODL_WAVE => Ok(self.cf_stats_hodl()),
+            keys::STATS_PREFIX_SCRIPT_DAILY => Ok(self.cf_stats_script()),
+            keys::STATS_PREFIX_TOKEN_TRANSFERS
+            | keys::STATS_PREFIX_TOKEN_HOURLY
+            | keys::STATS_PREFIX_TOKEN_DAILY => Ok(self.cf_stats_token()),
+            keys::STATS_PREFIX_CLUSTER_OWNER
+            | keys::STATS_PREFIX_SPORE_HOURLY
+            | keys::STATS_PREFIX_CLUSTER_DAILY
+            | keys::STATS_PREFIX_SPORE_DAILY
+            | keys::STATS_PREFIX_SPORE_OUTPOINT
+            | keys::STATS_PREFIX_SPORE_TYPE_INDEX
+            | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID => Ok(self.cf_stats_spore()),
+            keys::STATS_PREFIX_NFT_HOURLY
+            | keys::STATS_PREFIX_NFT_DAILY
+            | keys::STATS_PREFIX_NFT_TYPE_INDEX
+            | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
+            | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
+            | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT => Ok(self.cf_stats_nft()),
+            _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
+        }
+    }
+
+    /// Resolve target stats CF for a full key.
+    pub fn cf_for_stats_key(&self, key: &[u8]) -> anyhow::Result<&ColumnFamily> {
+        let Some(prefix) = key.first().copied() else {
+            anyhow::bail!("empty stats key");
+        };
+        self.stats_cf_by_prefix(prefix)
+    }
+
+    pub fn get_stats_key(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        let cf = self.cf_for_stats_key(key)?;
+        self.get_cf(cf, key)
+    }
+
+    pub fn put_stats_key(&self, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        let cf = self.cf_for_stats_key(key)?;
+        self.put_cf(cf, key, value)
+    }
+
+    pub fn delete_stats_key(&self, key: &[u8]) -> anyhow::Result<()> {
+        let cf = self.cf_for_stats_key(key)?;
+        self.delete_cf(cf, key)
     }
 
     /// Iterate over a CF starting from a specific key.
@@ -1247,6 +1345,90 @@ mod tests {
         store.delete_cf(cf, b"test_key").unwrap();
         let val = store.get_cf(cf, b"test_key").unwrap();
         assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_stats_key_routing_writes_to_split_cfs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let cases: Vec<(Vec<u8>, &[u8])> = vec![
+            (
+                crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20240201"),
+                b"chain",
+            ),
+            (
+                crate::keys::encode_stats_key(
+                    crate::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                    b"20240201",
+                ),
+                b"dao",
+            ),
+            (
+                crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HODL_WAVE, b"20240201"),
+                b"hodl",
+            ),
+            (
+                crate::keys::encode_script_daily_key(&[0xAB; 32], false, 20240201).to_vec(),
+                b"script",
+            ),
+            (
+                crate::keys::encode_token_daily_key(&[0xBC; 32], 20240201).to_vec(),
+                b"token",
+            ),
+            (
+                crate::keys::encode_spore_daily_key(&[0xCD; 32], 20240201).to_vec(),
+                b"spore",
+            ),
+            (
+                crate::keys::encode_nft_daily_key(&[0xDE; 24], 20240201).to_vec(),
+                b"nft",
+            ),
+        ];
+
+        for (key, value) in &cases {
+            store.put_stats_key(key, value).unwrap();
+            let loaded = store.get_stats_key(key).unwrap().unwrap();
+            assert_eq!(loaded, *value);
+        }
+
+        // Verify representative keys landed in expected split CFs.
+        assert!(store
+            .get_cf(store.cf_stats_chain(), &cases[0].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_dao(), &cases[1].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_hodl(), &cases[2].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_script(), &cases[3].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_token(), &cases[4].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_spore(), &cases[5].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_nft(), &cases[6].0)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn test_stats_key_routing_rejects_unknown_prefix() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let err = store.put_stats_key(&[0xFE, 0x00], b"v").unwrap_err();
+        assert!(err.to_string().contains("unsupported stats prefix"));
     }
 
     #[test]

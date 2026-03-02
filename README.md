@@ -102,7 +102,7 @@ on localhost deployments:
                 ▼               ▼               ▼
            ┌───────────┐   ┌───────────┐   ┌──────────┐
            │  RocksDB  │   │  RocksDB  │   │  Redis   │
-           │   (Core)  │   │ (Derived) │   │  (Cache) │
+           │  (Domain) │   │(Append-Only)│  │  (Cache) │
            └───────────┘   └───────────┘   └──────────┘
                     │
                     ▼
@@ -614,7 +614,7 @@ ckbadger/
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)
 │   │       └── ws/         # WebSocket handlers
-│   ├── ckbadger-store/     # Embedded RocksDB storage engine (31 column families)
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine (37 column families; split stats CFs)
 │   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 │   └── tui/                # Terminal monitoring UI (sync/memory/throughput)
 ├── frontend/               # Next.js application

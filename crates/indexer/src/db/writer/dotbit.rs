@@ -219,7 +219,7 @@ impl DotbitBatchState {
         if let Some(cached) = self.hourly_transfers.get(key) {
             return Ok(*cached);
         }
-        let loaded = match store.get_cf(store.cf_stats(), key)? {
+        let loaded = match store.get_stats_key(key)? {
             Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
             _ => 0,
         };

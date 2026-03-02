@@ -49,7 +49,7 @@
 ### Layer 2: Time-Series / Activity / Aggregates
 
 - `activities`, `nft_collection_activities`, `addr_txs`, `addr_balance`, `addr_daily_stats`
-- `stats` (prefix namespaces: daily/hourly/epoch/script/token/spore/nft/dao/hodl/etc.)
+- `stats_chain`, `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_nft`
 - `sync_meta`
 
 ## Indexer Write Model
@@ -100,5 +100,5 @@
   - Added `cells` CF.
   - Migrated writer core cell lifecycle to canonical payload + marker/meta model.
   - Updated rollback and API/store read paths to resolve from `cells`.
-- Remaining phase (optional next step):
-  - Split `stats` super-CF into dedicated CFs for very hot prefixes if compaction pressure warrants.
+- Completed follow-up:
+  - Split `stats` super-CF by hot prefix groups (`stats_chain`, `stats_token`, `stats_spore`, `stats_nft`, `stats_script`, `stats_dao`, `stats_hodl`) to reduce compaction contention during bulk sync.

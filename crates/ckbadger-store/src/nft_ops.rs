@@ -69,7 +69,7 @@ impl CkbadgerStore {
         type_script_hash: &[u8],
     ) -> anyhow::Result<Option<NftTypeIndex>> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_cf(self.cf_stats_nft(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -82,7 +82,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         let value = bincode::serialize(index)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_cf(self.cf_stats_nft(), &key, &value)
     }
 
     pub fn get_nft_daily_delta(
@@ -91,7 +91,7 @@ impl CkbadgerStore {
         date_yyyymmdd: u32,
     ) -> anyhow::Result<Option<NftDailyDelta>> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        match self.get_cf(self.cf_stats(), &key)? {
+        match self.get_cf(self.cf_stats_nft(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
@@ -105,7 +105,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats(), &key, &value)
+        self.put_cf(self.cf_stats_nft(), &key, &value)
     }
 
     pub fn list_nft_daily_deltas(
@@ -125,7 +125,7 @@ impl CkbadgerStore {
         let start_key =
             keys::encode_nft_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats(),
+            self.cf_stats_nft(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();

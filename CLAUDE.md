@@ -130,7 +130,7 @@ crates/
   api/            # Axum REST/WebSocket server (port 3001)
   indexer/        # Blockchain sync daemon (three-stage pipeline)
     src/verify/   #   Data integrity verification suite (54 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 31 canonical CFs)
+  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 37 canonical CFs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI (sync/memory/throughput)
@@ -142,7 +142,7 @@ docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture + Redis sync data
 docs/PERFORMANCE_RESULTS.md  # Benchmark snapshots for perf work
 docs/REORG_HANDLING.md       # Chain reorganization handling
-docs/STORE_SCHEMA.md         # Column families reference (31 CFs)
+docs/STORE_SCHEMA.md         # Column families reference (37 CFs)
 docs/VERIFY.md               # Data integrity verification details
 ```
 
@@ -166,7 +166,7 @@ Redis keys: `sync:status` (60s TTL), `sync:progress` (30s), `memory:stats` (30s)
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Two logical RocksDB stores: domain (`CKBADGER_DOMAIN_DATA_PATH`, default `./data/ckbadger-store`) and append-only (`CKBADGER_APPEND_ONLY_DATA_PATH`, default `./data/ckbadger-store-append-only`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (31 CFs).
+Two logical RocksDB stores: domain (`CKBADGER_DOMAIN_DATA_PATH`, default `./data/ckbadger-store`) and append-only (`CKBADGER_APPEND_ONLY_DATA_PATH`, default `./data/ckbadger-store-append-only`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (37 CFs, including split stats CFs).
 
 Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
