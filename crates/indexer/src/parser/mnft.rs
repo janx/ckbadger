@@ -172,6 +172,14 @@ impl MnftParser {
     }
 
     pub fn parse_issuers(tx: &TransactionView) -> Vec<ParsedMnftIssuer> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing mNFT issuers: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -182,6 +190,14 @@ impl MnftParser {
     pub fn parse_classes_with_output_indices(
         tx: &TransactionView,
     ) -> Vec<(usize, ParsedMnftClass)> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing mNFT classes: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -193,6 +209,14 @@ impl MnftParser {
     }
 
     pub fn parse_tokens_with_output_indices(tx: &TransactionView) -> Vec<(usize, ParsedMnftToken)> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing mNFT tokens: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -722,5 +746,19 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].0, 2);
         assert_eq!(parsed[0].1.total, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "transaction outputs mismatch while parsing mNFT issuers")]
+    fn test_parse_issuers_panics_on_outputs_data_length_mismatch() {
+        let tx = create_dummy_tx(
+            vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            vec![],
+        );
+        let _ = MnftParser::parse_issuers(&tx);
     }
 }

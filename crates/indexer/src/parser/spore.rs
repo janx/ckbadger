@@ -154,6 +154,14 @@ impl SporeParser {
     }
 
     pub fn parse_spores(tx: &TransactionView) -> Vec<ParsedSporeCell> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing spores: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -162,6 +170,14 @@ impl SporeParser {
     }
 
     pub fn parse_clusters(tx: &TransactionView) -> Vec<ParsedClusterCell> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing spore clusters: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -285,7 +301,7 @@ struct ClusterData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::{CellOutput, Script};
+    use crate::rpc::{CellOutput, Script, TransactionView};
 
     fn create_lock_script() -> Script {
         Script {
@@ -597,5 +613,45 @@ mod tests {
         assert_eq!(encoded.len(), 8);
         assert_eq!(&encoded[0..4], &[4, 0, 0, 0]);
         assert_eq!(&encoded[4..8], &content);
+    }
+
+    #[test]
+    #[should_panic(expected = "transaction outputs mismatch while parsing spores")]
+    fn test_parse_spores_panics_on_outputs_data_length_mismatch() {
+        let tx = TransactionView {
+            hash: "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            outputs_data: vec![],
+            witnesses: vec![],
+        };
+        let _ = SporeParser::parse_spores(&tx);
+    }
+
+    #[test]
+    #[should_panic(expected = "transaction outputs mismatch while parsing spore clusters")]
+    fn test_parse_clusters_panics_on_outputs_data_length_mismatch() {
+        let tx = TransactionView {
+            hash: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            outputs_data: vec![],
+            witnesses: vec![],
+        };
+        let _ = SporeParser::parse_clusters(&tx);
     }
 }

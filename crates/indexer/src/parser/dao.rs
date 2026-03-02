@@ -130,6 +130,14 @@ impl DaoParser {
         tx_hash: &[u8],
         input_cells: &[(Vec<u8>, i32, CellOutput, String)],
     ) -> Vec<ParsedDaoWithdrawRequest> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing DAO withdraw requests: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -421,6 +429,30 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].original_tx_hash, vec![0xAB; 32]);
         assert_eq!(parsed[0].original_output_index, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "transaction outputs mismatch while parsing DAO withdraw requests")]
+    fn test_parse_withdraw_requests_panics_on_outputs_data_length_mismatch() {
+        let tx = crate::rpc::TransactionView {
+            hash: "0x".to_string() + &"bb".repeat(32),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![crate::rpc::CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: crate::rpc::Script {
+                    code_hash: "0x".to_string() + &"11".repeat(32),
+                    hash_type: "type".to_string(),
+                    args: "0x".to_string(),
+                },
+                type_: None,
+            }],
+            outputs_data: vec![],
+            witnesses: vec![],
+        };
+        let _ = DaoParser::parse_withdraw_requests(&tx, &[0xCC; 32], &[]);
     }
 }
 

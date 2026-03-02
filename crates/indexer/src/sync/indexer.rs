@@ -475,6 +475,14 @@ fn parse_udt_cells_with_store_fallback_inner<F>(
 where
     F: FnMut(&[u8]) -> Result<Option<String>>,
 {
+    if tx.outputs.len() != tx.outputs_data.len() {
+        bail!(
+            "transaction outputs mismatch while parsing UDT outputs with store fallback: tx_hash={}, outputs={}, outputs_data={}",
+            tx.hash,
+            tx.outputs.len(),
+            tx.outputs_data.len()
+        );
+    }
     let mut parsed = Vec::new();
     let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
 
@@ -2093,9 +2101,14 @@ fn accumulate_secondary_issuance_deltas(
     block_date: NaiveDate,
     prev_dao_cs: &mut Option<(i128, i128)>,
 ) -> Result<()> {
-    let Some((c, s, u)) = extract_dao_csu(&parsed.dao) else {
-        return Ok(());
-    };
+    let (c, s, u) = extract_dao_csu(&parsed.dao).ok_or_else(|| {
+        anyhow!(
+            "invalid DAO field bytes while accumulating secondary issuance: block={}, date={}, dao_len={}",
+            parsed.number,
+            block_date,
+            parsed.dao.len()
+        )
+    })?;
 
     if let Some((prev_c, prev_s)) = *prev_dao_cs {
         let _c_delta = c - prev_c;
@@ -8563,7 +8576,13 @@ impl Indexer {
                                     .collect();
                                 writer
                                     .find_consumed_dao_deposits_batch(&outpoint_refs)
-                                    .unwrap_or_default()
+                                    .unwrap_or_else(|e| {
+                                        panic!(
+                                            "failed to prefetch consumed DAO deposits: outpoints={}, error={}",
+                                            outpoint_refs.len(),
+                                            e
+                                        )
+                                    })
                             } else {
                                 HashMap::new()
                             }
@@ -8663,13 +8682,19 @@ impl Indexer {
                                 (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String),
                             > = HashMap::new();
                             if !skip_token && !all_input_outpoints_udt.is_empty() {
-                                if let Ok(db_results) = resolve_input_udt_info_from_live_cells(
+                                let db_results = resolve_input_udt_info_from_live_cells(
                                     writer,
                                     udt_cache,
                                     &all_input_outpoints_udt,
-                                ) {
-                                    input_udt_info.extend(db_results);
-                                }
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!(
+                                        "failed to resolve UDT input info from live cells during bulk prefetch: inputs={}, error={}",
+                                        all_input_outpoints_udt.len(),
+                                        e
+                                    )
+                                });
+                                input_udt_info.extend(db_results);
                             }
 
                             // Build tx contexts for UDT processing
@@ -8711,14 +8736,28 @@ impl Indexer {
                             if !lock_hash_keys.is_empty() {
                                 writer
                                     .read_address_balances(&lock_hash_keys)
-                                    .unwrap_or_default()
+                                    .unwrap_or_else(|e| {
+                                        panic!(
+                                            "failed to prefetch address balances: lock_hashes={}, error={}",
+                                            lock_hash_keys.len(),
+                                            e
+                                        )
+                                    })
                             } else {
                                 HashMap::new()
                             }
                         },
                         || {
                             if !code_hash_refs.is_empty() {
-                                writer.read_script_info(&code_hash_refs).unwrap_or_default()
+                                writer
+                                    .read_script_info(&code_hash_refs)
+                                    .unwrap_or_else(|e| {
+                                        panic!(
+                                        "failed to prefetch script info: code_hashes={}, error={}",
+                                        code_hash_refs.len(),
+                                        e
+                                    )
+                                    })
                             } else {
                                 HashMap::new()
                             }
@@ -12633,6 +12672,34 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_udt_cells_with_store_fallback_errors_on_outputs_data_length_mismatch() {
+        let tx = crate::rpc::TransactionView {
+            hash: format!("0x{}", "bb".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![crate::rpc::CellOutput {
+                capacity: "0x0".to_string(),
+                lock: crate::rpc::Script {
+                    code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                        .to_string(),
+                    hash_type: "type".to_string(),
+                    args: "0x0102030405060708090a0b0c0d0e0f1011121314".to_string(),
+                },
+                type_: None,
+            }],
+            outputs_data: vec![],
+            witnesses: vec![],
+        };
+
+        let err = parse_udt_cells_with_store_fallback_inner(&tx, |_| Ok(None)).unwrap_err();
+        assert!(err.to_string().contains(
+            "transaction outputs mismatch while parsing UDT outputs with store fallback"
+        ));
+    }
+
+    #[test]
     fn test_resolve_input_udt_info_ignores_stale_cache_entry_for_non_live_outpoint() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
@@ -14317,6 +14384,20 @@ mod tests {
         assert!(err
             .to_string()
             .contains("secondary issuance S delta underflow"));
+    }
+
+    #[test]
+    fn test_accumulate_secondary_issuance_deltas_errors_on_invalid_dao_field() {
+        let mut stats = BatchStats::default();
+        let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let block = dummy_parsed_block(vec![0u8; 8], 0, 1000);
+
+        let err =
+            accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid DAO field bytes while accumulating secondary issuance"));
     }
 
     #[test]

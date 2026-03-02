@@ -139,6 +139,14 @@ impl DotbitParser {
     }
 
     pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccountOutput>> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            return Err(anyhow!(
+                "transaction outputs mismatch while parsing dotbit accounts: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            ));
+        }
         let witness_data = parse_account_data_from_witnesses(&tx.witnesses);
         let mut accounts = Vec::new();
         let mut missing_name_count = 0usize;
@@ -1044,5 +1052,28 @@ mod tests {
         assert_eq!(parsed[0].account.account.as_deref(), Some("bob.bit"));
         assert_eq!(parsed[0].account.registered_at, Some(registered_at));
         assert_eq!(parsed[0].account.status, Some(status));
+    }
+
+    #[test]
+    fn test_parse_accounts_errors_on_outputs_data_length_mismatch() {
+        let tx = TransactionView {
+            hash: "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::new(),
+            inputs: Vec::<CellInput>::new(),
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(create_account_cell_type_script()),
+            }],
+            outputs_data: vec![],
+            witnesses: vec![],
+        };
+
+        let err = DotbitParser::parse_accounts(&tx).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("transaction outputs mismatch while parsing dotbit accounts"));
     }
 }

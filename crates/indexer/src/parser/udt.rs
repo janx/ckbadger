@@ -113,6 +113,14 @@ impl UdtParser {
     }
 
     pub fn parse_udt_cells(tx: &TransactionView) -> Vec<ParsedUdtCell> {
+        if tx.outputs.len() != tx.outputs_data.len() {
+            panic!(
+                "transaction outputs mismatch while parsing UDT cells: tx_hash={}, outputs={}, outputs_data={}",
+                tx.hash,
+                tx.outputs.len(),
+                tx.outputs_data.len()
+            );
+        }
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -605,6 +613,29 @@ mod tests {
         );
 
         assert!(parsed.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "transaction outputs mismatch while parsing UDT cells")]
+    fn test_parse_udt_cells_panics_on_outputs_data_length_mismatch() {
+        use crate::rpc::TransactionView;
+
+        let tx = TransactionView {
+            hash: "0x9999".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: Some(create_sudt_type_script()),
+            }],
+            outputs_data: vec![],
+            witnesses: vec![],
+        };
+
+        let _ = UdtParser::parse_udt_cells(&tx);
     }
 
     #[test]
