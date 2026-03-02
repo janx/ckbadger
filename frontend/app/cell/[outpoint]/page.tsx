@@ -758,7 +758,9 @@ export default function CellDetailPage() {
                                           : 'gray'
                                   }
                                 >
-                                  {input.status}
+                                  {input.status.toLowerCase() === 'withdrawing'
+                                    ? 'Withdraw Request'
+                                    : input.status}
                                 </Badge>
                               )}
                             </div>
@@ -929,7 +931,7 @@ export default function CellDetailPage() {
                   {cell.daoInfo.daoStatus === 'deposited'
                     ? 'Active'
                     : cell.daoInfo.daoStatus === 'withdrawing'
-                      ? 'Withdrawing'
+                      ? 'Withdraw Request'
                       : 'Withdrawn'}
                 </Badge>
               </div>

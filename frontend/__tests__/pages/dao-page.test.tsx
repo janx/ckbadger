@@ -68,7 +68,7 @@ describe('DaoPage', () => {
     await waitFor(() => {
       expect(api.getDaoDeposits).toHaveBeenCalledWith({
         limit: 20,
-        status: undefined,
+        status: 0,
         cursor: undefined,
       });
       expect(screen.getByText('Default Lock')).toBeInTheDocument();
@@ -80,6 +80,11 @@ describe('DaoPage', () => {
     );
     expect(screen.getByText('Default Lock')).toHaveClass('text-blue-400');
     expect(screen.getAllByText('CKB')[0]).toHaveClass('text-slate-500');
+    expect(screen.getAllByText('Active Deposits').length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 1-1 of 1 deposits, 20 per page')).toBeInTheDocument();
+    expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
   });
 
   it('renders withdraw request tx as reference for withdrawing rows', async () => {

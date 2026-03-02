@@ -249,7 +249,7 @@ export default function AddressDetailPage() {
       case 'deposited':
         return <Badge variant="green">Active</Badge>;
       case 'withdrawing':
-        return <Badge variant="amber">Withdrawing</Badge>;
+        return <Badge variant="amber">Withdraw Request</Badge>;
       case 'withdrawn':
         return <Badge variant="gray">Completed</Badge>;
       default:
@@ -917,7 +917,7 @@ export default function AddressDetailPage() {
                                           {daoDepositInfo.status === 'deposited'
                                             ? 'Active'
                                             : daoDepositInfo.status === 'withdrawing'
-                                              ? 'Withdrawing'
+                                              ? 'Withdraw Request'
                                               : 'Completed'}
                                         </Badge>
                                       )}

@@ -11,7 +11,7 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
-import { PageHeader, Badge } from '@/components/ui/page-header';
+import { PageHeader } from '@/components/ui/page-header';
 import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -114,7 +114,7 @@ function InteractivePieChart({
 
 export default function DaoPage() {
   const depositsPagination = useCursorPagination();
-  const [status, setStatus] = useState<number | undefined>(undefined);
+  const [status, setStatus] = useState<number>(0);
   const [secondaryHover, setSecondaryHover] = useState<number | null>(null);
   const [compensationHover, setCompensationHover] = useState<number | null>(null);
 
@@ -196,25 +196,13 @@ export default function DaoPage() {
     ];
   };
 
-  const getStatusBadge = (depositStatus: string) => {
-    switch (depositStatus) {
-      case 'deposited':
-        return <Badge variant="green">Active</Badge>;
-      case 'withdrawing':
-        return <Badge variant="amber">Withdrawing</Badge>;
-      case 'withdrawn':
-        return <Badge variant="gray">Withdrawn</Badge>;
-      default:
-        return null;
-    }
-  };
-
   const filterOptions = [
-    { label: 'All', value: undefined },
-    { label: 'Active', value: 0 },
-    { label: 'Withdrawing', value: 1 },
+    { label: 'Active Deposits', value: 0 },
+    { label: 'Withdraw Request', value: 1 },
     { label: 'Withdrawn', value: 2 },
   ];
+  const selectedFilterLabel =
+    filterOptions.find((option) => option.value === status)?.label ?? 'Active Deposits';
 
   const renderReferenceCell = (deposit: DaoDeposit) => {
     const depositCellHref = `/cell/${deposit.txHash}-${deposit.outputIndex}`;
@@ -487,13 +475,13 @@ export default function DaoPage() {
                 options={filterOptions}
                 selected={status}
                 onChange={(v) => {
-                  setStatus(v as number | undefined);
+                  setStatus(v as number);
                   depositsPagination.reset();
                 }}
               />
             }
           >
-            Deposits
+            {selectedFilterLabel}
           </TerminalPanelHeader>
           <TerminalPanelContent padding="none">
             {isLoading ? (
@@ -507,7 +495,6 @@ export default function DaoPage() {
                         <th className="px-4 py-3">Reference</th>
                         <th className="px-4 py-3">Address</th>
                         <th className="px-4 py-3 text-right">Amount</th>
-                        <th className="px-4 py-3">Status</th>
                         <th className="px-4 py-3 text-right">Time</th>
                       </tr>
                     </thead>
@@ -548,7 +535,6 @@ export default function DaoPage() {
                               );
                             })()}
                           </td>
-                          <td className="px-4 py-3">{getStatusBadge(deposit.status)}</td>
                           <td className="px-4 py-3 text-right text-sm text-slate-500">
                             {formatTimeAgo(deposit.depositTimestamp)}
                           </td>
@@ -563,6 +549,7 @@ export default function DaoPage() {
                     totalLabel="deposits"
                     pageSize={20}
                     page={depositsPagination.page}
+                    currentCount={deposits.data.length}
                     hasMore={deposits.hasMore}
                     hasPrevious={depositsPagination.hasPrevious}
                     onNext={() => depositsPagination.goToNext(deposits.nextCursor)}

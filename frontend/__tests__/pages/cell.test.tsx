@@ -364,7 +364,7 @@ describe('CellDetailPage', () => {
     renderWithQueryClient(<CellDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Withdrawing')).toBeInTheDocument();
+      expect(screen.getAllByText('Withdraw Request').length).toBeGreaterThanOrEqual(1);
     });
   });
 
