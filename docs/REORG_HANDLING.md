@@ -64,7 +64,7 @@ For reorgs deeper than 36 blocks:
 2. Sets `deep_fork_detected = true`
 3. Pauses sync in a wait loop
 4. Broadcasts deep-fork status via WebSocket
-5. Requires manual intervention
+5. Requires operator intervention and full DB rebuild before resuming normal correctness guarantees
 
 ## RocksDB State
 
@@ -115,7 +115,9 @@ Returns current deep-fork status and optional synthetic reorg object when deep f
 
 ### `POST /api/v1/admin/resolve-deep-fork`
 
-Resolves current deep fork with action `dismiss` (requires `ADMIN_TOKEN`).
+Clears deep-fork status with action `dismiss` (requires `ADMIN_TOKEN`).
+
+`dismiss` only unblocks the paused indexer loop; it is not the correctness recovery path for deep forks.
 
 ## WebSocket Events
 
@@ -159,9 +161,10 @@ When a deep fork is detected:
 
 1. Investigate node/network state
 2. Verify canonical chain
-3. Resolve via API (`dismiss`) or rebuild DB and re-sync from genesis
+3. Stop indexer, delete RocksDB data, and re-sync from genesis
+4. Use API `dismiss` only for operational cleanup (for example clearing stale deep-fork status), not as a data-correctness fix
 
-After resolution, indexer resumes from stored tip and continues normal reorg handling.
+After rebuild + re-sync, indexer resumes normal bounded reorg handling (`depth <= DEEP_FORK_DEPTH`).
 
 ## Why 36 Blocks?
 
@@ -183,4 +186,4 @@ Recommended checks:
 
 ---
 
-_Last updated: 2026-02-19_
+_Last updated: 2026-03-02_
