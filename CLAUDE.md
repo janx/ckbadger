@@ -5,7 +5,6 @@ Instructions for AI agents working on ckbadger - a CKB blockchain explorer.
 ## Project Principles
 
 - **CKB Native** - Make CKB concepts tangible instead of just-another-explorer
-- **Unrivaled Speed** - Lightning-fast database rebuilds and ultra-low-latency request processing
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
 
@@ -13,6 +12,11 @@ Instructions for AI agents working on ckbadger - a CKB blockchain explorer.
 
 - Local-first aligns with Web5 and Unix philosophy. Files and executable binaries are the foundation of composability, and ckbadger is designed around files and executable binaries.
 - Local-first means ckbadger optimizes for writes (building data indexes), not reads (serving API and web page requests), unlike typical blockchain explorers. This enables extremely fast database sync, so local experiments remain cheap: if the DB is broken, rebuild it instead of protecting a 60-hour sync artifact. DB reads remain very fast, just not the top optimization target.
+
+## Design Starting Point (MANDATORY)
+
+- Documents under `docs/prompts/` capture the deep understanding and thinking principles of ckbadger.
+- Treat `docs/prompts/` as the starting point for all design reasoning and architecture decisions.
 
 ## Agent Task Template (MANDATORY)
 
