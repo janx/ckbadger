@@ -877,7 +877,7 @@ impl CkbadgerStore {
     ///
     /// Metadata fields (name/category/website/description/hash_type/deployment refs) are preserved.
     pub fn rebuild_script_infos_from_cells(&self) -> anyhow::Result<usize> {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::HashMap;
 
         fn reset_usage(info: &mut ScriptInfo) {
             info.cells_count = 0;
@@ -1144,7 +1144,6 @@ impl CkbadgerStore {
             info_by_code_hash.insert(key, info);
         }
 
-        let mut seen_consumed_outpoints: HashSet<Vec<u8>> = HashSet::new();
         let live_iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
         for item in live_iter.flatten() {
             let (key, _) = item;
@@ -1192,19 +1191,38 @@ impl CkbadgerStore {
         let consumed_iter =
             self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
         for item in consumed_iter.flatten() {
-            let (key, _) = item;
-            if !seen_consumed_outpoints.insert(key.to_vec()) {
-                continue;
+            let (key, value) = item;
+            if key.len() != keys::OUTPOINT_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid consumed cell key length while rebuilding script info: key_len={}, expected={}, key=0x{}",
+                    key.len(),
+                    keys::OUTPOINT_KEY_SIZE,
+                    bytes_to_hex(&key)
+                );
             }
-            let (tx_hash, output_index) = keys::decode_outpoint(&key);
-            let consumed = self
-                .get_consumed_cell_info(&tx_hash, output_index)?
-                .ok_or_else(|| {
+            let consumed = if let Some(info) = decode_consumed_cell_info(&value) {
+                info
+            } else {
+                let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "missing consumed cell info while rebuilding script info: outpoint=0x{}",
+                        "failed to decode consumed cell payload while rebuilding script info: outpoint=0x{}",
                         bytes_to_hex(&key)
                     )
                 })?;
+                let cell = self
+                    .get_cell_by_outpoint_key(&key)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing canonical cell for consumed marker while rebuilding script info: outpoint=0x{}",
+                            bytes_to_hex(&key)
+                        )
+                    })?;
+                ConsumedCellInfo {
+                    cell,
+                    consumed_at_block: meta.consumed_at_block,
+                    consumed_by_tx: meta.consumed_by_tx,
+                }
+            };
             let cell = consumed.cell;
 
             let lock_code_hash = cell.lock_code_hash.clone();
@@ -1541,6 +1559,25 @@ mod tests {
         assert_eq!(unused_after.type_live_cells_count, 0);
         assert_eq!(unused_after.cells_count, 0);
         assert_eq!(unused_after.capacity_used, 0);
+    }
+
+    #[test]
+    fn test_rebuild_script_infos_from_cells_fails_on_invalid_consumed_key_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let bad_key = [0xAB; 3];
+        let bad_value = [0xCD; 5];
+        store
+            .put_cf(store.cf_consumed_cells(), &bad_key, &bad_value)
+            .unwrap();
+
+        let err = store.rebuild_script_infos_from_cells().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid consumed cell key length while rebuilding script info"),
+            "unexpected error: {err:#}"
+        );
     }
 
     /// Helper: write a DaoDailySnapshot directly to the store.
