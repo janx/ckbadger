@@ -113,14 +113,6 @@ Returns deep-fork detail only when:
 
 Returns current deep-fork status and optional synthetic reorg object when deep fork is active.
 
-### `POST /api/v1/admin/resolve-deep-fork`
-
-`dismiss` action is intentionally rejected (requires `ADMIN_TOKEN`) and returns an error that
-in-place deep-fork resolution is disabled.
-
-This endpoint exists as an explicit fail-fast guardrail so operators do not resume from a known
-inconsistent fork state.
-
 ## WebSocket Events
 
 Subscribe to `reorg` channel for fork-related notifications.

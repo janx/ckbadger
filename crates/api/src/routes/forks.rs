@@ -2,8 +2,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    routing::{get, post},
-    Json, Router,
+    routing::get,
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -91,29 +91,11 @@ pub struct ListForksParams {
     pub offset: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveDeepForkRequest {
-    pub action: String,
-    pub admin_token: String,
-    #[allow(dead_code)]
-    pub notes: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveDeepForkResponse {
-    pub success: bool,
-    pub action: String,
-    pub message: String,
-}
-
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/forks", get(list_forks))
         .route("/forks/recent", get(get_recent_reorg))
         .route("/forks/{id}", get(get_fork_detail))
-        .route("/admin/resolve-deep-fork", post(resolve_deep_fork))
 }
 
 /// List forks.
@@ -272,32 +254,4 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
         reorg,
         deep_fork,
     })
-}
-
-async fn resolve_deep_fork(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ResolveDeepForkRequest>,
-) -> ApiResult<ResolveDeepForkResponse> {
-    let expected_token = std::env::var("ADMIN_TOKEN").unwrap_or_default();
-    if expected_token.is_empty() || req.admin_token != expected_token {
-        return Err(ApiError::unauthorized("Invalid admin token"));
-    }
-
-    let sync_status = state
-        .store
-        .get_sync_status()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    if !sync_status.deep_fork_detected {
-        return Err(ApiError::bad_request("No deep fork to resolve"));
-    }
-
-    match req.action.as_str() {
-        "dismiss" => Err(ApiError::bad_request(
-            "Deep fork cannot be resolved via API. Stop indexer, delete RocksDB data, and re-sync from genesis.",
-        )),
-        _ => Err(ApiError::bad_request(
-            "Invalid action. Supported: dismiss. Deep fork in-place resolution is disabled; rebuild RocksDB and re-sync from genesis.",
-        )),
-    }
 }

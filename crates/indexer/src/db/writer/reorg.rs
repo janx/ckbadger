@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use chrono::Utc;
 use tracing::info;
 
@@ -113,22 +113,6 @@ impl BatchWriter {
             orphaned_txs: 0, // Not tracked in RocksDB model
         })
     }
-
-    pub fn clear_deep_fork_flag(&self) -> Result<()> {
-        self.store.clear_deep_fork()?;
-        Ok(())
-    }
-
-    pub fn resolve_deep_fork(
-        &self,
-        _action: &str,
-        _resolved_by: Option<&str>,
-        _notes: Option<&str>,
-    ) -> Result<()> {
-        bail!(
-            "Deep fork cannot be resolved in-place. Stop indexer, delete RocksDB data, and re-sync from genesis."
-        )
-    }
 }
 
 pub struct ReorgResult {
@@ -143,7 +127,6 @@ mod tests {
 
     use ckbadger_store::keys;
     use ckbadger_store::store::CkbadgerStore;
-    use ckbadger_store::types::DeepForkInfo;
 
     use crate::db::writer::BatchWriter;
 
@@ -200,32 +183,5 @@ mod tests {
         let result = writer.execute_reorg(0, &[0xAA; 32], 1, &[], 1, &[]).await;
         assert!(result.is_err());
         assert_eq!(reorg_event_count(store.as_ref()), 0);
-    }
-
-    #[test]
-    fn test_resolve_deep_fork_requires_rebuild_and_keeps_flag() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
-
-        store
-            .set_deep_fork(DeepForkInfo {
-                db_tip: 100,
-                db_tip_hash: vec![0x11; 32],
-                chain_tip: 150,
-                chain_tip_hash: vec![0x22; 32],
-                depth: 50,
-                fork_point: 100,
-            })
-            .unwrap();
-
-        let err = writer.resolve_deep_fork("dismiss", None, None).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Deep fork cannot be resolved in-place"));
-
-        let status = store.get_sync_status().unwrap();
-        assert!(status.deep_fork_detected);
-        assert!(status.deep_fork_info.is_some());
     }
 }
