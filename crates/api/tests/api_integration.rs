@@ -21,12 +21,12 @@ fn test_store() -> Arc<CkbadgerStore> {
     Arc::new(CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap())
 }
 
-fn test_config_with_derived(
+fn test_config_with_append_only(
     store: Arc<CkbadgerStore>,
-    derived_store: Arc<CkbadgerStore>,
+    append_only_store: Arc<CkbadgerStore>,
 ) -> AppConfig {
     AppConfig {
-        derived_store,
+        append_only_store,
         store,
         redis_url: None,
         ckb_rpc_url: "http://localhost:8114".to_string(),
@@ -39,7 +39,7 @@ fn test_config_with_derived(
 }
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
-    test_config_with_derived(store.clone(), store)
+    test_config_with_append_only(store.clone(), store)
 }
 
 #[tokio::test]
@@ -86,8 +86,8 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
 #[tokio::test]
 async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     let core_store = test_store();
-    let derived_store = test_store();
-    derived_store
+    let append_only_store = test_store();
+    append_only_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -118,7 +118,7 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/hardforks")
@@ -158,7 +158,7 @@ async fn test_hardforks_endpoint_rejects_unknown_network() {
 #[tokio::test]
 async fn test_hardforks_endpoint_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -166,7 +166,7 @@ async fn test_hardforks_endpoint_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/hardforks")
@@ -203,7 +203,7 @@ async fn test_recent_blocks_endpoint_empty_db() {
 #[tokio::test]
 async fn test_statistics_network_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -211,7 +211,7 @@ async fn test_statistics_network_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/statistics/network")
@@ -227,7 +227,7 @@ async fn test_statistics_network_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_statistics_tx_stats_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -235,7 +235,7 @@ async fn test_statistics_tx_stats_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/statistics/tx-stats")
@@ -251,7 +251,7 @@ async fn test_statistics_tx_stats_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_tx_stats_reads_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
 
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
@@ -274,7 +274,7 @@ async fn test_tx_stats_reads_from_derived_store() {
     );
     core_batch.commit().unwrap();
 
-    derived_store
+    append_only_store
         .put_hourly_stats(
             &this_hour.to_string(),
             &HourlyStats {
@@ -287,7 +287,7 @@ async fn test_tx_stats_reads_from_derived_store() {
             },
         )
         .unwrap();
-    derived_store
+    append_only_store
         .put_daily_stats(
             &date_str,
             &DailyStats {
@@ -308,7 +308,7 @@ async fn test_tx_stats_reads_from_derived_store() {
         )
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -327,13 +327,13 @@ async fn test_tx_stats_reads_from_derived_store() {
 #[tokio::test]
 async fn test_epoch_time_charts_read_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
 
     let start = chrono::Utc::now() - chrono::Duration::hours(4);
     let end = chrono::Utc::now();
 
-    derived_store.put_epoch_time_dist(240, 3).unwrap();
-    derived_store
+    append_only_store.put_epoch_time_dist(240, 3).unwrap();
+    append_only_store
         .put_epoch_stats(
             12,
             &EpochStats {
@@ -349,7 +349,7 @@ async fn test_epoch_time_charts_read_from_derived_store() {
         )
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     let dist_request = Request::builder()
@@ -391,7 +391,7 @@ async fn test_epoch_time_charts_read_from_derived_store() {
 #[tokio::test]
 async fn test_network_stats_reads_derived_statistics() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
 
     let now = chrono::Utc::now();
     let now_ms = now.timestamp_millis();
@@ -415,7 +415,7 @@ async fn test_network_stats_reads_derived_statistics() {
     );
     core_batch.commit().unwrap();
 
-    derived_store
+    append_only_store
         .put_epoch_stats(
             42,
             &EpochStats {
@@ -430,7 +430,7 @@ async fn test_network_stats_reads_derived_statistics() {
             },
         )
         .unwrap();
-    derived_store
+    append_only_store
         .put_daily_stats(
             &today_str,
             &DailyStats {
@@ -450,7 +450,7 @@ async fn test_network_stats_reads_derived_statistics() {
             },
         )
         .unwrap();
-    derived_store
+    append_only_store
         .put_daily_stats(
             &yesterday_str,
             &DailyStats {
@@ -470,7 +470,7 @@ async fn test_network_stats_reads_derived_statistics() {
             },
         )
         .unwrap();
-    derived_store
+    append_only_store
         .put_daily_block_stats(
             &today_str,
             &DailyBlockStats {
@@ -482,7 +482,7 @@ async fn test_network_stats_reads_derived_statistics() {
         )
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -500,9 +500,9 @@ async fn test_network_stats_reads_derived_statistics() {
 #[tokio::test]
 async fn test_daily_block_charts_read_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
 
-    derived_store
+    append_only_store
         .put_daily_block_stats(
             "20260101",
             &DailyBlockStats {
@@ -513,7 +513,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
             },
         )
         .unwrap();
-    derived_store
+    append_only_store
         .put_daily_block_stats(
             "20260102",
             &DailyBlockStats {
@@ -525,7 +525,7 @@ async fn test_daily_block_charts_read_from_derived_store() {
         )
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     for path in [
@@ -545,10 +545,10 @@ async fn test_daily_block_charts_read_from_derived_store() {
 #[tokio::test]
 async fn test_miner_distribution_reads_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
 
     let miner_hash = vec![0x66; 32];
-    derived_store
+    append_only_store
         .put_miner_stats(
             "20260101",
             &miner_hash,
@@ -560,7 +560,7 @@ async fn test_miner_distribution_reads_from_derived_store() {
         )
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -594,7 +594,7 @@ async fn test_blocks_list_empty_db() {
 #[tokio::test]
 async fn test_blocks_list_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -602,7 +602,7 @@ async fn test_blocks_list_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks")
@@ -618,7 +618,7 @@ async fn test_blocks_list_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_get_block_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -626,7 +626,7 @@ async fn test_get_block_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks/1")
@@ -642,8 +642,8 @@ async fn test_get_block_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_get_block_includes_hardfork_activation() {
     let core_store = test_store();
-    let derived_store = test_store();
-    derived_store
+    let append_only_store = test_store();
+    append_only_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -674,7 +674,7 @@ async fn test_get_block_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks/8775638")
@@ -703,8 +703,8 @@ async fn test_get_block_includes_hardfork_activation() {
 #[tokio::test]
 async fn test_blocks_list_includes_hardfork_activation() {
     let core_store = test_store();
-    let derived_store = test_store();
-    derived_store
+    let append_only_store = test_store();
+    append_only_store
         .put_epoch_stats(
             5414,
             &EpochStats {
@@ -747,7 +747,7 @@ async fn test_blocks_list_includes_hardfork_activation() {
     );
     batch.commit().unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/blocks?limit=2")
@@ -858,7 +858,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
 #[tokio::test]
 async fn test_get_cell_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -866,7 +866,7 @@ async fn test_get_cell_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!("/api/v1/cells/0x{}/0", "11".repeat(32)))
@@ -882,7 +882,7 @@ async fn test_get_cell_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_address_detail_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -890,7 +890,7 @@ async fn test_address_detail_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!("/api/v1/addresses/0x{}", "22".repeat(32)))
@@ -1006,7 +1006,7 @@ async fn test_search_empty_db() {
 #[tokio::test]
 async fn test_search_script_scope_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1014,7 +1014,7 @@ async fn test_search_script_scope_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/search?q=script:alpha")
@@ -1235,7 +1235,7 @@ async fn test_dao_stats_empty_db() {
 #[tokio::test]
 async fn test_dao_stats_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1243,7 +1243,7 @@ async fn test_dao_stats_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/dao/statistics")
@@ -1259,7 +1259,7 @@ async fn test_dao_stats_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_dao_total_deposit_chart_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1267,7 +1267,7 @@ async fn test_dao_total_deposit_chart_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/dao/charts/total-deposit")
@@ -1283,7 +1283,7 @@ async fn test_dao_total_deposit_chart_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_dao_summary_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1291,7 +1291,7 @@ async fn test_dao_summary_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!("/api/v1/dao/summary/0x{}", "11".repeat(32)))
@@ -1307,7 +1307,7 @@ async fn test_dao_summary_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_dao_daily_deposit_chart_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1315,7 +1315,7 @@ async fn test_dao_daily_deposit_chart_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/dao/charts/daily-deposit")
@@ -1331,7 +1331,7 @@ async fn test_dao_daily_deposit_chart_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_dao_circulation_ratio_chart_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1339,7 +1339,7 @@ async fn test_dao_circulation_ratio_chart_returns_503_when_derived_store_lags() 
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/dao/charts/circulation-ratio")
@@ -1939,7 +1939,7 @@ async fn test_transaction_not_found() {
 #[tokio::test]
 async fn test_transaction_detail_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1947,7 +1947,7 @@ async fn test_transaction_detail_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let hash = format!("0x{}", "ab".repeat(32));
     let request = Request::builder()
@@ -1979,7 +1979,7 @@ async fn test_scripts_list_empty_db() {
 #[tokio::test]
 async fn test_scripts_list_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -1987,7 +1987,7 @@ async fn test_scripts_list_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/scripts")
@@ -2479,7 +2479,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
 #[tokio::test]
 async fn test_cells_by_script_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -2487,7 +2487,7 @@ async fn test_cells_by_script_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -3098,7 +3098,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
 #[tokio::test]
 async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     let type_hash = vec![0x64; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
 
@@ -3124,7 +3124,7 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
         )
         .unwrap();
 
-    derived_store
+    append_only_store
         .put_token_daily_delta(
             &type_hash,
             20240115,
@@ -3135,7 +3135,7 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
         )
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     let request = Request::builder()
@@ -3160,7 +3160,7 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
 #[tokio::test]
 async fn test_token_occupation_chart_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -3168,7 +3168,7 @@ async fn test_token_occupation_chart_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -3521,7 +3521,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
 #[tokio::test]
 async fn test_spore_cluster_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -3529,7 +3529,7 @@ async fn test_spore_cluster_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!("/api/v1/spore/clusters/0x{}", "11".repeat(32)))
@@ -3640,7 +3640,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
 #[tokio::test]
 async fn test_spore_nft_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -3648,7 +3648,7 @@ async fn test_spore_nft_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!("/api/v1/spore/nfts/0x{}", "22".repeat(32)))
@@ -3802,7 +3802,7 @@ async fn test_assets_rejects_legacy_dob_type_filter() {
 #[tokio::test]
 async fn test_assets_list_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -3810,7 +3810,7 @@ async fn test_assets_list_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/assets?type=token")
@@ -4393,7 +4393,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
 #[tokio::test]
 async fn test_assets_nft_collection_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -4401,7 +4401,7 @@ async fn test_assets_nft_collection_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!("/api/v1/assets/nfts/0x{}", "44".repeat(24)))
@@ -4417,7 +4417,7 @@ async fn test_assets_nft_collection_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_assets_nft_collection_chart_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -4425,7 +4425,7 @@ async fn test_assets_nft_collection_chart_returns_503_when_derived_store_lags() 
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -6145,7 +6145,7 @@ async fn test_hodl_wave_chart_with_data() {
 #[tokio::test]
 async fn test_address_activities_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -6153,7 +6153,7 @@ async fn test_address_activities_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -6172,7 +6172,7 @@ async fn test_address_activities_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_address_activities_reads_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     let lock_hash = vec![0x22; 32];
     let activity = ActivityEntry {
         tx_hash: vec![0xaa; 32],
@@ -6196,7 +6196,7 @@ async fn test_address_activities_reads_from_derived_store() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store.clone(), derived_store.clone());
+    let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -6211,7 +6211,7 @@ async fn test_address_activities_reads_from_derived_store() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
-    let mut derived_batch = StoreBatch::new(derived_store.as_ref());
+    let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
     derived_batch.put_activity(&lock_hash, 10, 0, &activity);
     derived_batch.commit().unwrap();
 
@@ -6232,7 +6232,7 @@ async fn test_address_activities_reads_from_derived_store() {
 #[tokio::test]
 async fn test_address_transactions_returns_503_when_derived_store_lags() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 100;
@@ -6240,7 +6240,7 @@ async fn test_address_transactions_returns_503_when_derived_store_lags() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -6259,7 +6259,7 @@ async fn test_address_transactions_returns_503_when_derived_store_lags() {
 #[tokio::test]
 async fn test_address_transactions_reads_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
     let lock_hash = vec![0x33; 32];
     let tx_hash = vec![0xab; 32];
 
@@ -6273,7 +6273,7 @@ async fn test_address_transactions_reads_from_derived_store() {
         })
         .unwrap();
 
-    let config = test_config_with_derived(core_store.clone(), derived_store.clone());
+    let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
@@ -6288,7 +6288,7 @@ async fn test_address_transactions_reads_from_derived_store() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
-    let mut derived_batch = StoreBatch::new(derived_store.as_ref());
+    let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
     derived_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
     derived_batch.commit().unwrap();
 
@@ -6311,7 +6311,7 @@ async fn test_address_transactions_reads_from_derived_store() {
 #[tokio::test]
 async fn test_scripts_list_reads_from_derived_store() {
     let core_store = test_store();
-    let derived_store = test_store();
+    let append_only_store = test_store();
 
     let core_script_hash = vec![0x11; 32];
     let derived_script_hash = vec![0x22; 32];
@@ -6327,7 +6327,7 @@ async fn test_scripts_list_reads_from_derived_store() {
     );
     core_batch.commit().unwrap();
 
-    let mut derived_batch = StoreBatch::new(derived_store.as_ref());
+    let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
     derived_batch.put_script_info(
         &derived_script_hash,
         &ScriptInfo {
@@ -6339,7 +6339,7 @@ async fn test_scripts_list_reads_from_derived_store() {
     );
     derived_batch.commit().unwrap();
 
-    let config = test_config_with_derived(core_store, derived_store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/scripts?limit=20")

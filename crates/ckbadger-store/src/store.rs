@@ -237,6 +237,13 @@ pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
 pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreClass {
+    Unified,
+    Domain,
+    AppendOnly,
+}
+
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
     CF_CELLS,
@@ -282,11 +289,19 @@ pub const ALL_CFS: &[&str] = &[
 
 /// Column families intended for the domain mutable store.
 pub const DOMAIN_CFS: &[&str] = &[
+    CF_CELLS,
     CF_LIVE_CELLS,
+    CF_CONSUMED_CELLS,
+    CF_REORG_CELLS_CREATED_BY_BLOCK,
+    CF_REORG_CONSUMED_CELLS_BY_BLOCK,
+    CF_BLOCK_HEADERS,
+    CF_BLOCK_HASH_INDEX,
     CF_CELL_BY_LOCK,
     CF_CELL_BY_TYPE,
     CF_CELL_BY_LOCK_CODE,
     CF_CELL_BY_TYPE_CODE,
+    CF_TX_INDEX,
+    CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
@@ -313,19 +328,7 @@ pub const DOMAIN_CFS: &[&str] = &[
 ];
 
 /// Column families intended for append-only history/archive store.
-pub const APPEND_CFS: &[&str] = &[
-    CF_CELLS,
-    CF_CONSUMED_CELLS,
-    CF_REORG_CELLS_CREATED_BY_BLOCK,
-    CF_REORG_CONSUMED_CELLS_BY_BLOCK,
-    CF_BLOCK_HEADERS,
-    CF_BLOCK_HASH_INDEX,
-    CF_TX_INDEX,
-    CF_TX_HASH_MAP,
-    CF_ADDR_TXS,
-    CF_ACTIVITIES,
-    CF_NFT_COLLECTION_ACTIVITIES,
-];
+pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_ACTIVITIES, CF_NFT_COLLECTION_ACTIVITIES];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("CKBADGER_APPEND_ONLY_DATA_PATH") {
@@ -355,6 +358,7 @@ fn consumed_cf_storage_bytes(
 
 pub struct CkbadgerStore {
     db: DB,
+    store_class: StoreClass,
     domain_path: PathBuf,
     append_path: PathBuf,
     /// Keep block cache alive for the lifetime of the store.
@@ -371,31 +375,82 @@ pub struct CkbadgerStore {
 }
 
 impl CkbadgerStore {
-    /// Open as primary (read-write). Creates all column families.
-    /// Also opens any legacy CFs that exist on disk but are no longer in ALL_CFS,
-    /// so RocksDB doesn't error on "Column families not opened".
-    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let domain_path = path.as_ref().to_path_buf();
-        let append_path = append_path_from_domain(&domain_path);
+    fn cfs_for_class(store_class: StoreClass) -> &'static [&'static str] {
+        match store_class {
+            StoreClass::Unified => ALL_CFS,
+            StoreClass::Domain => DOMAIN_CFS,
+            StoreClass::AppendOnly => APPEND_CFS,
+        }
+    }
+
+    fn cf_allowed(store_class: StoreClass, name: &str) -> bool {
+        match store_class {
+            StoreClass::Unified => true,
+            StoreClass::Domain => DOMAIN_CFS.contains(&name),
+            StoreClass::AppendOnly => APPEND_CFS.contains(&name),
+        }
+    }
+
+    fn open_with_class<P: AsRef<Path>>(path: P, store_class: StoreClass) -> anyhow::Result<Self> {
+        let db_path = path.as_ref().to_path_buf();
+        let (domain_path, append_path) = match store_class {
+            StoreClass::Domain | StoreClass::Unified => {
+                let domain = db_path.clone();
+                let append = append_path_from_domain(&domain);
+                (domain, append)
+            }
+            StoreClass::AppendOnly => {
+                let append = db_path.clone();
+                let domain = std::env::var("CKBADGER_DOMAIN_DATA_PATH")
+                    .ok()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        let s = append.display().to_string();
+                        if let Some(stripped) = s.strip_suffix("-append-only") {
+                            PathBuf::from(stripped)
+                        } else {
+                            append.clone()
+                        }
+                    });
+                (domain, append)
+            }
+        };
+
         let memory_profile = MemoryProfile::for_primary();
         let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
 
-        // Discover any CFs that exist on disk (may include legacy/removed ones)
         let existing_cfs = DB::list_cf(&opts, &path).unwrap_or_default();
-        let mut cf_names: Vec<String> = ALL_CFS.iter().map(|s| s.to_string()).collect();
+        let allowed = Self::cfs_for_class(store_class);
+        let allowed_set = allowed
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
         for cf in &existing_cfs {
-            if cf != "default" && !ALL_CFS.contains(&cf.as_str()) {
-                warn!(cf = cf.as_str(), "Opening legacy column family from disk");
-                cf_names.push(cf.clone());
+            if cf == "default" {
+                continue;
+            }
+            if !allowed_set.contains(cf.as_str()) {
+                anyhow::bail!(
+                    "found column family '{}' in {} store at '{}' but it is not allowed there; \
+                     expected only {:?}. Please rebuild this RocksDB path.",
+                    cf,
+                    match store_class {
+                        StoreClass::Domain => "domain",
+                        StoreClass::AppendOnly => "append-only",
+                        StoreClass::Unified => "unified",
+                    },
+                    db_path.display(),
+                    allowed
+                );
             }
         }
 
-        let cf_descriptors: Vec<ColumnFamilyDescriptor> = cf_names
+        let cf_descriptors: Vec<ColumnFamilyDescriptor> = allowed
             .iter()
             .map(|name| {
                 ColumnFamilyDescriptor::new(
-                    name.as_str(),
-                    Self::cf_options(name.as_str(), &block_cache, &memory_profile),
+                    *name,
+                    Self::cf_options(name, &block_cache, &memory_profile),
                 )
             })
             .collect();
@@ -404,6 +459,7 @@ impl CkbadgerStore {
 
         Ok(Self {
             db,
+            store_class,
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
@@ -414,28 +470,67 @@ impl CkbadgerStore {
         })
     }
 
-    /// Open as secondary instance (read-only). Follows primary writes via `refresh()`.
-    pub fn open_secondary<P: AsRef<Path>>(
+    fn open_secondary_with_class<P: AsRef<Path>>(
         primary_path: P,
         secondary_path: P,
+        store_class: StoreClass,
     ) -> anyhow::Result<Self> {
-        let domain_path = primary_path.as_ref().to_path_buf();
-        let append_path = append_path_from_domain(&domain_path);
+        let db_path = primary_path.as_ref().to_path_buf();
+        let (domain_path, append_path) = match store_class {
+            StoreClass::Domain | StoreClass::Unified => {
+                let domain = db_path.clone();
+                let append = append_path_from_domain(&domain);
+                (domain, append)
+            }
+            StoreClass::AppendOnly => {
+                let append = db_path.clone();
+                let domain = std::env::var("CKBADGER_DOMAIN_DATA_PATH")
+                    .ok()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        let s = append.display().to_string();
+                        if let Some(stripped) = s.strip_suffix("-append-only") {
+                            PathBuf::from(stripped)
+                        } else {
+                            append.clone()
+                        }
+                    });
+                (domain, append)
+            }
+        };
         let memory_profile = MemoryProfile::for_secondary();
         let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
-
         let existing_cfs = DB::list_cf(&opts, &primary_path).unwrap_or_default();
-        let mut cf_names: Vec<String> = ALL_CFS.iter().map(|s| s.to_string()).collect();
+        let allowed = Self::cfs_for_class(store_class);
+        let allowed_set = allowed
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
         for cf in &existing_cfs {
-            if cf != "default" && !ALL_CFS.contains(&cf.as_str()) {
-                cf_names.push(cf.clone());
+            if cf == "default" {
+                continue;
+            }
+            if !allowed_set.contains(cf.as_str()) {
+                anyhow::bail!(
+                    "found column family '{}' in {} store at '{}' but it is not allowed there; \
+                     expected only {:?}. Please rebuild this RocksDB path.",
+                    cf,
+                    match store_class {
+                        StoreClass::Domain => "domain",
+                        StoreClass::AppendOnly => "append-only",
+                        StoreClass::Unified => "unified",
+                    },
+                    db_path.display(),
+                    allowed
+                );
             }
         }
-        let cf_refs: Vec<&str> = cf_names.iter().map(|s| s.as_str()).collect();
+        let cf_refs: Vec<&str> = allowed.to_vec();
         let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_refs)?;
 
         Ok(Self {
             db,
+            store_class,
             domain_path,
             append_path,
             block_cache: Mutex::new(block_cache),
@@ -444,6 +539,42 @@ impl CkbadgerStore {
             is_secondary: true,
             memory_profile,
         })
+    }
+
+    /// Legacy unified open (read-write). Opens all column families in one DB path.
+    /// Prefer `open_domain` / `open_append_only` for strict CF ownership.
+    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::Unified)
+    }
+
+    pub fn open_domain<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::Domain)
+    }
+
+    pub fn open_append_only<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::AppendOnly)
+    }
+
+    /// Legacy unified secondary open (read-only). Follows primary writes via `refresh()`.
+    pub fn open_secondary<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::Unified)
+    }
+
+    pub fn open_domain_secondary<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::Domain)
+    }
+
+    pub fn open_append_only_secondary<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::AppendOnly)
     }
 
     /// Catch up with primary instance writes (secondary only).
@@ -646,6 +777,12 @@ impl CkbadgerStore {
     // ---- Column family accessors ----
 
     pub fn cf(&self, name: &str) -> &ColumnFamily {
+        if !Self::cf_allowed(self.store_class, name) {
+            panic!(
+                "CF '{}' is not allowed in {:?} store",
+                name, self.store_class
+            );
+        }
         self.db
             .cf_handle(name)
             .unwrap_or_else(|| panic!("CF '{}' not found", name))
@@ -1308,6 +1445,50 @@ mod tests {
         for cf_name in ALL_CFS {
             let _ = store.cf(cf_name);
         }
+    }
+
+    #[test]
+    fn test_open_domain_restricts_append_only_cfs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let panicked = std::panic::catch_unwind(|| {
+            let _ = store.cf_addr_txs();
+        })
+        .is_err();
+        assert!(panicked, "domain store should reject append-only CF access");
+    }
+
+    #[test]
+    fn test_open_append_only_restricts_domain_cfs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let panicked = std::panic::catch_unwind(|| {
+            let _ = store.cf_sync_meta();
+        })
+        .is_err();
+        assert!(panicked, "append-only store should reject domain CF access");
+    }
+
+    #[test]
+    fn test_open_append_only_rejects_path_with_domain_cfs() {
+        let dir = TempDir::new().unwrap();
+        let _ = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let err = match CkbadgerStore::open_append_only(dir.path()) {
+            Ok(_) => panic!("expected open_append_only to fail on domain CF path"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("not allowed there"));
+    }
+
+    #[test]
+    fn test_open_domain_rejects_path_with_append_cfs() {
+        let dir = TempDir::new().unwrap();
+        let _ = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let err = match CkbadgerStore::open_domain(dir.path()) {
+            Ok(_) => panic!("expected open_domain to fail on append-only CF path"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("not allowed there"));
     }
 
     #[test]

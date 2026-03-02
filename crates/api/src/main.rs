@@ -69,23 +69,23 @@ async fn main() -> Result<()> {
         "Opening ckbadger domain store (secondary) at: {} -> {}",
         domain_data_path, secondary_path
     );
-    let store = Arc::new(CkbadgerStore::open_secondary(
+    let store = Arc::new(CkbadgerStore::open_domain_secondary(
         &domain_data_path,
         &secondary_path,
     )?);
-    let derived_secondary_path = format!("{}-api-secondary", append_only_data_path);
+    let append_only_secondary_path = format!("{}-api-secondary", append_only_data_path);
     info!(
         "Opening ckbadger append-only store (secondary) at: {} -> {}",
-        append_only_data_path, derived_secondary_path
+        append_only_data_path, append_only_secondary_path
     );
-    let derived_store = Arc::new(CkbadgerStore::open_secondary(
+    let append_only_store = Arc::new(CkbadgerStore::open_append_only_secondary(
         &append_only_data_path,
-        &derived_secondary_path,
+        &append_only_secondary_path,
     )?);
 
     let config = AppConfig {
         store,
-        derived_store,
+        append_only_store,
         redis_url,
         ckb_rpc_url: args.ckb_rpc_url,
         ckb_network: args.ckb_network,

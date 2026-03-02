@@ -1538,7 +1538,7 @@ async fn get_nft_collection(
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
     let daily = state
-        .derived_store
+        .store
         .list_nft_daily_deltas(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let chart = build_capacity_occupation_chart(
@@ -1570,7 +1570,7 @@ async fn get_nft_collection(
 
     let holders_count = count_nft_collection_holders(&state, &collection_id_bytes, &agg)?;
     let activities_count = state
-        .store
+        .append_only_store
         .count_nft_collection_activities(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2252,7 +2252,7 @@ async fn list_nft_collection_activities(
 
     // Fetch limit+1 to detect has_more
     let results = state
-        .store
+        .append_only_store
         .list_nft_collection_activities(
             &collection_id_bytes,
             (limit as usize) + 1,
@@ -2425,14 +2425,14 @@ async fn get_nft_collection_occupation_chart(
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
     let daily = state
-        .derived_store
+        .store
         .list_nft_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
         let mut base_occupied: i128 = 0;
         let baseline = state
-            .derived_store
+            .store
             .list_nft_daily_deltas_in_range(
                 &collection_id_bytes,
                 None,
@@ -2501,7 +2501,7 @@ fn compute_token_assets(
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
         let token_daily = state
-            .derived_store
+            .store
             .list_token_daily_deltas(hash)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (live_capacity, live_occupied_capacity) =
@@ -2576,7 +2576,7 @@ fn compute_nft_assets(
             agg.name.as_deref(),
         );
         let cluster_daily = state
-            .derived_store
+            .store
             .list_cluster_daily_deltas(cluster_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (live_capacity, live_occupied_capacity) =
@@ -2641,7 +2641,7 @@ fn compute_nft_assets(
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let nft_daily = state
-            .derived_store
+            .store
             .list_nft_daily_deltas(collection_id_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (live_capacity, live_occupied_capacity) =

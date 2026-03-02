@@ -465,7 +465,7 @@ async fn get_address_dao_summary(
     }
 
     let latest_snapshot = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .last()
@@ -596,7 +596,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     }
 
     let latest_snapshot = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .last()
@@ -809,7 +809,7 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -842,7 +842,7 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -900,7 +900,7 @@ async fn get_circulation_ratio_chart(
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

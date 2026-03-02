@@ -1850,7 +1850,7 @@ async fn list_cells_by_script(
     })?;
 
     let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .derived_store
+        .store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
         .into_iter()
@@ -2007,7 +2007,7 @@ async fn get_address(
     let (lock_script, lock_script_info, address) =
         if let Some((_, _, info)) = cells_for_script.first() {
             let script_info = state
-                .derived_store
+                .store
                 .get_script_info(&info.lock_code_hash)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2290,7 +2290,7 @@ async fn get_cell(
 
     let type_script = if let Some(code_hash) = info.type_code_hash.as_ref() {
         let type_hash_type_num: i16 = state
-            .derived_store
+            .store
             .get_script_info(code_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map(|si| si.hash_type as i16)
@@ -2347,7 +2347,7 @@ async fn get_cell(
     });
 
     let code_cell_of = if let Some(dh) = data_hash.as_ref() {
-        lookup_code_cell_scripts(&state.derived_store, dh, info.type_script_hash.as_ref())?
+        lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref())?
     } else {
         None
     };
@@ -2513,7 +2513,7 @@ async fn get_address_transactions(
 
     // Fetch recent transactions for this address (newest first)
     let addr_txs = state
-        .derived_store
+        .append_only_store
         .list_addr_txs_recent(&lock_hash, limit + 1, cursor)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2685,7 +2685,7 @@ async fn get_address_transactions(
                 .map(
                     |ch| -> Result<String, (axum::http::StatusCode, axum::Json<ApiError>)> {
                     let known_name = state
-                        .derived_store
+                        .store
                         .get_script_info(ch)
                         .map_err(|e| ApiError::internal(e.to_string()))?
                         .and_then(|si| si.name)

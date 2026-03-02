@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         &domain_data_path,
     );
 
-    let store = Arc::new(CkbadgerStore::open_secondary(
+    let store = Arc::new(CkbadgerStore::open_domain_secondary(
         &domain_data_path,
         &secondary_data_path,
     )?);

@@ -14,7 +14,7 @@ pub fn ensure_derived_ready(state: &AppState) -> Result<(), (StatusCode, Json<Ap
             Json(ApiError::new(
                 "derived_syncing",
                 format!(
-                    "derived store syncing: core_tip={}, derived_tip={}",
+                    "append-only store syncing: core_tip={}, append_tip={}",
                     sync.tip_block_number, sync.derived_tip_block_number
                 ),
             )),

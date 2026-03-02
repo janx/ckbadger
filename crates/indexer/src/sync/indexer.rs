@@ -94,6 +94,7 @@ const ADAPTIVE_REASON_ADJUSTED: u8 = 9;
 const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
 const ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF: u8 = 11;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
+const APPEND_ROLLBACK_DELETE_BATCH: u64 = 100_000;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 /// Pre-parsed mNFT/DotBit data computed in the parser stage.
@@ -2908,8 +2909,7 @@ pub struct Indexer {
     rpc: CkbRpcClient,
     repo: Repository,
     writer: BatchWriter,
-    derived_writer: BatchWriter,
-    derived_store: Arc<CkbadgerStore>,
+    append_only_store: Arc<CkbadgerStore>,
     progress: Arc<SyncProgress>,
     cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
     udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
@@ -2941,7 +2941,7 @@ impl Indexer {
         run_id: String,
         config: Config,
         store: Arc<CkbadgerStore>,
-        derived_store: Arc<CkbadgerStore>,
+        append_only_store: Arc<CkbadgerStore>,
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
@@ -2960,8 +2960,6 @@ impl Indexer {
             config.fast_sync_mode,
             cache_invalidator.clone(),
         );
-        let derived_writer =
-            BatchWriter::with_fast_sync_mode(derived_store.clone(), config.fast_sync_mode);
 
         let (tip_number, _) = repo.get_sync_tip().await?;
         let chain_tip = if let Some(ref store) = ckb_store {
@@ -3005,8 +3003,7 @@ impl Indexer {
             rpc,
             repo,
             writer,
-            derived_writer,
-            derived_store,
+            append_only_store,
             progress,
             cell_cache,
             udt_cell_cache,
@@ -6013,7 +6010,6 @@ impl Indexer {
             ..Default::default()
         };
         let core_store = Arc::clone(self.writer.store());
-        let derived_store = Arc::clone(&self.derived_store);
         let ckb_store = self.ckb_store.clone();
 
         tokio::spawn(async move {
@@ -6030,17 +6026,6 @@ impl Indexer {
                 summary.udt_labels_imported += core_result.udt_labels_imported;
                 summary.script_labels_imported += core_result.script_labels_imported;
                 summary.errors.extend(core_result.errors);
-
-                let mut derived_config = config;
-                derived_config.import_udt = false;
-                let derived_result = crate::label_import::run_label_import(
-                    derived_store.as_ref(),
-                    ckb_store.as_deref(),
-                    &derived_config,
-                )?;
-                summary.udt_labels_imported += derived_result.udt_labels_imported;
-                summary.script_labels_imported += derived_result.script_labels_imported;
-                summary.errors.extend(derived_result.errors);
 
                 Ok::<LabelImportResult, anyhow::Error>(summary)
             })
@@ -6428,7 +6413,8 @@ impl Indexer {
         }
         // Single batch for consume + address balances + script usage
         let mut consume_addr_batch = StoreBatch::new(self.writer.store());
-        let mut derived_analytics_batch = StoreBatch::new(&self.derived_store);
+        let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
+        let mut append_history_batch = StoreBatch::new(&self.append_only_store);
         if !all_consumptions.is_empty() {
             self.writer.consume_cells_batch_preloaded(
                 &all_consumptions,
@@ -6521,7 +6507,7 @@ impl Indexer {
                 entry.6 += occupied_change;
 
                 // Index address → transaction
-                derived_analytics_batch.put_addr_tx(
+                append_history_batch.put_addr_tx(
                     &lock_hash,
                     tx_data.block_number,
                     tx_data.tx_index,
@@ -6801,7 +6787,6 @@ impl Indexer {
 
         if need_balances || need_scripts {
             let writer = &self.writer;
-            let derived_writer = &self.derived_writer;
             let (existing_balances, existing_scripts) = std::thread::scope(|s| {
                 let bal = if need_balances {
                     Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
@@ -6809,7 +6794,7 @@ impl Indexer {
                     None
                 };
                 let scr = if need_scripts {
-                    Some(s.spawn(|| derived_writer.read_script_info(&code_hash_refs)))
+                    Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
                 } else {
                     None
                 };
@@ -6828,23 +6813,23 @@ impl Indexer {
                 )?;
             }
             if let Some(existing) = existing_scripts {
-                self.derived_writer.apply_script_usage_deltas(
+                self.writer.apply_script_usage_deltas(
                     &existing?,
                     &script_usage_changes,
-                    &mut derived_analytics_batch,
+                    &mut domain_analytics_batch,
                 )?;
             }
         }
         if !script_daily_changes.is_empty() {
-            self.derived_writer.update_script_daily_deltas_batch(
+            self.writer.update_script_daily_deltas_batch(
                 &script_daily_changes,
-                &mut derived_analytics_batch,
+                &mut domain_analytics_batch,
             )?;
         }
         if !token_daily_changes.is_empty() {
-            self.derived_writer.update_token_daily_deltas_batch(
+            self.writer.update_token_daily_deltas_batch(
                 &token_daily_changes,
-                &mut derived_analytics_batch,
+                &mut domain_analytics_batch,
             )?;
         }
         if !spore_type_index_changes.is_empty() {
@@ -6854,9 +6839,9 @@ impl Indexer {
             )?;
         }
         if !spore_daily_changes.is_empty() {
-            self.derived_writer.update_spore_daily_deltas_batch(
+            self.writer.update_spore_daily_deltas_batch(
                 &spore_daily_changes,
-                &mut derived_analytics_batch,
+                &mut domain_analytics_batch,
             )?;
         }
         if !nft_type_index_changes.is_empty() {
@@ -6864,13 +6849,13 @@ impl Indexer {
                 .update_nft_type_index_batch(&nft_type_index_changes, &mut consume_addr_batch)?;
         }
         if !nft_daily_changes.is_empty() {
-            self.derived_writer
-                .update_nft_daily_deltas_batch(&nft_daily_changes, &mut derived_analytics_batch)?;
+            self.writer
+                .update_nft_daily_deltas_batch(&nft_daily_changes, &mut domain_analytics_batch)?;
         }
         if !cluster_daily_changes.is_empty() {
-            self.derived_writer.update_cluster_daily_deltas_batch(
+            self.writer.update_cluster_daily_deltas_batch(
                 &cluster_daily_changes,
-                &mut derived_analytics_batch,
+                &mut domain_analytics_batch,
             )?;
         }
         {
@@ -6878,9 +6863,14 @@ impl Indexer {
             consume_addr_batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
-        if !derived_analytics_batch.is_empty() {
+        if !domain_analytics_batch.is_empty() {
             let commit_started = Instant::now();
-            derived_analytics_batch.commit()?;
+            domain_analytics_batch.commit()?;
+            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+        }
+        if !append_history_batch.is_empty() {
+            let commit_started = Instant::now();
+            append_history_batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
 
@@ -7737,6 +7727,7 @@ impl Indexer {
             }
             block_tx_idx += tx_count_for_block;
         }
+        let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
         // Write .bit collection activities directly (bypassing accumulator)
         for (_tx_hash, activity) in &dotbit_tx_activity_data {
             resolve_dotbit_tx_activity(
@@ -7747,16 +7738,21 @@ impl Indexer {
                 activity.block_number,
                 activity.tx_idx,
                 activity.timestamp_ms,
-                &mut consume_batch,
+                &mut nft_activity_batch,
             );
         }
-        nft_activity_acc.flush(&mut consume_batch);
+        nft_activity_acc.flush(&mut nft_activity_batch);
         let commit_started = Instant::now();
         consume_batch.commit()?;
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+        if !nft_activity_batch.is_empty() {
+            let commit_started = Instant::now();
+            nft_activity_batch.commit()?;
+            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+        }
 
         {
-            let mut batch = StoreBatch::new(&self.derived_store);
+            let mut batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
             if bulk_sync_mode {
                 let commit_started = Instant::now();
@@ -8134,7 +8130,6 @@ impl Indexer {
             (prefetched_addr_balances, prefetched_script_info),
         ) = if bulk_sync_mode {
             let writer = &self.writer;
-            let derived_writer = &self.derived_writer;
             let udt_cache = &self.udt_cell_cache;
             rayon::join(
                 || {
@@ -8329,9 +8324,7 @@ impl Indexer {
                         },
                         || {
                             if !code_hash_refs.is_empty() {
-                                derived_writer
-                                    .read_script_info(&code_hash_refs)
-                                    .unwrap_or_default()
+                                writer.read_script_info(&code_hash_refs).unwrap_or_default()
                             } else {
                                 HashMap::new()
                             }
@@ -8361,9 +8354,8 @@ impl Indexer {
             // Independent batches let all threads run fully in parallel; the RocksDB write
             // group overhead (~2ms) is negligible.
             let store = self.writer.store();
-            let derived_store = &self.derived_store;
+            let append_only_store = &self.append_only_store;
             let writer = &self.writer;
-            let derived_writer = &self.derived_writer;
 
             let tt;
             (batch_stats, tt, write_commit_ms) = std::thread::scope(
@@ -8417,7 +8409,8 @@ impl Indexer {
                     let h2 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
-                        let mut derived_analytics_batch = StoreBatch::new(derived_store);
+                        let mut domain_analytics_batch = StoreBatch::new(store);
+                        let mut append_history_batch = StoreBatch::new(append_only_store);
                         if !txs_for_batch.is_empty() {
                             writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
                         }
@@ -8429,22 +8422,22 @@ impl Indexer {
                             )?;
                         }
                         if !script_usage_changes.is_empty() {
-                            derived_writer.apply_script_usage_deltas(
+                            writer.apply_script_usage_deltas(
                                 &prefetched_script_info,
                                 &script_usage_changes,
-                                &mut derived_analytics_batch,
+                                &mut domain_analytics_batch,
                             )?;
                         }
                         if !script_daily_changes.is_empty() {
-                            derived_writer.update_script_daily_deltas_batch(
+                            writer.update_script_daily_deltas_batch(
                                 &script_daily_changes,
-                                &mut derived_analytics_batch,
+                                &mut domain_analytics_batch,
                             )?;
                         }
                         if !token_daily_changes.is_empty() {
-                            derived_writer.update_token_daily_deltas_batch(
+                            writer.update_token_daily_deltas_batch(
                                 &token_daily_changes,
-                                &mut derived_analytics_batch,
+                                &mut domain_analytics_batch,
                             )?;
                         }
                         if !spore_type_index_changes.is_empty() {
@@ -8454,9 +8447,9 @@ impl Indexer {
                             )?;
                         }
                         if !spore_daily_changes.is_empty() {
-                            derived_writer.update_spore_daily_deltas_batch(
+                            writer.update_spore_daily_deltas_batch(
                                 &spore_daily_changes,
-                                &mut derived_analytics_batch,
+                                &mut domain_analytics_batch,
                             )?;
                         }
                         if !nft_type_index_changes.is_empty() {
@@ -8464,29 +8457,37 @@ impl Indexer {
                                 .update_nft_type_index_batch(&nft_type_index_changes, &mut batch)?;
                         }
                         if !nft_daily_changes.is_empty() {
-                            derived_writer.update_nft_daily_deltas_batch(
+                            writer.update_nft_daily_deltas_batch(
                                 &nft_daily_changes,
-                                &mut derived_analytics_batch,
+                                &mut domain_analytics_batch,
                             )?;
                         }
                         if !cluster_daily_changes.is_empty() {
-                            derived_writer.update_cluster_daily_deltas_batch(
+                            writer.update_cluster_daily_deltas_batch(
                                 &cluster_daily_changes,
-                                &mut derived_analytics_batch,
+                                &mut domain_analytics_batch,
                             )?;
                         }
                         for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                            derived_analytics_batch
+                            append_history_batch
                                 .put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
                         }
                         let mut commit_ms =
                             commit_phase_no_wal("T2_txs_addr", first_block, last_block, batch)?;
-                        if !derived_analytics_batch.is_empty() {
+                        if !domain_analytics_batch.is_empty() {
                             commit_ms += commit_phase_no_wal(
-                                "T2_derived_analytics",
+                                "T2_domain_analytics",
                                 first_block,
                                 last_block,
-                                derived_analytics_batch,
+                                domain_analytics_batch,
+                            )?;
+                        }
+                        if !append_history_batch.is_empty() {
+                            commit_ms += commit_phase_no_wal(
+                                "T2_append_history",
+                                first_block,
+                                last_block,
+                                append_history_batch,
                             )?;
                         }
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
@@ -9330,7 +9331,7 @@ impl Indexer {
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
-                        let mut batch = StoreBatch::new(derived_store);
+                        let mut batch = StoreBatch::new(append_only_store);
                         let token_info_cache = load_activity_token_info_cache(
                             store,
                             &all_tx_data,
@@ -9503,11 +9504,11 @@ impl Indexer {
 
             let need_balances = !lock_hash_keys.is_empty();
             let need_scripts = !code_hash_refs.is_empty();
-            let mut derived_analytics_batch = StoreBatch::new(&self.derived_store);
+            let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
+            let mut append_history_batch = StoreBatch::new(&self.append_only_store);
 
             if need_balances || need_scripts {
                 let writer = &self.writer;
-                let derived_writer = &self.derived_writer;
                 let (existing_balances, existing_scripts) = std::thread::scope(|s| {
                     let bal = if need_balances {
                         Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
@@ -9515,7 +9516,7 @@ impl Indexer {
                         None
                     };
                     let scr = if need_scripts {
-                        Some(s.spawn(|| derived_writer.read_script_info(&code_hash_refs)))
+                        Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
                     } else {
                         None
                     };
@@ -9534,23 +9535,23 @@ impl Indexer {
                     )?;
                 }
                 if let Some(existing) = existing_scripts {
-                    self.derived_writer.apply_script_usage_deltas(
+                    self.writer.apply_script_usage_deltas(
                         &existing?,
                         &script_usage_changes,
-                        &mut derived_analytics_batch,
+                        &mut domain_analytics_batch,
                     )?;
                 }
             }
             if !script_daily_changes.is_empty() {
-                self.derived_writer.update_script_daily_deltas_batch(
+                self.writer.update_script_daily_deltas_batch(
                     &script_daily_changes,
-                    &mut derived_analytics_batch,
+                    &mut domain_analytics_batch,
                 )?;
             }
             if !token_daily_changes.is_empty() {
-                self.derived_writer.update_token_daily_deltas_batch(
+                self.writer.update_token_daily_deltas_batch(
                     &token_daily_changes,
-                    &mut derived_analytics_batch,
+                    &mut domain_analytics_batch,
                 )?;
             }
             if !spore_type_index_changes.is_empty() {
@@ -9558,9 +9559,9 @@ impl Indexer {
                     .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
             }
             if !spore_daily_changes.is_empty() {
-                self.derived_writer.update_spore_daily_deltas_batch(
+                self.writer.update_spore_daily_deltas_batch(
                     &spore_daily_changes,
-                    &mut derived_analytics_batch,
+                    &mut domain_analytics_batch,
                 )?;
             }
             if !nft_type_index_changes.is_empty() {
@@ -9568,21 +9569,21 @@ impl Indexer {
                     .update_nft_type_index_batch(&nft_type_index_changes, &mut data_batch)?;
             }
             if !nft_daily_changes.is_empty() {
-                self.derived_writer.update_nft_daily_deltas_batch(
+                self.writer.update_nft_daily_deltas_batch(
                     &nft_daily_changes,
-                    &mut derived_analytics_batch,
+                    &mut domain_analytics_batch,
                 )?;
             }
             if !cluster_daily_changes.is_empty() {
-                self.derived_writer.update_cluster_daily_deltas_batch(
+                self.writer.update_cluster_daily_deltas_batch(
                     &cluster_daily_changes,
-                    &mut derived_analytics_batch,
+                    &mut domain_analytics_batch,
                 )?;
             }
 
             // Write addr_txs entries
             for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                derived_analytics_batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
+                append_history_batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
             }
 
             // Group A: DAO processing
@@ -10388,6 +10389,7 @@ impl Indexer {
                         }
                     }
                 }
+                let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
                 // Write .bit collection activities directly (bypassing accumulator)
                 for (tx_hash, activity) in &dotbit_tx_activity_data {
                     resolve_dotbit_tx_activity(
@@ -10398,14 +10400,17 @@ impl Indexer {
                         activity.block_number,
                         activity.tx_idx,
                         activity.timestamp_ms,
-                        &mut data_batch,
+                        &mut nft_activity_batch,
                     );
                 }
-                nft_activity_acc.flush(&mut data_batch);
+                nft_activity_acc.flush(&mut nft_activity_batch);
+                if !nft_activity_batch.is_empty() {
+                    nft_activity_batch.commit()?;
+                }
             }
 
             // Activity writes (live sync)
-            let mut activity_batch = StoreBatch::new(&self.derived_store);
+            let mut activity_batch = StoreBatch::new(&self.append_only_store);
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),
@@ -10496,10 +10501,15 @@ impl Indexer {
             let data_commit_started = Instant::now();
             data_batch.commit()?;
             write_commit_ms += data_commit_started.elapsed().as_secs_f64() * 1000.0;
-            if !derived_analytics_batch.is_empty() {
+            if !domain_analytics_batch.is_empty() {
                 let script_commit_started = Instant::now();
-                derived_analytics_batch.commit()?;
+                domain_analytics_batch.commit()?;
                 write_commit_ms += script_commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            if !append_history_batch.is_empty() {
+                let append_commit_started = Instant::now();
+                append_history_batch.commit()?;
+                write_commit_ms += append_commit_started.elapsed().as_secs_f64() * 1000.0;
             }
             if !activity_batch.is_empty() {
                 let activity_commit_started = Instant::now();
@@ -10802,8 +10812,8 @@ impl Indexer {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
                 .insert_blocks_batch(&block_refs, &mut core_batch)?;
-            let mut derived_batch = StoreBatch::new(&self.derived_store);
-            self.write_batch_stats_to_batch(&batch_stats, &mut derived_batch)?;
+            let mut stats_batch = StoreBatch::new(self.writer.store());
+            self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
             debug!(
                 phase = "finalize_headers_stats",
                 batch_start = first_block,
@@ -10819,9 +10829,9 @@ impl Indexer {
                         first_block, last_block
                     )
                 })?;
-                derived_batch.commit_no_wal().with_context(|| {
+                stats_batch.commit_no_wal().with_context(|| {
                     format!(
-                        "derived finalize commit_no_wal failed for blocks {}-{}",
+                        "stats finalize commit_no_wal failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;
@@ -10832,9 +10842,9 @@ impl Indexer {
                         first_block, last_block
                     )
                 })?;
-                derived_batch.commit().with_context(|| {
+                stats_batch.commit().with_context(|| {
                     format!(
-                        "derived finalize commit failed for blocks {}-{}",
+                        "stats finalize commit failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;
@@ -10946,7 +10956,7 @@ impl Indexer {
     fn write_batch_stats_to_batch(&self, stats: &BatchStats, batch: &mut StoreBatch) -> Result<()> {
         // Epoch statistics
         for (epoch_number, accum) in &stats.epoch_stats {
-            self.derived_writer.upsert_epoch_statistics_batch(
+            self.writer.upsert_epoch_statistics_batch(
                 *epoch_number,
                 accum.start_block,
                 accum.end_block,
@@ -10979,7 +10989,7 @@ impl Indexer {
             ) = stats.daily_stats[date];
             let dao_field = stats.daily_dao_fields.get(date);
             let block_time = stats.daily_block_times.get(date).copied();
-            let result = self.derived_writer.update_daily_statistics(
+            let result = self.writer.update_daily_statistics(
                 *date,
                 blocks,
                 txs,
@@ -11012,20 +11022,20 @@ impl Indexer {
             } else {
                 0
             };
-            self.derived_writer
+            self.writer
                 .update_daily_block_stats_batch(*date, avg_target, *count, *uncles, batch)?;
         }
 
         // Hourly statistics
         for (hour, (blocks, txs, created, consumed, capacity)) in &stats.hourly_stats {
-            self.derived_writer.update_hourly_statistics(
+            self.writer.update_hourly_statistics(
                 *hour, *blocks, *txs, *created, *consumed, *capacity, batch,
             )?;
         }
 
         // Miner statistics
         for ((date, miner_hash), (blocks_count, last_block)) in &stats.miner_stats {
-            self.derived_writer.update_miner_statistics_batch(
+            self.writer.update_miner_statistics_batch(
                 miner_hash,
                 *last_block,
                 *date,
@@ -11036,13 +11046,13 @@ impl Indexer {
 
         // Block time distribution
         for (bucket, count) in &stats.block_time_dist {
-            self.derived_writer
+            self.writer
                 .update_block_time_distribution_batch(*bucket, *count, batch)?;
         }
 
         // Epoch time distribution
         for (bucket, count) in &stats.epoch_time_dist {
-            self.derived_writer
+            self.writer
                 .update_epoch_time_distribution_batch(*bucket, *count, batch)?;
         }
 
@@ -11057,7 +11067,7 @@ impl Indexer {
                 // deltas default to 0 via unwrap_or(0), carrying forward previous
                 // totals while still updating DAO fields and secondary issuance.
                 let latest_snapshot = self
-                    .derived_writer
+                    .writer
                     .store()
                     .list_dao_daily_snapshots()
                     .ok()
@@ -11175,7 +11185,7 @@ impl Indexer {
                         cum_dao_compensation: running_cum_dao,
                         cum_treasury: running_cum_treasury,
                     };
-                    self.derived_writer
+                    self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;
                 }
             }
@@ -11406,9 +11416,85 @@ impl Indexer {
             .await?;
         let fork_point_i64 = i64::try_from(fork_point)
             .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?;
-        self.derived_store.rollback_to_block(fork_point_i64)?;
+        self.rollback_append_only_history(fork_point_i64)?;
 
         Ok(Some(ReorgAction::Handled(result)))
+    }
+
+    fn rollback_append_only_history(&self, rollback_to: i64) -> Result<()> {
+        if rollback_to < -1 {
+            bail!(
+                "invalid append-only rollback target: rollback_to={} (expected >= -1)",
+                rollback_to
+            );
+        }
+
+        let store = &self.append_only_store;
+        let mut batch = rocksdb::WriteBatch::default();
+        let mut pending = 0u64;
+
+        let flush_batch = |batch: &mut rocksdb::WriteBatch, pending: &mut u64| -> Result<()> {
+            if !batch.is_empty() {
+                store.write_batch(std::mem::take(batch))?;
+                *batch = rocksdb::WriteBatch::default();
+                *pending = 0;
+            }
+            Ok(())
+        };
+
+        // addr_txs: lock_hash(32) + block_num(8) + tx_idx(4)
+        let iter = store.iterator_cf(store.cf_addr_txs(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.len() == 44 {
+                let block_num = keys::decode_block_num(&key[32..40]);
+                if block_num > rollback_to {
+                    batch.delete_cf(store.cf_addr_txs(), &key);
+                    pending += 1;
+                    if pending >= APPEND_ROLLBACK_DELETE_BATCH {
+                        flush_batch(&mut batch, &mut pending)?;
+                    }
+                }
+            }
+        }
+
+        // activities: lock_hash(32) + block_num_desc(8) + tx_idx(4)
+        let iter = store.iterator_cf(store.cf_activities(), rocksdb::IteratorMode::Start);
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.len() == 44 {
+                let (_, block_num, _) = keys::decode_activity_key(&key);
+                if block_num > rollback_to {
+                    batch.delete_cf(store.cf_activities(), &key);
+                    pending += 1;
+                    if pending >= APPEND_ROLLBACK_DELETE_BATCH {
+                        flush_batch(&mut batch, &mut pending)?;
+                    }
+                }
+            }
+        }
+
+        // nft_collection_activities: collection_id(32) + block_num_desc(8) + tx_idx(4)
+        let iter = store.iterator_cf(
+            store.cf_nft_collection_activities(),
+            rocksdb::IteratorMode::Start,
+        );
+        for item in iter.flatten() {
+            let (key, _) = item;
+            if key.len() == keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                let (_, block_num, _) = keys::decode_nft_collection_activity_key(&key);
+                if block_num > rollback_to {
+                    batch.delete_cf(store.cf_nft_collection_activities(), &key);
+                    pending += 1;
+                    if pending >= APPEND_ROLLBACK_DELETE_BATCH {
+                        flush_batch(&mut batch, &mut pending)?;
+                    }
+                }
+            }
+        }
+
+        flush_batch(&mut batch, &mut pending)?;
+        Ok(())
     }
 
     async fn find_fork_point(&self, db_tip: u64) -> Result<(u64, Vec<u8>)> {

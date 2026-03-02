@@ -375,12 +375,14 @@ async fn run_sync(args: Cli) -> Result<()> {
         "Opening ckbadger domain store at: {}",
         config.domain_data_path
     );
-    let store = Arc::new(CkbadgerStore::open(&config.domain_data_path)?);
+    let store = Arc::new(CkbadgerStore::open_domain(&config.domain_data_path)?);
     info!(
         "Opening ckbadger append-only store at: {}",
         config.append_only_data_path
     );
-    let derived_store = Arc::new(CkbadgerStore::open(&config.append_only_data_path)?);
+    let append_only_store = Arc::new(CkbadgerStore::open_append_only(
+        &config.append_only_data_path,
+    )?);
     store.log_config();
 
     // One-time backfill: populate code_hash indexes if they are empty
@@ -390,8 +392,8 @@ async fn run_sync(args: Cli) -> Result<()> {
         info!("Code hash index backfill complete: {} cells indexed", count);
     }
 
-    // addr_txs is derived-only and written inline during sync.
-    // We do not run startup backfill against derived because it has no live/consumed cell tables.
+    // addr_txs lives in append-only store and is written inline during sync.
+    // We do not run startup backfill against append-only because it has no live/consumed cell tables.
 
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
@@ -419,10 +421,10 @@ async fn run_sync(args: Cli) -> Result<()> {
         info!(
             rollback_cleanup_in_progress,
             startup_cleanup_reason = startup_cleanup.reason,
-            "Forcing startup rollback cleanup to reconcile derived state"
+            "Forcing startup rollback cleanup to reconcile append-only state"
         );
     }
-    reconcile_token_daily_deltas_on_startup(&derived_store)?;
+    reconcile_token_daily_deltas_on_startup(&store)?;
 
     let repo = Repository::new(store.clone());
     let (db_tip, db_tip_hash) = repo.get_sync_tip().await?;
@@ -532,8 +534,13 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     info!("Connecting to CKB node: {}", config.ckb_rpc_url);
 
-    let indexer =
-        Indexer::new(run_id, config.clone(), store.clone(), derived_store.clone()).await?;
+    let indexer = Indexer::new(
+        run_id,
+        config.clone(),
+        store.clone(),
+        append_only_store.clone(),
+    )
+    .await?;
     let indexer = Arc::new(indexer);
 
     spawn_cycles_task_worker(
@@ -847,17 +854,12 @@ async fn run_sync(args: Cli) -> Result<()> {
 
 async fn run_label_import_command(
     domain_data_path: String,
-    append_only_data_path: String,
+    _append_only_data_path: String,
     ckb_data_path: Option<String>,
     args: LabelImportArgs,
 ) -> Result<()> {
     info!("Opening ckbadger domain store at: {}", domain_data_path);
-    let core_store = Arc::new(CkbadgerStore::open(&domain_data_path)?);
-    info!(
-        "Opening ckbadger append-only store at: {}",
-        append_only_data_path
-    );
-    let derived_store = Arc::new(CkbadgerStore::open(&append_only_data_path)?);
+    let core_store = Arc::new(CkbadgerStore::open_domain(&domain_data_path)?);
 
     let ckb_store = match ckb_data_path.as_deref() {
         Some(path) => {
@@ -888,15 +890,12 @@ async fn run_label_import_command(
         }
 
         if base_config.import_scripts {
-            let mut derived_config = base_config;
-            derived_config.import_udt = false;
-            let derived_result = run_label_import(
-                derived_store.as_ref(),
-                ckb_store.as_deref(),
-                &derived_config,
-            )?;
-            summary.script_labels_imported += derived_result.script_labels_imported;
-            summary.errors.extend(derived_result.errors);
+            let mut script_config = base_config;
+            script_config.import_udt = false;
+            let script_result =
+                run_label_import(core_store.as_ref(), ckb_store.as_deref(), &script_config)?;
+            summary.script_labels_imported += script_result.script_labels_imported;
+            summary.errors.extend(script_result.errors);
         }
 
         Ok::<ckbadger_common::LabelImportResult, anyhow::Error>(summary)

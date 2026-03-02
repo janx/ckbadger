@@ -180,7 +180,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     // Get hourly stats (last 24 hours)
     let hourly_stats = state
-        .derived_store
+        .store
         .list_hourly_stats_with_keys()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -196,7 +196,7 @@ async fn get_tx_stats(State(state): State<Arc<AppState>>) -> ApiResult<TxStatsRe
 
     // Get daily stats (last 14 days)
     let daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -709,7 +709,7 @@ async fn get_most_utilized_scripts_chart(
     }
 
     let all_scripts = state
-        .derived_store
+        .store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -761,7 +761,7 @@ async fn get_most_utilized_scripts_chart(
 
         for is_type in [false, true] {
             let deltas = state
-                .derived_store
+                .store
                 .list_script_daily_deltas(&code_hash, is_type)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             for (date, delta) in deltas {
@@ -878,7 +878,7 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let deltas = state
-            .derived_store
+            .store
             .list_token_daily_deltas(&type_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
@@ -928,7 +928,7 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let deltas = state
-            .derived_store
+            .store
             .list_cluster_daily_deltas(&cluster_id)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
@@ -977,7 +977,7 @@ async fn get_most_utilized_assets_chart(
             continue;
         }
         let deltas = state
-            .derived_store
+            .store
             .list_nft_daily_deltas(&collection_id)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
@@ -1065,7 +1065,7 @@ async fn get_transaction_count_chart(
 ) -> ApiResult<ChartResponse> {
     ensure_derived_ready(state.as_ref())?;
     let daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1094,7 +1094,7 @@ async fn get_cell_count_chart(
 ) -> ApiResult<StackedAreaChartResponse> {
     ensure_derived_ready(state.as_ref())?;
     let daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -1159,12 +1159,12 @@ async fn get_knowledge_size_chart(State(state): State<Arc<AppState>>) -> ApiResu
     }
 
     let daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let circulating_by_date = build_circulating_supply_by_date_map(&snapshots)?;
@@ -1302,7 +1302,7 @@ async fn get_common_knowledge_composition_chart(
     }
 
     let daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut knowledge_by_date: BTreeMap<u32, i128> = BTreeMap::new();
@@ -1331,7 +1331,7 @@ async fn get_common_knowledge_composition_chart(
     }
 
     let script_infos = state
-        .derived_store
+        .store
         .list_script_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let type_code_hashes: HashSet<Vec<u8>> = script_infos
@@ -1350,7 +1350,7 @@ async fn get_common_knowledge_composition_chart(
 
     for code_hash in type_code_hashes {
         let deltas = state
-            .derived_store
+            .store
             .list_script_daily_deltas_in_range(&code_hash, true, None, None)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
@@ -1693,7 +1693,7 @@ async fn get_capacity_turnover_ratio_chart(
     }
 
     let mut daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
     daily_stats.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1997,7 +1997,7 @@ async fn get_epoch_time_distribution_chart(
     }
 
     let dist = state
-        .derived_store
+        .store
         .list_epoch_time_dist()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2035,7 +2035,7 @@ async fn get_epoch_time_length_chart(
     }
 
     let epochs = state
-        .derived_store
+        .store
         .list_epoch_stats()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2075,7 +2075,7 @@ async fn get_average_block_time_chart(
     }
 
     let daily_stats = state
-        .derived_store
+        .store
         .list_daily_stats_with_dates()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2149,7 +2149,6 @@ async fn fetch_network_stats_from_db(
     ),
 > {
     let store = &state.store;
-    let derived_store = &state.derived_store;
 
     // Get latest block header from store
     let latest = store
@@ -2179,7 +2178,7 @@ async fn fetch_network_stats_from_db(
     let yesterday_str = yesterday.format("%Y%m%d").to_string();
 
     // Fetch epoch stats for avg block time
-    let epoch_stats = derived_store
+    let epoch_stats = store
         .get_epoch_stats(epoch_number)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2189,10 +2188,10 @@ async fn fetch_network_stats_from_db(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Get 24h tx count from daily stats
-    let today_stats = derived_store
+    let today_stats = store
         .get_daily_stats(&today_str)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let yesterday_stats = derived_store
+    let yesterday_stats = store
         .get_daily_stats(&yesterday_str)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2256,12 +2255,12 @@ async fn fetch_network_stats_from_db(
     };
 
     // Get compact_target from daily block stats for difficulty/hash rate
-    let daily_block_stats = match derived_store
+    let daily_block_stats = match store
         .get_daily_block_stats(&today_str)
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
         Some(stats) => Some(stats),
-        None => derived_store
+        None => store
             .get_daily_block_stats(&yesterday_str)
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
@@ -2465,7 +2464,7 @@ async fn get_hash_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<Ch
     }
 
     let daily_block_stats = state
-        .derived_store
+        .store
         .list_daily_block_stats()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2513,7 +2512,7 @@ async fn get_difficulty_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     }
 
     let daily_block_stats = state
-        .derived_store
+        .store
         .list_daily_block_stats()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2559,7 +2558,7 @@ async fn get_uncle_rate_chart(State(state): State<Arc<AppState>>) -> ApiResult<C
     }
 
     let daily_block_stats = state
-        .derived_store
+        .store
         .list_daily_block_stats()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2629,7 +2628,7 @@ async fn get_miner_address_distribution_chart(
     }
 
     let miner_stats = state
-        .derived_store
+        .store
         .list_miner_stats()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2732,7 +2731,7 @@ async fn get_total_supply_chart(
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
@@ -2865,7 +2864,7 @@ async fn get_secondary_issuance_chart(
     }
 
     let snapshots = state
-        .derived_store
+        .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 

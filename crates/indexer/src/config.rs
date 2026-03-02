@@ -38,7 +38,7 @@ pub struct Config {
     #[serde(default = "default_token_labels_path")]
     pub token_labels_path: String,
     /// Force startup rollback cleanup before syncing.
-    /// Used after unclean shutdowns to reconcile derived aggregates.
+    /// Used after unclean shutdowns to reconcile append-only aggregates.
     #[serde(default = "default_force_startup_cleanup")]
     pub force_startup_cleanup: bool,
 }

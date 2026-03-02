@@ -23,7 +23,7 @@ use ws::WsManager;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<CkbadgerStore>,
-    pub derived_store: Arc<CkbadgerStore>,
+    pub append_only_store: Arc<CkbadgerStore>,
     pub ws_manager: Arc<WsManager>,
     pub cache: CacheBackend,
     pub ckb_rpc_url: String,
@@ -37,7 +37,7 @@ pub struct AppState {
 
 pub struct AppConfig {
     pub store: Arc<CkbadgerStore>,
-    pub derived_store: Arc<CkbadgerStore>,
+    pub append_only_store: Arc<CkbadgerStore>,
     pub redis_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
@@ -94,7 +94,7 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let state = Arc::new(AppState {
         store: config.store,
-        derived_store: config.derived_store,
+        append_only_store: config.append_only_store,
         ws_manager,
         cache,
         ckb_rpc_url: config.ckb_rpc_url,
@@ -153,20 +153,20 @@ pub async fn create_router(config: AppConfig) -> Router {
     // RocksDB call that can block for extended periods during heavy indexer writes,
     // which would starve the tokio async runtime if run on a worker thread.
     let refresh_store = state.store.clone();
-    let refresh_derived_store = state.derived_store.clone();
+    let refresh_append_only_store = state.append_only_store.clone();
     let refresh_ckb_store = state.ckb_store.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             let store = refresh_store.clone();
-            let derived = refresh_derived_store.clone();
+            let append_only = refresh_append_only_store.clone();
             let ckb = refresh_ckb_store.clone();
             let result = tokio::task::spawn_blocking(move || {
                 if let Err(e) = store.refresh() {
                     tracing::warn!("Store refresh failed: {}", e);
                 }
-                if let Err(e) = derived.refresh() {
-                    tracing::warn!("Derived store refresh failed: {}", e);
+                if let Err(e) = append_only.refresh() {
+                    tracing::warn!("Append-only store refresh failed: {}", e);
                 }
                 if let Some(ref ckb_store) = ckb {
                     if let Err(e) = ckb_store.refresh() {

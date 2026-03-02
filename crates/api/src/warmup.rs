@@ -164,7 +164,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         }
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
-        let token_daily = state.derived_store.list_token_daily_deltas(hash)?;
+        let token_daily = state.store.list_token_daily_deltas(hash)?;
         let (live_capacity, live_occupied_capacity) =
             accumulate_live_capacity(token_daily.into_iter().map(|(_, delta)| {
                 (
@@ -241,9 +241,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .get(cluster_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
-        let cluster_daily = state
-            .derived_store
-            .list_cluster_daily_deltas(cluster_id_bytes)?;
+        let cluster_daily = state.store.list_cluster_daily_deltas(cluster_id_bytes)?;
         let (live_capacity, live_occupied_capacity) =
             accumulate_live_capacity(cluster_daily.into_iter().map(|(_, delta)| {
                 (
@@ -320,9 +318,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             0
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
-        let nft_daily = state
-            .derived_store
-            .list_nft_daily_deltas(collection_id_bytes)?;
+        let nft_daily = state.store.list_nft_daily_deltas(collection_id_bytes)?;
         let (live_capacity, live_occupied_capacity) =
             accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
                 (

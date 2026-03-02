@@ -821,7 +821,7 @@ async fn get_token_occupation_chart(
     let mut cumulative_occupied: i128 = 0;
     if let Some(from) = from_date {
         let baseline = state
-            .derived_store
+            .store
             .list_token_daily_deltas_in_range(&hash, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
@@ -837,7 +837,7 @@ async fn get_token_occupation_chart(
     }
 
     let deltas = state
-        .derived_store
+        .store
         .list_token_daily_deltas_in_range(&hash, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut daily_deltas: std::collections::BTreeMap<u32, (i128, i128)> =

@@ -168,7 +168,7 @@ async fn get_address_activities(
     });
 
     let results = state
-        .derived_store
+        .append_only_store
         .list_activities(&lock_hash, limit + 1, cursor, params.filter.as_deref())
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
