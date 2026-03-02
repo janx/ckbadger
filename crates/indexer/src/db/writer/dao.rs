@@ -197,15 +197,21 @@ impl BatchWriter {
                 .store
                 .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
             {
-                if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                    let key = (tx_hash.to_vec(), *output_index as i16);
-                    seen_keys.insert(key);
-                    results.push(dao_cache_entry_to_row(
-                        tx_hash.to_vec(),
-                        *output_index as i16,
-                        entry,
-                    ));
-                }
+                let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        e
+                    )
+                })?;
+                let key = (tx_hash.to_vec(), *output_index as i16);
+                seen_keys.insert(key);
+                results.push(dao_cache_entry_to_row(
+                    tx_hash.to_vec(),
+                    *output_index as i16,
+                    entry,
+                ));
             }
         }
 
@@ -220,13 +226,21 @@ impl BatchWriter {
                     .store
                     .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                 {
-                    if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                        if entry.status == 1 {
+                    let entry: DaoDepositCacheEntry =
+                        bincode::deserialize(&value).map_err(|e| {
                             let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
-                            let key = (orig_tx.clone(), orig_idx);
-                            if seen_keys.insert(key) {
-                                results.push(dao_cache_entry_to_row(orig_tx, orig_idx, entry));
-                            }
+                            anyhow!(
+                                "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                                hex::encode(orig_tx),
+                                orig_idx,
+                                e
+                            )
+                        })?;
+                    if entry.status == 1 {
+                        let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
+                        let key = (orig_tx.clone(), orig_idx);
+                        if seen_keys.insert(key) {
+                            results.push(dao_cache_entry_to_row(orig_tx, orig_idx, entry));
                         }
                     }
                 }
@@ -247,6 +261,7 @@ impl BatchWriter {
         _timestamp: DateTime<Utc>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        let mut consumed_output_indices: HashSet<usize> = HashSet::new();
         for (
             _deposit_id,
             original_tx_hash,
@@ -267,24 +282,35 @@ impl BatchWriter {
 
             if *status == 0 {
                 // Phase 1: deposit -> withdraw_request
-                let matching_output = new_dao_outputs
-                    .iter()
-                    .find(|(_, _, _, cap, _)| *cap == capacity);
+                let matching_output =
+                    new_dao_outputs
+                        .iter()
+                        .enumerate()
+                        .find(|(pos, (_, _, _, cap, _))| {
+                            *cap == capacity && !consumed_output_indices.contains(pos)
+                        });
 
-                if let Some((new_tx_hash, new_output_index, _, _, _)) = matching_output {
+                if let Some((pos, (new_tx_hash, new_output_index, _, _, _))) = matching_output {
+                    consumed_output_indices.insert(pos);
                     if let Some(value) = self
                         .store
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                     {
-                        if let Ok(mut entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value)
-                        {
-                            entry.status = 1;
-                            entry.withdraw_request_block = Some(block_number);
-                            entry.withdraw_request_tx = Some(new_tx_hash.clone());
-                            entry.withdraw_request_output_index = Some(*new_output_index);
-                            batch.put_dao_deposit(&outpoint_key, &entry);
-                            batch.put_dao_by_withdraw_tx(new_tx_hash, &outpoint_key);
-                        }
+                        let mut entry: DaoDepositCacheEntry = bincode::deserialize(&value)
+                            .map_err(|e| {
+                                anyhow!(
+                                    "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                                    hex::encode(original_tx_hash),
+                                    original_output_index,
+                                    e
+                                )
+                            })?;
+                        entry.status = 1;
+                        entry.withdraw_request_block = Some(block_number);
+                        entry.withdraw_request_tx = Some(new_tx_hash.clone());
+                        entry.withdraw_request_output_index = Some(*new_output_index);
+                        batch.put_dao_deposit(&outpoint_key, &entry);
+                        batch.put_dao_by_withdraw_tx(new_tx_hash, &outpoint_key);
                     }
                 }
             } else if *status == 1 {
@@ -367,8 +393,20 @@ impl BatchWriter {
 
         match (deposit_dao, withdraw_dao) {
             (Some(d), Some(w)) => {
-                let ar_deposit = extract_ar_from_dao(&d).unwrap_or(1);
-                let ar_withdraw = extract_ar_from_dao(&w).unwrap_or(1);
+                let ar_deposit = extract_ar_from_dao(&d).ok_or_else(|| {
+                    anyhow!(
+                        "failed to extract AR from DAO field: deposit_block={}, dao_len={}",
+                        deposit_block,
+                        d.len()
+                    )
+                })?;
+                let ar_withdraw = extract_ar_from_dao(&w).ok_or_else(|| {
+                    anyhow!(
+                        "failed to extract AR from DAO field: request_block={}, dao_len={}",
+                        withdraw_request_block,
+                        w.len()
+                    )
+                })?;
                 let compensation =
                     calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
                 Ok(compensation)
@@ -420,12 +458,18 @@ impl BatchWriter {
                 .store
                 .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
             {
-                if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                    result_map.insert(
-                        (tx_hash.to_vec(), *output_index),
-                        dao_cache_entry_to_row(tx_hash.to_vec(), *output_index, entry),
-                    );
-                }
+                let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
+                    anyhow!(
+                        "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        e
+                    )
+                })?;
+                result_map.insert(
+                    (tx_hash.to_vec(), *output_index),
+                    dao_cache_entry_to_row(tx_hash.to_vec(), *output_index, entry),
+                );
             }
         }
 
@@ -440,14 +484,28 @@ impl BatchWriter {
                     .store
                     .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                 {
-                    if let Ok(entry) = bincode::deserialize::<DaoDepositCacheEntry>(&value) {
-                        if entry.status == 1 {
+                    let entry: DaoDepositCacheEntry =
+                        bincode::deserialize(&value).map_err(|e| {
                             let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
-                            let key = (tx_hash.to_vec(), 0i16);
-                            result_map.entry(key).or_insert_with(|| {
-                                dao_cache_entry_to_row(orig_tx, orig_idx, entry)
-                            });
-                        }
+                            anyhow!(
+                                "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                                hex::encode(orig_tx),
+                                orig_idx,
+                                e
+                            )
+                        })?;
+                    if entry.status == 1 {
+                        let (orig_tx, orig_idx) = keys::decode_outpoint(&outpoint_key);
+                        // Look up the input that references this tx_hash to get the correct output_index
+                        let input_output_index = inputs
+                            .iter()
+                            .find(|(h, _)| *h == tx_hash)
+                            .map(|(_, idx)| *idx)
+                            .unwrap_or(0);
+                        let key = (tx_hash.to_vec(), input_output_index);
+                        result_map
+                            .entry(key)
+                            .or_insert_with(|| dao_cache_entry_to_row(orig_tx, orig_idx, entry));
                     }
                 }
             }
@@ -488,7 +546,16 @@ impl BatchWriter {
                         .store
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                     {
-                        bincode::deserialize::<DaoDepositCacheEntry>(&value).ok()
+                        Some(
+                            bincode::deserialize::<DaoDepositCacheEntry>(&value).map_err(|e| {
+                                anyhow!(
+                                    "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                                    hex::encode(tx_hash),
+                                    output_index,
+                                    e
+                                )
+                            })?,
+                        )
                     } else {
                         pending_deposits.get(&outpoint_key).cloned()
                     };
@@ -512,6 +579,7 @@ impl BatchWriter {
         };
 
         for ctx in contexts {
+            let mut consumed_output_indices: HashSet<usize> = HashSet::new();
             for (
                 _deposit_id,
                 original_tx_hash,
@@ -531,17 +599,28 @@ impl BatchWriter {
                 let outpoint_key = keys::encode_outpoint(original_tx_hash, *original_output_index);
 
                 if *status == 0 {
-                    let matching_output = ctx
-                        .new_dao_outputs()
-                        .iter()
-                        .find(|(_, _, _, cap, _)| *cap == capacity);
+                    let matching_output = ctx.new_dao_outputs().iter().enumerate().find(
+                        |(pos, (_, _, _, cap, _))| {
+                            *cap == capacity && !consumed_output_indices.contains(pos)
+                        },
+                    );
 
-                    if let Some((new_tx_hash, new_output_index, _, _, _)) = matching_output {
+                    if let Some((pos, (new_tx_hash, new_output_index, _, _, _))) = matching_output {
+                        consumed_output_indices.insert(pos);
                         let maybe_entry: Option<DaoDepositCacheEntry> = if let Some(value) = self
                             .store
                             .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                         {
-                            bincode::deserialize::<DaoDepositCacheEntry>(&value).ok()
+                            Some(bincode::deserialize::<DaoDepositCacheEntry>(&value).map_err(
+                                |e| {
+                                    anyhow!(
+                                        "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                                        hex::encode(original_tx_hash),
+                                        original_output_index,
+                                        e
+                                    )
+                                },
+                            )?)
                         } else {
                             // Fall back to pending (same-batch) deposits not yet committed
                             pending_deposits.get(&outpoint_key).cloned()
@@ -561,7 +640,16 @@ impl BatchWriter {
                         .store
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
                     {
-                        bincode::deserialize::<DaoDepositCacheEntry>(&value).ok()
+                        Some(
+                            bincode::deserialize::<DaoDepositCacheEntry>(&value).map_err(|e| {
+                                anyhow!(
+                                    "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
+                                    hex::encode(original_tx_hash),
+                                    original_output_index,
+                                    e
+                                )
+                            })?,
+                        )
                     } else {
                         pending_deposits.get(&outpoint_key).cloned()
                     };
@@ -569,7 +657,14 @@ impl BatchWriter {
                     let request_block: i64 = maybe_entry
                         .as_ref()
                         .and_then(|e| e.withdraw_request_block)
-                        .unwrap_or(ctx.block_number());
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "withdraw_request_block missing for status=1 deposit: outpoint=0x{}:{}, block={}",
+                                hex::encode(original_tx_hash),
+                                original_output_index,
+                                ctx.block_number()
+                            )
+                        })?;
 
                     if let Some(mut entry) = maybe_entry {
                         let request_tx_hash = entry.withdraw_request_tx.as_ref().ok_or_else(|| {
@@ -618,8 +713,20 @@ impl BatchWriter {
                                     .unwrap_or_else(|| "<missing>".to_string())
                             )
                         })?;
-                        let ar_deposit = extract_ar_from_dao(dep_dao).unwrap_or(1);
-                        let ar_withdraw = extract_ar_from_dao(req_dao).unwrap_or(1);
+                        let ar_deposit = extract_ar_from_dao(dep_dao).ok_or_else(|| {
+                            anyhow!(
+                                "failed to extract AR from DAO field: deposit_block={}, dao_len={}",
+                                deposit_block,
+                                dep_dao.len()
+                            )
+                        })?;
+                        let ar_withdraw = extract_ar_from_dao(req_dao).ok_or_else(|| {
+                            anyhow!(
+                                "failed to extract AR from DAO field: request_block={}, dao_len={}",
+                                request_block,
+                                req_dao.len()
+                            )
+                        })?;
                         let compensation =
                             calculate_dao_compensation_from_ar(capacity, ar_deposit, ar_withdraw)?;
                         let withdraw_to_output_index =
@@ -1321,6 +1428,189 @@ mod tests {
         assert!(
             reverse_lookup.is_some(),
             "dao_by_withdraw_tx index should be written"
+        );
+    }
+
+    #[test]
+    fn test_identical_capacity_deposits_match_distinct_outputs() {
+        // Two deposits with identical capacity should match to different outputs
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let deposit_a_tx = vec![0xA1; 32];
+        let deposit_b_tx = vec![0xA2; 32];
+        let capacity: i64 = 500_00000000;
+
+        let outpoint_a = ckbadger_store::keys::encode_outpoint(&deposit_a_tx, 0);
+        let outpoint_b = ckbadger_store::keys::encode_outpoint(&deposit_b_tx, 0);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(
+            &outpoint_a,
+            &DaoDepositCacheEntry {
+                capacity,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.put_dao_deposit(
+            &outpoint_b,
+            &DaoDepositCacheEntry {
+                capacity,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.commit().unwrap();
+
+        let output_tx_1 = vec![0xC1; 32];
+        let output_tx_2 = vec![0xC2; 32];
+        let new_dao_outputs = vec![
+            (output_tx_1.clone(), 0i16, vec![0xBB; 32], capacity, 100u64),
+            (output_tx_2.clone(), 0i16, vec![0xBB; 32], capacity, 100u64),
+        ];
+
+        let consumed = vec![
+            (
+                0,
+                deposit_a_tx.clone(),
+                0i16,
+                capacity.to_string(),
+                100i64,
+                0i16,
+            ),
+            (
+                0,
+                deposit_b_tx.clone(),
+                0i16,
+                capacity.to_string(),
+                100i64,
+                0i16,
+            ),
+        ];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_dao_withdrawals(
+                &consumed,
+                &new_dao_outputs,
+                &[],
+                &[],
+                200,
+                &[0xDD; 32],
+                chrono::Utc::now(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored_a = store
+            .get_cf(store.cf_dao_deposits(), &outpoint_a)
+            .unwrap()
+            .unwrap();
+        let entry_a: DaoDepositCacheEntry = bincode::deserialize(&stored_a).unwrap();
+        let stored_b = store
+            .get_cf(store.cf_dao_deposits(), &outpoint_b)
+            .unwrap()
+            .unwrap();
+        let entry_b: DaoDepositCacheEntry = bincode::deserialize(&stored_b).unwrap();
+
+        assert_eq!(entry_a.status, 1);
+        assert_eq!(entry_b.status, 1);
+        // They should reference different outputs
+        assert_ne!(
+            entry_a.withdraw_request_tx, entry_b.withdraw_request_tx,
+            "identical-capacity deposits should match distinct DAO outputs"
+        );
+    }
+
+    #[test]
+    fn test_extract_ar_from_dao_errors_on_short_field() {
+        let short_dao = vec![0u8; 8];
+        assert!(extract_ar_from_dao(&short_dao).is_none());
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_batch_errors_on_missing_request_block() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let deposit_tx_hash = vec![0xAA; 32];
+        let deposit_output_index: i16 = 0;
+        let outpoint_key =
+            ckbadger_store::keys::encode_outpoint(&deposit_tx_hash, deposit_output_index);
+        let mut pending_deposits: HashMap<[u8; 34], DaoDepositCacheEntry> = HashMap::new();
+        pending_deposits.insert(
+            outpoint_key,
+            DaoDepositCacheEntry {
+                capacity: 500_00000000,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10,
+                status: 1,
+                withdraw_request_tx: Some(vec![0xCC; 32]),
+                withdraw_request_output_index: Some(0),
+                withdraw_request_block: None, // Missing!
+                withdraw_request_ar: Some(11),
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+
+        let ctx = BatchCtx {
+            consumed: vec![(
+                0,
+                deposit_tx_hash,
+                deposit_output_index,
+                "50000000000".to_string(),
+                100,
+                1,
+            )],
+            new_outputs: vec![],
+            block_num: 200,
+            consuming_tx: vec![0xDD; 32],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .process_dao_withdrawals_batch(&[ctx], &mut batch, &pending_deposits)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("withdraw_request_block missing"),
+            "expected withdraw_request_block missing error, got: {}",
+            err
         );
     }
 }
