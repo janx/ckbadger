@@ -38,8 +38,10 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);
 
         let mut all: Vec<(Vec<u8>, AddressBalance)> = Vec::new();
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate addr_balance in top_addresses: {}", e)
+            })?;
             let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize address balance in top_addresses: lock_hash=0x{}, error={}",
@@ -62,6 +64,16 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, Vec<u8>)>> {
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "list_addr_txs_recent expects 32-byte lock_hash, got {} bytes",
+                lock_hash.len()
+            );
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         // Seek to the cursor position or end of prefix range, then iterate backwards
         let upper_key = match cursor {
             Some((block_num, tx_idx)) => {
@@ -83,8 +95,10 @@ impl CkbadgerStore {
 
         let mut results = Vec::new();
         let mut skip_first = cursor.is_some();
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate addr_txs in list_addr_txs_recent: {}", e)
+            })?;
             if !key.starts_with(lock_hash) {
                 break;
             }
@@ -132,8 +146,13 @@ impl CkbadgerStore {
 
         let mut agg_by_lock: HashMap<Vec<u8>, Agg> = HashMap::new();
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate live_cells in rebuild_addr_balances_from_live_cells: {}",
+                    e
+                )
+            })?;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
@@ -184,8 +203,13 @@ impl CkbadgerStore {
         // Rebuild tx count from addr_txs index.
         // Count only addresses that still have live cells after rebuild.
         let iter = self.iterator_cf(self.cf_addr_txs(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate addr_txs in rebuild_addr_balances_from_live_cells: {}",
+                    e
+                )
+            })?;
             // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
             if key.len() != 44 {
                 continue;
@@ -199,8 +223,13 @@ impl CkbadgerStore {
         let mut clear_batch = rocksdb::WriteBatch::default();
         let mut cleared = 0usize;
         let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate addr_balance for clearing in rebuild_addr_balances_from_live_cells: {}",
+                    e
+                )
+            })?;
             clear_batch.delete_cf(self.cf_addr_balance(), &key);
             cleared += 1;
             #[allow(clippy::manual_is_multiple_of)]
@@ -382,5 +411,32 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize address balance in top_addresses"));
+    }
+
+    #[test]
+    fn test_list_addr_txs_recent_rejects_non_32_byte_lock_hash() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let err = store
+            .list_addr_txs_recent(&[0xAA; 31], 10, None)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("list_addr_txs_recent expects 32-byte lock_hash"));
+    }
+
+    #[test]
+    fn test_list_addr_txs_recent_limit_zero_returns_empty() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xAA; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 100, 0, &[0x11; 32]);
+        batch.commit().unwrap();
+
+        let rows = store.list_addr_txs_recent(&lock, 0, None).unwrap();
+        assert!(rows.is_empty());
     }
 }

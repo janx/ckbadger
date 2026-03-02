@@ -18,15 +18,22 @@ impl CkbadgerStore {
         cursor: Option<(i64, i32)>,
         filter: Option<&str>,
     ) -> anyhow::Result<Vec<(i64, i32, ActivityEntry)>> {
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "list_activities expects 32-byte lock_hash, got {} bytes",
+                lock_hash.len()
+            );
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let prefix = &lock_hash[..32];
 
-        // For cursor: start from the key just after the cursor position.
+        // For cursor: seek to the cursor key and skip that exact row.
         // For no cursor: start from the lock_hash prefix (newest first due to desc key).
         let start_key = match cursor {
-            Some((block_num, tx_idx)) => {
-                // tx_idx + 1 moves past the cursor entry in the descending order
-                keys::encode_activity_key(lock_hash, block_num, tx_idx + 1)
-            }
+            Some((block_num, tx_idx)) => keys::encode_activity_key(lock_hash, block_num, tx_idx),
             None => prefix.to_vec(),
         };
 
@@ -36,12 +43,17 @@ impl CkbadgerStore {
         );
 
         let mut results = Vec::new();
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate activities in list_activities: {}", e)
+            })?;
             if !key.starts_with(prefix) {
                 break;
             }
             if key.len() == 44 {
+                if cursor.is_some() && key.as_ref() == start_key.as_slice() {
+                    continue;
+                }
                 let (_, block_num, tx_idx) = keys::decode_activity_key(&key);
                 let entry: ActivityEntry = bincode::deserialize(&value)?;
                 if Self::matches_activity_filter(&entry, filter) {
@@ -63,6 +75,12 @@ impl CkbadgerStore {
         from_date: u32,
         to_date: u32,
     ) -> anyhow::Result<Vec<(u32, AddressDailyStats)>> {
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "list_addr_daily_stats expects 32-byte lock_hash, got {} bytes",
+                lock_hash.len()
+            );
+        }
         let start_key = keys::encode_addr_daily_stats_key(lock_hash, from_date);
         let prefix = &lock_hash[..32];
 
@@ -72,8 +90,13 @@ impl CkbadgerStore {
         );
 
         let mut results = Vec::new();
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate addr_daily_stats in list_addr_daily_stats: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(prefix) {
                 break;
             }
@@ -111,5 +134,53 @@ impl CkbadgerStore {
             }),
             Some(_) => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::batch::StoreBatch;
+    use tempfile::TempDir;
+
+    fn make_activity(block_num: i64, tx_idx: i32) -> ActivityEntry {
+        ActivityEntry {
+            tx_hash: vec![block_num as u8; 32],
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        }
+    }
+
+    #[test]
+    fn test_list_activities_limit_zero_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xAA; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock, 100, 0, &make_activity(100, 0));
+        batch.commit().unwrap();
+
+        let rows = store.list_activities(&lock, 0, None, None).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_list_addr_daily_stats_rejects_non_32_byte_lock_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let err = store
+            .list_addr_daily_stats(&[0xAA; 31], 20240101, 20240131)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("list_addr_daily_stats expects 32-byte lock_hash"));
     }
 }

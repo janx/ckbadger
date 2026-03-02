@@ -226,8 +226,13 @@ impl CkbadgerStore {
         );
 
         let mut first = after_key.is_some();
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate cell index in list_cells_by_hash_cf: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(hash) {
                 break;
             }
@@ -293,8 +298,13 @@ impl CkbadgerStore {
         );
 
         let mut first = after_key.is_some();
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate code-hash cell index in list_cells_by_code_hash_cf: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(code_hash) {
                 break;
             }
@@ -322,8 +332,11 @@ impl CkbadgerStore {
     pub fn live_cells_count(&self) -> usize {
         let mut count = 0;
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for _ in iter.flatten() {
-            count += 1;
+        for item in iter {
+            match item {
+                Ok(_) => count += 1,
+                Err(e) => panic!("failed to iterate live_cells in live_cells_count: {}", e),
+            }
         }
         count
     }
@@ -337,8 +350,13 @@ impl CkbadgerStore {
         let batch_size = 10_000;
 
         let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate live_cells in backfill_code_hash_indexes: {}",
+                    e
+                )
+            })?;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
                 let Some(info) = self.get_cell_by_outpoint_key(&key)? else {
                     continue;
@@ -384,8 +402,15 @@ impl CkbadgerStore {
     /// Check if the code_hash indexes have been populated.
     pub fn code_hash_indexes_populated(&self) -> bool {
         // Check if cell_by_lock_code has any entries
-        let iter = self.iterator_cf(self.cf_cell_by_lock_code(), rocksdb::IteratorMode::Start);
-        iter.flatten().next().is_some()
+        let mut iter = self.iterator_cf(self.cf_cell_by_lock_code(), rocksdb::IteratorMode::Start);
+        match iter.next() {
+            Some(Ok(_)) => true,
+            Some(Err(e)) => panic!(
+                "failed to iterate cell_by_lock_code in code_hash_indexes_populated: {}",
+                e
+            ),
+            None => false,
+        }
     }
 
     /// Aggregate cell stats for a token (by type script hash).
@@ -407,8 +432,13 @@ impl CkbadgerStore {
         let batch_size = 256;
         let mut outpoints: Vec<(Vec<u8>, i16)> = Vec::with_capacity(batch_size);
 
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate cell_by_type in aggregate_token_cell_stats: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(type_hash) {
                 break;
             }

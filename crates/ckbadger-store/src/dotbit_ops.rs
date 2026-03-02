@@ -91,8 +91,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
         let mut resolved: DotbitLiveOutpointMap = HashMap::with_capacity(targets.len());
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in get_live_dotbit_outpoints_by_account_ids: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT) {
                 break;
             }
@@ -144,8 +149,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
         let mut outpoints = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in list_dotbit_account_outpoints_by_account_id: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT) {
                 break;
             }

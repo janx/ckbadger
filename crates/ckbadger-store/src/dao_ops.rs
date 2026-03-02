@@ -56,8 +56,10 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_dao_deposits(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate dao_deposits in list_dao_deposits: {}", e)
+            })?;
             let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao deposit entry in list_dao_deposits: outpoint_key=0x{}, error={}",

@@ -95,8 +95,10 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_tx_index(), &prefix);
 
         let mut results = Vec::new();
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate tx_index in list_block_txs: {}", e)
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }

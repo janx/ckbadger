@@ -29,7 +29,16 @@ pub fn encode_block_num(n: i64) -> [u8; BLOCK_NUM_KEY_SIZE] {
 }
 
 pub fn decode_block_num(key: &[u8]) -> i64 {
-    i64::from_be_bytes(key[..8].try_into().unwrap_or([0; 8]))
+    assert!(
+        key.len() >= 8,
+        "decode_block_num: expected at least 8 bytes, got {}",
+        key.len()
+    );
+    i64::from_be_bytes(
+        key[..8]
+            .try_into()
+            .expect("decode_block_num: slice length checked"),
+    )
 }
 
 pub fn encode_block_outpoint_key(
@@ -54,7 +63,16 @@ pub fn encode_tx_idx(idx: i32) -> [u8; 4] {
 }
 
 pub fn decode_tx_idx(key: &[u8]) -> i32 {
-    i32::from_be_bytes(key[..4].try_into().unwrap_or([0; 4]))
+    assert!(
+        key.len() >= 4,
+        "decode_tx_idx: expected at least 4 bytes, got {}",
+        key.len()
+    );
+    i32::from_be_bytes(
+        key[..4]
+            .try_into()
+            .expect("decode_tx_idx: slice length checked"),
+    )
 }
 
 /// Encode composite key from multiple parts concatenated.
@@ -665,6 +683,18 @@ mod tests {
         for n in [0i64, 1, 100, 1_000_000, i64::MAX] {
             assert_eq!(decode_block_num(&encode_block_num(n)), n);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "decode_block_num: expected at least 8 bytes")]
+    fn test_decode_block_num_panics_on_short_key() {
+        let _ = decode_block_num(&[0x01; 7]);
+    }
+
+    #[test]
+    #[should_panic(expected = "decode_tx_idx: expected at least 4 bytes")]
+    fn test_decode_tx_idx_panics_on_short_key() {
+        let _ = decode_tx_idx(&[0x01; 3]);
     }
 
     #[test]

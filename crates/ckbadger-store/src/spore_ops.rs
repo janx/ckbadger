@@ -73,8 +73,10 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_spore_data(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate spore_data in list_spores: {}", e)
+            })?;
             let entry: SporeEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore entry in list_spores: spore_id=0x{}, error={}",
@@ -99,8 +101,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate spore_by_cluster in list_spores_by_cluster: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(cluster_id) {
                 break;
             }
@@ -123,8 +130,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
         let mut count: i64 = 0;
 
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate spore_by_cluster in count_spores_in_cluster: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(cluster_id) {
                 break;
             }
@@ -218,8 +230,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
         let mut outpoints = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, _value) = item;
+        for item in iter {
+            let (key, _value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_spore in list_spore_outpoints_by_spore_id: {}",
+                    e
+                )
+            })?;
             if key.len() != keys::SPORE_OUTPOINT_BY_ID_KEY_SIZE
                 || key[0] != keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID
                 || &key[1..33] != spore_id
@@ -277,8 +294,13 @@ impl CkbadgerStore {
         );
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_spore in list_cluster_daily_deltas_in_range: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -350,8 +372,13 @@ impl CkbadgerStore {
         );
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_spore in list_spore_daily_deltas_in_range: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }

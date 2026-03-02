@@ -103,8 +103,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
         let mut resolved: MnftLiveOutpointMap = HashMap::with_capacity(targets.len());
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in get_live_mnft_token_outpoints_by_token_ids: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT) {
                 break;
             }
@@ -156,8 +161,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
         let mut outpoints = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in list_mnft_token_outpoints_by_token_id: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT) {
                 break;
             }

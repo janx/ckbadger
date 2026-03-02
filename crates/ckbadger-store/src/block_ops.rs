@@ -28,8 +28,13 @@ impl CkbadgerStore {
     pub fn get_sync_tip_block(&self) -> anyhow::Result<Option<(i64, CachedBlockHeader)>> {
         let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::End);
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate block_headers in get_sync_tip_block: {}",
+                    e
+                )
+            })?;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
                 let header: CachedBlockHeader = bincode::deserialize(&value)?;
@@ -56,8 +61,10 @@ impl CkbadgerStore {
         );
 
         let mut results = Vec::with_capacity(limit);
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate block_headers in list_blocks_desc: {}", e)
+            })?;
             if key.len() == 8 {
                 let block_num = keys::decode_block_num(&key);
                 let header: CachedBlockHeader = bincode::deserialize(&value)?;
@@ -116,8 +123,14 @@ impl CkbadgerStore {
     pub fn block_headers_count(&self) -> usize {
         let mut count = 0;
         let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
-        for _ in iter.flatten() {
-            count += 1;
+        for item in iter {
+            match item {
+                Ok(_) => count += 1,
+                Err(e) => panic!(
+                    "failed to iterate block_headers in block_headers_count: {}",
+                    e
+                ),
+            }
         }
         count
     }
@@ -131,8 +144,13 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
         let mut expected: Option<i64> = None;
 
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate block_headers in find_first_block_header_gap: {}",
+                    e
+                )
+            })?;
             if key.len() != 8 {
                 continue;
             }

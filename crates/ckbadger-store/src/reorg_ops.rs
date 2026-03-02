@@ -329,8 +329,13 @@ impl CkbadgerStore {
             self.cf_block_headers(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate block_headers in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() != 8 {
                 anyhow::bail!(
                     "invalid block header key length during rollback cleanup: key_len={}, key=0x{}",
@@ -361,8 +366,13 @@ impl CkbadgerStore {
             self.cf_tx_index(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate tx_index in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() == 12 {
                 let block_num = keys::decode_block_num(&key[..8]);
                 if block_num <= rollback_to {
@@ -384,8 +394,13 @@ impl CkbadgerStore {
             self.cf_reorg_cells_created_by_block(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate reorg_cells_created_by_block in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() != keys::BLOCK_OUTPOINT_KEY_SIZE {
                 anyhow::bail!(
                     "invalid reorg created-cell index key length: key_len={}, expected={}",
@@ -481,8 +496,13 @@ impl CkbadgerStore {
             self.cf_reorg_consumed_cells_by_block(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate reorg_consumed_cells_by_block in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() != keys::BLOCK_OUTPOINT_KEY_SIZE {
                 anyhow::bail!(
                     "invalid reorg consumed-cell index key length: key_len={}, expected={}",
@@ -566,8 +586,13 @@ impl CkbadgerStore {
         let mut dao_deposits_repaired = 0u64;
         let mut stage = RollbackStageProgress::new("repair_dao_deposits");
         let iter = self.iterator_cf(self.cf_dao_deposits(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate dao_deposits in rollback_to_block repair stage: {}",
+                    e
+                )
+            })?;
             let mut entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao_deposit during rollback: outpoint=0x{}, error={}",
@@ -610,8 +635,13 @@ impl CkbadgerStore {
         let mut dao_withdraw_index_deleted = 0u64;
         let mut stage = RollbackStageProgress::new("rebuild_dao_withdraw_index_clear");
         let iter = self.iterator_cf(self.cf_dao_by_withdraw_tx(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate dao_by_withdraw_tx in rollback_to_block clear stage: {}",
+                    e
+                )
+            })?;
             batch.delete_cf(self.cf_dao_by_withdraw_tx(), &key);
             dao_withdraw_index_deleted += 1;
             stage.tick(dao_withdraw_index_deleted);
@@ -621,8 +651,13 @@ impl CkbadgerStore {
         let mut dao_withdraw_index_rebuilt = 0u64;
         let mut stage = RollbackStageProgress::new("rebuild_dao_withdraw_index_fill");
         let iter = self.iterator_cf(self.cf_dao_deposits(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate dao_deposits in rollback_to_block rebuild stage: {}",
+                    e
+                )
+            })?;
             let entry: DaoDepositCacheEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize dao_deposit while rebuilding dao_by_withdraw_tx: outpoint=0x{}, error={}",
@@ -678,8 +713,13 @@ impl CkbadgerStore {
             ];
             for cf in stats_cfs {
                 let iter = self.iterator_cf(cf, IteratorMode::Start);
-                for item in iter.flatten() {
-                    let (key, _) = item;
+                for item in iter {
+                    let (key, _) = item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate stats CF in rollback_to_block cleanup: {}",
+                            e
+                        )
+                    })?;
                     if should_delete_stats_for_replay(&key, cutoff.as_bytes())? {
                         batch.delete_cf(cf, &key);
                         stats_removed += 1;
@@ -698,8 +738,13 @@ impl CkbadgerStore {
             self.cf_block_issuance(),
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate block_issuance in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             batch.delete_cf(self.cf_block_issuance(), &key);
             issuance_removed += 1;
             stage.tick(issuance_removed);
@@ -711,8 +756,13 @@ impl CkbadgerStore {
         let mut addr_txs_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_addr_txs");
         let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate addr_txs in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() == 44 {
                 let block_num = keys::decode_block_num(&key[32..40]);
                 if block_num > rollback_to {
@@ -729,8 +779,13 @@ impl CkbadgerStore {
         let mut activities_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_activities");
         let iter = self.iterator_cf(self.cf_activities(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate activities in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() == 44 {
                 let (_, block_num, _) = keys::decode_activity_key(&key);
                 if block_num > rollback_to {
@@ -747,8 +802,13 @@ impl CkbadgerStore {
         let mut token_transfers_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_token_transfers");
         let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_transfers in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
             if key.len() == 44 {
                 let (block_num, _) = keys::decode_token_transfer_key(&key);
                 if block_num > rollback_to {

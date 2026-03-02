@@ -36,8 +36,10 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate stats_chain in list_daily_stats: {}", e)
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -75,8 +77,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_daily_stats_with_dates: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -100,8 +107,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_hourly_stats_with_keys: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -140,8 +152,10 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate stats_chain in list_epoch_stats: {}", e)
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -177,8 +191,10 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate stats_chain in list_miner_stats: {}", e)
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -216,8 +232,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_daily_block_stats: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -247,8 +268,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_epoch_time_dist: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -268,8 +294,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_dao(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_dao in list_dao_daily_snapshots: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -314,8 +345,10 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_hodl(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate stats_hodl in list_hodl_waves: {}", e)
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -407,8 +440,13 @@ impl CkbadgerStore {
         );
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_script in list_script_daily_deltas_in_range: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -470,8 +508,10 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_script_info(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate script_info in list_script_infos: {}", e)
+            })?;
             let info: ScriptInfo = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize script info in list_script_infos: code_hash=0x{}, error={}",
@@ -760,8 +800,13 @@ impl CkbadgerStore {
         }
 
         let live_iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for item in live_iter.flatten() {
-            let (key, _) = item;
+        for item in live_iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate live_cells in rebuild_script_infos_from_cells: {}",
+                    e
+                )
+            })?;
             let cell: LiveCellInfo = self
                 .get_cell_by_outpoint_key(&key)?
                 .ok_or_else(|| {
@@ -805,8 +850,13 @@ impl CkbadgerStore {
 
         let consumed_iter =
             self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
-        for item in consumed_iter.flatten() {
-            let (key, value) = item;
+        for item in consumed_iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate consumed_cells in rebuild_script_infos_from_cells: {}",
+                    e
+                )
+            })?;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 anyhow::bail!(
                     "invalid consumed cell key length while rebuilding script info: key_len={}, expected={}, key=0x{}",
@@ -875,8 +925,13 @@ impl CkbadgerStore {
         let mut clear_batch = rocksdb::WriteBatch::default();
         let mut cleared = 0usize;
         let iter = self.iterator_cf(self.cf_script_info(), rocksdb::IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate script_info for clearing in rebuild_script_infos_from_cells: {}",
+                    e
+                )
+            })?;
             clear_batch.delete_cf(self.cf_script_info(), &key);
             cleared += 1;
             #[allow(clippy::manual_is_multiple_of)]

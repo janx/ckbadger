@@ -31,8 +31,13 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_cluster_agg(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate cluster_agg in list_cluster_aggregates: {}",
+                    e
+                )
+            })?;
             let agg: ClusterAggregate = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize cluster aggregate in list_cluster_aggregates: cluster_id=0x{}, error={}",
@@ -87,8 +92,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_spore in list_cluster_owner_counts: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }

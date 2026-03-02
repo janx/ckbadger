@@ -135,8 +135,9 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_tokens(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item
+                .map_err(|e| anyhow::anyhow!("failed to iterate tokens in list_tokens: {}", e))?;
             let info: TokenInfo = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize token info in list_tokens: type_hash=0x{}, error={}",
@@ -183,8 +184,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_token(), &prefix);
         let mut total: i64 = 0;
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_token in get_token_24h_transfers: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -244,8 +250,13 @@ impl CkbadgerStore {
         );
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_token in list_token_daily_deltas_in_range: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -291,8 +302,13 @@ impl CkbadgerStore {
         let mut live_capacity: i128 = 0;
         let mut live_occupied_capacity: i128 = 0;
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_token in find_first_invalid_token_daily_delta: {}",
+                    e
+                )
+            })?;
             if key.first().copied() != Some(keys::STATS_PREFIX_TOKEN_DAILY) {
                 break;
             }
@@ -376,8 +392,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_token(), &prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_token in scan_all_token_24h_transfers: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_TOKEN_HOURLY) {
                 break;
             }
@@ -408,8 +429,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_spore(), &prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_spore in scan_all_spore_24h_transfers: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_SPORE_HOURLY) {
                 break;
             }
@@ -436,8 +462,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
         let mut result: HashMap<Vec<u8>, i64> = HashMap::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in scan_all_nft_24h_transfers: {}",
+                    e
+                )
+            })?;
             if key.first() != Some(&keys::STATS_PREFIX_NFT_HOURLY) {
                 break;
             }
@@ -464,8 +495,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_stats_token(), &prefix);
         let mut deleted = 0u64;
 
-        for item in iter.flatten() {
-            let (key, _value) = item;
+        for item in iter {
+            let (key, _value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_token hourly buckets in cleanup_old_hourly_buckets: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -486,12 +522,23 @@ impl CkbadgerStore {
         collection_id: &[u8],
         cutoff_hour: i64,
     ) -> anyhow::Result<u64> {
+        if collection_id.len() != 32 {
+            anyhow::bail!(
+                "cleanup_old_nft_hourly_buckets expects 32-byte collection_id, got {} bytes",
+                collection_id.len()
+            );
+        }
         let prefix = keys::encode_nft_hourly_prefix(collection_id);
         let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
         let mut deleted = 0u64;
 
-        for item in iter.flatten() {
-            let (key, _value) = item;
+        for item in iter {
+            let (key, _value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft hourly buckets in cleanup_old_nft_hourly_buckets: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -516,13 +563,23 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, TokenTransferRecord)>> {
+        if type_hash.len() != 32 {
+            anyhow::bail!(
+                "list_token_transfers expects 32-byte type_hash, got {} bytes",
+                type_hash.len()
+            );
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let prefix = &type_hash[..32];
 
-        // For cursor: start from the key just after the cursor position.
+        // For cursor: seek to the cursor key and skip that exact row.
         // For no cursor: start from the type_hash prefix (newest first due to desc key).
         let start_key = match cursor {
             Some((block_num, tx_idx)) => {
-                keys::encode_token_transfer_key(type_hash, block_num, tx_idx + 1)
+                keys::encode_token_transfer_key(type_hash, block_num, tx_idx)
             }
             None => prefix.to_vec(),
         };
@@ -533,12 +590,20 @@ impl CkbadgerStore {
         );
 
         let mut results = Vec::new();
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_transfers in list_token_transfers: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(prefix) {
                 break;
             }
             if key.len() == 44 {
+                if cursor.is_some() && key.as_ref() == start_key.as_slice() {
+                    continue;
+                }
                 let (block_num, tx_idx) = keys::decode_token_transfer_key(&key);
                 let record: TokenTransferRecord = bincode::deserialize(&value)?;
                 results.push((block_num, tx_idx, record));
@@ -562,6 +627,12 @@ impl CkbadgerStore {
         limit: usize,
         cursor: Option<(i64, i32)>,
     ) -> anyhow::Result<Vec<(i64, i32, TokenActivityEntry)>> {
+        if type_hash.len() != 32 {
+            anyhow::bail!(
+                "list_token_activities expects 32-byte type_hash, got {} bytes",
+                type_hash.len()
+            );
+        }
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -570,7 +641,7 @@ impl CkbadgerStore {
 
         let start_key = match cursor {
             Some((block_num, tx_idx)) => {
-                keys::encode_token_transfer_key(type_hash, block_num, tx_idx + 1)
+                keys::encode_token_transfer_key(type_hash, block_num, tx_idx)
             }
             None => prefix.to_vec(),
         };
@@ -589,12 +660,20 @@ impl CkbadgerStore {
         let mut current_transfers: Vec<TokenActivityTransfer> = Vec::new();
         let mut current_last_idx: i32 = 0;
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_transfers in list_token_activities: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(prefix) {
                 break;
             }
             if key.len() != 44 {
+                continue;
+            }
+            if cursor.is_some() && key.as_ref() == start_key.as_slice() {
                 continue;
             }
 
@@ -688,8 +767,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
         let mut count: i64 = 0;
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_holders in count_token_holders: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(type_hash) {
                 break;
             }
@@ -714,8 +798,13 @@ impl CkbadgerStore {
         let iter = self.prefix_iterator_cf(self.cf_token_holders(), type_hash);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_holders in list_token_holders: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(type_hash) {
                 break;
             }
@@ -742,8 +831,13 @@ impl CkbadgerStore {
 
         let mut existing_tokens: HashMap<Vec<u8>, TokenInfo> = HashMap::new();
         let iter = self.iterator_cf(self.cf_tokens(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate tokens in rebuild_token_state_from_transfers: {}",
+                    e
+                )
+            })?;
             let info: TokenInfo = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize token metadata during rebuild: type_hash=0x{}, error={}",
@@ -757,8 +851,13 @@ impl CkbadgerStore {
         // 1) Aggregate live UDT balances and current total supply from live_cells.
         let mut live_aggs: HashMap<Vec<u8>, LiveTokenAgg> = HashMap::new();
         let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate live_cells in rebuild_token_state_from_transfers: {}",
+                    e
+                )
+            })?;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
@@ -815,8 +914,13 @@ impl CkbadgerStore {
         // 2) Aggregate transfer counters from token_transfers.
         let mut transfer_aggs: HashMap<Vec<u8>, TransferTokenAgg> = HashMap::new();
         let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_transfers in rebuild_token_state_from_transfers: {}",
+                    e
+                )
+            })?;
             if key.len() != 44 {
                 anyhow::bail!(
                     "invalid token_transfer key length during rebuild: key_len={}, key=0x{}",
@@ -863,8 +967,13 @@ impl CkbadgerStore {
         // 3) Clear token_holders.
         let mut clear_batch = WriteBatch::default();
         let iter = self.iterator_cf(self.cf_token_holders(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_holders for clearing in rebuild_token_state_from_transfers: {}",
+                    e
+                )
+            })?;
             clear_batch.delete_cf(self.cf_token_holders(), &key);
             result.token_holders_cleared += 1;
             if result
@@ -882,8 +991,13 @@ impl CkbadgerStore {
         // 4) Clear token stats rollups (TOKEN_TRANSFERS and TOKEN_HOURLY).
         let mut clear_batch = WriteBatch::default();
         let iter = self.iterator_cf(self.cf_stats_token(), IteratorMode::Start);
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_token for clearing in rebuild_token_state_from_transfers: {}",
+                    e
+                )
+            })?;
             match key.first().copied() {
                 Some(keys::STATS_PREFIX_TOKEN_TRANSFERS) => {
                     clear_batch.delete_cf(self.cf_stats_token(), &key);
@@ -1350,6 +1464,17 @@ mod tests {
     }
 
     #[test]
+    fn test_cleanup_old_nft_hourly_buckets_rejects_non_32_byte_collection_id() {
+        let (_dir, store) = test_store();
+        let err = store
+            .cleanup_old_nft_hourly_buckets(&[0x16u8; 31], 100)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cleanup_old_nft_hourly_buckets expects 32-byte collection_id"));
+    }
+
+    #[test]
     fn test_scan_all_token_24h_transfers_empty() {
         let (_dir, store) = test_store();
         let now_ms = 1_700_000_000_000i64;
@@ -1693,6 +1818,52 @@ mod tests {
             .unwrap();
         assert_eq!(page2.len(), 1);
         assert_eq!(page2[0].2.tx_hash, tx_3.to_vec()); // block 100
+    }
+
+    #[test]
+    fn test_list_token_transfers_cursor_i32_max_does_not_overflow() {
+        let (_dir, store) = test_store();
+        let type_hash = [0xA6u8; 32];
+        let tx_hash = [0x01u8; 32];
+        let lock = [0x0Au8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_transfer(
+            &type_hash,
+            100,
+            0,
+            &make_transfer_record(&tx_hash, 100, None, &lock, 100, true, false),
+        );
+        batch.commit().unwrap();
+
+        let page = store
+            .list_token_transfers(&type_hash, 10, Some((100, i32::MAX)))
+            .unwrap();
+        assert!(page.is_empty());
+    }
+
+    #[test]
+    fn test_list_token_activities_rejects_non_32_byte_type_hash() {
+        let (_dir, store) = test_store();
+
+        let err = store
+            .list_token_activities(&[0x01; 31], 10, None)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("list_token_activities expects 32-byte type_hash"));
+    }
+
+    #[test]
+    fn test_list_token_transfers_rejects_non_32_byte_type_hash() {
+        let (_dir, store) = test_store();
+
+        let err = store
+            .list_token_transfers(&[0x01; 31], 10, None)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("list_token_transfers expects 32-byte type_hash"));
     }
 
     #[test]

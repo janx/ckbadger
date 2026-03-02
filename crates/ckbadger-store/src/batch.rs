@@ -845,4 +845,33 @@ mod tests {
         let results = store.list_activities(&lock, 100, None, None).unwrap();
         assert!(results.is_empty());
     }
+
+    #[test]
+    fn test_list_activities_rejects_non_32_byte_lock_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let err = store
+            .list_activities(&[0xAA; 31], 10, None, None)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("list_activities expects 32-byte lock_hash"));
+    }
+
+    #[test]
+    fn test_list_activities_cursor_i32_max_does_not_overflow() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xABu8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 1));
+        batch.commit().unwrap();
+
+        let results = store
+            .list_activities(&lock, 10, Some((100, i32::MAX)), None)
+            .unwrap();
+        assert!(results.is_empty());
+    }
 }

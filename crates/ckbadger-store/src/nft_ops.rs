@@ -30,8 +30,9 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_nft_data(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item
+                .map_err(|e| anyhow::anyhow!("failed to iterate nft_data in list_nfts: {}", e))?;
             let entry: NftEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize nft entry in list_nfts: nft_id=0x{}, error={}",
@@ -65,8 +66,13 @@ impl CkbadgerStore {
         let iter = self.iterator_cf(self.cf_nft_collection_agg(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft_collection_agg in list_nft_collection_aggregates: {}",
+                    e
+                )
+            })?;
             let agg: NftCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize nft collection aggregate in list_nft_collection_aggregates: collection_id=0x{}, error={}",
@@ -145,8 +151,13 @@ impl CkbadgerStore {
         );
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in list_nft_daily_deltas_in_range: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -198,8 +209,13 @@ impl CkbadgerStore {
         );
         let mut results = Vec::new();
 
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft_by_collection in list_nft_ids_by_collection: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -266,8 +282,13 @@ impl CkbadgerStore {
             _ => AssetAction::Mint, // unreachable if caller validates
         });
 
-        for item in iter.flatten() {
-            let (key, value) = item;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft_collection_activities in list_nft_collection_activities: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }
@@ -312,8 +333,13 @@ impl CkbadgerStore {
         );
 
         let mut count: i64 = 0;
-        for item in iter.flatten() {
-            let (key, _) = item;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft_collection_activities in count_nft_collection_activities: {}",
+                    e
+                )
+            })?;
             if !key.starts_with(&prefix) {
                 break;
             }

@@ -419,7 +419,17 @@ impl CkbadgerStore {
         let memory_profile = MemoryProfile::for_primary();
         let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
 
-        let existing_cfs = DB::list_cf(&opts, &path).unwrap_or_default();
+        let existing_cfs = match DB::list_cf(&opts, &path) {
+            Ok(cfs) => cfs,
+            Err(_err) if !db_path.join("CURRENT").exists() => Vec::new(),
+            Err(err) => {
+                anyhow::bail!(
+                    "failed to list column families at '{}': {}",
+                    db_path.display(),
+                    err
+                );
+            }
+        };
         let allowed = Self::cfs_for_class(store_class);
         let allowed_set = allowed
             .iter()
@@ -500,7 +510,17 @@ impl CkbadgerStore {
         };
         let memory_profile = MemoryProfile::for_secondary();
         let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
-        let existing_cfs = DB::list_cf(&opts, &primary_path).unwrap_or_default();
+        let existing_cfs = match DB::list_cf(&opts, &primary_path) {
+            Ok(cfs) => cfs,
+            Err(_err) if !db_path.join("CURRENT").exists() => Vec::new(),
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "failed to list column families at secondary primary path '{}': {}",
+                    db_path.display(),
+                    err
+                ));
+            }
+        };
         let allowed = Self::cfs_for_class(store_class);
         let allowed_set = allowed
             .iter()
