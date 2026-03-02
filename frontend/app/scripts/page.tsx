@@ -23,7 +23,7 @@ import {
 import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
 type SortDirection = 'asc' | 'desc';
-type ScriptSortKey = 'name' | 'kind' | 'description' | 'occupied' | 'capacity' | 'occupiedRatio';
+type ScriptSortKey = 'name' | 'kind' | 'description' | 'occupied' | 'capacity';
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 const UNLABELED_SCRIPT_LABEL = 'Unlabeled';
 
@@ -59,37 +59,6 @@ export default function ScriptsPage() {
     setSearchInput('');
     setSearch(undefined);
     pagination.reset();
-  };
-
-  const parseBigInt = (value: string | null | undefined): bigint | null => {
-    if (!value) return null;
-    try {
-      return BigInt(value);
-    } catch {
-      return null;
-    }
-  };
-
-  const parseOccupiedRatioBasisPoints = (
-    occupied: string | null | undefined,
-    capacity: string | null | undefined
-  ): bigint | null => {
-    const occupiedValue = parseBigInt(occupied);
-    const capacityValue = parseBigInt(capacity);
-    if (occupiedValue === null || capacityValue === null || capacityValue <= BigInt(0)) return null;
-    return (occupiedValue * BigInt(10_000)) / capacityValue;
-  };
-
-  const formatOccupiedRatio = (
-    occupied: string | null | undefined,
-    capacity: string | null | undefined
-  ): string | null => {
-    const basisPoints = parseOccupiedRatioBasisPoints(occupied, capacity);
-    if (basisPoints === null) return null;
-
-    const integerPart = basisPoints / BigInt(100);
-    const decimalPart = (basisPoints % BigInt(100)).toString().padStart(2, '0');
-    return `${integerPart.toString()}.${decimalPart}%`;
   };
 
   const toggleSort = (nextKey: ScriptSortKey) => {
@@ -212,9 +181,6 @@ export default function ScriptsPage() {
                       <div className="w-28">
                         <div className="ml-auto h-4 w-20 rounded bg-slate-800" />
                       </div>
-                      <div className="w-24">
-                        <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
-                      </div>
                     </div>
                   </TerminalRow>
                 ))}
@@ -232,7 +198,6 @@ export default function ScriptsPage() {
                   {renderSortHeader('description', 'Description', 'flex-1 px-4')}
                   {renderSortHeader('occupied', 'Occupied (CKB)', 'w-28', 'right')}
                   {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28', 'right')}
-                  {renderSortHeader('occupiedRatio', 'Utilization Ratio', 'w-24', 'right')}
                 </div>
                 {scripts.map((script: KnownScript) => (
                   <TerminalRow key={script.codeHash}>
@@ -295,12 +260,6 @@ export default function ScriptsPage() {
                           const compact = formatCkbCompact(capacity);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                         })()}
-                      </div>
-                      <div className="w-24 text-right font-mono text-slate-300">
-                        {formatOccupiedRatio(
-                          script.liveOccupiedCapacitySum,
-                          script.liveCapacitySum
-                        ) ?? <span className="text-slate-500">-</span>}
                       </div>
                     </div>
                   </TerminalRow>
