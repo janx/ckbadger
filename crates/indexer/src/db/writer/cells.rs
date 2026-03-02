@@ -241,9 +241,35 @@ impl BatchWriter {
         let cell_results = self.store.multi_get_cf(cell_refs);
         let mut infos_by_pos: HashMap<usize, LiveCellInfo> = HashMap::new();
         for (batch_idx, res) in cell_results.into_iter().enumerate() {
-            if let Ok(Some(value)) = res {
-                if let Ok(info) = bincode::deserialize::<LiveCellInfo>(&value) {
-                    infos_by_pos.insert(present_positions[batch_idx], info);
+            let outpoint_idx = present_positions[batch_idx];
+            let (tx_hash, output_index, ..) = consumptions[outpoint_idx];
+            match res {
+                Ok(Some(value)) => {
+                    let info =
+                        bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                            anyhow!(
+                                "failed to deserialize live cell info during consumption: outpoint=0x{}:{}, error={}",
+                                hex::encode(tx_hash),
+                                output_index,
+                                e
+                            )
+                        })?;
+                    infos_by_pos.insert(outpoint_idx, info);
+                }
+                Ok(None) => {
+                    bail!(
+                        "live cell marker present but canonical cell data missing: outpoint=0x{}:{}",
+                        hex::encode(tx_hash),
+                        output_index
+                    );
+                }
+                Err(e) => {
+                    bail!(
+                        "failed to read canonical cell info during consumption: outpoint=0x{}:{}, error={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        e
+                    );
                 }
             }
         }
@@ -569,5 +595,38 @@ mod tests {
             .insert_cells_batch(&all_cells, &mut batch, false)
             .unwrap_err();
         assert!(err.to_string().contains("failed to parse UDT amount"));
+    }
+
+    #[test]
+    fn test_consume_cells_batch_errors_on_corrupt_cell_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let tx_hash = vec![0xCC; 32];
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+
+        // Write a live marker and corrupt canonical data
+        store
+            .put_cf(store.cf_live_cells(), &outpoint_key, &[1])
+            .unwrap();
+        store
+            .put_cf(store.cf_cells(), &outpoint_key, &[0xFF, 0xAA, 0x10])
+            .unwrap();
+
+        let consumed_by = [0xDD_u8; 32];
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+            vec![(tx_hash.as_slice(), 0, 1, consumed_by.as_slice(), 2, 0)];
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .consume_cells_batch(&consumptions, &mut batch)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to deserialize live cell info"),
+            "expected deserialization error, got: {}",
+            err
+        );
     }
 }
