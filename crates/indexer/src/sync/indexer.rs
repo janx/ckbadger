@@ -354,9 +354,9 @@ fn tx_hash_key32(tx_hash: &[u8], context: &str) -> Result<[u8; 32]> {
 fn parse_udt_cells_with_store_fallback_inner<F>(
     tx: &crate::rpc::TransactionView,
     mut standard_lookup: F,
-) -> Vec<(i16, crate::parser::ParsedUdtCell)>
+) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>>
 where
-    F: FnMut(&[u8]) -> Option<String>,
+    F: FnMut(&[u8]) -> Result<Option<String>>,
 {
     let mut parsed = Vec::new();
     let mut standard_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
@@ -367,7 +367,7 @@ where
         if let Some(cell) = UdtParser::parse_udt_cell(output, data_hex) {
             let output_index_i16 =
                 checked_usize_to_i16(output_index, "UDT output index while parsing outputs")
-                    .unwrap_or_else(|e| panic!("{}", e));
+                    .map_err(|e| anyhow!("{}: tx_hash={}", e, tx.hash))?;
             parsed.push((output_index_i16, cell));
             continue;
         }
@@ -376,16 +376,17 @@ where
             continue;
         };
 
-        let type_script_hash = ScriptParser::compute_script_hash(type_script).unwrap_or_else(|e| {
-            panic!(
+        let type_script_hash = ScriptParser::compute_script_hash(type_script).map_err(|e| {
+            anyhow!(
                 "compute_script_hash failed for type script in tx {}: {}",
-                tx.hash, e
+                tx.hash,
+                e
             )
-        });
+        })?;
         let standard_hint = if let Some(cached) = standard_cache.get(&type_script_hash) {
             cached.clone()
         } else {
-            let looked_up = standard_lookup(&type_script_hash);
+            let looked_up = standard_lookup(&type_script_hash)?;
             standard_cache.insert(type_script_hash.clone(), looked_up.clone());
             looked_up
         };
@@ -401,12 +402,12 @@ where
                 output_index,
                 "UDT output index while parsing hinted outputs",
             )
-            .unwrap_or_else(|e| panic!("{}", e));
+            .map_err(|e| anyhow!("{}: tx_hash={}", e, tx.hash))?;
             parsed.push((output_index_i16, cell));
         }
     }
 
-    parsed
+    Ok(parsed)
 }
 
 type UdtInputInfo = (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String);
@@ -1497,6 +1498,7 @@ struct BatchStats {
     dao_daily_active_delta: HashMap<NaiveDate, i128>,
     dao_daily_gross_deposit_delta: HashMap<NaiveDate, i128>,
     dao_daily_new_deposits_delta: HashMap<NaiveDate, i64>,
+    dao_daily_withdrawals_delta: HashMap<NaiveDate, i64>,
     daily_secondary_non_miner_delta: HashMap<NaiveDate, i128>,
     daily_secondary_miner_delta: HashMap<NaiveDate, i128>,
     /// Set to true after the DAO delta computation code path runs, even if no
@@ -1823,7 +1825,8 @@ fn accumulate_dao_snapshot_deltas_for_txs(
     daily_active_delta: &mut HashMap<NaiveDate, i128>,
     daily_gross_deposit_delta: &mut HashMap<NaiveDate, i128>,
     daily_new_deposits_delta: &mut HashMap<NaiveDate, i64>,
-) {
+    daily_withdrawals_delta: &mut HashMap<NaiveDate, i64>,
+) -> Result<()> {
     for tx_data in tx_slice {
         let mut has_withdraw_request_output = false;
 
@@ -1847,7 +1850,22 @@ fn accumulate_dao_snapshot_deltas_for_txs(
             }
         }
 
-        if tx_data.is_cellbase || !has_withdraw_request_output {
+        if tx_data.is_cellbase {
+            continue;
+        }
+
+        if !has_withdraw_request_output {
+            for input in &tx_data.inputs {
+                let outpoint = (
+                    input.previous_tx_hash.to_vec(),
+                    input.previous_output_index as i16,
+                );
+                if let Some((_, _, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
+                    if *status == 1 {
+                        *daily_withdrawals_delta.entry(block_date).or_default() += 1;
+                    }
+                }
+            }
             continue;
         }
 
@@ -1862,7 +1880,15 @@ fn accumulate_dao_snapshot_deltas_for_txs(
             if maybe_cap.is_none() {
                 if let Some((_, _, _, capacity_str, _, status)) = consumed_dao_map.get(&outpoint) {
                     if *status == 0 {
-                        maybe_cap = capacity_str.parse::<i64>().ok();
+                        maybe_cap = Some(capacity_str.parse::<i64>().map_err(|e| {
+                            anyhow!(
+                                "invalid DAO capacity string while accumulating snapshot deltas: value='{}', tx_hash=0x{}, output_index={}, error={}",
+                                capacity_str,
+                                hex::encode(input.previous_tx_hash),
+                                input.previous_output_index,
+                                e
+                            )
+                        })?);
                     }
                 }
             }
@@ -1871,6 +1897,7 @@ fn accumulate_dao_snapshot_deltas_for_txs(
             }
         }
     }
+    Ok(())
 }
 
 fn accumulate_secondary_issuance_deltas(
@@ -1887,21 +1914,26 @@ fn accumulate_secondary_issuance_deltas(
         let _c_delta = c - prev_c;
         let s_delta = s - prev_s;
 
-        // Protocol upgrades can produce negative S deltas; they should not reduce
-        // user-facing cumulative issuance series. Track only positive growth.
-        if s_delta > 0 {
-            *stats
-                .daily_secondary_non_miner_delta
-                .entry(block_date)
-                .or_default() += s_delta;
-            // Derive miner share directly from C/U ratio to avoid compact-target
-            // and primary-issuance approximation drift.
-            let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta)?;
-            *stats
-                .daily_secondary_miner_delta
-                .entry(block_date)
-                .or_default() += miner;
+        if s_delta < 0 {
+            bail!(
+                "secondary issuance S delta underflow: date={}, prev_s={}, current_s={}, delta={}",
+                block_date,
+                prev_s,
+                s,
+                s_delta
+            );
         }
+        *stats
+            .daily_secondary_non_miner_delta
+            .entry(block_date)
+            .or_default() += s_delta;
+        // Derive miner share directly from C/U ratio to avoid compact-target
+        // and primary-issuance approximation drift.
+        let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta)?;
+        *stats
+            .daily_secondary_miner_delta
+            .entry(block_date)
+            .or_default() += miner;
     }
 
     *prev_dao_cs = Some((c, s));
@@ -3020,14 +3052,12 @@ impl Indexer {
     fn parse_udt_cells_with_store_fallback(
         &self,
         tx: &crate::rpc::TransactionView,
-    ) -> Vec<(i16, crate::parser::ParsedUdtCell)> {
+    ) -> Result<Vec<(i16, crate::parser::ParsedUdtCell)>> {
         parse_udt_cells_with_store_fallback_inner(tx, |type_script_hash| {
             self.writer
                 .store()
                 .get_token(type_script_hash)
-                .ok()
-                .flatten()
-                .map(|info| info.standard)
+                .map(|info| info.map(|token| token.standard))
         })
     }
 
@@ -4171,19 +4201,33 @@ impl Indexer {
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                        let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                        let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref()
+                        {
                             if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                                return cached.clone();
+                                cached.clone()
+                            } else {
+                                let looked_up = match writer_for_parser.store().get_token(type_hash)
+                                {
+                                    Ok(token) => token.map(|info| info.standard),
+                                    Err(e) => {
+                                        error!(
+                                            block_number = tx_data.block_number,
+                                            tx_hash = %hex::encode(tx_data.hash),
+                                            output_index,
+                                            type_script_hash = %hex::encode(type_hash),
+                                            "Parser: token metadata lookup failed while parsing UDT output hint: {}",
+                                            e
+                                        );
+                                        return;
+                                    }
+                                };
+                                udt_standard_hint_cache
+                                    .insert(type_hash.clone(), looked_up.clone());
+                                looked_up
                             }
-                            let looked_up = writer_for_parser
-                                .store()
-                                .get_token(type_hash)
-                                .ok()
-                                .flatten()
-                                .map(|info| info.standard);
-                            udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
-                            looked_up
-                        });
+                        } else {
+                            None
+                        };
                         let udt_amount = match parse_parsed_cell_udt_amount(
                             cell,
                             &tx_data.hash,
@@ -4305,19 +4349,33 @@ impl Indexer {
                     );
                     // cell_cache update
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                        let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                        let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref()
+                        {
                             if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                                return cached.clone();
+                                cached.clone()
+                            } else {
+                                let looked_up = match writer_for_parser.store().get_token(type_hash)
+                                {
+                                    Ok(token) => token.map(|info| info.standard),
+                                    Err(e) => {
+                                        error!(
+                                            block_number = tx_data.block_number,
+                                            tx_hash = %hex::encode(tx_data.hash),
+                                            output_index,
+                                            type_script_hash = %hex::encode(type_hash),
+                                            "Parser: token metadata lookup failed while updating UDT cache hint: {}",
+                                            e
+                                        );
+                                        return;
+                                    }
+                                };
+                                udt_standard_hint_cache
+                                    .insert(type_hash.clone(), looked_up.clone());
+                                looked_up
                             }
-                            let looked_up = writer_for_parser
-                                .store()
-                                .get_token(type_hash)
-                                .ok()
-                                .flatten()
-                                .map(|info| info.standard);
-                            udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
-                            looked_up
-                        });
+                        } else {
+                            None
+                        };
                         let udt_amount = match parse_parsed_cell_udt_amount(
                             cell,
                             &tx_data.hash,
@@ -6054,20 +6112,21 @@ impl Indexer {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 let output_index_i16 =
                     checked_usize_to_i16(output_index, "sync batch output index")?;
-                let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref() {
                     if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                        return cached.clone();
+                        cached.clone()
+                    } else {
+                        let looked_up = self
+                            .writer
+                            .store()
+                            .get_token(type_hash)
+                            .map(|info| info.map(|token| token.standard))?;
+                        udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                        looked_up
                     }
-                    let looked_up = self
-                        .writer
-                        .store()
-                        .get_token(type_hash)
-                        .ok()
-                        .flatten()
-                        .map(|info| info.standard);
-                    udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
-                    looked_up
-                });
+                } else {
+                    None
+                };
                 let udt_amount = parse_parsed_cell_udt_amount(
                     cell,
                     &tx_data.hash,
@@ -6197,20 +6256,21 @@ impl Indexer {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 let output_index_i16 =
                     checked_usize_to_i16(output_index, "sync batch output index for cache insert")?;
-                let standard_hint = cell.type_script_hash.as_ref().and_then(|type_hash| {
+                let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref() {
                     if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                        return cached.clone();
+                        cached.clone()
+                    } else {
+                        let looked_up = self
+                            .writer
+                            .store()
+                            .get_token(type_hash)
+                            .map(|info| info.map(|token| token.standard))?;
+                        udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
+                        looked_up
                     }
-                    let looked_up = self
-                        .writer
-                        .store()
-                        .get_token(type_hash)
-                        .ok()
-                        .flatten()
-                        .map(|info| info.standard);
-                    udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
-                    looked_up
-                });
+                } else {
+                    None
+                };
                 let udt_amount = parse_parsed_cell_udt_amount(
                     cell,
                     &tx_data.hash,
@@ -7109,7 +7169,8 @@ impl Indexer {
                 &mut batch_stats.dao_daily_active_delta,
                 &mut batch_stats.dao_daily_gross_deposit_delta,
                 &mut batch_stats.dao_daily_new_deposits_delta,
-            );
+                &mut batch_stats.dao_daily_withdrawals_delta,
+            )?;
 
             batch_stats.dao_snapshot_dates.insert(block_date);
         }
@@ -7273,7 +7334,7 @@ impl Indexer {
                 }
                 let tx = &block_response.block.transactions[tx_idx];
                 let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx) {
+                for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx)? {
                     batch_udt_cells.insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
                     self.udt_cell_cache.insert(
                         (tx_data.hash, output_index),
@@ -8149,8 +8210,16 @@ impl Indexer {
                                     let tx = &block_response.block.transactions[tx_idx];
                                     let mut output_udts: Vec<crate::parser::ParsedUdtCell> =
                                         Vec::new();
-                                    for (output_index, udt_cell) in
-                                        self.parse_udt_cells_with_store_fallback(tx)
+                                    for (output_index, udt_cell) in self
+                                        .parse_udt_cells_with_store_fallback(tx)
+                                        .unwrap_or_else(|e| {
+                                            panic!(
+                                                "UDT prefetch parse failed: tx_hash=0x{}, block={}, error={}",
+                                                hex::encode(tx_data.hash),
+                                                parsed.number,
+                                                e
+                                            )
+                                        })
                                     {
                                         batch_udt_cells.insert(
                                             (tx_data.hash.to_vec(), output_index),
@@ -9054,7 +9123,8 @@ impl Indexer {
                             &mut stats.dao_daily_active_delta,
                             &mut stats.dao_daily_gross_deposit_delta,
                             &mut stats.dao_daily_new_deposits_delta,
-                        );
+                            &mut stats.dao_daily_withdrawals_delta,
+                        )?;
 
                         let cells_created: i32 =
                             tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
@@ -9822,7 +9892,8 @@ impl Indexer {
                         }
                         let tx = &block_response.block.transactions[tx_idx];
                         let mut output_udts: Vec<crate::parser::ParsedUdtCell> = Vec::new();
-                        for (output_index, udt_cell) in self.parse_udt_cells_with_store_fallback(tx)
+                        for (output_index, udt_cell) in
+                            self.parse_udt_cells_with_store_fallback(tx)?
                         {
                             batch_udt_cells
                                 .insert((tx_data.hash.to_vec(), output_index), udt_cell.clone());
@@ -10716,7 +10787,8 @@ impl Indexer {
                     &mut batch_stats.dao_daily_active_delta,
                     &mut batch_stats.dao_daily_gross_deposit_delta,
                     &mut batch_stats.dao_daily_new_deposits_delta,
-                );
+                    &mut batch_stats.dao_daily_withdrawals_delta,
+                )?;
 
                 batch_stats.dao_snapshot_dates.insert(block_date);
             }
@@ -11003,7 +11075,7 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.new_deposits)
                     .unwrap_or(0);
-                let running_total_withdrawal_count =
+                let mut running_total_withdrawal_count =
                     latest_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
                 let running_total_compensation = latest_snapshot
                     .as_ref()
@@ -11040,6 +11112,11 @@ impl Indexer {
                         .unwrap_or(0);
                     running_total_deposit_count += stats
                         .dao_daily_new_deposits_delta
+                        .get(date)
+                        .copied()
+                        .unwrap_or(0);
+                    running_total_withdrawal_count += stats
+                        .dao_daily_withdrawals_delta
                         .get(date)
                         .copied()
                         .unwrap_or(0);
@@ -11924,10 +12001,47 @@ mod tests {
             witnesses: vec![],
         };
 
-        let parsed = parse_udt_cells_with_store_fallback_inner(&tx, |_| None);
+        let parsed = parse_udt_cells_with_store_fallback_inner(&tx, |_| Ok(None)).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].0, 1);
         assert_eq!(parsed[0].1.amount, 1);
+    }
+
+    #[test]
+    fn test_parse_udt_cells_with_store_fallback_propagates_lookup_error() {
+        let lock = crate::rpc::Script {
+            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                .to_string(),
+            hash_type: "type".to_string(),
+            args: "0x0102030405060708090a0b0c0d0e0f1011121314".to_string(),
+        };
+        let non_udt_type = crate::rpc::Script {
+            code_hash: "0x1234".to_string(),
+            hash_type: "type".to_string(),
+            args: "0x56".to_string(),
+        };
+        let tx = crate::rpc::TransactionView {
+            hash: format!("0x{}", "aa".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![crate::rpc::CellOutput {
+                capacity: "0x0".to_string(),
+                lock,
+                type_: Some(non_udt_type),
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![],
+        };
+
+        let err = parse_udt_cells_with_store_fallback_inner(&tx, |_| {
+            Err(anyhow!("synthetic token metadata lookup failure"))
+        })
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("synthetic token metadata lookup failure"));
     }
 
     #[test]
@@ -13544,7 +13658,7 @@ mod tests {
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_ignores_negative_adjustment() {
+    fn test_accumulate_secondary_issuance_deltas_errors_on_negative_adjustment() {
         let mut stats = BatchStats::default();
         let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
         let block = dummy_parsed_block(
@@ -13558,30 +13672,27 @@ mod tests {
         );
         let date = ckbadger_common::block_date(block.timestamp);
 
-        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap();
-
-        assert!(!stats.daily_secondary_non_miner_delta.contains_key(&date));
-        assert!(!stats.daily_secondary_miner_delta.contains_key(&date));
+        let err =
+            accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("secondary issuance S delta underflow"));
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_same_day_keeps_only_positive_s_growth() {
+    fn test_accumulate_secondary_issuance_deltas_same_day_fails_on_negative_s_drop() {
         let mut stats = BatchStats::default();
         let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
 
-        // First block in the day has an S drop (protocol adjustment).
+        // First block in the day has an S drop (protocol adjustment) and must fail fast.
         let block_drop =
             dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev).unwrap();
-
-        // Later in the same day, normal positive growth resumes.
-        let block_growth =
-            dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_120, 100), 0, 1000);
-        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, &mut prev).unwrap();
-
-        // Non-miner should track only positive growth (+170), ignoring the prior -50 drop.
-        assert_eq!(stats.daily_secondary_non_miner_delta.get(&date), Some(&170));
+        let err = accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("secondary issuance S delta underflow"));
     }
 
     #[test]
@@ -13614,6 +13725,7 @@ mod tests {
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
 
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
@@ -13624,11 +13736,14 @@ mod tests {
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
-        );
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
 
         assert_eq!(daily_active_delta.get(&block_date), Some(&-10_000_000_000));
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        assert!(daily_withdrawals_delta.is_empty());
     }
 
     #[test]
@@ -13658,6 +13773,7 @@ mod tests {
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
         let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
 
         accumulate_dao_snapshot_deltas_for_txs(
             &[tx],
@@ -13668,11 +13784,109 @@ mod tests {
             &mut daily_active_delta,
             &mut daily_gross_deposit_delta,
             &mut daily_new_deposits_delta,
-        );
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
 
         assert!(daily_active_delta.is_empty());
         assert!(daily_gross_deposit_delta.is_empty());
         assert!(daily_new_deposits_delta.is_empty());
+        assert!(daily_withdrawals_delta.is_empty());
+    }
+
+    #[test]
+    fn test_accumulate_dao_snapshot_deltas_counts_status1_inputs_as_withdrawals() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let input_hash_vec = vec![0x33; 32];
+        let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
+
+        let tx = dummy_tx_data(
+            [0xCC; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: input_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
+        consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+
+        let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+
+        accumulate_dao_snapshot_deltas_for_txs(
+            &[tx],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap();
+
+        assert!(daily_active_delta.is_empty());
+        assert!(daily_gross_deposit_delta.is_empty());
+        assert!(daily_new_deposits_delta.is_empty());
+        assert_eq!(daily_withdrawals_delta.get(&block_date), Some(&1));
+    }
+
+    #[test]
+    fn test_accumulate_dao_snapshot_deltas_errors_on_invalid_capacity_string() {
+        let block_date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+        let input_hash_vec = vec![0x44; 32];
+        let input_hash: [u8; 32] = input_hash_vec.clone().try_into().unwrap();
+
+        let tx = dummy_tx_data(
+            [0xDD; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: input_hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(9_900_000_000, false)],
+            vec![],
+            vec!["0x0100000000000000".to_string()],
+        );
+
+        let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
+        consumed_dao_map.insert(
+            (input_hash_vec, 0),
+            (0, vec![], 0, "bad-capacity".to_string(), 0, 0),
+        );
+
+        let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
+        let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_gross_deposit_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
+        let mut daily_new_deposits_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+        let mut daily_withdrawals_delta: HashMap<chrono::NaiveDate, i64> = HashMap::new();
+
+        let err = accumulate_dao_snapshot_deltas_for_txs(
+            &[tx],
+            block_date,
+            &dao_code_hash,
+            &consumed_dao_map,
+            &mut same_batch_dao_map,
+            &mut daily_active_delta,
+            &mut daily_gross_deposit_delta,
+            &mut daily_new_deposits_delta,
+            &mut daily_withdrawals_delta,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid DAO capacity string"));
     }
 
     #[test]
