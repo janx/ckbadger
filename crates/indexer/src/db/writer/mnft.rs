@@ -3,13 +3,83 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{NftEntry, NftExtra, NftStandard, NftTypeIndex};
+use ckbadger_store::types::{
+    NftCollectionAggregate, NftEntry, NftExtra, NftStandard, NftTypeIndex,
+};
+use ckbadger_store::CkbadgerStore;
 
 use crate::parser::mnft::{ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken};
 
 use super::BatchWriter;
 
+#[derive(Default)]
+pub(crate) struct MnftBatchState {
+    tokens: HashMap<Vec<u8>, Option<NftEntry>>,
+    collection_aggs: HashMap<Vec<u8>, Option<NftCollectionAggregate>>,
+    hourly_transfers: HashMap<Vec<u8>, i64>,
+}
+
+impl MnftBatchState {
+    fn get_token(&mut self, store: &CkbadgerStore, token_id: &[u8]) -> Result<Option<NftEntry>> {
+        if let Some(cached) = self.tokens.get(token_id) {
+            return Ok(cached.clone());
+        }
+        let loaded = store.get_nft(token_id)?;
+        self.tokens.insert(token_id.to_vec(), loaded.clone());
+        Ok(loaded)
+    }
+
+    fn put_token(&mut self, token_id: &[u8], entry: NftEntry) {
+        self.tokens.insert(token_id.to_vec(), Some(entry));
+    }
+
+    fn get_collection_aggregate(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+    ) -> Result<Option<NftCollectionAggregate>> {
+        if let Some(cached) = self.collection_aggs.get(collection_id) {
+            return Ok(cached.clone());
+        }
+        let loaded = store.get_nft_collection_aggregate(collection_id)?;
+        self.collection_aggs
+            .insert(collection_id.to_vec(), loaded.clone());
+        Ok(loaded)
+    }
+
+    fn put_collection_aggregate(
+        &mut self,
+        collection_id: &[u8],
+        agg: NftCollectionAggregate,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_nft_collection_aggregate(collection_id, &agg);
+        self.collection_aggs
+            .insert(collection_id.to_vec(), Some(agg));
+    }
+
+    fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
+        if let Some(cached) = self.hourly_transfers.get(key) {
+            return Ok(*cached);
+        }
+        let loaded = match store.get_stats_key(key)? {
+            Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
+            _ => 0,
+        };
+        self.hourly_transfers.insert(key.to_vec(), loaded);
+        Ok(loaded)
+    }
+
+    fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
+        self.hourly_transfers.insert(key, count);
+    }
+}
+
 impl BatchWriter {
+    pub(crate) fn new_mnft_batch_state(&self) -> MnftBatchState {
+        MnftBatchState::default()
+    }
+
     pub fn insert_mnft_issuer(
         &self,
         issuer: &ParsedMnftIssuer,
@@ -101,7 +171,29 @@ impl BatchWriter {
         timestamp_ms: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let existing = self.store.get_nft(&token.token_id)?;
+        let mut state = self.new_mnft_batch_state();
+        self.insert_mnft_token_with_state(
+            token,
+            tx_hash,
+            output_index,
+            block_number,
+            timestamp_ms,
+            batch,
+            &mut state,
+        )
+    }
+
+    pub(crate) fn insert_mnft_token_with_state(
+        &self,
+        token: &ParsedMnftToken,
+        tx_hash: &[u8],
+        output_index: i16,
+        block_number: i64,
+        timestamp_ms: i64,
+        batch: &mut StoreBatch,
+        state: &mut MnftBatchState,
+    ) -> Result<()> {
+        let existing = state.get_token(self.store.as_ref(), &token.token_id)?;
         let entry = NftEntry {
             standard: NftStandard::MnftToken,
             collection_id: Some(token.class_id.clone()),
@@ -121,6 +213,7 @@ impl BatchWriter {
             },
         };
         batch.put_nft(&token.token_id, &entry);
+        state.put_token(&token.token_id, entry);
         let should_upsert_collection_index = !existing
             .as_ref()
             .is_some_and(|e| e.is_live && e.collection_id.as_ref() == Some(&token.class_id));
@@ -130,22 +223,42 @@ impl BatchWriter {
 
         // Update collection aggregate if this is a new token
         if existing.is_none() {
-            let mut agg = self
-                .store
-                .get_nft_collection_aggregate(&token.class_id)?
+            let mut agg = state
+                .get_collection_aggregate(self.store.as_ref(), &token.class_id)?
                 .unwrap_or_default();
-            agg.total_count += 1;
-            agg.live_count += 1;
-            batch.put_nft_collection_aggregate(&token.class_id, &agg);
+            agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mnft collection total_count overflow: class_id=0x{}, token_id=0x{}, total_count={}",
+                    hex::encode(&token.class_id),
+                    hex::encode(&token.token_id),
+                    agg.total_count
+                )
+            })?;
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mnft collection live_count overflow: class_id=0x{}, token_id=0x{}, live_count={}",
+                    hex::encode(&token.class_id),
+                    hex::encode(&token.token_id),
+                    agg.live_count
+                )
+            })?;
+            state.put_collection_aggregate(&token.class_id, agg, batch);
         } else {
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
             let key = ckbadger_store::keys::encode_nft_hourly_key(&token.class_id, hour_bucket);
-            let current = match self.store.get_stats_key(&key)? {
-                Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
-                _ => 0,
-            };
-            batch.put_nft_hourly_transfer(&token.class_id, hour_bucket, current + 1);
+            let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
+            let next = current.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mnft hourly transfer overflow: class_id=0x{}, hour_bucket={}, current={}, token_id=0x{}",
+                    hex::encode(&token.class_id),
+                    hour_bucket,
+                    current,
+                    hex::encode(&token.token_id)
+                )
+            })?;
+            batch.put_nft_hourly_transfer(&token.class_id, hour_bucket, next);
+            state.put_hourly_transfer(key, next);
         }
         batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
         Ok(())
@@ -159,7 +272,19 @@ impl BatchWriter {
         _tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
-        if let Some(mut entry) = self.store.get_nft(token_id)? {
+        let mut state = self.new_mnft_batch_state();
+        self.consume_mnft_token_with_state(token_id, _block_number, _tx_hash, batch, &mut state)
+    }
+
+    pub(crate) fn consume_mnft_token_with_state(
+        &self,
+        token_id: &[u8],
+        _block_number: i64,
+        _tx_hash: &[u8],
+        batch: &mut StoreBatch,
+        state: &mut MnftBatchState,
+    ) -> Result<Option<Vec<u8>>> {
+        if let Some(mut entry) = state.get_token(self.store.as_ref(), token_id)? {
             if !entry.is_live {
                 bail!(
                     "mnft token already consumed: token_id=0x{}",
@@ -170,10 +295,12 @@ impl BatchWriter {
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_nft(token_id, &entry);
+            state.put_token(token_id, entry);
 
             // Decrement collection's live_count
             if let Some(ref cid) = collection_id {
-                let Some(mut agg) = self.store.get_nft_collection_aggregate(cid)? else {
+                let Some(mut agg) = state.get_collection_aggregate(self.store.as_ref(), cid)?
+                else {
                     bail!(
                         "mnft collection aggregate missing: class_id=0x{}, token_id=0x{}",
                         hex::encode(cid),
@@ -188,7 +315,7 @@ impl BatchWriter {
                     );
                 }
                 agg.live_count -= 1;
-                batch.put_nft_collection_aggregate(cid, &agg);
+                state.put_collection_aggregate(cid, agg, batch);
             } else {
                 bail!(
                     "mnft token missing class_id: token_id=0x{}",
@@ -289,6 +416,34 @@ mod tests {
     use ckbadger_store::store::CkbadgerStore;
     use std::sync::Arc;
 
+    fn sample_class() -> ParsedMnftClass {
+        ParsedMnftClass {
+            class_id: vec![0x11; 24],
+            type_script_hash: vec![0x21; 32],
+            issuer_id: vec![0x31; 20],
+            name: Some("Class".to_string()),
+            description: None,
+            renderer: None,
+            total: 0,
+            issued: 0,
+            configure: 0,
+            owner_lock_hash: vec![0x41; 32],
+        }
+    }
+
+    fn sample_token(token_byte: u8, class_id: Vec<u8>, owner_byte: u8) -> ParsedMnftToken {
+        ParsedMnftToken {
+            token_id: vec![token_byte; 28],
+            type_script_hash: vec![0x22; 32],
+            class_id,
+            token_index: u32::from(token_byte),
+            characteristic: vec![],
+            configure: 0,
+            state: 0,
+            owner_lock_hash: vec![owner_byte; 32],
+        }
+    }
+
     #[test]
     fn test_update_nft_type_index_and_daily_deltas_batch_and_delete_zero_net() {
         let dir = tempfile::tempdir().unwrap();
@@ -354,28 +509,8 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
-        let class = ParsedMnftClass {
-            class_id: vec![0x11; 24],
-            type_script_hash: vec![0x21; 32],
-            issuer_id: vec![0x31; 20],
-            name: Some("Class".to_string()),
-            description: None,
-            renderer: None,
-            total: 0,
-            issued: 0,
-            configure: 0,
-            owner_lock_hash: vec![0x41; 32],
-        };
-        let token = ParsedMnftToken {
-            token_id: vec![0x12; 28],
-            type_script_hash: vec![0x22; 32],
-            class_id: class.class_id.clone(),
-            token_index: 1,
-            characteristic: vec![],
-            configure: 0,
-            state: 0,
-            owner_lock_hash: vec![0x42; 32],
-        };
+        let class = sample_class();
+        let token = sample_token(0x12, class.class_id.clone(), 0x42);
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
@@ -413,33 +548,143 @@ mod tests {
     }
 
     #[test]
+    fn test_insert_mnft_tokens_with_state_accumulates_collection_counts_in_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = sample_class();
+        let token_a = sample_token(0x12, class.class_id.clone(), 0x42);
+        let token_b = sample_token(0x13, class.class_id.clone(), 0x43);
+        let tx_hash = vec![0x51; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_mnft_batch_state();
+        writer
+            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut batch)
+            .unwrap();
+        writer
+            .insert_mnft_token_with_state(&token_a, &tx_hash, 8, 1, 0, &mut batch, &mut state)
+            .unwrap();
+        writer
+            .insert_mnft_token_with_state(&token_b, &tx_hash, 9, 1, 0, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = writer
+            .store()
+            .get_nft_collection_aggregate(&class.class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 2);
+    }
+
+    #[test]
+    fn test_insert_mnft_token_with_state_accumulates_hourly_transfers_in_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = sample_class();
+        let token = sample_token(0x12, class.class_id.clone(), 0x42);
+        let tx_hash = vec![0x51; 32];
+        let hour_bucket = 3_600_000_i64 / 3_600_000;
+
+        let mut seed = StoreBatch::new(writer.store());
+        writer
+            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut seed)
+            .unwrap();
+        writer
+            .insert_mnft_token(&token, &tx_hash, 8, 1, 0, &mut seed)
+            .unwrap();
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_mnft_batch_state();
+        let transfer_a = sample_token(0x12, class.class_id.clone(), 0x55);
+        let transfer_b = sample_token(0x12, class.class_id.clone(), 0x66);
+        writer
+            .insert_mnft_token_with_state(
+                &transfer_a,
+                &tx_hash,
+                8,
+                2,
+                3_600_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .insert_mnft_token_with_state(
+                &transfer_b,
+                &tx_hash,
+                8,
+                3,
+                3_600_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let key = ckbadger_store::keys::encode_nft_hourly_key(&class.class_id, hour_bucket);
+        let value = writer.store().get_stats_key(&key).unwrap().unwrap();
+        let transfer_count = i64::from_le_bytes(value[..8].try_into().unwrap());
+        assert_eq!(transfer_count, 2);
+    }
+
+    #[test]
+    fn test_consume_mnft_tokens_with_state_decrements_live_count_in_same_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let class = sample_class();
+        let token_a = sample_token(0x12, class.class_id.clone(), 0x42);
+        let token_b = sample_token(0x13, class.class_id.clone(), 0x43);
+        let tx_hash = vec![0x51; 32];
+
+        let mut seed = StoreBatch::new(writer.store());
+        let mut seed_state = writer.new_mnft_batch_state();
+        writer
+            .insert_mnft_class(&class, &tx_hash, 7, 1, &mut seed)
+            .unwrap();
+        writer
+            .insert_mnft_token_with_state(&token_a, &tx_hash, 8, 1, 0, &mut seed, &mut seed_state)
+            .unwrap();
+        writer
+            .insert_mnft_token_with_state(&token_b, &tx_hash, 9, 1, 0, &mut seed, &mut seed_state)
+            .unwrap();
+        seed.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_mnft_batch_state();
+        writer
+            .consume_mnft_token_with_state(&token_a.token_id, 2, &tx_hash, &mut batch, &mut state)
+            .unwrap();
+        writer
+            .consume_mnft_token_with_state(&token_b.token_id, 2, &tx_hash, &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = writer
+            .store()
+            .get_nft_collection_aggregate(&class.class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 0);
+    }
+
+    #[test]
     fn test_consume_mnft_token_errors_on_live_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
-        let class = ParsedMnftClass {
-            class_id: vec![0x11; 24],
-            type_script_hash: vec![0x21; 32],
-            issuer_id: vec![0x31; 20],
-            name: Some("Class".to_string()),
-            description: None,
-            renderer: None,
-            total: 0,
-            issued: 0,
-            configure: 0,
-            owner_lock_hash: vec![0x41; 32],
-        };
-        let token = ParsedMnftToken {
-            token_id: vec![0x12; 28],
-            type_script_hash: vec![0x22; 32],
-            class_id: class.class_id.clone(),
-            token_index: 1,
-            characteristic: vec![],
-            configure: 0,
-            state: 0,
-            owner_lock_hash: vec![0x42; 32],
-        };
+        let class = sample_class();
+        let token = sample_token(0x12, class.class_id.clone(), 0x42);
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
@@ -474,28 +719,8 @@ mod tests {
         let store = CkbadgerStore::open(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
-        let class = ParsedMnftClass {
-            class_id: vec![0x11; 24],
-            type_script_hash: vec![0x21; 32],
-            issuer_id: vec![0x31; 20],
-            name: Some("Class".to_string()),
-            description: None,
-            renderer: None,
-            total: 0,
-            issued: 0,
-            configure: 0,
-            owner_lock_hash: vec![0x41; 32],
-        };
-        let token = ParsedMnftToken {
-            token_id: vec![0x12; 28],
-            type_script_hash: vec![0x22; 32],
-            class_id: class.class_id.clone(),
-            token_index: 1,
-            characteristic: vec![],
-            configure: 0,
-            state: 0,
-            owner_lock_hash: vec![0x42; 32],
-        };
+        let class = sample_class();
+        let token = sample_token(0x12, class.class_id.clone(), 0x42);
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());

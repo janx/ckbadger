@@ -373,6 +373,74 @@ where
     Ok(())
 }
 
+fn rollback_append_only_history_store(store: &CkbadgerStore, rollback_to: i64) -> Result<()> {
+    if rollback_to < -1 {
+        bail!(
+            "invalid append-only rollback target: rollback_to={} (expected >= -1)",
+            rollback_to
+        );
+    }
+
+    let mut batch = rocksdb::WriteBatch::default();
+    let mut pending = 0u64;
+
+    // addr_txs: lock_hash(32) + block_num(8) + tx_idx(4)
+    delete_append_history_cf_entries(
+        store,
+        store.cf_addr_txs(),
+        "addr_txs",
+        rollback_to,
+        &mut batch,
+        &mut pending,
+        |key| {
+            if key.len() == 44 {
+                Some(keys::decode_block_num(&key[32..40]))
+            } else {
+                None
+            }
+        },
+    )?;
+
+    // activities: lock_hash(32) + block_num_desc(8) + tx_idx(4)
+    delete_append_history_cf_entries(
+        store,
+        store.cf_activities(),
+        "activities",
+        rollback_to,
+        &mut batch,
+        &mut pending,
+        |key| {
+            if key.len() == 44 {
+                let (_, block_num, _) = keys::decode_activity_key(key);
+                Some(block_num)
+            } else {
+                None
+            }
+        },
+    )?;
+
+    // nft_collection_activities: collection_id(32) + block_num_desc(8) + tx_idx(4)
+    delete_append_history_cf_entries(
+        store,
+        store.cf_nft_collection_activities(),
+        "nft_collection_activities",
+        rollback_to,
+        &mut batch,
+        &mut pending,
+        |key| {
+            if key.len() == keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                let (_, block_num, _) = keys::decode_nft_collection_activity_key(key);
+                Some(block_num)
+            } else {
+                None
+            }
+        },
+    )?;
+
+    flush_append_rollback_batch(store, &mut batch, &mut pending)?;
+    Ok(())
+}
+
 fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> String {
     if outpoints.is_empty() {
         return "none".to_string();
@@ -3642,6 +3710,19 @@ impl Indexer {
             self.record_flight_event("startup_cleanup_completed", "ok");
         }
         init_result?;
+        if cleanup_needed {
+            info!(
+                run_id = %self.run_id,
+                rollback_to = actual_start,
+                "Startup append-only rollback cleanup phase started"
+            );
+            self.rollback_append_only_history(actual_start)?;
+            info!(
+                run_id = %self.run_id,
+                rollback_to = actual_start,
+                "Startup append-only rollback cleanup phase completed"
+            );
+        }
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
 
         self.maybe_start_label_import();
@@ -7780,6 +7861,7 @@ impl Indexer {
             let mut nft_batch = StoreBatch::new(self.writer.store());
             let mut spore_state = self.writer.new_spore_batch_state();
             let mut dotbit_state = self.writer.new_dotbit_batch_state();
+            let mut mnft_state = self.writer.new_mnft_batch_state();
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 let parsed = &all_parsed_blocks[block_idx];
@@ -7868,13 +7950,14 @@ impl Indexer {
                                 output_index
                             )
                         })?;
-                        self.writer.insert_mnft_token(
+                        self.writer.insert_mnft_token_with_state(
                             &token,
                             &tx_data.hash,
                             output_index,
                             parsed.number,
                             parsed.timestamp.timestamp_millis(),
                             &mut nft_batch,
+                            &mut mnft_state,
                         )?;
                         nft_activity_acc.record(
                             &token.class_id,
@@ -9228,6 +9311,7 @@ impl Indexer {
                     let mut batch = StoreBatch::new(store);
                     let mut activity_batch = StoreBatch::new(append_only_store);
                     let mut dotbit_state = writer.new_dotbit_batch_state();
+                    let mut mnft_state = writer.new_mnft_batch_state();
                     let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
 
                     // Build tx_global_index → (tx_idx_in_block, block_number, ts_ms) lookup.
@@ -9279,13 +9363,14 @@ impl Indexer {
                                 output_index
                             )
                         })?;
-                        writer.insert_mnft_token(
+                        writer.insert_mnft_token_with_state(
                             token,
                             &all_tx_data[tx_gi].hash,
                             output_index,
                             block_number,
                             ts_ms,
                             &mut batch,
+                            &mut mnft_state,
                         )?;
                         nft_activity_acc.record(
                             &token.class_id,
@@ -10359,6 +10444,7 @@ impl Indexer {
                 let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
                 let mut spore_state = self.writer.new_spore_batch_state();
                 let mut dotbit_state = self.writer.new_dotbit_batch_state();
+                let mut mnft_state = self.writer.new_mnft_batch_state();
                 let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
                 let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
                     HashMap::new();
@@ -10452,13 +10538,14 @@ impl Indexer {
                                     output_index
                                 )
                             })?;
-                            self.writer.insert_mnft_token(
+                            self.writer.insert_mnft_token_with_state(
                                 &token,
                                 &tx_data.hash,
                                 output_index,
                                 parsed.number,
                                 ts_ms,
                                 &mut data_batch,
+                                &mut mnft_state,
                             )?;
                             batch_mnft_token_outpoints.insert(
                                 (tx_data.hash.to_vec(), output_index),
@@ -10664,11 +10751,12 @@ impl Indexer {
                                 }
                             }
                             if let Some(token_id) = mnft_map.get(&key) {
-                                if let Some(coll_id) = self.writer.consume_mnft_token(
+                                if let Some(coll_id) = self.writer.consume_mnft_token_with_state(
                                     token_id,
                                     *block_number,
                                     consuming_tx_hash,
                                     &mut data_batch,
+                                    &mut mnft_state,
                                 )? {
                                     nft_activity_acc.record(
                                         &coll_id,
@@ -11746,72 +11834,7 @@ impl Indexer {
     }
 
     fn rollback_append_only_history(&self, rollback_to: i64) -> Result<()> {
-        if rollback_to < -1 {
-            bail!(
-                "invalid append-only rollback target: rollback_to={} (expected >= -1)",
-                rollback_to
-            );
-        }
-
-        let store = self.append_only_store.as_ref();
-        let mut batch = rocksdb::WriteBatch::default();
-        let mut pending = 0u64;
-
-        // addr_txs: lock_hash(32) + block_num(8) + tx_idx(4)
-        delete_append_history_cf_entries(
-            store,
-            store.cf_addr_txs(),
-            "addr_txs",
-            rollback_to,
-            &mut batch,
-            &mut pending,
-            |key| {
-                if key.len() == 44 {
-                    Some(keys::decode_block_num(&key[32..40]))
-                } else {
-                    None
-                }
-            },
-        )?;
-
-        // activities: lock_hash(32) + block_num_desc(8) + tx_idx(4)
-        delete_append_history_cf_entries(
-            store,
-            store.cf_activities(),
-            "activities",
-            rollback_to,
-            &mut batch,
-            &mut pending,
-            |key| {
-                if key.len() == 44 {
-                    let (_, block_num, _) = keys::decode_activity_key(key);
-                    Some(block_num)
-                } else {
-                    None
-                }
-            },
-        )?;
-
-        // nft_collection_activities: collection_id(32) + block_num_desc(8) + tx_idx(4)
-        delete_append_history_cf_entries(
-            store,
-            store.cf_nft_collection_activities(),
-            "nft_collection_activities",
-            rollback_to,
-            &mut batch,
-            &mut pending,
-            |key| {
-                if key.len() == keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
-                    let (_, block_num, _) = keys::decode_nft_collection_activity_key(key);
-                    Some(block_num)
-                } else {
-                    None
-                }
-            },
-        )?;
-
-        flush_append_rollback_batch(store, &mut batch, &mut pending)?;
-        Ok(())
+        rollback_append_only_history_store(self.append_only_store.as_ref(), rollback_to)
     }
 
     async fn find_fork_point(&self, db_tip: u64) -> Result<(u64, Vec<u8>)> {
@@ -12379,6 +12402,68 @@ mod tests {
             .is_some());
         assert!(store
             .get_cf(store.cf_addr_txs(), &drop_key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_rollback_append_only_history_store_prunes_all_append_history_cfs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock_hash = [0x11; 32];
+        let collection_id = [0x22; 24];
+
+        let addr_keep = keys::encode_addr_tx_key(&lock_hash, 10, 0);
+        let addr_drop = keys::encode_addr_tx_key(&lock_hash, 20, 0);
+        store
+            .put_cf(store.cf_addr_txs(), &addr_keep, &[0x01])
+            .unwrap();
+        store
+            .put_cf(store.cf_addr_txs(), &addr_drop, &[0x02])
+            .unwrap();
+
+        let act_keep = keys::encode_activity_key(&lock_hash, 11, 0);
+        let act_drop = keys::encode_activity_key(&lock_hash, 21, 0);
+        store
+            .put_cf(store.cf_activities(), &act_keep, &[0x03])
+            .unwrap();
+        store
+            .put_cf(store.cf_activities(), &act_drop, &[0x04])
+            .unwrap();
+
+        let nft_keep = keys::encode_nft_collection_activity_key(&collection_id, 12, 0);
+        let nft_drop = keys::encode_nft_collection_activity_key(&collection_id, 22, 0);
+        store
+            .put_cf(store.cf_nft_collection_activities(), &nft_keep, &[0x05])
+            .unwrap();
+        store
+            .put_cf(store.cf_nft_collection_activities(), &nft_drop, &[0x06])
+            .unwrap();
+
+        rollback_append_only_history_store(&store, 15).unwrap();
+
+        assert!(store
+            .get_cf(store.cf_addr_txs(), &addr_keep)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_addr_txs(), &addr_drop)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cf(store.cf_activities(), &act_keep)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_activities(), &act_drop)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cf(store.cf_nft_collection_activities(), &nft_keep)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_nft_collection_activities(), &nft_drop)
             .unwrap()
             .is_none());
     }

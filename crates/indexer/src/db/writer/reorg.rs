@@ -4,6 +4,8 @@ use anyhow::Result;
 use chrono::Utc;
 use tracing::info;
 
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::keys::sync_meta_keys;
 use ckbadger_store::types::{DeepForkInfo, ReorgEvent};
 
 use super::BatchWriter;
@@ -36,21 +38,22 @@ impl BatchWriter {
         };
         let event_key = next_reorg_event_key();
         let event_bytes = bincode::serialize(&event)?;
-        self.store.put_cf(
-            self.store.cf_sync_meta(),
-            event_key.as_bytes(),
-            &event_bytes,
-        )?;
-
-        // Update sync status with deep fork info
-        self.store.set_deep_fork(DeepForkInfo {
+        let mut status = self.store.get_sync_status()?;
+        status.deep_fork_detected = true;
+        status.deep_fork_info = Some(DeepForkInfo {
             db_tip,
             db_tip_hash: db_tip_hash.to_vec(),
             chain_tip,
             chain_tip_hash: chain_tip_hash.to_vec(),
             depth: depth as i32,
             fork_point,
-        })?;
+        });
+        let status_bytes = bincode::serialize(&status)?;
+
+        let mut batch = StoreBatch::new(self.store.as_ref());
+        batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        batch.commit()?;
 
         Ok(())
     }
@@ -66,7 +69,10 @@ impl BatchWriter {
     ) -> Result<ReorgResult> {
         let depth = (old_tip - fork_point) as i32;
 
-        // Record the reorg event
+        // Use the store's atomic rollback which handles all CFs
+        self.store.rollback_to_block(fork_point)?;
+
+        // Record reorg event and clear deep fork flag in one sync_meta batch.
         let event = ReorgEvent {
             detected_at: Utc::now().timestamp(),
             rollback_from: fork_point + 1,
@@ -75,17 +81,14 @@ impl BatchWriter {
         };
         let event_key = next_reorg_event_key();
         let event_bytes = bincode::serialize(&event)?;
-        self.store.put_cf(
-            self.store.cf_sync_meta(),
-            event_key.as_bytes(),
-            &event_bytes,
-        )?;
-
-        // Use the store's atomic rollback which handles all CFs
-        self.store.rollback_to_block(fork_point)?;
-
-        // Clear deep fork flag
-        self.clear_deep_fork_flag()?;
+        let mut status = self.store.get_sync_status()?;
+        status.deep_fork_detected = false;
+        status.deep_fork_info = None;
+        let status_bytes = bincode::serialize(&status)?;
+        let mut batch = StoreBatch::new(self.store.as_ref());
+        batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
+        batch.commit()?;
 
         // Update cache
         if let Some(cache) = &self.cache_invalidator {
@@ -134,7 +137,22 @@ pub struct ReorgResult {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use ckbadger_store::keys;
+    use ckbadger_store::store::CkbadgerStore;
+
+    use crate::db::writer::BatchWriter;
+
     use super::next_reorg_event_key;
+
+    fn reorg_event_count(store: &CkbadgerStore) -> usize {
+        store
+            .iterator_cf(store.cf_sync_meta(), rocksdb::IteratorMode::Start)
+            .flatten()
+            .filter(|(key, _)| key.starts_with(b"reorg:"))
+            .count()
+    }
 
     #[test]
     fn test_next_reorg_event_key_is_unique() {
@@ -143,5 +161,41 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("reorg:"));
         assert!(second.starts_with("reorg:"));
+    }
+
+    #[test]
+    fn test_record_deep_fork_writes_event_and_sync_status_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        writer
+            .record_deep_fork(100, &[], 120, &[0x11; 32], 130, &[0x22; 32], 20)
+            .unwrap();
+
+        assert_eq!(reorg_event_count(store.as_ref()), 1);
+        let status = store.get_sync_status().unwrap();
+        assert!(status.deep_fork_detected);
+        let info = status.deep_fork_info.unwrap();
+        assert_eq!(info.fork_point, 100);
+        assert_eq!(info.db_tip, 120);
+        assert_eq!(info.chain_tip, 130);
+        assert_eq!(info.depth, 20);
+    }
+
+    #[tokio::test]
+    async fn test_execute_reorg_does_not_persist_event_when_rollback_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let key = keys::encode_block_num(1);
+        store
+            .put_cf(store.cf_block_headers(), &key, b"invalid-header-payload")
+            .unwrap();
+
+        let result = writer.execute_reorg(0, &[0xAA; 32], 1, &[], 1, &[]).await;
+        assert!(result.is_err());
+        assert_eq!(reorg_event_count(store.as_ref()), 0);
     }
 }
