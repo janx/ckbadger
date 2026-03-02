@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::Result;
 use chrono::Utc;
 use tracing::info;
@@ -5,6 +7,14 @@ use tracing::info;
 use ckbadger_store::types::{DeepForkInfo, ReorgEvent};
 
 use super::BatchWriter;
+
+static REORG_EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn next_reorg_event_key() -> String {
+    let ts_ms = Utc::now().timestamp_millis();
+    let seq = REORG_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("reorg:{}:{}", ts_ms, seq)
+}
 
 impl BatchWriter {
     pub fn record_deep_fork(
@@ -24,7 +34,7 @@ impl BatchWriter {
             rollback_to: fork_point,
             depth: depth as i32,
         };
-        let event_key = format!("reorg:{}", Utc::now().timestamp_millis());
+        let event_key = next_reorg_event_key();
         let event_bytes = bincode::serialize(&event)?;
         self.store.put_cf(
             self.store.cf_sync_meta(),
@@ -63,7 +73,7 @@ impl BatchWriter {
             rollback_to: fork_point,
             depth,
         };
-        let event_key = format!("reorg:{}", Utc::now().timestamp_millis());
+        let event_key = next_reorg_event_key();
         let event_bytes = bincode::serialize(&event)?;
         self.store.put_cf(
             self.store.cf_sync_meta(),
@@ -120,4 +130,18 @@ pub struct ReorgResult {
     pub depth: i32,
     pub orphaned_blocks: i32,
     pub orphaned_txs: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_reorg_event_key;
+
+    #[test]
+    fn test_next_reorg_event_key_is_unique() {
+        let first = next_reorg_event_key();
+        let second = next_reorg_event_key();
+        assert_ne!(first, second);
+        assert!(first.starts_with("reorg:"));
+        assert!(second.starts_with("reorg:"));
+    }
 }

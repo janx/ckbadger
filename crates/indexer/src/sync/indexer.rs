@@ -21,7 +21,7 @@ use tracing::{debug, error, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    AddressBalance, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+    AddressBalance, DaoDailySnapshot, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -791,6 +791,42 @@ fn is_bulk_sync_active_by_lag(blocks_behind: u64, bulk_sync_threshold: u64) -> b
 
 fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_threshold: u64) -> bool {
     chain_tip.saturating_sub(batch_end) > bulk_sync_threshold
+}
+
+fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
+    tip.ok_or_else(|| anyhow!("Failed to get chain tip from {}", source))
+}
+
+fn load_optional_index_from_store<T, F>(
+    cache: &mut HashMap<Vec<u8>, Option<T>>,
+    type_script_hash: &[u8],
+    index_name: &str,
+    load: F,
+) -> Result<Option<T>>
+where
+    T: Clone,
+    F: FnOnce() -> Result<Option<T>>,
+{
+    if let Some(cached) = cache.get(type_script_hash) {
+        return Ok(cached.clone());
+    }
+
+    let loaded = load().with_context(|| {
+        format!(
+            "failed to load {} index: type_script_hash=0x{}",
+            index_name,
+            hex::encode(type_script_hash)
+        )
+    })?;
+    cache.insert(type_script_hash.to_vec(), loaded.clone());
+    Ok(loaded)
+}
+
+fn load_latest_dao_daily_snapshot(store: &CkbadgerStore) -> Result<Option<DaoDailySnapshot>> {
+    let snapshots = store
+        .list_dao_daily_snapshots()
+        .context("failed to list dao daily snapshots while building cumulative snapshot")?;
+    Ok(snapshots.last().cloned())
 }
 
 fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished: bool) -> bool {
@@ -3046,7 +3082,7 @@ impl Indexer {
 
         let (tip_number, _) = repo.get_sync_tip().await?;
         let chain_tip = if let Some(ref store) = ckb_store {
-            store.tip_number().unwrap_or(0)
+            require_chain_tip_number(store.tip_number(), "CKB RocksDB during indexer startup")?
         } else {
             rpc.get_tip_block_number().await?
         };
@@ -4050,6 +4086,7 @@ impl Indexer {
         let pipeline_perf_for_parser = Arc::clone(&self.pipeline_perf);
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
+        let bulk_sync_threshold_for_parser = self.config.bulk_sync_threshold;
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -4182,7 +4219,11 @@ impl Indexer {
                     let mut db_lookup_failed = false;
                     if !missing_outpoints.is_empty() {
                         db_lookups = missing_outpoints.len();
-                        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+                        let bulk_sync_mode = is_bulk_sync_batch(
+                            chain_tip,
+                            end_block,
+                            bulk_sync_threshold_for_parser,
+                        );
                         let wr = writer_for_parser.clone();
                         let missing_owned: Vec<(Vec<u8>, i16)> = missing_outpoints
                             .iter()
@@ -4772,19 +4813,33 @@ impl Indexer {
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
                                 {
                                     if SporeParser::is_spore_nft_type_script(type_code_hash) {
-                                        let spore_index = if let Some(cached) =
-                                            spore_type_index_cache.get(type_script_hash)
-                                        {
-                                            cached.clone()
-                                        } else {
-                                            let loaded = writer_for_parser
-                                                .store()
-                                                .get_spore_type_index(type_script_hash)
-                                                .ok()
-                                                .flatten();
-                                            spore_type_index_cache
-                                                .insert(type_script_hash.clone(), loaded.clone());
-                                            loaded
+                                        let spore_index = match load_optional_index_from_store(
+                                            &mut spore_type_index_cache,
+                                            type_script_hash,
+                                            "spore_type",
+                                            || {
+                                                writer_for_parser
+                                                    .store()
+                                                    .get_spore_type_index(type_script_hash)
+                                            },
+                                        ) {
+                                            Ok(index) => index,
+                                            Err(e) => {
+                                                error!(
+                                                    start_block,
+                                                    end_block,
+                                                    "Parser: failed to load spore type index: {}",
+                                                    e
+                                                );
+                                                record_worker_exit_reason(
+                                                    &parser_exit_reason_for_parser,
+                                                    format!(
+                                                        "failed to load spore type index for range {}-{}: {}",
+                                                        start_block, end_block, e
+                                                    ),
+                                                );
+                                                return;
+                                            }
                                         };
                                         if let Some(index) = spore_index {
                                             let spore_daily = spore_daily_changes
@@ -4821,16 +4876,36 @@ impl Indexer {
                                             {
                                                 cached.clone().map(|idx| idx.collection_id)
                                             } else {
-                                                let loaded = writer_for_parser
-                                                    .store()
-                                                    .get_nft_type_index(type_script_hash)
-                                                    .ok()
-                                                    .flatten();
-                                                nft_type_index_cache.insert(
-                                                    type_script_hash.clone(),
-                                                    loaded.clone(),
-                                                );
-                                                loaded.map(|idx| idx.collection_id)
+                                                match load_optional_index_from_store(
+                                                    &mut nft_type_index_cache,
+                                                    type_script_hash,
+                                                    "nft_type",
+                                                    || {
+                                                        writer_for_parser
+                                                            .store()
+                                                            .get_nft_type_index(type_script_hash)
+                                                    },
+                                                ) {
+                                                    Ok(loaded) => {
+                                                        loaded.map(|idx| idx.collection_id)
+                                                    }
+                                                    Err(e) => {
+                                                        error!(
+                                                            start_block,
+                                                            end_block,
+                                                            "Parser: failed to load nft type index: {}",
+                                                            e
+                                                        );
+                                                        record_worker_exit_reason(
+                                                            &parser_exit_reason_for_parser,
+                                                            format!(
+                                                                "failed to load nft type index for range {}-{}: {}",
+                                                                start_block, end_block, e
+                                                            ),
+                                                        );
+                                                        return;
+                                                    }
+                                                }
                                             };
                                         if let Some(collection_id) = collection_id {
                                             let nft_daily = nft_daily_changes
@@ -6322,7 +6397,8 @@ impl Indexer {
             .last()
             .map(|b| b.number as u64)
             .unwrap_or(0);
-        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+        let bulk_sync_mode =
+            is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
         let mut commit_ms = 0.0_f64;
         let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
 
@@ -8076,7 +8152,8 @@ impl Indexer {
         let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
         let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
         let end_block = last_block as u64;
-        let bulk_sync_mode = chain_tip.saturating_sub(end_block) > 1000;
+        let bulk_sync_mode =
+            is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
 
         let all_input_outpoints: Vec<(Vec<u8>, i16)> = all_tx_data
             .iter()
@@ -11318,12 +11395,7 @@ impl Indexer {
                 // When dao_deltas_computed is false (e.g. live sync path), deposit
                 // deltas default to 0 via unwrap_or(0), carrying forward previous
                 // totals while still updating DAO fields and secondary issuance.
-                let latest_snapshot = self
-                    .writer
-                    .store()
-                    .list_dao_daily_snapshots()
-                    .ok()
-                    .and_then(|snaps| snaps.last().cloned());
+                let latest_snapshot = load_latest_dao_daily_snapshot(self.writer.store())?;
 
                 let mut running_total_deposited = latest_snapshot
                     .as_ref()
@@ -12337,6 +12409,61 @@ mod tests {
         assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
         assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
         assert!(!is_bulk_sync_batch(100, 150, 1000));
+    }
+
+    #[test]
+    fn test_require_chain_tip_number_errors_on_missing_tip() {
+        let err = require_chain_tip_number(None, "CKB RocksDB").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Failed to get chain tip from CKB RocksDB"));
+    }
+
+    #[test]
+    fn test_load_optional_index_from_store_propagates_error() {
+        let mut cache: HashMap<Vec<u8>, Option<i32>> = HashMap::new();
+        let err = load_optional_index_from_store(&mut cache, &[0xAA; 32], "test_index", || {
+            Err(anyhow!("synthetic index read failure"))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("failed to load test_index index"));
+        assert!(err
+            .chain()
+            .any(|cause| cause.to_string().contains("synthetic index read failure")));
+    }
+
+    #[test]
+    fn test_load_optional_index_from_store_caches_loaded_value() {
+        let mut cache: HashMap<Vec<u8>, Option<i32>> = HashMap::new();
+        let mut load_calls = 0usize;
+
+        let first = load_optional_index_from_store(&mut cache, &[0xAB; 32], "test_index", || {
+            load_calls += 1;
+            Ok(Some(7))
+        })
+        .unwrap();
+        let second = load_optional_index_from_store(&mut cache, &[0xAB; 32], "test_index", || {
+            load_calls += 1;
+            Ok(Some(9))
+        })
+        .unwrap();
+
+        assert_eq!(first, Some(7));
+        assert_eq!(second, Some(7));
+        assert_eq!(load_calls, 1);
+    }
+
+    #[test]
+    fn test_load_latest_dao_daily_snapshot_propagates_deserialize_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260101");
+        store.put_cf(store.cf_stats_dao(), &key, b"broken").unwrap();
+
+        let err = load_latest_dao_daily_snapshot(&store).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to list dao daily snapshots while building cumulative snapshot"));
     }
 
     #[test]
