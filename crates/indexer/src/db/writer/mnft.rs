@@ -63,8 +63,22 @@ impl MnftBatchState {
             return Ok(*cached);
         }
         let loaded = match store.get_stats_key(key)? {
-            Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
-            _ => 0,
+            Some(v) => {
+                if v.len() != 8 {
+                    bail!(
+                        "invalid mNFT hourly transfer value length in stats CF: key=0x{}, len={}",
+                        hex::encode(key),
+                        v.len()
+                    );
+                }
+                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "failed to decode mNFT hourly transfer value as i64: key=0x{}",
+                        hex::encode(key)
+                    )
+                })?)
+            }
+            None => 0,
         };
         self.hourly_transfers.insert(key.to_vec(), loaded);
         Ok(loaded)
@@ -632,6 +646,25 @@ mod tests {
         let value = writer.store().get_stats_key(&key).unwrap().unwrap();
         let transfer_count = i64::from_le_bytes(value[..8].try_into().unwrap());
         assert_eq!(transfer_count, 2);
+    }
+
+    #[test]
+    fn test_get_hourly_transfer_errors_on_invalid_existing_value_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+        let mut state = writer.new_mnft_batch_state();
+
+        let collection_id = vec![0x88; 24];
+        let key = ckbadger_store::keys::encode_nft_hourly_key(&collection_id, 1);
+        let mut seed = StoreBatch::new(writer.store());
+        seed.put_stats(&key, &[1, 2, 3, 4]);
+        seed.commit().unwrap();
+
+        let err = state.get_hourly_transfer(writer.store(), &key).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid mNFT hourly transfer value length"));
     }
 
     #[test]

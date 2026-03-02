@@ -211,14 +211,28 @@ fn decode_hex(s: &str) -> Result<Vec<u8>> {
 fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<bool> {
     let type_hash = decode_hex(&label.type_hash)?;
     let label_hash_type = parse_hash_type(&label.type_script.hash_type)?;
+    let label_type_code_hash = decode_hex(&label.type_script.code_hash).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid type script code_hash for token label type_hash={}: {}",
+            label.type_hash,
+            e
+        )
+    })?;
+    let label_type_args = decode_hex(&label.type_script.args).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid type script args for token label type_hash={}: {}",
+            label.type_hash,
+            e
+        )
+    })?;
 
     let mut info =
         store
             .get_token(&type_hash)?
             .unwrap_or_else(|| ckbadger_store::types::TokenInfo {
-                type_code_hash: decode_hex(&label.type_script.code_hash).unwrap_or_default(),
+                type_code_hash: label_type_code_hash.clone(),
                 hash_type: label_hash_type,
-                type_args: decode_hex(&label.type_script.args).unwrap_or_default(),
+                type_args: label_type_args.clone(),
                 standard: label.udt_type.clone(),
                 name: None,
                 symbol: None,
@@ -246,7 +260,7 @@ fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<boo
 
 fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
     let mut scripts = Vec::new();
-    let overrides = load_script_overrides(base_path);
+    let overrides = load_script_overrides(base_path)?;
 
     let script_path = Path::new(base_path).join("information").join("script");
 
@@ -308,20 +322,30 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
     Ok(scripts)
 }
 
-fn load_script_overrides(base_path: &str) -> ScriptNameOverrides {
+fn load_script_overrides(base_path: &str) -> Result<ScriptNameOverrides> {
     let overrides_path = Path::new(base_path)
         .parent()
         .unwrap_or(Path::new("."))
         .join("script-name-overrides.json");
 
     if !overrides_path.exists() {
-        return ScriptNameOverrides::default();
+        return Ok(ScriptNameOverrides::default());
     }
 
-    match std::fs::read_to_string(&overrides_path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => ScriptNameOverrides::default(),
-    }
+    let content = std::fs::read_to_string(&overrides_path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to read script overrides file {}: {}",
+            overrides_path.display(),
+            e
+        )
+    })?;
+    serde_json::from_str(&content).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to parse script overrides file {}: {}",
+            overrides_path.display(),
+            e
+        )
+    })
 }
 
 fn upsert_script_label(
@@ -538,5 +562,52 @@ mod tests {
 
         assert_eq!(token.max_supply, Some(1_000_000));
         assert_eq!(token.total_supply, Some(0));
+    }
+
+    #[test]
+    fn test_upsert_token_label_errors_on_invalid_type_script_code_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+
+        let label = UdtLabelInfo {
+            name: Some("Broken".to_string()),
+            symbol: "BROKEN".to_string(),
+            icon: None,
+            decimal: 8,
+            tags: None,
+            manager: None,
+            type_script: UdtTypeScript {
+                code_hash: "0xzz".to_string(),
+                hash_type: "type".to_string(),
+                args: "0x01".to_string(),
+            },
+            type_hash: "0x1111111111111111111111111111111111111111111111111111111111111111"
+                .to_string(),
+            description: None,
+            udt_type: "sudt".to_string(),
+            published: true,
+            email: None,
+            famous: false,
+            operator_website: None,
+        };
+
+        let err = upsert_token_label(&store, &label).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid type script code_hash for token label"));
+    }
+
+    #[test]
+    fn test_load_script_overrides_errors_on_invalid_json() {
+        let dir = TempDir::new().unwrap();
+        let labels_dir = dir.path().join("token-labels");
+        std::fs::create_dir_all(&labels_dir).unwrap();
+        let overrides_path = dir.path().join("script-name-overrides.json");
+        std::fs::write(&overrides_path, "{invalid-json").unwrap();
+
+        let err = load_script_overrides(labels_dir.to_str().unwrap()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to parse script overrides file"));
     }
 }

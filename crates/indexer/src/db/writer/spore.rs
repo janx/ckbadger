@@ -112,8 +112,22 @@ impl SporeBatchState {
             return Ok(*cached);
         }
         let loaded = match store.get_stats_key(key)? {
-            Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
-            _ => 0,
+            Some(v) => {
+                if v.len() != 8 {
+                    bail!(
+                        "invalid Spore hourly transfer value length in stats CF: key=0x{}, len={}",
+                        hex::encode(key),
+                        v.len()
+                    );
+                }
+                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "failed to decode Spore hourly transfer value as i64: key=0x{}",
+                        hex::encode(key)
+                    )
+                })?)
+            }
+            None => 0,
         };
         self.spore_hourly_transfers.insert(key.to_vec(), loaded);
         Ok(loaded)
@@ -151,8 +165,22 @@ impl SporeBatchState {
             return Ok(*cached);
         }
         let loaded = match store.get_stats_key(key)? {
-            Some(v) if v.len() == 8 => i64::from_le_bytes(v[..8].try_into().unwrap()),
-            _ => 0,
+            Some(v) => {
+                if v.len() != 8 {
+                    bail!(
+                        "invalid did:ckb hourly transfer value length in stats CF: key=0x{}, len={}",
+                        hex::encode(key),
+                        v.len()
+                    );
+                }
+                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "failed to decode did:ckb hourly transfer value as i64: key=0x{}",
+                        hex::encode(key)
+                    )
+                })?)
+            }
+            None => 0,
         };
         self.did_hourly_transfers.insert(key.to_vec(), loaded);
         Ok(loaded)
@@ -1364,6 +1392,47 @@ mod tests {
                 .unwrap_or(0),
             1
         );
+    }
+
+    #[test]
+    fn test_get_spore_hourly_transfer_errors_on_invalid_existing_value_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let mut state = writer.new_spore_batch_state();
+
+        let cluster_id = vec![0xCC; 32];
+        let key = ckbadger_store::keys::encode_spore_hourly_key(&cluster_id, 5);
+        let mut seed = StoreBatch::new(writer.store());
+        seed.put_stats(&key, &[1, 2, 3, 4, 5]);
+        seed.commit().unwrap();
+
+        let err = state
+            .get_spore_hourly_transfer(writer.store(), &key)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid Spore hourly transfer value length"));
+    }
+
+    #[test]
+    fn test_get_did_hourly_transfer_errors_on_invalid_existing_value_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+        let mut state = writer.new_spore_batch_state();
+
+        let key = ckbadger_store::keys::encode_nft_hourly_key(&DID_CKB_SENTINEL_COLLECTION, 7);
+        let mut seed = StoreBatch::new(writer.store());
+        seed.put_stats(&key, &[1, 2, 3]);
+        seed.commit().unwrap();
+
+        let err = state
+            .get_did_hourly_transfer(writer.store(), &key)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid did:ckb hourly transfer value length"));
     }
 
     #[test]

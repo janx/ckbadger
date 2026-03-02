@@ -1845,6 +1845,36 @@ fn split_secondary_issuance(
     Ok((miner, dao, treasury))
 }
 
+fn resolve_non_miner_secondary_delta_for_snapshot(
+    date: NaiveDate,
+    daily_non_miner_delta: Option<i128>,
+    secondary_pool: i128,
+    prev_secondary_pool: i128,
+) -> Result<i128> {
+    if let Some(delta) = daily_non_miner_delta {
+        if delta < 0 {
+            bail!(
+                "negative daily non-miner secondary issuance delta while building DAO daily snapshot: date={}, delta={}",
+                date,
+                delta
+            );
+        }
+        return Ok(delta);
+    }
+
+    let delta = secondary_pool - prev_secondary_pool;
+    if delta < 0 {
+        bail!(
+            "secondary pool decreased while building DAO daily snapshot without precomputed delta: date={}, previous_secondary_pool={}, secondary_pool={}, delta={}",
+            date,
+            prev_secondary_pool,
+            secondary_pool,
+            delta
+        );
+    }
+    Ok(delta)
+}
+
 fn parse_prefixed_hex_u128(field: &str, label: &str) -> Result<u128> {
     let Some(hex) = field.strip_prefix("0x") else {
         bail!("{} missing 0x prefix: {}", label, field);
@@ -11585,38 +11615,23 @@ impl Indexer {
                     // Extract C, S, U from the DAO header field for this date.
                     let (total_issuance, secondary_pool, occupied_capacity) =
                         dao_csu_for_snapshot_date(stats, *date)?;
-                    let daily_non_miner = stats.daily_secondary_non_miner_delta.get(date).copied();
-                    let (daily_miner, daily_dao_share, daily_treasury_share) = if total_issuance > 0
-                    {
-                        if let Some(non_miner) = daily_non_miner {
-                            if non_miner > 0 {
-                                split_secondary_issuance(
-                                    total_issuance,
-                                    occupied_capacity,
-                                    running_total_deposited,
-                                    non_miner,
-                                )?
-                            } else {
-                                // Ignore negative S adjustments in user-facing cumulative
-                                // charts to keep the series monotonic.
-                                (0, 0, 0)
-                            }
+                    let non_miner_secondary = resolve_non_miner_secondary_delta_for_snapshot(
+                        *date,
+                        stats.daily_secondary_non_miner_delta.get(date).copied(),
+                        secondary_pool,
+                        prev_secondary_pool,
+                    )?;
+                    let (daily_miner, daily_dao_share, daily_treasury_share) =
+                        if total_issuance > 0 && non_miner_secondary > 0 {
+                            split_secondary_issuance(
+                                total_issuance,
+                                occupied_capacity,
+                                running_total_deposited,
+                                non_miner_secondary,
+                            )?
                         } else {
-                            let s_delta = secondary_pool - prev_secondary_pool;
-                            if s_delta > 0 {
-                                split_secondary_issuance(
-                                    total_issuance,
-                                    occupied_capacity,
-                                    running_total_deposited,
-                                    s_delta,
-                                )?
-                            } else {
-                                (0, 0, 0)
-                            }
-                        }
-                    } else {
-                        (0, 0, 0)
-                    };
+                            (0, 0, 0)
+                        };
                     running_cum_miner += daily_miner;
                     running_cum_dao += daily_dao_share;
                     running_cum_treasury += daily_treasury_share;
@@ -14346,6 +14361,34 @@ mod tests {
     fn test_split_secondary_issuance_errors_when_deposited_exceeds_liquid_supply() {
         let err = split_secondary_issuance(1000, 900, 200, 10).unwrap_err();
         assert!(err.to_string().contains("exceeds liquid supply"));
+    }
+
+    #[test]
+    fn test_resolve_non_miner_secondary_delta_for_snapshot_prefers_precomputed_delta() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let resolved =
+            resolve_non_miner_secondary_delta_for_snapshot(date, Some(123), 10_000, 9_000).unwrap();
+        assert_eq!(resolved, 123);
+    }
+
+    #[test]
+    fn test_resolve_non_miner_secondary_delta_for_snapshot_errors_on_negative_precomputed_delta() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let err = resolve_non_miner_secondary_delta_for_snapshot(date, Some(-1), 10_000, 9_000)
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("negative daily non-miner secondary issuance delta"));
+    }
+
+    #[test]
+    fn test_resolve_non_miner_secondary_delta_for_snapshot_errors_on_negative_fallback_delta() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let err =
+            resolve_non_miner_secondary_delta_for_snapshot(date, None, 8_999, 9_000).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("secondary pool decreased while building DAO daily snapshot"));
     }
 
     #[test]

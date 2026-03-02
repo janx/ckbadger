@@ -4,8 +4,8 @@
 
 ckbadger information is organized into three layers, from low to high:
 
-1. Raw Data (Syntax Representations)
-2. Domain Knowledge (Semantics)
+1. Raw Data (Syntax Representations, Facts)
+2. Domain Knowledge (Semantics, Opinions)
 3. Aggregations and Intelligence
 
 ### Layer 0: Raw Data (Syntax Representations)
@@ -17,9 +17,10 @@ This layer contains on-chain primitive objects:
 - cells
 - scripts
 - hardforks
-- reorgs
 
-Raw data is the factual foundation, but it should not be the default entry point for most users.
+Raw data is the factual foundation, because they come from and are verified by CKB nodes, however it should not be the default entry point for most users.
+
+The append-only store should record all known facts.
 
 ### Layer 1: Domain Knowledge (Semantics)
 
@@ -30,8 +31,11 @@ This layer contains user-facing semantic concepts:
 - asset standards
 - activities
 - Nervos DAO
+- canonical chain and reorgs
 
-This is the primary focus of information presentation and navigation.
+Domain knowledge are like opinions about fact, for example, the activities of a transaction can be interpreted as either two payments or a swap, different nodes may see different canonical chain tip and reorgs. This is the primary focus of information presentation and navigation.
+
+Reorgs could change opinions but don't change facts. The domain store should keep latest opinions.
 
 ### Layer 2: Aggregations and Intelligence
 
@@ -45,6 +49,8 @@ This layer contains higher-order semantics derived from syntax + semantics throu
 - other advanced analytical conclusions
 
 This layer has high value, but reliable automation is hard. Its display priority is medium.
+
+The domain store should keep stats and intelligence.
 
 ## Information Display Priority
 
