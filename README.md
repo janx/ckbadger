@@ -229,9 +229,8 @@ make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
 `make tui`:
 
 - Runs `ckbadger-tui` for sync/memory/throughput monitoring
-- Auto-selects RocksDB source:
-  - Uses local `CKBADGER_DOMAIN_DATA_PATH` when `<path>/CURRENT` exists
-  - Falls back to Docker indexer volume (container `ckbadger-indexer`) when local DB is missing
+- Host-only execution (no Docker fallback)
+- No RocksDB local path pre-check; TUI reads sync/memory data from Redis + API
 - Pass extra args with `TUI_ARGS`, for example:
   - `make tui TUI_ARGS="--refresh-ms 500 --api-url http://localhost:3001/api/v1"`
 

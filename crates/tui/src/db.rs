@@ -3,11 +3,11 @@ use ckbadger_common::{
     format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
     MEMORY_STATS_REDIS_KEY, SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
 };
-use ckbadger_store::{CkbadgerStore, RuntimeStatus};
+use ckbadger_store::MemoryProfile;
 use redis::AsyncCommands;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -150,22 +150,6 @@ fn age_since(unix_ts: i64, now: i64) -> Option<i64> {
     }
 }
 
-fn runtime_diag_from_status(status: RuntimeStatus, now: i64) -> RuntimeDiagData {
-    RuntimeDiagData {
-        active_run_id: status.active_run_id,
-        last_run_id: status.last_run_id,
-        heartbeat_block: status.last_heartbeat_block,
-        heartbeat_target_block: status.last_heartbeat_target_block,
-        heartbeat_stage: status.last_heartbeat_stage,
-        heartbeat_age_secs: age_since(status.last_heartbeat_at, now),
-        heartbeat_oom_events: status.last_heartbeat_oom_events,
-        heartbeat_oom_kill_events: status.last_heartbeat_oom_kill_events,
-        last_incident_summary: status.last_incident_summary,
-        last_shutdown_reason: status.last_shutdown_reason,
-        last_exit_code: status.last_exit_code,
-    }
-}
-
 fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
     let tx_24h = stats.transactions_per_day.parse::<i64>().unwrap_or(0);
     let (epoch_number, epoch_index, epoch_length) = parse_epoch_string(&stats.epoch);
@@ -227,6 +211,8 @@ fn ttl_or_none(ttl_secs: i64) -> Option<i64> {
     }
 }
 
+const LEGACY_BULK_SYNC_THRESHOLD_BLOCKS: i64 = 1000;
+
 fn derive_sync_status_fields(
     tip_block: i64,
     status_data: Option<&SyncStatusData>,
@@ -241,6 +227,20 @@ fn derive_sync_status_fields(
     let lag = (tip_block - derived_tip).max(0);
     let in_progress = status.derived_sync_in_progress || lag > 0;
     (Some(derived_tip), Some(lag), in_progress)
+}
+
+fn sync_modes_from_progress(
+    progress: &SyncProgressData,
+    status_data: Option<&SyncStatusData>,
+    blocks_behind: i64,
+) -> (bool, bool) {
+    let is_syncing = progress.is_syncing.unwrap_or(blocks_behind > 0);
+    let is_bulk_sync = progress.is_bulk_sync.unwrap_or_else(|| {
+        status_data
+            .map(|status| status.derived_sync_in_progress)
+            .unwrap_or(blocks_behind > LEGACY_BULK_SYNC_THRESHOLD_BLOCKS)
+    });
+    (is_syncing, is_bulk_sync)
 }
 
 fn response_indicates_derived_syncing(status_code: u16, body: &str) -> bool {
@@ -262,18 +262,33 @@ fn response_indicates_derived_syncing(status_code: u16, body: &str) -> bool {
 }
 
 pub struct TuiDb {
-    store: Arc<CkbadgerStore>,
     redis: Option<redis::aio::MultiplexedConnection>,
     api_url: String,
     http: reqwest::Client,
+    memory_profile: MemoryProfile,
+    domain_data_path: PathBuf,
+    append_only_data_path: PathBuf,
 }
 
 impl TuiDb {
-    pub fn store(&self) -> &CkbadgerStore {
-        &self.store
+    pub fn memory_profile(&self) -> &MemoryProfile {
+        &self.memory_profile
     }
 
-    pub async fn new(store: Arc<CkbadgerStore>, redis_url: Option<&str>, api_url: &str) -> Self {
+    pub fn domain_data_path(&self) -> &Path {
+        &self.domain_data_path
+    }
+
+    pub fn append_only_data_path(&self) -> &Path {
+        &self.append_only_data_path
+    }
+
+    pub async fn new(
+        redis_url: Option<&str>,
+        api_url: &str,
+        domain_data_path: &str,
+        append_only_data_path: &str,
+    ) -> Self {
         let redis = if let Some(url) = redis_url {
             match redis::Client::open(url) {
                 Ok(client) => match client.get_multiplexed_async_connection().await {
@@ -298,19 +313,13 @@ impl TuiDb {
             .unwrap_or_default();
 
         Self {
-            store,
             redis,
             api_url: api_url.to_string(),
             http,
+            memory_profile: MemoryProfile::for_secondary(),
+            domain_data_path: PathBuf::from(domain_data_path),
+            append_only_data_path: PathBuf::from(append_only_data_path),
         }
-    }
-
-    pub async fn refresh_store(&self) -> Result<()> {
-        let store = Arc::clone(&self.store);
-        tokio::task::spawn_blocking(move || store.refresh())
-            .await
-            .map_err(|e| anyhow::anyhow!("store refresh task failed: {e}"))??;
-        Ok(())
     }
 
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
@@ -326,7 +335,11 @@ impl TuiDb {
             return self.build_from_status(status);
         }
 
-        self.build_fallback()
+        Err(anyhow::anyhow!(
+            "sync status unavailable: missing redis keys '{}' and '{}'",
+            SYNC_PROGRESS_REDIS_KEY,
+            SYNC_STATUS_REDIS_KEY
+        ))
     }
 
     async fn get_redis_key<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
@@ -347,6 +360,8 @@ impl TuiDb {
         let tip_block = progress.current_block as i64;
         let chain_tip = progress.target_block as i64;
         let blocks_behind = chain_tip - tip_block;
+        let (is_syncing, is_bulk_sync) =
+            sync_modes_from_progress(progress, status_data.as_ref(), blocks_behind);
         let (derived_tip_block, derived_lag_blocks, derived_sync_in_progress) =
             derive_sync_status_fields(tip_block, status_data.as_ref());
 
@@ -365,8 +380,8 @@ impl TuiDb {
             derived_tip_block,
             derived_lag_blocks,
             derived_sync_in_progress,
-            is_syncing: blocks_behind > 100,
-            is_bulk_sync: blocks_behind > 1000,
+            is_syncing,
+            is_bulk_sync,
             progress: progress.progress_percentage,
             elapsed_time,
             eta: Some(progress.eta_formatted.clone()),
@@ -397,12 +412,12 @@ impl TuiDb {
 
     fn build_from_status(&self, status: &SyncStatusData) -> Result<SyncStatusRow> {
         let tip_block = status.tip_block_number;
-        let (chain_tip, _) = self.store.get_sync_tip()?;
+        let chain_tip = tip_block;
         let (derived_tip_block, derived_lag_blocks, derived_sync_in_progress) =
             derive_sync_status_fields(tip_block, Some(status));
 
         let blocks_behind = chain_tip - tip_block;
-        let is_syncing = blocks_behind > 100;
+        let is_syncing = blocks_behind > 0 || status.derived_sync_in_progress;
 
         let progress = if chain_tip > 0 {
             (tip_block as f64 / chain_tip as f64 * 100.0).min(100.0)
@@ -436,7 +451,7 @@ impl TuiDb {
             derived_lag_blocks,
             derived_sync_in_progress,
             is_syncing,
-            is_bulk_sync: blocks_behind > 1000,
+            is_bulk_sync: status.derived_sync_in_progress,
             progress,
             elapsed_time,
             eta,
@@ -463,65 +478,25 @@ impl TuiDb {
         })
     }
 
-    fn build_fallback(&self) -> Result<SyncStatusRow> {
-        let (tip, _) = self.store.get_sync_tip()?;
-
-        Ok(SyncStatusRow {
-            tip_block: tip,
-            chain_tip: tip,
-            derived_tip_block: None,
-            derived_lag_blocks: None,
-            derived_sync_in_progress: false,
-            is_syncing: false,
-            is_bulk_sync: false,
-            progress: 100.0,
-            elapsed_time: None,
-            eta: None,
-            rate_realtime: None,
-            rate_ema: None,
-            tx_rate_realtime: None,
-            tx_rate_ema: None,
-            db_write_ms: None,
-            db_commit_ms: None,
-            rpc_fetch_ms: None,
-            pipeline: None,
-            pipeline_reset_epoch: None,
-            pipeline_reset_reason: None,
-            last_batch_blocks: None,
-            adaptive_target_batch_txs: None,
-            adaptive_inflight_limit: None,
-            adaptive_min_target_batch_txs: None,
-            adaptive_cooldown_steps: None,
-            adaptive_last_reason: None,
-            adaptive_adjustment_seq: None,
-            adaptive_backoff_streak: None,
-            adaptive_last_adjusted_age_secs: None,
-            startup_phase: None,
-        })
-    }
-
-    pub fn get_runtime_diag(&self) -> Option<RuntimeDiagData> {
-        let now = chrono::Utc::now().timestamp();
-        let status = self.store.get_runtime_status().ok()?;
-        Some(runtime_diag_from_status(status, now))
-    }
-
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
-        let mut mem: MemoryStatsData = self.get_redis_key(MEMORY_STATS_REDIS_KEY).await?;
-
-        if mem.total_transactions == 0 || mem.total_cells == 0 {
-            if let Some(sync) = self
-                .get_redis_key::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
-                .await
-            {
-                mem.total_transactions = sync.total_transactions;
-                mem.total_cells = sync.total_cells;
-                mem.total_live_cells = sync.total_live_cells;
-                mem.total_addresses = sync.total_addresses;
+        if let Some(mut mem) = self
+            .get_redis_key::<MemoryStatsData>(MEMORY_STATS_REDIS_KEY)
+            .await
+        {
+            if mem.total_transactions == 0 || mem.total_cells == 0 {
+                if let Some(sync) = self
+                    .get_redis_key::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+                    .await
+                {
+                    mem.total_transactions = sync.total_transactions;
+                    mem.total_cells = sync.total_cells;
+                    mem.total_live_cells = sync.total_live_cells;
+                    mem.total_addresses = sync.total_addresses;
+                }
             }
+            return Some(mem);
         }
-
-        Some(mem)
+        None
     }
 
     pub async fn get_chain_info_and_api_service_info(
@@ -709,21 +684,44 @@ impl TuiDb {
 mod tests {
     use super::{
         age_since, derive_sync_status_fields, parse_epoch_string, parse_info_map,
-        parse_keyspace_db0, response_indicates_derived_syncing, runtime_diag_from_status,
-        ttl_or_none,
+        parse_keyspace_db0, response_indicates_derived_syncing, sync_modes_from_progress,
+        ttl_or_none, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
     };
-    use ckbadger_common::SyncStatusData;
-    use ckbadger_store::{CkbadgerStore, RuntimeStatus};
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use ckbadger_common::{SyncProgressData, SyncStatusData};
+    use std::path::Path;
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be after unix epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    fn sample_progress() -> SyncProgressData {
+        SyncProgressData {
+            current_block: 1000,
+            target_block: 2000,
+            is_syncing: Some(true),
+            is_bulk_sync: Some(true),
+            last_batch_blocks: Some(64),
+            blocks_per_second: 100.0,
+            ema_blocks_per_second: 95.0,
+            txs_per_second: Some(2_000.0),
+            ema_txs_per_second: Some(1_900.0),
+            eta_seconds: Some(90.0),
+            eta_formatted: "1m 30s".to_string(),
+            progress_percentage: 10.0,
+            updated_at: 1_234_567_890,
+            startup_phase: Some("bulk_sync".to_string()),
+            is_direct_db_read: false,
+            db_write_ms: Some(11.0),
+            db_commit_ms: Some(4.0),
+            rpc_fetch_ms: Some(7.0),
+            pipeline: None,
+            pipeline_reset_epoch: None,
+            pipeline_reset_reason: None,
+            adaptive_target_batch_txs: None,
+            adaptive_inflight_limit: None,
+            adaptive_min_target_batch_txs: None,
+            adaptive_cooldown_steps: None,
+            adaptive_last_reason: None,
+            adaptive_adjustment_seq: None,
+            adaptive_backoff_streak: None,
+            adaptive_last_adjusted_at: None,
+        }
     }
 
     #[test]
@@ -798,6 +796,37 @@ mod tests {
     }
 
     #[test]
+    fn sync_modes_from_progress_prefers_explicit_flags() {
+        let mut progress = sample_progress();
+        progress.is_syncing = Some(false);
+        progress.is_bulk_sync = Some(false);
+
+        let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, None, 10_000);
+        assert!(!is_syncing);
+        assert!(!is_bulk_sync);
+    }
+
+    #[test]
+    fn sync_modes_from_progress_falls_back_to_status_or_legacy_lag() {
+        let mut progress = sample_progress();
+        progress.is_syncing = None;
+        progress.is_bulk_sync = None;
+
+        let status_hint = SyncStatusData {
+            derived_sync_in_progress: true,
+            ..Default::default()
+        };
+        let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, Some(&status_hint), 8);
+        assert!(is_syncing);
+        assert!(is_bulk_sync);
+
+        let (is_syncing_legacy, is_bulk_sync_legacy) =
+            sync_modes_from_progress(&progress, None, 1001);
+        assert!(is_syncing_legacy);
+        assert!(is_bulk_sync_legacy);
+    }
+
+    #[test]
     fn response_indicates_derived_syncing_detects_marker() {
         assert!(response_indicates_derived_syncing(
             503,
@@ -815,65 +844,21 @@ mod tests {
     }
 
     #[test]
-    fn runtime_diag_from_status_maps_fields() {
-        let status = RuntimeStatus {
-            active_run_id: Some("run-1".to_string()),
-            last_run_id: Some("run-0".to_string()),
-            last_heartbeat_at: 100,
-            last_heartbeat_block: 120,
-            last_heartbeat_target_block: 180,
-            last_heartbeat_stage: Some("bulk_sync".to_string()),
-            last_heartbeat_oom_events: Some(11),
-            last_heartbeat_oom_kill_events: Some(2),
-            last_incident_summary: Some("pipeline batch mismatch".to_string()),
-            last_shutdown_reason: Some("run_error".to_string()),
-            last_exit_code: Some(1),
-            ..Default::default()
-        };
-
-        let diag = runtime_diag_from_status(status, 130);
-        assert_eq!(diag.active_run_id.as_deref(), Some("run-1"));
-        assert_eq!(diag.last_run_id.as_deref(), Some("run-0"));
-        assert_eq!(diag.heartbeat_block, 120);
-        assert_eq!(diag.heartbeat_target_block, 180);
-        assert_eq!(diag.heartbeat_stage.as_deref(), Some("bulk_sync"));
-        assert_eq!(diag.heartbeat_age_secs, Some(30));
-        assert_eq!(diag.heartbeat_oom_events, Some(11));
-        assert_eq!(diag.heartbeat_oom_kill_events, Some(2));
-        assert_eq!(
-            diag.last_incident_summary.as_deref(),
-            Some("pipeline batch mismatch")
-        );
-        assert_eq!(diag.last_shutdown_reason.as_deref(), Some("run_error"));
-        assert_eq!(diag.last_exit_code, Some(1));
+    fn sync_modes_legacy_threshold_constant_is_stable() {
+        assert_eq!(LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, 1000);
     }
 
     #[tokio::test]
-    async fn refresh_store_updates_secondary_view() {
-        let primary_dir = unique_temp_dir("ckbadger-tui-db-primary");
-        let secondary_dir = unique_temp_dir("ckbadger-tui-db-secondary");
-
-        let primary = CkbadgerStore::open_domain(&primary_dir).unwrap();
-        primary
-            .put_cf(primary.cf_sync_meta(), b"sync-key", b"sync-value")
-            .unwrap();
-
-        let secondary =
-            Arc::new(CkbadgerStore::open_domain_secondary(&primary_dir, &secondary_dir).unwrap());
-        let db =
-            super::TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:3001/api/v1").await;
-
-        db.refresh_store().await.unwrap();
-
-        let value = secondary
-            .get_cf(secondary.cf_sync_meta(), b"sync-key")
-            .unwrap();
-        assert_eq!(value.as_deref(), Some(b"sync-value".as_slice()));
-
-        drop(db);
-        drop(secondary);
-        drop(primary);
-        let _ = std::fs::remove_dir_all(&secondary_dir);
-        let _ = std::fs::remove_dir_all(&primary_dir);
+    async fn tui_db_exposes_paths_and_profile_without_store() {
+        let db = TuiDb::new(
+            None,
+            "http://127.0.0.1:3001/api/v1",
+            "/tmp/domain-store",
+            "/tmp/append-store",
+        )
+        .await;
+        assert_eq!(db.domain_data_path(), Path::new("/tmp/domain-store"));
+        assert_eq!(db.append_only_data_path(), Path::new("/tmp/append-store"));
+        assert!(db.memory_profile().is_secondary);
     }
 }

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use ckbadger_store::CkbadgerStore;
 use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -8,7 +7,6 @@ use crossterm::{
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
-use std::sync::Arc;
 use std::time::Duration;
 
 mod chart;
@@ -25,8 +23,8 @@ struct Args {
     #[arg(long = "domain-data-path", env = "CKBADGER_DOMAIN_DATA_PATH")]
     domain_data_path: Option<String>,
 
-    #[arg(long = "secondary-data-path", env = "CKBADGER_TUI_SECONDARY_DATA_PATH")]
-    secondary_data_path: Option<String>,
+    #[arg(long = "append-only-data-path", env = "CKBADGER_APPEND_ONLY_DATA_PATH")]
+    append_only_data_path: Option<String>,
 
     #[arg(long, env = "REDIS_URL")]
     redis_url: Option<String>,
@@ -47,17 +45,19 @@ async fn main() -> Result<()> {
         args.domain_data_path,
         std::env::var("CKBADGER_DOMAIN_DATA_PATH").ok(),
     );
-    let secondary_data_path = resolve_secondary_data_path(
-        args.secondary_data_path,
-        std::env::var("CKBADGER_TUI_SECONDARY_DATA_PATH").ok(),
+    let append_only_data_path = resolve_append_only_data_path(
+        args.append_only_data_path,
+        std::env::var("CKBADGER_APPEND_ONLY_DATA_PATH").ok(),
         &domain_data_path,
     );
 
-    let store = Arc::new(CkbadgerStore::open_domain_secondary(
+    let db = TuiDb::new(
+        args.redis_url.as_deref(),
+        &args.api_url,
         &domain_data_path,
-        &secondary_data_path,
-    )?);
-    let db = TuiDb::new(store, args.redis_url.as_deref(), &args.api_url).await;
+        &append_only_data_path,
+    )
+    .await;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -140,19 +140,19 @@ fn resolve_domain_data_path(explicit: Option<String>, domain_env: Option<String>
         .unwrap_or_else(|| "./data/ckbadger-store".to_string())
 }
 
-fn resolve_secondary_data_path(
+fn resolve_append_only_data_path(
     explicit: Option<String>,
-    secondary_env: Option<String>,
+    append_env: Option<String>,
     domain_data_path: &str,
 ) -> String {
     explicit
-        .or(secondary_env)
-        .unwrap_or_else(|| format!("{domain_data_path}-tui-secondary"))
+        .or(append_env)
+        .unwrap_or_else(|| format!("{domain_data_path}-append-only"))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_domain_data_path, resolve_secondary_data_path};
+    use super::{resolve_append_only_data_path, resolve_domain_data_path};
 
     #[test]
     fn test_resolve_domain_data_path() {
@@ -174,22 +174,22 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_secondary_data_path() {
+    fn test_resolve_append_only_data_path() {
         assert_eq!(
-            resolve_secondary_data_path(
-                Some("/explicit/secondary".to_string()),
-                Some("/env/secondary".to_string()),
+            resolve_append_only_data_path(
+                Some("/explicit/append".to_string()),
+                Some("/env/append".to_string()),
                 "/domain/path",
             ),
-            "/explicit/secondary"
+            "/explicit/append"
         );
         assert_eq!(
-            resolve_secondary_data_path(None, Some("/env/secondary".to_string()), "/domain/path",),
-            "/env/secondary"
+            resolve_append_only_data_path(None, Some("/env/append".to_string()), "/domain/path",),
+            "/env/append"
         );
         assert_eq!(
-            resolve_secondary_data_path(None, None, "/domain/path"),
-            "/domain/path-tui-secondary"
+            resolve_append_only_data_path(None, None, "/domain/path"),
+            "/domain/path-append-only"
         );
     }
 }
