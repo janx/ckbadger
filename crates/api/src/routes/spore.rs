@@ -1488,6 +1488,7 @@ async fn get_cluster(
         .map(|agg| agg.owner_count)
         .unwrap_or(0);
     let activities_count = count_nft_collection_activities_cached(
+        state.store.as_ref(),
         state.append_only_store.as_ref(),
         &state.mem_cache,
         &id,

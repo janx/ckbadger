@@ -73,8 +73,8 @@ impl CkbadgerStore {
             outpoint_key.len()
         );
         anyhow::ensure!(
-            entry.lock_script_hash.len() >= 32,
-            "put_dao_secondary_indexes_direct expected lock hash >= 32 bytes, got {}",
+            entry.lock_script_hash.len() == 32,
+            "put_dao_secondary_indexes_direct expected lock hash 32 bytes, got {}",
             entry.lock_script_hash.len()
         );
 
@@ -234,8 +234,8 @@ impl CkbadgerStore {
         F: FnMut(&[u8], &DaoDepositCacheEntry) -> anyhow::Result<()>,
     {
         anyhow::ensure!(
-            lock_hash.len() >= 32,
-            "scan_dao_deposits_by_lock expected lock hash >= 32 bytes, got {}",
+            lock_hash.len() == 32,
+            "scan_dao_deposits_by_lock expected lock hash 32 bytes, got {}",
             lock_hash.len()
         );
 
@@ -455,8 +455,8 @@ impl CkbadgerStore {
         cursor_key_exclusive: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, DaoDepositCacheEntry)>> {
         anyhow::ensure!(
-            lock_hash.len() >= 32,
-            "list_dao_deposits_by_lock_paginated expected lock hash >= 32 bytes, got {}",
+            lock_hash.len() == 32,
+            "list_dao_deposits_by_lock_paginated expected lock hash 32 bytes, got {}",
             lock_hash.len()
         );
 
@@ -855,6 +855,34 @@ mod tests {
             .unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].1.deposit_block_number, 10);
+    }
+
+    #[test]
+    fn test_scan_dao_deposits_by_lock_rejects_non_32_byte_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let err = store
+            .scan_dao_deposits_by_lock(&[0x11; 33], |_, _| Ok(()))
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("scan_dao_deposits_by_lock expected lock hash 32 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_list_dao_deposits_by_lock_paginated_rejects_non_32_byte_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let err = store
+            .list_dao_deposits_by_lock_paginated(&[0x11; 33], 1, None)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("list_dao_deposits_by_lock_paginated expected lock hash 32 bytes"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

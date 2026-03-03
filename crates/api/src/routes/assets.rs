@@ -884,7 +884,6 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     Ok(out)
 }
 
-#[cfg(test)]
 pub(crate) fn count_canonical_nft_collection_activities(
     store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
@@ -929,6 +928,7 @@ pub(crate) fn count_canonical_nft_collection_activities(
 }
 
 pub(crate) fn count_nft_collection_activities_cached(
+    store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
     mem_cache: &InMemoryCache,
     collection_id: &[u8],
@@ -941,7 +941,7 @@ pub(crate) fn count_nft_collection_activities_cached(
         return Ok(cached);
     }
 
-    let total = append_only_store.count_nft_collection_activities(collection_id)?;
+    let total = count_canonical_nft_collection_activities(store, append_only_store, collection_id)?;
     mem_cache.set(&cache_key, &total, NFT_ACTIVITY_COUNT_CACHE_TTL);
     Ok(total)
 }
@@ -1703,6 +1703,7 @@ async fn get_nft_collection(
 
     let holders_count = count_nft_collection_holders(&state, &collection_id_bytes, &agg)?;
     let activities_count = count_nft_collection_activities_cached(
+        state.store.as_ref(),
         state.append_only_store.as_ref(),
         &state.mem_cache,
         &collection_id_bytes,
@@ -2907,9 +2908,10 @@ mod tests {
         assert_eq!(count, 2);
 
         let mem_cache = InMemoryCache::new();
-        let fast_count =
-            count_nft_collection_activities_cached(&append, &mem_cache, &collection_id).unwrap();
-        assert_eq!(fast_count, 3);
+        let canonical_cached =
+            count_nft_collection_activities_cached(&domain, &append, &mem_cache, &collection_id)
+                .unwrap();
+        assert_eq!(canonical_cached, 2);
 
         let mut append_batch = StoreBatch::new(&append);
         append_batch.put_nft_collection_activity(
@@ -2920,7 +2922,8 @@ mod tests {
         );
         append_batch.commit().unwrap();
         let cached_count =
-            count_nft_collection_activities_cached(&append, &mem_cache, &collection_id).unwrap();
-        assert_eq!(cached_count, 3);
+            count_nft_collection_activities_cached(&domain, &append, &mem_cache, &collection_id)
+                .unwrap();
+        assert_eq!(cached_count, 2);
     }
 }

@@ -444,6 +444,45 @@ fn parse_hash_type_label_to_i16(hash_type: &str) -> Result<i16, RouteError> {
     }
 }
 
+fn decode_hex_bytes_with_context(
+    raw: &str,
+    field: &str,
+    context: &str,
+    expected_len: Option<usize>,
+) -> Result<Vec<u8>, RouteError> {
+    let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw)).map_err(|e| {
+        ApiError::internal(format!(
+            "invalid hex for {} while {}: value='{}', error={}",
+            field, context, raw, e
+        ))
+    })?;
+    if let Some(expected) = expected_len {
+        if bytes.len() != expected {
+            return Err(ApiError::internal(format!(
+                "invalid byte length for {} while {}: expected {}, got {}",
+                field,
+                context,
+                expected,
+                bytes.len()
+            )));
+        }
+    }
+    Ok(bytes)
+}
+
+fn parse_u64_hex_field_with_context(
+    raw: &str,
+    field: &str,
+    context: &str,
+) -> Result<u64, RouteError> {
+    u64::from_str_radix(raw.strip_prefix("0x").unwrap_or(raw), 16).map_err(|e| {
+        ApiError::internal(format!(
+            "invalid hex u64 for {} while {}: value='{}', error={}",
+            field, context, raw, e
+        ))
+    })
+}
+
 fn is_dao_type_code_hash_hex(code_hash: &str) -> bool {
     code_hash
         .strip_prefix("0x")
@@ -904,23 +943,34 @@ fn build_inputs_outputs_from_ckb(
         .map(|input| -> Result<TransactionInputResponse, RouteError> {
             let prev_tx_hash_hex = &input.previous_output.tx_hash;
             let prev_index_hex = &input.previous_output.index;
+            let input_context = format!(
+                "building input for tx=0x{} prev_outpoint=({}, {})",
+                hex::encode(tx_view.hash().raw_data()),
+                prev_tx_hash_hex,
+                prev_index_hex
+            );
             let prev_index = u32::from_str_radix(
                 prev_index_hex.strip_prefix("0x").unwrap_or(prev_index_hex),
                 16,
             )
-            .unwrap_or(0);
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "invalid previous_output.index while {}: value='{}', error={}",
+                    input_context, prev_index_hex, e
+                ))
+            })?;
 
             let since = &input.since;
 
             // Try to look up the previous output cell for capacity/lock info
-            let prev_tx_hash_bytes = hex::decode(
-                prev_tx_hash_hex
-                    .strip_prefix("0x")
-                    .unwrap_or(prev_tx_hash_hex),
-            )
-            .unwrap_or_default();
+            let prev_tx_hash_bytes = decode_hex_bytes_with_context(
+                prev_tx_hash_hex,
+                "input.previous_output.tx_hash",
+                &input_context,
+                Some(32),
+            )?;
 
-            let (capacity, lock, type_script, address) = if prev_tx_hash_bytes.len() == 32 {
+            let (capacity, lock, type_script, address) = {
                 // Try live cells first, then consumed cells in our store
                 let cell_info = core_store
                     .get_cell(&prev_tx_hash_bytes, prev_index as i16)
@@ -989,33 +1039,32 @@ fn build_inputs_outputs_from_ckb(
                         if let Some(prev_tx) = ckb_store.get_transaction(&prev_hash) {
                             let rpc_prev_tx = ckb_store_reader::convert_transaction_view(&prev_tx);
                             if let Some(output) = rpc_prev_tx.outputs.get(prev_index as usize) {
-                                let cap = u64::from_str_radix(
-                                    output
-                                        .capacity
-                                        .strip_prefix("0x")
-                                        .unwrap_or(&output.capacity),
-                                    16,
-                                )
-                                .unwrap_or(0);
+                                let output_context = format!(
+                                    "building input fallback for tx=0x{} prev_outpoint=0x{}:{}",
+                                    hex::encode(tx_view.hash().raw_data()),
+                                    hex::encode(prev_hash),
+                                    prev_index
+                                );
+                                let cap = parse_u64_hex_field_with_context(
+                                    &output.capacity,
+                                    "output.capacity",
+                                    &output_context,
+                                )?;
                                 inputs_capacity += cap as u128;
 
-                                let code_hash = hex::decode(
-                                    output
-                                        .lock
-                                        .code_hash
-                                        .strip_prefix("0x")
-                                        .unwrap_or(&output.lock.code_hash),
-                                )
-                                .unwrap_or_default();
+                                let code_hash = decode_hex_bytes_with_context(
+                                    &output.lock.code_hash,
+                                    "output.lock.code_hash",
+                                    &output_context,
+                                    Some(32),
+                                )?;
                                 let ht = parse_hash_type_label_to_i16(&output.lock.hash_type)?;
-                                let args = hex::decode(
-                                    output
-                                        .lock
-                                        .args
-                                        .strip_prefix("0x")
-                                        .unwrap_or(&output.lock.args),
-                                )
-                                .unwrap_or_default();
+                                let args = decode_hex_bytes_with_context(
+                                    &output.lock.args,
+                                    "output.lock.args",
+                                    &output_context,
+                                    None,
+                                )?;
 
                                 let lock_resp = ScriptResponse {
                                     code_hash: output.lock.code_hash.clone(),
@@ -1035,20 +1084,21 @@ fn build_inputs_outputs_from_ckb(
                                     .get_cell_data(&prev_hash, prev_index)
                                     .map(|d| d.len())
                                     .unwrap_or(0);
-                                let occ = occupied_capacity_bytes(
-                                    args.len(),
-                                    output.type_.as_ref().map(|type_script| {
-                                        hex::decode(
-                                            type_script
-                                                .args
-                                                .strip_prefix("0x")
-                                                .unwrap_or(&type_script.args),
+                                let type_args_len = output
+                                    .type_
+                                    .as_ref()
+                                    .map(|type_script| {
+                                        decode_hex_bytes_with_context(
+                                            &type_script.args,
+                                            "output.type.args",
+                                            &output_context,
+                                            None,
                                         )
-                                        .unwrap_or_default()
-                                        .len()
-                                    }),
-                                    data_len,
-                                );
+                                        .map(|v| v.len())
+                                    })
+                                    .transpose()?;
+                                let occ =
+                                    occupied_capacity_bytes(args.len(), type_args_len, data_len);
                                 inputs_occupied_capacity += occ as u128;
 
                                 (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
@@ -1060,8 +1110,6 @@ fn build_inputs_outputs_from_ckb(
                         }
                     }
                 }
-            } else {
-                (None, None, None, None)
             };
 
             if type_script
@@ -1088,87 +1136,103 @@ fn build_inputs_outputs_from_ckb(
     let mut outputs_capacity: u128 = 0;
     let mut outputs_occupied_capacity: u128 = 0;
 
+    let tx_hash: Vec<u8> = tx_view.hash().raw_data().to_vec();
     let outputs: Vec<TransactionOutputResponse> = rpc_tx
         .outputs
         .iter()
         .enumerate()
-        .map(|(output_idx, output)| {
-            let cap_hex = &output.capacity;
-            let cap =
-                u64::from_str_radix(cap_hex.strip_prefix("0x").unwrap_or(cap_hex), 16).unwrap_or(0);
-            outputs_capacity += cap as u128;
+        .map(
+            |(output_idx, output)| -> Result<TransactionOutputResponse, RouteError> {
+                let output_context = format!(
+                    "building output for tx=0x{} output_index={}",
+                    hex::encode(&tx_hash),
+                    output_idx
+                );
+                let cap_hex = &output.capacity;
+                let cap =
+                    parse_u64_hex_field_with_context(cap_hex, "output.capacity", &output_context)?;
+                outputs_capacity += cap as u128;
 
-            let lock = &output.lock;
-            let code_hash_bytes =
-                hex::decode(lock.code_hash.strip_prefix("0x").unwrap_or(&lock.code_hash))
-                    .unwrap_or_default();
-            let ht = match lock.hash_type.as_str() {
-                "data" => 0i16,
-                "type" => 1i16,
-                "data1" => 2i16,
-                "data2" => 4i16,
-                _ => 0i16,
-            };
-            let args_bytes =
-                hex::decode(lock.args.strip_prefix("0x").unwrap_or(&lock.args)).unwrap_or_default();
+                let lock = &output.lock;
+                let code_hash_bytes = decode_hex_bytes_with_context(
+                    &lock.code_hash,
+                    "output.lock.code_hash",
+                    &output_context,
+                    Some(32),
+                )?;
+                let ht = parse_hash_type_label_to_i16(&lock.hash_type)?;
+                let args_bytes = decode_hex_bytes_with_context(
+                    &lock.args,
+                    "output.lock.args",
+                    &output_context,
+                    None,
+                )?;
 
-            let lock_resp = ScriptResponse {
-                code_hash: lock.code_hash.clone(),
-                hash_type: lock.hash_type.clone(),
-                args: lock.args.clone(),
-            };
+                let lock_resp = ScriptResponse {
+                    code_hash: lock.code_hash.clone(),
+                    hash_type: lock.hash_type.clone(),
+                    args: lock.args.clone(),
+                };
 
-            let address = script_to_address(&code_hash_bytes, ht, &args_bytes, network).ok();
+                let address = script_to_address(&code_hash_bytes, ht, &args_bytes, network).ok();
 
-            let type_resp = output.type_.as_ref().map(|t| ScriptResponse {
-                code_hash: t.code_hash.clone(),
-                hash_type: t.hash_type.clone(),
-                args: t.args.clone(),
-            });
+                let type_resp = output.type_.as_ref().map(|t| ScriptResponse {
+                    code_hash: t.code_hash.clone(),
+                    hash_type: t.hash_type.clone(),
+                    args: t.args.clone(),
+                });
 
-            let type_args_len = output.type_.as_ref().map(|t| {
-                hex::decode(t.args.strip_prefix("0x").unwrap_or(&t.args))
-                    .unwrap_or_default()
-                    .len()
-            });
+                let type_args_len = output
+                    .type_
+                    .as_ref()
+                    .map(|t| {
+                        decode_hex_bytes_with_context(
+                            &t.args,
+                            "output.type.args",
+                            &output_context,
+                            None,
+                        )
+                        .map(|v| v.len())
+                    })
+                    .transpose()?;
 
-            // Get data size from CKB store
-            let tx_hash: Vec<u8> = tx_view.hash().raw_data().to_vec();
-            let data_size = if tx_hash.len() == 32 {
-                let mut th = [0u8; 32];
-                th.copy_from_slice(&tx_hash);
-                ckb_store
-                    .get_cell_data(&th, output_idx as u32)
-                    .map(|d| d.len())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
+                // Get data size from CKB store
+                let data_size = if tx_hash.len() == 32 {
+                    let mut th = [0u8; 32];
+                    th.copy_from_slice(&tx_hash);
+                    ckb_store
+                        .get_cell_data(&th, output_idx as u32)
+                        .map(|d| d.len())
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
 
-            let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
-            outputs_occupied_capacity += occ as u128;
+                let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
+                outputs_occupied_capacity += occ as u128;
 
-            let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
-            let (cell_type, virtual_occupied_capacity) = if is_satoshi {
-                (
-                    Some("genesis_special_burn".to_string()),
-                    Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
-                )
-            } else {
-                (None, None)
-            };
+                let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+                let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+                    (
+                        Some("genesis_special_burn".to_string()),
+                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                    )
+                } else {
+                    (None, None)
+                };
 
-            TransactionOutputResponse {
-                capacity: cap.to_string(),
-                occupied_capacity: occ as i64,
-                virtual_occupied_capacity,
-                cell_type,
-                lock: Some(lock_resp),
-                r#type: type_resp,
-                address,
-            }
-        })
-        .collect();
+                Ok(TransactionOutputResponse {
+                    capacity: cap.to_string(),
+                    occupied_capacity: occ as i64,
+                    virtual_occupied_capacity,
+                    cell_type,
+                    lock: Some(lock_resp),
+                    r#type: type_resp,
+                    address,
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
 
     let is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
         input.previous_output.tx_hash
@@ -1894,6 +1958,39 @@ mod tests {
              .0
             .message
             .contains("unknown script hash_type label in CKB store fallback"));
+    }
+
+    #[test]
+    fn test_decode_hex_bytes_with_context_rejects_invalid_hex() {
+        let err =
+            decode_hex_bytes_with_context("0xzz", "lock.args", "unit-test", None).unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("invalid hex for lock.args while unit-test"));
+    }
+
+    #[test]
+    fn test_decode_hex_bytes_with_context_rejects_len_mismatch() {
+        let err = decode_hex_bytes_with_context("0x1234", "lock.code_hash", "unit-test", Some(32))
+            .unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("invalid byte length for lock.code_hash while unit-test"));
+    }
+
+    #[test]
+    fn test_parse_u64_hex_field_with_context_rejects_invalid_hex() {
+        let err = parse_u64_hex_field_with_context("0x-not-hex", "output.capacity", "unit-test")
+            .unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("invalid hex u64 for output.capacity while unit-test"));
     }
 
     #[test]

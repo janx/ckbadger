@@ -653,8 +653,8 @@ pub fn encode_dao_by_lock_block_key(
     outpoint_key: &[u8],
 ) -> [u8; DAO_BY_LOCK_BLOCK_KEY_SIZE] {
     assert!(
-        lock_hash.len() >= 32,
-        "encode_dao_by_lock_block_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len() == 32,
+        "encode_dao_by_lock_block_key: expected lock_hash 32 bytes, got {}",
         lock_hash.len()
     );
     assert!(
@@ -665,7 +665,7 @@ pub fn encode_dao_by_lock_block_key(
     );
     let mut key = [0u8; DAO_BY_LOCK_BLOCK_KEY_SIZE];
     let block_desc = (i64::MAX - deposit_block).to_be_bytes();
-    key[..32].copy_from_slice(&lock_hash[..32]);
+    key[..32].copy_from_slice(lock_hash);
     key[32..40].copy_from_slice(&block_desc);
     key[40..74].copy_from_slice(outpoint_key);
     key
@@ -687,12 +687,12 @@ pub fn decode_dao_by_lock_block_key(key: &[u8]) -> (Vec<u8>, i64, Vec<u8>, i16) 
 
 pub fn encode_dao_by_lock_prefix(lock_hash: &[u8]) -> [u8; 32] {
     assert!(
-        lock_hash.len() >= 32,
-        "encode_dao_by_lock_prefix: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len() == 32,
+        "encode_dao_by_lock_prefix: expected lock_hash 32 bytes, got {}",
         lock_hash.len()
     );
     let mut prefix = [0u8; 32];
-    prefix.copy_from_slice(&lock_hash[..32]);
+    prefix.copy_from_slice(lock_hash);
     prefix
 }
 
@@ -852,6 +852,13 @@ mod tests {
     fn test_dao_index_prefix_helpers() {
         assert_eq!(encode_dao_by_status_prefix(1), 1i16.to_be_bytes());
         assert_eq!(encode_dao_by_lock_prefix(&[0x22; 32]), [0x22; 32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "encode_dao_by_lock_prefix: expected lock_hash 32 bytes")]
+    fn test_dao_lock_prefix_panics_on_non_32_len() {
+        let oversized = [0x33; 33];
+        let _ = encode_dao_by_lock_prefix(&oversized);
     }
 
     #[test]
