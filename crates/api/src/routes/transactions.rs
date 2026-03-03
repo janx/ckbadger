@@ -7,7 +7,6 @@ use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
-use ckbadger_common::parse_hex_to_bytes;
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -540,7 +539,7 @@ async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
     let rpc_response: RpcResponse = response.json().await.ok()?;
     let tx = rpc_response.result?.transaction?;
 
-    Some(calculate_serialized_tx_size(&tx))
+    calculate_serialized_tx_size(&tx)
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -593,7 +592,12 @@ struct RpcTxSizeScript {
     args: String,
 }
 
-fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> i32 {
+fn try_decode_hex_bytes(raw: &str) -> Option<Vec<u8>> {
+    let normalized = raw.strip_prefix("0x").unwrap_or(raw);
+    hex::decode(normalized).ok()
+}
+
+fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> Option<i32> {
     const MOLECULE_NUMBER_SIZE: usize = 4;
     const OUTPOINT_SIZE: usize = 36;
     const CELLINPUT_SIZE: usize = 44;
@@ -619,19 +623,21 @@ fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> i32 {
 
         raw_size += MOLECULE_NUMBER_SIZE;
         for output in &tx.outputs {
-            let lock_args = parse_hex_to_bytes(&output.lock.args);
+            let lock_args = try_decode_hex_bytes(&output.lock.args)?;
             let lock_size = SCRIPT_TABLE_HEADER_SIZE
                 + SCRIPT_FIXED_FIELDS_SIZE
                 + MOLECULE_NUMBER_SIZE
                 + lock_args.len();
 
-            let type_size = output.type_.as_ref().map_or(0, |type_script| {
-                let type_args = parse_hex_to_bytes(&type_script.args);
-                SCRIPT_TABLE_HEADER_SIZE
-                    + SCRIPT_FIXED_FIELDS_SIZE
-                    + MOLECULE_NUMBER_SIZE
-                    + type_args.len()
-            });
+            let type_size = output.type_.as_ref().map_or(Some(0), |type_script| {
+                let type_args = try_decode_hex_bytes(&type_script.args)?;
+                Some(
+                    SCRIPT_TABLE_HEADER_SIZE
+                        + SCRIPT_FIXED_FIELDS_SIZE
+                        + MOLECULE_NUMBER_SIZE
+                        + type_args.len(),
+                )
+            })?;
 
             let output_size = MOLECULE_NUMBER_SIZE * 4 + 8 + lock_size + type_size;
             raw_size += MOLECULE_NUMBER_SIZE + output_size;
@@ -640,7 +646,7 @@ fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> i32 {
         raw_size += MOLECULE_NUMBER_SIZE;
         raw_size += tx.outputs_data.len() * MOLECULE_NUMBER_SIZE;
         for output_data in &tx.outputs_data {
-            let data = parse_hex_to_bytes(output_data);
+            let data = try_decode_hex_bytes(output_data)?;
             raw_size += MOLECULE_NUMBER_SIZE + data.len();
         }
 
@@ -652,11 +658,11 @@ fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> i32 {
     size += MOLECULE_NUMBER_SIZE;
     size += tx.witnesses.len() * MOLECULE_NUMBER_SIZE;
     for witness in &tx.witnesses {
-        let witness_data = parse_hex_to_bytes(witness);
+        let witness_data = try_decode_hex_bytes(witness)?;
         size += MOLECULE_NUMBER_SIZE + witness_data.len();
     }
 
-    size as i32
+    i32::try_from(size).ok()
 }
 
 async fn fetch_witnesses_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<Vec<String>> {
@@ -1792,7 +1798,29 @@ mod tests {
         let packed: ckb_types::packed::Transaction = tx_view.inner.into();
         let expected = i32::try_from(packed.as_slice().len()).expect("packed tx fits in i32");
 
-        assert_eq!(calculate_serialized_tx_size(&tx), expected);
+        assert_eq!(calculate_serialized_tx_size(&tx), Some(expected));
+    }
+
+    #[test]
+    fn test_calculate_serialized_tx_size_returns_none_on_invalid_hex() {
+        let tx = RpcTxSizeView {
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![RpcTxSizeCellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: RpcTxSizeScript {
+                    code_hash: "0x00".to_string(),
+                    hash_type: "type".to_string(),
+                    args: "0xzz".to_string(),
+                },
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![],
+        };
+
+        assert_eq!(calculate_serialized_tx_size(&tx), None);
     }
 
     #[test]

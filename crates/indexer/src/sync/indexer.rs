@@ -337,6 +337,63 @@ fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
+fn build_activity_input_views(
+    tx_data: &TxData,
+    block_number: i64,
+    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+) -> Result<Vec<crate::db::writer::activities::InputCellView>> {
+    if tx_data.is_cellbase {
+        return Ok(Vec::new());
+    }
+
+    tx_data
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(input_index, input)| {
+            let previous_output_index =
+                i16::try_from(input.previous_output_index).map_err(|_| {
+                    anyhow!(
+                        "input previous output index out of i16 range while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, previous_output_index={}",
+                        block_number,
+                        hex::encode(tx_data.hash),
+                        tx_data.tx_index,
+                        input_index,
+                        input.previous_output_index
+                    )
+                })?;
+            let key = (input.previous_tx_hash.to_vec(), previous_output_index);
+            let info = input_cell_info
+                .get(&key)
+                .or_else(|| batch_cell_infos.get(&key))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing input cell info while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, prev_outpoint=0x{}:{}",
+                        block_number,
+                        hex::encode(tx_data.hash),
+                        tx_data.tx_index,
+                        input_index,
+                        hex::encode(input.previous_tx_hash),
+                        previous_output_index
+                    )
+                })?;
+
+            Ok(crate::db::writer::activities::InputCellView {
+                lock_script_hash: info.lock_script_hash.clone(),
+                capacity: info.capacity,
+                occupied_capacity: info.occupied_capacity,
+                type_code_hash: info.type_code_hash.clone(),
+                type_script_hash: info.type_script_hash.clone(),
+                type_args: info.type_args.clone(),
+                udt_amount: info.udt_amount,
+                data: Vec::new(),
+                data_size: info.data_size,
+            })
+        })
+        .collect()
+}
+
 const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
 const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 
@@ -10040,119 +10097,85 @@ impl Indexer {
                     // CFs: REORG_UNDO_LOG_BY_BLOCK, ACTIVITIES
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
-                        let t = Instant::now();
-                        let mut domain_batch = StoreBatch::new(store);
-                        let mut append_batch = StoreBatch::new(append_only_store);
-                        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
-                        let token_info_cache = load_activity_token_info_cache(
-                            store,
-                            &all_tx_data,
-                            &input_cell_info,
-                            &batch_cell_infos,
-                        )?;
-                        let mut block_tx_idx = 0usize;
-                        for parsed in all_parsed_blocks {
-                            let tx_count = parsed.transactions_count as usize;
-                            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
-                            block_tx_idx += tx_count;
+                            let t = Instant::now();
+                            let mut domain_batch = StoreBatch::new(store);
+                            let mut append_batch = StoreBatch::new(append_only_store);
+                            let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+                            let token_info_cache = load_activity_token_info_cache(
+                                store,
+                                &all_tx_data,
+                                &input_cell_info,
+                                &batch_cell_infos,
+                            )?;
+                            let mut block_tx_idx = 0usize;
+                            for parsed in all_parsed_blocks {
+                                let tx_count = parsed.transactions_count as usize;
+                                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+                                block_tx_idx += tx_count;
 
-                            let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
-                                .iter()
-                                .map(|td| {
-                                    let inputs: Vec<crate::db::writer::activities::InputCellView> =
-                                        if td.is_cellbase {
-                                            Vec::new()
-                                        } else {
-                                            td.inputs
-                                                .iter()
-                                                .map(|inp| {
-                                                    let key = (
-                                                        inp.previous_tx_hash.to_vec(),
-                                                        inp.previous_output_index as i16,
-                                                    );
-                                                    let cell_info = input_cell_info
-                                                        .get(&key)
-                                                        .or_else(|| batch_cell_infos.get(&key));
-                                                    if let Some(info) = cell_info {
-                                                        crate::db::writer::activities::InputCellView {
-                                                            lock_script_hash: info
-                                                                .lock_script_hash
-                                                                .clone(),
-                                                            capacity: info.capacity,
-                                                            occupied_capacity: info.occupied_capacity,
-                                                            type_code_hash: info.type_code_hash.clone(),
-                                                            type_script_hash: info
-                                                                .type_script_hash
-                                                                .clone(),
-                                                            type_args: info.type_args.clone(),
-                                                            udt_amount: info.udt_amount,
-                                                            data: Vec::new(),
-                                                            data_size: info.data_size,
-                                                        }
-                                                    } else {
-                                                        crate::db::writer::activities::InputCellView {
-                                                            lock_script_hash: Vec::new(),
-                                                            capacity: 0,
-                                                            occupied_capacity: 0,
-                                                            type_code_hash: None,
-                                                            type_script_hash: None,
-                                                            type_args: None,
-                                                            udt_amount: None,
-                                                            data: Vec::new(),
-                                                            data_size: 0,
-                                                        }
-                                                    }
+                                let tx_views: Vec<crate::db::writer::activities::TxView<'_>> =
+                                    tx_slice
+                                        .iter()
+                                        .map(
+                                            |td| -> Result<
+                                                crate::db::writer::activities::TxView<'_>,
+                                            > {
+                                                let inputs = build_activity_input_views(
+                                                    td,
+                                                    parsed.number,
+                                                    &input_cell_info,
+                                                    &batch_cell_infos,
+                                                )?;
+                                                Ok(crate::db::writer::activities::TxView {
+                                                    tx_hash: &td.hash,
+                                                    tx_index: td.tx_index,
+                                                    block_number: parsed.number,
+                                                    timestamp: parsed.timestamp.timestamp_millis(),
+                                                    is_cellbase: td.is_cellbase,
+                                                    inputs,
+                                                    outputs: &td.cells,
+                                                    outputs_data: &td.outputs_data,
                                                 })
-                                                .collect()
-                                        };
-                                    crate::db::writer::activities::TxView {
-                                        tx_hash: &td.hash,
-                                        tx_index: td.tx_index,
-                                        block_number: parsed.number,
-                                        timestamp: parsed.timestamp.timestamp_millis(),
-                                        is_cellbase: td.is_cellbase,
-                                        inputs,
-                                        outputs: &td.cells,
-                                        outputs_data: &td.outputs_data,
-                                    }
-                                })
-                                .collect();
+                                            },
+                                        )
+                                        .collect::<Result<Vec<_>>>()?;
 
-                            let activities = crate::db::writer::activities::build_activities_for_block(
-                                &tx_views,
-                                &token_info_cache,
-                            );
-                            for (lock_hash, entry) in activities {
-                                put_activity_with_undo_log(
-                                    &mut domain_batch,
-                                    &mut append_batch,
-                                    &mut append_undo_seq_by_block,
-                                    &lock_hash,
-                                    entry.block_number,
-                                    entry.tx_index,
-                                    &entry,
-                                );
+                                let activities =
+                                    crate::db::writer::activities::build_activities_for_block(
+                                        &tx_views,
+                                        &token_info_cache,
+                                    );
+                                for (lock_hash, entry) in activities {
+                                    put_activity_with_undo_log(
+                                        &mut domain_batch,
+                                        &mut append_batch,
+                                        &mut append_undo_seq_by_block,
+                                        &lock_hash,
+                                        entry.block_number,
+                                        entry.tx_index,
+                                        &entry,
+                                    );
+                                }
                             }
-                        }
-                        let mut commit_ms = 0.0;
-                        if !domain_batch.is_empty() {
-                            commit_ms += commit_phase_no_wal(
-                                "T_ACT_reorg_history",
-                                first_block,
-                                last_block,
-                                domain_batch,
-                            )?;
-                        }
-                        if !append_batch.is_empty() {
-                            commit_ms += commit_phase_no_wal(
-                                "T_ACT_activities",
-                                first_block,
-                                last_block,
-                                append_batch,
-                            )?;
-                        }
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
-                    }))
+                            let mut commit_ms = 0.0;
+                            if !domain_batch.is_empty() {
+                                commit_ms += commit_phase_no_wal(
+                                    "T_ACT_reorg_history",
+                                    first_block,
+                                    last_block,
+                                    domain_batch,
+                                )?;
+                            }
+                            if !append_batch.is_empty() {
+                                commit_ms += commit_phase_no_wal(
+                                    "T_ACT_activities",
+                                    first_block,
+                                    last_block,
+                                    append_batch,
+                                )?;
+                            }
+                            Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                        }))
                     } else {
                         None
                     };
@@ -10763,6 +10786,8 @@ impl Indexer {
                 }
             }
 
+            let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
+
             // Group C: NFT/Spore processing
             {
                 let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
@@ -11135,7 +11160,6 @@ impl Indexer {
                         }
                     }
                 }
-                let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
                 // Write .bit collection activities directly (bypassing accumulator)
                 for (tx_hash, activity) in &dotbit_tx_activity_data {
                     let inserted = resolve_dotbit_tx_activity(
@@ -11181,9 +11205,6 @@ impl Indexer {
                         &append_key,
                     );
                 }
-                if !nft_activity_batch.is_empty() {
-                    nft_activity_batch.commit()?;
-                }
             }
 
             // Activity writes (live sync)
@@ -11203,50 +11224,14 @@ impl Indexer {
 
                     let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
                         .iter()
-                        .map(|td| {
-                            let inputs: Vec<crate::db::writer::activities::InputCellView> =
-                                if td.is_cellbase {
-                                    Vec::new()
-                                } else {
-                                    td.inputs
-                                        .iter()
-                                        .map(|inp| {
-                                            let key = (
-                                                inp.previous_tx_hash.to_vec(),
-                                                inp.previous_output_index as i16,
-                                            );
-                                            let cell_info = input_cell_info
-                                                .get(&key)
-                                                .or_else(|| batch_cell_infos.get(&key));
-                                            if let Some(info) = cell_info {
-                                                crate::db::writer::activities::InputCellView {
-                                                    lock_script_hash: info.lock_script_hash.clone(),
-                                                    capacity: info.capacity,
-                                                    occupied_capacity: info.occupied_capacity,
-                                                    type_code_hash: info.type_code_hash.clone(),
-                                                    type_script_hash: info.type_script_hash.clone(),
-                                                    type_args: info.type_args.clone(),
-                                                    udt_amount: info.udt_amount,
-                                                    data: Vec::new(),
-                                                    data_size: info.data_size,
-                                                }
-                                            } else {
-                                                crate::db::writer::activities::InputCellView {
-                                                    lock_script_hash: Vec::new(),
-                                                    capacity: 0,
-                                                    occupied_capacity: 0,
-                                                    type_code_hash: None,
-                                                    type_script_hash: None,
-                                                    type_args: None,
-                                                    udt_amount: None,
-                                                    data: Vec::new(),
-                                                    data_size: 0,
-                                                }
-                                            }
-                                        })
-                                        .collect()
-                                };
-                            crate::db::writer::activities::TxView {
+                        .map(|td| -> Result<crate::db::writer::activities::TxView<'_>> {
+                            let inputs = build_activity_input_views(
+                                td,
+                                parsed.number,
+                                &input_cell_info,
+                                &batch_cell_infos,
+                            )?;
+                            Ok(crate::db::writer::activities::TxView {
                                 tx_hash: &td.hash,
                                 tx_index: td.tx_index,
                                 block_number: parsed.number,
@@ -11255,9 +11240,9 @@ impl Indexer {
                                 inputs,
                                 outputs: &td.cells,
                                 outputs_data: &td.outputs_data,
-                            }
+                            })
                         })
-                        .collect();
+                        .collect::<Result<Vec<_>>>()?;
 
                     let activities = crate::db::writer::activities::build_activities_for_block(
                         &tx_views,
@@ -11285,6 +11270,11 @@ impl Indexer {
                 let script_commit_started = Instant::now();
                 domain_analytics_batch.commit()?;
                 write_commit_ms += script_commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            if !nft_activity_batch.is_empty() {
+                let nft_activity_commit_started = Instant::now();
+                nft_activity_batch.commit()?;
+                write_commit_ms += nft_activity_commit_started.elapsed().as_secs_f64() * 1000.0;
             }
             if !append_history_batch.is_empty() {
                 let append_commit_started = Instant::now();
@@ -12782,6 +12772,66 @@ mod tests {
 
         let missing = collect_missing_input_outpoints(&input_outpoints, &resolved, &same_batch);
         assert_eq!(missing, vec![(vec![0xAA; 32], 0)]);
+    }
+
+    #[test]
+    fn test_build_activity_input_views_errors_when_input_cell_is_missing() {
+        let previous_tx_hash = [0x44; 32];
+        let tx = dummy_tx_data(
+            [0x11; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 2,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let err = match build_activity_input_views(&tx, 99, &HashMap::new(), &HashMap::new()) {
+            Ok(_) => panic!("missing input cell info should fail fast"),
+            Err(err) => err,
+        };
+        assert!(err
+            .to_string()
+            .contains("missing input cell info while building activities"));
+        assert!(err.to_string().contains("block=99"));
+    }
+
+    #[test]
+    fn test_build_activity_input_views_uses_batch_fallback_cell_info() {
+        let previous_tx_hash = [0x55; 32];
+        let tx = dummy_tx_data(
+            [0x22; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 3,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let mut info = dummy_live_cell_info();
+        info.capacity = 123;
+        info.occupied_capacity = 456;
+        info.data_size = 16;
+        info.lock_script_hash = vec![0xAB; 32];
+
+        let mut batch_cell_infos = HashMap::new();
+        batch_cell_infos.insert((previous_tx_hash.to_vec(), 3), info.clone());
+
+        let inputs = build_activity_input_views(&tx, 100, &HashMap::new(), &batch_cell_infos)
+            .expect("input lookup should fall back to same-batch cell cache");
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].capacity, info.capacity);
+        assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity);
+        assert_eq!(inputs[0].data_size, info.data_size);
+        assert_eq!(inputs[0].lock_script_hash, info.lock_script_hash);
     }
 
     #[test]

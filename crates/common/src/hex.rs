@@ -6,17 +6,20 @@ pub fn parse_hex_to_bytes(hex: &str) -> Vec<u8> {
 }
 
 /// Parses a hex string (with or without "0x" prefix) to a fixed-size 32-byte hash.
-/// Returns [0u8; 32] if the input is invalid or not exactly 32 bytes.
 pub fn parse_hex_to_hash(hex: &str) -> [u8; 32] {
+    let raw = hex;
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    let bytes = hex::decode(hex).unwrap_or_default();
-    if bytes.len() == 32 {
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        arr
-    } else {
-        [0u8; 32]
+    let bytes = hex::decode(hex).unwrap_or_else(|e| panic!("invalid hex hash '{}': {}", raw, e));
+    if bytes.len() != 32 {
+        panic!(
+            "invalid hash length '{}': expected 32 bytes, got {}",
+            raw,
+            bytes.len()
+        );
     }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    arr
 }
 
 /// Parses a hex string to u32.
@@ -89,33 +92,33 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_hex_to_hash_too_short() {
-        let result = parse_hex_to_hash("0x1234");
-        assert_eq!(result, [0u8; 32]);
+    #[should_panic(expected = "invalid hash length")]
+    fn test_parse_hex_to_hash_too_short_panics() {
+        let _ = parse_hex_to_hash("0x1234");
     }
 
     #[test]
-    fn test_parse_hex_to_hash_too_long() {
+    #[should_panic(expected = "invalid hash length")]
+    fn test_parse_hex_to_hash_too_long_panics() {
         let hex = "0x00000000000000000000000000000000000000000000000000000000000000000000";
-        let result = parse_hex_to_hash(hex);
-        assert_eq!(result, [0u8; 32]);
+        let _ = parse_hex_to_hash(hex);
     }
 
     #[test]
-    fn test_parse_hex_to_hash_invalid_hex() {
-        let result = parse_hex_to_hash("0xZZZZZZ");
-        assert_eq!(result, [0u8; 32]);
+    #[should_panic(expected = "invalid hex hash")]
+    fn test_parse_hex_to_hash_invalid_hex_panics() {
+        let _ = parse_hex_to_hash("0xZZZZZZ");
     }
 
     #[test]
-    fn test_parse_hex_to_hash_empty() {
-        let result = parse_hex_to_hash("");
-        assert_eq!(result, [0u8; 32]);
+    #[should_panic(expected = "invalid hash length")]
+    fn test_parse_hex_to_hash_empty_panics() {
+        let _ = parse_hex_to_hash("");
     }
 
     #[test]
-    fn test_parse_hex_to_hash_just_prefix() {
-        let result = parse_hex_to_hash("0x");
-        assert_eq!(result, [0u8; 32]);
+    #[should_panic(expected = "invalid hash length")]
+    fn test_parse_hex_to_hash_just_prefix_panics() {
+        let _ = parse_hex_to_hash("0x");
     }
 }
