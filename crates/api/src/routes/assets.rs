@@ -15,9 +15,8 @@ use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::address::compute_script_hash;
 use crate::utils::{
-    accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready,
-    parse_chart_date_range, resolve_dob_collection_name, resolve_nft_collection_name,
-    resolve_nft_collection_storage_tier_override,
+    apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready, parse_chart_date_range,
+    resolve_nft_collection_name,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
@@ -397,8 +396,9 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(tokens);
             } else {
-                // Cache cold — fall back to direct computation for tokens
-                all_cached.extend(compute_token_assets(state)?);
+                return Err(ApiError::internal(
+                    "token asset cache unavailable; warmup in progress",
+                ));
             }
         }
         Some(AssetFilterType::Nft) => {
@@ -408,8 +408,9 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts);
             } else {
-                // Cache cold — fall back to direct computation for NFTs (including Spore/DOB)
-                all_cached.extend(compute_nft_assets(state)?);
+                return Err(ApiError::internal(
+                    "nft asset cache unavailable; warmup in progress",
+                ));
             }
         }
         None => {
@@ -419,8 +420,9 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(tokens);
             } else {
-                // Cache cold — fall back to direct computation for tokens
-                all_cached.extend(compute_token_assets(state)?);
+                return Err(ApiError::internal(
+                    "token asset cache unavailable; warmup in progress",
+                ));
             }
 
             if let Some(nfts) = state
@@ -429,8 +431,9 @@ fn fetch_assets_cached(
             {
                 all_cached.extend(nfts);
             } else {
-                // Cache cold — fall back to direct computation for NFTs (including Spore/DOB)
-                all_cached.extend(compute_nft_assets(state)?);
+                return Err(ApiError::internal(
+                    "nft asset cache unavailable; warmup in progress",
+                ));
             }
         }
     }
@@ -636,24 +639,6 @@ fn format_ratio_4(numerator: i64, denominator: i64) -> String {
     let whole = scaled / 10_000;
     let frac = (scaled % 10_000).abs();
     format!("{whole}.{frac:04}")
-}
-
-fn resolve_storage_tier(
-    fully_onchain: i64,
-    decentralized_external: i64,
-    centralized_dependent: i64,
-    unknown: i64,
-) -> String {
-    if centralized_dependent > 0 {
-        return "centralized_dependent".to_string();
-    }
-    if decentralized_external > 0 {
-        return "decentralized_external".to_string();
-    }
-    if fully_onchain > 0 && unknown == 0 {
-        return "fully_onchain".to_string();
-    }
-    "unknown".to_string()
 }
 
 fn asset_display_name(entry: &CachedAssetEntry) -> String {
@@ -2611,214 +2596,6 @@ async fn get_nft_collection_occupation_chart(
         to_date,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?)
-}
-
-/// Fallback: compute token assets directly using batch 24h scan (when cache is cold).
-fn compute_token_assets(
-    state: &Arc<AppState>,
-) -> Result<Vec<CachedAssetEntry>, (axum::http::StatusCode, Json<ApiError>)> {
-    let tokens = state
-        .store
-        .list_tokens()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let transfers_24h_map = state
-        .store
-        .scan_all_token_24h_transfers(now_ms)
-        .unwrap_or_default();
-    let mut result = Vec::with_capacity(tokens.len());
-
-    for (hash, info) in &tokens {
-        // Skip noise tokens: no name/symbol and no holders
-        if info.name.is_none() && info.symbol.is_none() && info.holders_count == 0 {
-            continue;
-        }
-
-        let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
-        let token_daily = state
-            .store
-            .list_token_daily_deltas(hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(token_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|err| {
-                ApiError::internal(format!(
-                    "invalid token daily deltas for type_hash=0x{}: {}",
-                    hex::encode(hash),
-                    err
-                ))
-            })?;
-
-        result.push(CachedAssetEntry {
-            id: format!("0x{}", hex::encode(hash)),
-            asset_type: "token".to_string(),
-            standard: info.standard.clone(),
-            name: info.name.clone(),
-            symbol: info.symbol.clone(),
-            icon_url: info.icon_url.clone(),
-            holders_count: info.holders_count,
-            transfers_count: info.transfers_count,
-            transfers_24h,
-            decimals: info.decimals.map(|d| d as i16),
-            total_supply: info.total_supply.map(|s| s.to_string()),
-            maximum_supply: info.max_supply.map(|s| s.to_string()),
-            content_type: None,
-            content_size: None,
-            cluster_id: None,
-            cluster_name: None,
-            live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
-            storage_tier: None,
-            fully_onchain_ratio: None,
-            fully_onchain_count: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            description: None,
-        });
-    }
-
-    Ok(result)
-}
-
-/// Fallback: compute NFT assets directly, including Spore/DOB collections.
-fn compute_nft_assets(
-    state: &Arc<AppState>,
-) -> Result<Vec<CachedAssetEntry>, (axum::http::StatusCode, Json<ApiError>)> {
-    let cluster_aggs = state
-        .store
-        .list_cluster_aggregates()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let nft_aggs = state
-        .store
-        .list_nft_collection_aggregates()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut result = Vec::with_capacity(cluster_aggs.len() + nft_aggs.len());
-    for (cluster_id_bytes, agg) in &cluster_aggs {
-        if agg.total_count == 0 {
-            continue;
-        }
-        let cluster_hex = format!("0x{}", hex::encode(cluster_id_bytes));
-        let display_name = resolve_dob_collection_name(
-            state.store.as_ref(),
-            cluster_id_bytes,
-            agg.name.as_deref(),
-        );
-        let cluster_daily = state
-            .store
-            .list_cluster_daily_deltas(cluster_id_bytes)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(cluster_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let fully_onchain_ratio = format_ratio_4(agg.fully_onchain_count, agg.live_count);
-        let storage_tier = resolve_storage_tier(
-            agg.fully_onchain_count,
-            agg.decentralized_external_count,
-            agg.centralized_dependent_count,
-            agg.unknown_count,
-        );
-
-        result.push(CachedAssetEntry {
-            id: cluster_hex.clone(),
-            asset_type: "nft".to_string(),
-            standard: "spore".to_string(),
-            name: display_name.clone(),
-            symbol: None,
-            icon_url: None,
-            holders_count: agg.owner_count,
-            transfers_count: agg.total_count,
-            transfers_24h: 0,
-            decimals: None,
-            total_supply: Some(agg.total_count.to_string()),
-            maximum_supply: None,
-            content_type: None,
-            content_size: None,
-            cluster_id: Some(cluster_hex),
-            cluster_name: display_name,
-            live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
-            storage_tier: Some(storage_tier),
-            fully_onchain_ratio: Some(fully_onchain_ratio),
-            fully_onchain_count: Some(agg.fully_onchain_count),
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            description: None,
-        });
-    }
-
-    for (collection_id_bytes, agg) in &nft_aggs {
-        if agg.total_count == 0 {
-            continue;
-        }
-        let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
-        let standard = agg.standard.asset_standard().to_string();
-        let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
-        let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
-            .unwrap_or("unknown")
-            .to_string();
-        let fully_onchain_count = if storage_tier == "fully_onchain" {
-            agg.live_count
-        } else {
-            0
-        };
-        let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
-        let nft_daily = state
-            .store
-            .list_nft_daily_deltas(collection_id_bytes)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
-        result.push(CachedAssetEntry {
-            id: collection_hex.clone(),
-            asset_type: "nft".to_string(),
-            standard,
-            name: display_name.clone(),
-            symbol: None,
-            icon_url: None,
-            holders_count: agg.live_count,
-            transfers_count: agg.total_count,
-            transfers_24h: 0,
-            decimals: None,
-            total_supply: Some(agg.total_count.to_string()),
-            maximum_supply: None,
-            content_type: None,
-            content_size: None,
-            cluster_id: Some(collection_hex.clone()),
-            cluster_name: display_name,
-            live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
-            storage_tier: Some(storage_tier),
-            fully_onchain_ratio: Some(fully_onchain_ratio),
-            fully_onchain_count: Some(fully_onchain_count),
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            description: None,
-        });
-    }
-
-    Ok(result)
 }
 
 #[cfg(test)]

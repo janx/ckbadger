@@ -6,7 +6,10 @@ use crate::utils::{
     resolve_nft_collection_storage_tier_override,
 };
 use crate::AppState;
+use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -16,6 +19,13 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 // Cache keys for assets
 pub const CACHE_KEY_ASSETS_TOKEN: &str = "assets:token";
 pub const CACHE_KEY_ASSETS_NFT: &str = "assets:nft";
+pub const CACHE_KEY_ADDRESSES_TOP: &str = "addresses:top";
+pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
+pub const CACHE_KEY_SPORES_ALL: &str = "spores:all";
+pub const CACHE_KEY_SCRIPTS_ALL: &str = "scripts:all";
+pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
+const ADDRESS_CACHE_LIMIT: usize = 500;
+const SPORE_CACHE_LIMIT: usize = 100_000;
 
 /// Cached asset entry with pre-computed metrics, ready for API serving.
 #[derive(Clone, Serialize, Deserialize)]
@@ -46,6 +56,66 @@ pub struct CachedAssetEntry {
     pub type_hash_type: Option<String>,
     pub type_args: Option<String>,
     pub description: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CachedAddressEntry {
+    pub lock_script_hash: String,
+    pub balance: String,
+    pub live_cells_count: i32,
+    pub transactions_count: i64,
+    pub last_activity_block: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CachedScriptEntry {
+    pub code_hash: String,
+    pub name: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct AddressCandidate {
+    lock_hash: Vec<u8>,
+    balance: i128,
+    live_cells_count: i32,
+    transactions_count: i64,
+    last_activity_block: i64,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct BalanceRank(AddressCandidate);
+
+impl Ord for BalanceRank {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .balance
+            .cmp(&other.0.balance)
+            .then_with(|| self.0.lock_hash.cmp(&other.0.lock_hash))
+    }
+}
+
+impl PartialOrd for BalanceRank {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+struct ActivityRank(AddressCandidate);
+
+impl Ord for ActivityRank {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0
+            .last_activity_block
+            .cmp(&other.0.last_activity_block)
+            .then_with(|| self.0.lock_hash.cmp(&other.0.lock_hash))
+    }
+}
+
+impl PartialOrd for ActivityRank {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl CachedAssetEntry {
@@ -143,6 +213,162 @@ fn hash_type_to_string(hash_type: u8) -> String {
         4 => "data2".to_string(),
         _ => format!("unknown({})", hash_type),
     }
+}
+
+fn push_bounded<T: Ord>(heap: &mut BinaryHeap<Reverse<T>>, item: T, limit: usize) {
+    if heap.len() < limit {
+        heap.push(Reverse(item));
+        return;
+    }
+    let Some(mut smallest) = heap.peek_mut() else {
+        heap.push(Reverse(item));
+        return;
+    };
+    if item > smallest.0 {
+        *smallest = Reverse(item);
+    }
+}
+
+fn cached_address_entry_from_candidate(candidate: AddressCandidate) -> CachedAddressEntry {
+    CachedAddressEntry {
+        lock_script_hash: format!("0x{}", hex::encode(candidate.lock_hash)),
+        balance: candidate.balance.to_string(),
+        live_cells_count: candidate.live_cells_count,
+        transactions_count: candidate.transactions_count,
+        last_activity_block: candidate.last_activity_block,
+    }
+}
+
+fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
+    let mut by_balance: BinaryHeap<Reverse<BalanceRank>> = BinaryHeap::new();
+    let mut by_activity: BinaryHeap<Reverse<ActivityRank>> = BinaryHeap::new();
+    let iter = state
+        .store
+        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+
+    for item in iter {
+        let (key, value) =
+            item.map_err(|e| anyhow::anyhow!("failed to iterate addr_balance in warmup: {}", e))?;
+        let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to deserialize address balance in warmup: lock_hash=0x{}, error={}",
+                hex::encode(&key),
+                e
+            )
+        })?;
+        if balance.balance < 0 {
+            anyhow::bail!(
+                "negative balance detected in addr_balance warmup: lock_hash=0x{}, balance={}",
+                hex::encode(&key),
+                balance.balance
+            );
+        }
+        if balance.live_cells_count < 0 {
+            anyhow::bail!(
+                "negative live_cells_count detected in addr_balance warmup: lock_hash=0x{}, live_cells_count={}",
+                hex::encode(&key),
+                balance.live_cells_count
+            );
+        }
+        if balance.txs_count < 0 {
+            anyhow::bail!(
+                "negative txs_count detected in addr_balance warmup: lock_hash=0x{}, txs_count={}",
+                hex::encode(&key),
+                balance.txs_count
+            );
+        }
+
+        let candidate = AddressCandidate {
+            lock_hash: key.to_vec(),
+            balance: balance.balance,
+            live_cells_count: balance.live_cells_count,
+            transactions_count: balance.txs_count,
+            last_activity_block: balance.last_activity_block,
+        };
+
+        if candidate.balance > 0 {
+            push_bounded(
+                &mut by_balance,
+                BalanceRank(candidate.clone()),
+                ADDRESS_CACHE_LIMIT,
+            );
+        }
+        push_bounded(
+            &mut by_activity,
+            ActivityRank(candidate),
+            ADDRESS_CACHE_LIMIT,
+        );
+    }
+
+    let mut top_entries: Vec<AddressCandidate> = by_balance.into_iter().map(|v| v.0 .0).collect();
+    top_entries.sort_by(|a, b| {
+        b.balance
+            .cmp(&a.balance)
+            .then_with(|| a.lock_hash.cmp(&b.lock_hash))
+    });
+    let top_cached: Vec<CachedAddressEntry> = top_entries
+        .into_iter()
+        .map(cached_address_entry_from_candidate)
+        .collect();
+
+    let mut active_entries: Vec<AddressCandidate> =
+        by_activity.into_iter().map(|v| v.0 .0).collect();
+    active_entries.sort_by(|a, b| {
+        b.last_activity_block
+            .cmp(&a.last_activity_block)
+            .then_with(|| a.lock_hash.cmp(&b.lock_hash))
+    });
+    let active_cached: Vec<CachedAddressEntry> = active_entries
+        .into_iter()
+        .map(cached_address_entry_from_candidate)
+        .collect();
+
+    state.mem_cache.set(
+        CACHE_KEY_ADDRESSES_TOP,
+        &top_cached,
+        CacheTtl::ADDRESS_BALANCE,
+    );
+    state.mem_cache.set(
+        CACHE_KEY_ADDRESSES_ACTIVE,
+        &active_cached,
+        CacheTtl::ADDRESS_BALANCE,
+    );
+    Ok(())
+}
+
+fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
+    let mut spores = state.store.list_spores(SPORE_CACHE_LIMIT)?;
+    spores.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
+    state
+        .mem_cache
+        .set(CACHE_KEY_SPORES_ALL, &spores, CacheTtl::ASSETS);
+    Ok(())
+}
+
+fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
+    let script_infos = state.store.list_script_infos()?;
+    state
+        .mem_cache
+        .set(CACHE_KEY_SCRIPTS_ALL, &script_infos, CacheTtl::ASSETS);
+
+    let mut scripts: Vec<CachedScriptEntry> = script_infos
+        .into_iter()
+        .filter_map(|(code_hash, info)| {
+            info.name.map(|name| CachedScriptEntry {
+                code_hash: format!("0x{}", hex::encode(code_hash)),
+                name,
+            })
+        })
+        .collect();
+    scripts.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.code_hash.cmp(&b.code_hash))
+    });
+    state
+        .mem_cache
+        .set(CACHE_KEY_SCRIPTS_NAMED, &scripts, CacheTtl::ASSETS);
+    Ok(())
 }
 
 /// Sync function that computes and caches all asset lists.
@@ -370,8 +596,18 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     });
 
     state.mem_cache.set(CACHE_KEY_ASSETS_NFT, &nft_assets, ttl);
+    refresh_address_cache_sync(state)?;
+    refresh_spore_cache_sync(state)?;
+    refresh_named_script_cache_sync(state)?;
 
     Ok(())
+}
+
+pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()> {
+    let refresh = tokio::task::spawn_blocking(move || refresh_assets_cache_sync(&state))
+        .await
+        .map_err(|e| anyhow::anyhow!("assets cache warmup task panicked: {}", e))?;
+    refresh
 }
 
 pub async fn warmup_chart_caches(state: Arc<AppState>) {
@@ -497,6 +733,7 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 
     fn compact_to_difficulty(compact: i64) -> u64 {
@@ -528,5 +765,36 @@ mod tests {
         let d_low_exp = compact_to_difficulty(0x1f010000);
         assert!(d_low_exp > d_high_exp);
         assert_eq!(d_low_exp, d_high_exp * 256);
+    }
+
+    #[test]
+    fn test_push_bounded_keeps_top_n_values() {
+        let mut heap: BinaryHeap<Reverse<i32>> = BinaryHeap::new();
+        push_bounded(&mut heap, 1, 3);
+        push_bounded(&mut heap, 4, 3);
+        push_bounded(&mut heap, 2, 3);
+        push_bounded(&mut heap, 6, 3);
+        push_bounded(&mut heap, 3, 3);
+
+        let mut values: Vec<i32> = heap.into_iter().map(|v| v.0).collect();
+        values.sort();
+        assert_eq!(values, vec![3, 4, 6]);
+    }
+
+    #[test]
+    fn test_cached_address_entry_from_candidate_formats_hash_and_balance() {
+        let candidate = AddressCandidate {
+            lock_hash: vec![0xAB; 32],
+            balance: 12345,
+            live_cells_count: 3,
+            transactions_count: 9,
+            last_activity_block: 100,
+        };
+        let entry = cached_address_entry_from_candidate(candidate);
+        assert_eq!(entry.lock_script_hash, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(entry.balance, "12345");
+        assert_eq!(entry.live_cells_count, 3);
+        assert_eq!(entry.transactions_count, 9);
+        assert_eq!(entry.last_activity_block, 100);
     }
 }

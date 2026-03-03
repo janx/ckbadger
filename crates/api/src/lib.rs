@@ -104,6 +104,10 @@ pub async fn create_router(config: AppConfig) -> Router {
         mem_cache,
     });
 
+    if let Err(e) = warmup::warmup_assets_cache_once(state.clone()).await {
+        tracing::warn!("Initial assets cache warmup failed: {}", e);
+    }
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)

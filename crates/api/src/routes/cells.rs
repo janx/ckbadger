@@ -23,6 +23,10 @@ use crate::utils::{
     ensure_derived_ready, is_ckb_address, is_known_script_name, merge_script_info_for_reference,
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
+use crate::warmup::{
+    CachedAddressEntry, CachedAssetEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP,
+    CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
+};
 use crate::AppState;
 use ckbadger_store::{keys, CkbadgerStore};
 
@@ -1826,6 +1830,16 @@ fn parse_hash_type(hash_type: &str) -> Option<u8> {
     }
 }
 
+fn load_script_infos_cached(
+    state: &Arc<AppState>,
+) -> Result<Vec<ckbadger_store::ScriptInfo>, (axum::http::StatusCode, axum::Json<ApiError>)> {
+    state
+        .mem_cache
+        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
+        .map(|rows| rows.into_iter().map(|(_, info)| info).collect())
+        .ok_or_else(|| ApiError::internal("script cache unavailable; warmup in progress"))
+}
+
 async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
@@ -1846,13 +1860,7 @@ async fn list_cells_by_script(
         ApiError::bad_request("Invalid hash_type. Must be one of: data, type, data1, data2")
     })?;
 
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .into_iter()
-        .map(|(_, info)| info)
-        .collect();
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?;
 
     // "type" references are not universally available. If this deployment has no type reference,
     // return empty instead of silently mapping to data-family references.
@@ -2076,16 +2084,11 @@ async fn get_address(
 }
 
 fn lookup_code_cell_scripts(
-    store: &ckbadger_store::CkbadgerStore,
+    state: &Arc<AppState>,
     data_hash: &[u8],
     type_script_hash: Option<&Vec<u8>>,
 ) -> Result<Option<Vec<CodeCellScript>>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .into_iter()
-        .map(|(_, info)| info)
-        .collect();
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(state)?;
 
     let mut scripts: Vec<CodeCellScript> = Vec::new();
     let mut deployment_index: HashMap<Vec<u8>, usize> = HashMap::new();
@@ -2344,7 +2347,7 @@ async fn get_cell(
     });
 
     let code_cell_of = if let Some(dh) = data_hash.as_ref() {
-        lookup_code_cell_scripts(&state.store, dh, info.type_script_hash.as_ref())?
+        lookup_code_cell_scripts(&state, dh, info.type_script_hash.as_ref())?
     } else {
         None
     };
@@ -2421,23 +2424,15 @@ async fn get_top_addresses(
 ) -> ApiResult<Vec<TopAddressResponse>> {
     let limit = params.limit.clamp(1, 500) as usize;
 
-    let rows = state
-        .store
-        .top_addresses(limit)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let addresses: Vec<TopAddressResponse> = rows
-        .into_iter()
-        .filter(|(_, ab)| ab.balance > 0)
-        .map(|(lock_hash, ab)| TopAddressResponse {
-            lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
-            balance: ab.balance.to_string(),
-            live_cells_count: ab.live_cells_count,
-            transactions_count: ab.txs_count,
-        })
-        .collect();
-
-    ok(addresses)
+    if let Some(cached) = state
+        .mem_cache
+        .get::<Vec<CachedAddressEntry>>(CACHE_KEY_ADDRESSES_TOP)
+    {
+        return ok(top_addresses_from_cache(cached, limit));
+    }
+    Err(ApiError::internal(
+        "top addresses cache unavailable; warmup in progress",
+    ))
 }
 
 async fn get_active_addresses(
@@ -2456,37 +2451,50 @@ async fn get_active_addresses(
     let blocks_per_day: i64 = 8640;
     let min_block = tip_block.saturating_sub(days * blocks_per_day);
 
-    // Full scan of addr_balance CF, filter by last_activity_block
-    let iter = state
-        .store
-        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
-
-    let mut all: Vec<(Vec<u8>, ckbadger_store::AddressBalance)> = Vec::new();
-    for item in iter.flatten() {
-        let (key, value) = item;
-        if let Ok(ab) = bincode::deserialize::<ckbadger_store::AddressBalance>(&value) {
-            if ab.last_activity_block >= min_block {
-                all.push((key.to_vec(), ab));
-            }
-        }
+    if let Some(cached) = state
+        .mem_cache
+        .get::<Vec<CachedAddressEntry>>(CACHE_KEY_ADDRESSES_ACTIVE)
+    {
+        return ok(active_addresses_from_cache(cached, min_block, limit));
     }
+    Err(ApiError::internal(
+        "active addresses cache unavailable; warmup in progress",
+    ))
+}
 
-    // Sort by last_activity_block desc
-    all.sort_by(|a, b| b.1.last_activity_block.cmp(&a.1.last_activity_block));
-    all.truncate(limit);
-
-    let addresses: Vec<ActiveAddressResponse> = all
+fn top_addresses_from_cache(
+    cached: Vec<CachedAddressEntry>,
+    limit: usize,
+) -> Vec<TopAddressResponse> {
+    cached
         .into_iter()
-        .map(|(lock_hash, ab)| ActiveAddressResponse {
-            lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
-            balance: ab.balance.to_string(),
-            live_cells_count: ab.live_cells_count,
-            transactions_count: ab.txs_count,
-            last_activity_block: ab.last_activity_block,
+        .take(limit)
+        .map(|entry| TopAddressResponse {
+            lock_script_hash: entry.lock_script_hash,
+            balance: entry.balance,
+            live_cells_count: entry.live_cells_count,
+            transactions_count: entry.transactions_count,
         })
-        .collect();
+        .collect()
+}
 
-    ok(addresses)
+fn active_addresses_from_cache(
+    cached: Vec<CachedAddressEntry>,
+    min_block: i64,
+    limit: usize,
+) -> Vec<ActiveAddressResponse> {
+    cached
+        .into_iter()
+        .filter(|entry| entry.last_activity_block >= min_block)
+        .take(limit)
+        .map(|entry| ActiveAddressResponse {
+            lock_script_hash: entry.lock_script_hash,
+            balance: entry.balance,
+            live_cells_count: entry.live_cells_count,
+            transactions_count: entry.transactions_count,
+            last_activity_block: entry.last_activity_block,
+        })
+        .collect()
 }
 
 fn is_canonical_addr_tx(
@@ -2805,18 +2813,29 @@ async fn get_address_tokens(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    // Get all tokens and check balances for this address
-    let all_tokens = state
-        .store
-        .list_tokens()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let cached_tokens = state
+        .mem_cache
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
+        .ok_or_else(|| ApiError::internal("token cache unavailable; warmup in progress"))?;
 
-    let mut token_balances: Vec<(Vec<u8>, ckbadger_store::TokenInfo, i128)> = Vec::new();
+    let mut token_balances: Vec<(String, CachedAssetEntry, i128)> = Vec::new();
 
-    for (type_hash, token_info) in all_tokens {
+    for token_info in cached_tokens {
+        let type_hash = hex::decode(
+            token_info
+                .id
+                .strip_prefix("0x")
+                .unwrap_or(token_info.id.as_str()),
+        )
+        .map_err(|_| {
+            ApiError::internal(format!(
+                "invalid token hash in warmup cache: {}",
+                token_info.id
+            ))
+        })?;
         if let Ok(Some(balance)) = state.store.get_token_holder_balance(&type_hash, &lock_hash) {
             if balance > 0 {
-                token_balances.push((type_hash, token_info, balance));
+                token_balances.push((token_info.id.clone(), token_info, balance));
             }
         }
     }
@@ -2830,7 +2849,7 @@ async fn get_address_tokens(
     let next_cursor: Option<String> = if has_more {
         token_balances
             .last()
-            .map(|(type_hash, _, balance)| format!("{}:{}", balance, hex::encode(type_hash)))
+            .map(|(type_hash, _, balance)| format!("{}:{}", balance, type_hash))
     } else {
         None
     };
@@ -2838,11 +2857,11 @@ async fn get_address_tokens(
     let tokens: Vec<AddressTokenResponse> = token_balances
         .into_iter()
         .map(|(type_hash, token_info, balance)| AddressTokenResponse {
-            type_script_hash: format!("0x{}", hex::encode(&type_hash)),
+            type_script_hash: type_hash,
             standard: token_info.standard,
             name: token_info.name,
             symbol: token_info.symbol,
-            decimals: token_info.decimals.unwrap_or(0) as i16,
+            decimals: token_info.decimals.unwrap_or(0),
             icon_url: token_info.icon_url,
             balance: balance.to_string(),
         })
@@ -3561,5 +3580,53 @@ mod tests {
         assert_eq!(rows[1].0, 10);
         assert_eq!(rows[0].2, canonical_tx_new);
         assert_eq!(rows[1].2, canonical_tx_old);
+    }
+
+    #[test]
+    fn test_top_addresses_from_cache_respects_limit_order() {
+        let cached = vec![
+            CachedAddressEntry {
+                lock_script_hash: "0x01".to_string(),
+                balance: "300".to_string(),
+                live_cells_count: 3,
+                transactions_count: 30,
+                last_activity_block: 100,
+            },
+            CachedAddressEntry {
+                lock_script_hash: "0x02".to_string(),
+                balance: "200".to_string(),
+                live_cells_count: 2,
+                transactions_count: 20,
+                last_activity_block: 90,
+            },
+        ];
+        let rows = top_addresses_from_cache(cached, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].lock_script_hash, "0x01");
+        assert_eq!(rows[0].balance, "300");
+    }
+
+    #[test]
+    fn test_active_addresses_from_cache_filters_by_min_block() {
+        let cached = vec![
+            CachedAddressEntry {
+                lock_script_hash: "0x01".to_string(),
+                balance: "100".to_string(),
+                live_cells_count: 1,
+                transactions_count: 10,
+                last_activity_block: 100,
+            },
+            CachedAddressEntry {
+                lock_script_hash: "0x02".to_string(),
+                balance: "90".to_string(),
+                live_cells_count: 1,
+                transactions_count: 9,
+                last_activity_block: 80,
+            },
+        ];
+        let rows = active_addresses_from_cache(cached, 90, 10);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].lock_script_hash, "0x01");
+        assert_eq!(rows[0].last_activity_block, 100);
     }
 }

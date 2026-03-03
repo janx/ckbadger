@@ -53,6 +53,7 @@ impl BatchWriter {
 
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_sync_meta(sync_meta_keys::REORG_LATEST_EVENT, &event_bytes);
         batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
         batch.commit()?;
 
@@ -91,6 +92,7 @@ impl BatchWriter {
         let status_bytes = bincode::serialize(&status)?;
         let mut batch = StoreBatch::new(self.store.as_ref());
         batch.put_sync_meta(event_key.as_bytes(), &event_bytes);
+        batch.put_sync_meta(sync_meta_keys::REORG_LATEST_EVENT, &event_bytes);
         batch.put_sync_meta(sync_meta_keys::SYNC_STATUS, &status_bytes);
         batch.commit()?;
 
@@ -164,6 +166,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(reorg_event_count(store.as_ref()), 1);
+        let latest = store
+            .get_cf(
+                store.cf_sync_meta(),
+                keys::sync_meta_keys::REORG_LATEST_EVENT,
+            )
+            .unwrap()
+            .expect("latest reorg marker should exist");
+        let latest_event: ckbadger_store::types::ReorgEvent =
+            bincode::deserialize(&latest).unwrap();
+        assert_eq!(latest_event.rollback_to, 100);
+        assert_eq!(latest_event.depth, 20);
+
         let status = store.get_sync_status().unwrap();
         assert!(status.deep_fork_detected);
         let info = status.deep_fork_info.unwrap();

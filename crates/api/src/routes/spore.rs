@@ -16,8 +16,11 @@ use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready, parse_chart_date_range,
 };
-use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT};
+use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL};
 use crate::AppState;
+
+type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
+type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::SporeEntry)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -1083,8 +1086,9 @@ async fn list_clusters(
         return serve_clusters_from_cache(cached_nfts, cursor_block, limit, &state);
     }
 
-    // Fallback: derive from spores scan
-    serve_clusters_from_store(&state, cursor_block, limit)
+    Err(ApiError::internal(
+        "cluster cache unavailable; warmup in progress",
+    ))
 }
 
 fn serve_clusters_from_cache(
@@ -1170,91 +1174,34 @@ fn serve_clusters_from_cache(
     ))
 }
 
-fn serve_clusters_from_store(
-    state: &Arc<AppState>,
-    cursor_block: i64,
+fn load_spores_cached_or_store(state: &Arc<AppState>) -> Result<CachedSporeRows, ApiRouteError> {
+    if let Some(cached) = state.mem_cache.get::<CachedSporeRows>(CACHE_KEY_SPORES_ALL) {
+        return Ok(cached);
+    }
+    Err(ApiError::internal(
+        "spore cache unavailable; warmup in progress",
+    ))
+}
+
+fn collect_spore_page<F>(
+    all_spores: &[(Vec<u8>, ckbadger_store::SporeEntry)],
     limit: usize,
-) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
-    let all_spores = state
-        .store
-        .list_spores(100_000)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    type ClusterInfo = (Option<Vec<u8>>, i32, i64);
-
-    let mut cluster_map: std::collections::HashMap<Vec<u8>, ClusterInfo> =
-        std::collections::HashMap::new();
-
-    for (_, entry) in &all_spores {
-        if let Some(ref cluster_id) = entry.collection_id {
-            let e = cluster_map.entry(cluster_id.clone()).or_insert((
-                entry.owner_lock_hash.clone(),
-                0,
-                entry.created_at_block,
-            ));
-            e.1 += 1;
-            if entry.created_at_block < e.2 {
-                e.2 = entry.created_at_block;
-            }
+    mut predicate: F,
+) -> Vec<(&Vec<u8>, &ckbadger_store::SporeEntry)>
+where
+    F: FnMut(&ckbadger_store::SporeEntry) -> bool,
+{
+    let mut page: Vec<(&Vec<u8>, &ckbadger_store::SporeEntry)> = Vec::with_capacity(limit + 1);
+    for (spore_id, entry) in all_spores {
+        if !predicate(entry) {
+            continue;
+        }
+        page.push((spore_id, entry));
+        if page.len() > limit {
+            break;
         }
     }
-
-    let mut clusters: Vec<_> = cluster_map.into_iter().collect();
-    clusters.sort_by(|a, b| b.1 .2.cmp(&a.1 .2));
-
-    let filtered: Vec<_> = clusters
-        .iter()
-        .filter(|(_, (_, _, created))| *created < cursor_block)
-        .take(limit + 1)
-        .collect();
-
-    let has_more = filtered.len() > limit;
-    let page: Vec<_> = filtered.into_iter().take(limit).collect();
-
-    let next_cursor = if has_more {
-        page.last().map(|(_, (_, _, created))| created.to_string())
-    } else {
-        None
-    };
-
-    let result: Vec<ClusterResponse> = page
-        .into_iter()
-        .map(|(cluster_id, (owner, spores_count, created_at_block))| {
-            let cluster_entry = state.store.get_spore(cluster_id).ok().flatten();
-            let cluster_aggregate = state.store.get_cluster_aggregate(cluster_id).ok().flatten();
-            let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
-            let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
-            ClusterResponse {
-                cluster_id: format!("0x{}", hex::encode(cluster_id)),
-                name,
-                description,
-                owner_lock_hash: owner
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h)))
-                    .unwrap_or_default(),
-                owner_address: None,
-                spores_count: *spores_count,
-                holders_count: cluster_aggregate
-                    .as_ref()
-                    .map(|a| a.owner_count)
-                    .unwrap_or(0),
-                activities_count: 0,
-                created_at_block: *created_at_block,
-                live_capacity: None,
-                live_occupied_capacity: None,
-                storage_profile: cluster_storage_profile_from_aggregate(
-                    cluster_aggregate.as_ref(),
-                    i64::from(*spores_count),
-                ),
-            }
-        })
-        .collect();
-
-    ok(CursorPaginatedResponse::without_total(
-        result,
-        limit as i64,
-        next_cursor,
-    ))
+    page
 }
 
 async fn get_cluster_holders(
@@ -1556,19 +1503,10 @@ async fn list_spores(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let all_spores = state
-        .store
-        .list_spores(100_000)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut filtered: Vec<_> = all_spores
-        .into_iter()
-        .filter(|(_, entry)| entry.is_live && entry.created_at_block < cursor_block)
-        .collect();
-
-    filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
-
-    let page: Vec<_> = filtered.iter().take(limit + 1).collect();
+    let all_spores = load_spores_cached_or_store(&state)?;
+    let page = collect_spore_page(&all_spores, limit, |entry| {
+        entry.is_live && entry.created_at_block < cursor_block
+    });
     let has_more = page.len() > limit;
     let page: Vec<_> = page.into_iter().take(limit).collect();
 
@@ -1853,23 +1791,12 @@ async fn get_spores_by_owner(
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
 
-    let all_spores = state
-        .store
-        .list_spores(100_000)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut filtered: Vec<_> = all_spores
-        .into_iter()
-        .filter(|(_, entry)| {
-            entry.is_live
-                && entry.owner_lock_hash.as_ref() == Some(&hash)
-                && entry.created_at_block < cursor_block
-        })
-        .collect();
-
-    filtered.sort_by(|a, b| b.1.created_at_block.cmp(&a.1.created_at_block));
-
-    let page: Vec<_> = filtered.iter().take(limit + 1).collect();
+    let all_spores = load_spores_cached_or_store(&state)?;
+    let page = collect_spore_page(&all_spores, limit, |entry| {
+        entry.is_live
+            && entry.owner_lock_hash.as_ref() == Some(&hash)
+            && entry.created_at_block < cursor_block
+    });
     let has_more = page.len() > limit;
     let page: Vec<_> = page.into_iter().take(limit).collect();
 
@@ -1903,6 +1830,27 @@ mod tests {
         out
     }
 
+    fn make_spore_entry(
+        created_at_block: i64,
+        owner_lock_hash: Option<Vec<u8>>,
+    ) -> ckbadger_store::SporeEntry {
+        ckbadger_store::SporeEntry {
+            standard: ckbadger_store::DobStandard::Spore,
+            collection_id: None,
+            owner_lock_hash,
+            name: Some("sample".to_string()),
+            description: None,
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![0x11; 32],
+            extra: ckbadger_store::DobExtra::Spore {
+                content_type: "text/plain".to_string(),
+                content_length: 5,
+                media_profile: ckbadger_store::SporeMediaProfile::default(),
+            },
+        }
+    }
+
     fn make_spore_output_data_hex(content_type: &str, content_text: &str) -> String {
         let content_type_bytes = encode_molecule_bytes(content_type.as_bytes());
         let content_bytes = encode_molecule_bytes(content_text.as_bytes());
@@ -1928,6 +1876,35 @@ mod tests {
         let parsed = parse_spore_content_from_output_data(&data_hex).expect("parse spore output");
         assert_eq!(parsed.0, "dob/0");
         assert!(String::from_utf8_lossy(&parsed.1).contains("\"dna\""));
+    }
+
+    #[test]
+    fn test_collect_spore_page_respects_limit_plus_one() {
+        let spores = vec![
+            (vec![0x01; 32], make_spore_entry(300, Some(vec![0xAA; 32]))),
+            (vec![0x02; 32], make_spore_entry(200, Some(vec![0xAA; 32]))),
+            (vec![0x03; 32], make_spore_entry(100, Some(vec![0xAA; 32]))),
+        ];
+        let page = collect_spore_page(&spores, 2, |_| true);
+        assert_eq!(page.len(), 3);
+        assert_eq!(page[0].1.created_at_block, 300);
+        assert_eq!(page[2].1.created_at_block, 100);
+    }
+
+    #[test]
+    fn test_collect_spore_page_filters_by_predicate() {
+        let spores = vec![
+            (vec![0x01; 32], make_spore_entry(300, Some(vec![0xAA; 32]))),
+            (vec![0x02; 32], make_spore_entry(200, Some(vec![0xBB; 32]))),
+            (vec![0x03; 32], make_spore_entry(100, Some(vec![0xAA; 32]))),
+        ];
+        let target_owner = vec![0xAA; 32];
+        let page = collect_spore_page(&spores, 10, |entry| {
+            entry.owner_lock_hash.as_ref() == Some(&target_owner)
+        });
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].1.created_at_block, 300);
+        assert_eq!(page[1].1.created_at_block, 100);
     }
 
     #[test]

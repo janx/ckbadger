@@ -431,46 +431,53 @@ async fn get_tx_graph(
     } else {
         // Fallback: look up live cells created by this tx from the store.
         // This won't show consumed outputs.
-        let iter = state
-            .store
-            .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
+        let iter = state.store.iterator_cf(
+            state.store.cf_live_cells(),
+            rocksdb::IteratorMode::From(&hash_bytes, rocksdb::Direction::Forward),
+        );
 
         for item in iter.flatten() {
             let (key, _) = item;
-            if key.len() >= 34 && &key[..32] == hash_bytes.as_slice() {
-                let output_index = i16::from_be_bytes([key[32], key[33]]);
-                let Some(info) = state
-                    .store
-                    .get_cell_by_outpoint_key(&key)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                else {
-                    continue;
-                };
-                let output_cell_id = format!("cell-{}-{}", hash, output_index);
-                let capacity_str = info.capacity.to_string();
-
-                nodes.push(GraphNode {
-                    id: output_cell_id.clone(),
-                    node_type: "cell".to_string(),
-                    label: format!("{} CKB", parse_capacity(&capacity_str)),
-                    data: serde_json::json!({
-                        "txHash": hash,
-                        "outputIndex": output_index,
-                        "capacity": capacity_str,
-                        "status": "live",
-                    }),
-                });
-
-                links.push(GraphLink {
-                    source: tx_id.clone(),
-                    target: output_cell_id,
-                    link_type: "output".to_string(),
-                });
+            // cf_live_cells key layout is tx_hash(32) + output_index(2).
+            if !live_cell_key_matches_tx_hash(&key, &hash_bytes) {
+                break;
             }
+            let output_index = i16::from_be_bytes([key[32], key[33]]);
+            let Some(info) = state
+                .store
+                .get_cell_by_outpoint_key(&key)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+            else {
+                continue;
+            };
+            let output_cell_id = format!("cell-{}-{}", hash, output_index);
+            let capacity_str = info.capacity.to_string();
+
+            nodes.push(GraphNode {
+                id: output_cell_id.clone(),
+                node_type: "cell".to_string(),
+                label: format!("{} CKB", parse_capacity(&capacity_str)),
+                data: serde_json::json!({
+                    "txHash": hash,
+                    "outputIndex": output_index,
+                    "capacity": capacity_str,
+                    "status": "live",
+                }),
+            });
+
+            links.push(GraphLink {
+                source: tx_id.clone(),
+                target: output_cell_id,
+                link_type: "output".to_string(),
+            });
         }
     }
 
     ok(GraphResponse { nodes, links })
+}
+
+fn live_cell_key_matches_tx_hash(key: &[u8], tx_hash: &[u8]) -> bool {
+    key.len() >= 34 && tx_hash.len() == 32 && &key[..32] == tx_hash
 }
 
 fn parse_capacity(capacity: &str) -> String {
@@ -695,6 +702,16 @@ mod tests {
     #[test]
     fn test_parse_capacity_zero() {
         assert_eq!(parse_capacity("0"), "0.00");
+    }
+
+    #[test]
+    fn test_live_cell_key_matches_tx_hash() {
+        let tx_hash = vec![0x11; 32];
+        let mut key = tx_hash.clone();
+        key.extend_from_slice(&0_i16.to_be_bytes());
+        assert!(live_cell_key_matches_tx_hash(&key, &tx_hash));
+        assert!(!live_cell_key_matches_tx_hash(&key[..33], &tx_hash));
+        assert!(!live_cell_key_matches_tx_hash(&key, &[0x22; 32]));
     }
 
     #[test]

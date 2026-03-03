@@ -9,6 +9,10 @@ use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::utils::{address_to_lock_script_hash, ensure_derived_ready, is_ckb_address};
+use crate::warmup::{
+    CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
+    CACHE_KEY_SCRIPTS_NAMED, CACHE_KEY_SPORES_ALL,
+};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -42,6 +46,50 @@ pub struct SearchResponse {
 const MAX_RESULTS: usize = 20;
 const NAME_MATCH_LIMIT: usize = 6;
 const SPORE_NAME_SCAN_LIMIT: usize = 5_000;
+type CachedTokenMatch = (String, Option<String>, Option<String>, bool, bool, i64);
+
+fn cached_token_name_symbol_match(entry: &CachedAssetEntry, pattern: &str) -> Option<(bool, bool)> {
+    let name_match = entry
+        .name
+        .as_ref()
+        .map(|name| name.to_ascii_lowercase().contains(pattern))
+        .unwrap_or(false);
+    let symbol_match = entry
+        .symbol
+        .as_ref()
+        .map(|symbol| symbol.to_ascii_lowercase().contains(pattern))
+        .unwrap_or(false);
+    if !name_match && !symbol_match {
+        return None;
+    }
+    Some((name_match, symbol_match))
+}
+
+fn cached_cluster_match(entry: &CachedAssetEntry, pattern: &str) -> Option<(String, String, i64)> {
+    if entry.standard != "spore" {
+        return None;
+    }
+    let name = entry.name.clone()?;
+    if !name.to_ascii_lowercase().contains(pattern) {
+        return None;
+    }
+    let cluster_id = entry.cluster_id.clone().unwrap_or_else(|| entry.id.clone());
+    Some((cluster_id, name, entry.transfers_count))
+}
+
+fn cached_nft_collection_match(
+    entry: &CachedAssetEntry,
+    pattern: &str,
+) -> Option<(String, String, i64)> {
+    if entry.standard == "spore" {
+        return None;
+    }
+    let name = entry.name.clone()?;
+    if !name.to_ascii_lowercase().contains(pattern) {
+        return None;
+    }
+    Some((entry.id.clone(), name, entry.holders_count))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchScope {
@@ -443,28 +491,38 @@ async fn search(
 
     if scoped_query.len() >= 2 {
         let pattern = scoped_query.to_ascii_lowercase();
+        let cached_scripts = state
+            .mem_cache
+            .get::<Vec<CachedScriptEntry>>(CACHE_KEY_SCRIPTS_NAMED);
+        let cached_tokens = state
+            .mem_cache
+            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN);
+        let cached_nfts = state
+            .mem_cache
+            .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT);
+        let cached_spores = state
+            .mem_cache
+            .get::<Vec<(Vec<u8>, ckbadger_store::SporeEntry)>>(CACHE_KEY_SPORES_ALL);
 
         if scope_allows(scope, &[SearchScope::Script]) {
-            let mut script_matches: Vec<_> = state
-                .store
-                .list_script_infos()
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .into_iter()
-                .filter_map(|(code_hash, info)| {
-                    let name = info.name?;
-                    if !is_known_script_name(Some(&name)) {
+            let cached = cached_scripts.as_ref().ok_or_else(|| {
+                ApiError::internal("named script cache unavailable; warmup in progress")
+            })?;
+            let mut script_matches: Vec<(String, String)> = cached
+                .iter()
+                .filter_map(|entry| {
+                    if !is_known_script_name(Some(&entry.name)) {
                         return None;
                     }
-                    if !name.to_ascii_lowercase().contains(&pattern) {
+                    if !entry.name.to_ascii_lowercase().contains(&pattern) {
                         return None;
                     }
-                    Some((code_hash, name))
+                    Some((entry.code_hash.clone(), entry.name.clone()))
                 })
                 .collect();
 
             script_matches.sort_by(|a, b| a.1.cmp(&b.1));
-            for (code_hash, name) in script_matches.into_iter().take(NAME_MATCH_LIMIT) {
-                let hash = format!("0x{}", hex::encode(code_hash));
+            for (hash, name) in script_matches.into_iter().take(NAME_MATCH_LIMIT) {
                 results.push(SearchResult {
                     result_type: "script".to_string(),
                     id: hash.clone(),
@@ -476,38 +534,32 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Token, SearchScope::Asset]) {
-            let mut token_matches: Vec<_> = state
-                .store
-                .list_tokens()
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .into_iter()
-                .filter_map(|(type_hash, info)| {
-                    let name_match = info
-                        .name
-                        .as_ref()
-                        .map(|name| name.to_ascii_lowercase().contains(&pattern))
-                        .unwrap_or(false);
-                    let symbol_match = info
-                        .symbol
-                        .as_ref()
-                        .map(|symbol| symbol.to_ascii_lowercase().contains(&pattern))
-                        .unwrap_or(false);
-                    if !name_match && !symbol_match {
-                        return None;
-                    }
-                    Some((type_hash, info, name_match, symbol_match))
+            let cached = cached_tokens.as_ref().ok_or_else(|| {
+                ApiError::internal("token asset cache unavailable; warmup in progress")
+            })?;
+            let mut token_matches: Vec<CachedTokenMatch> = cached
+                .iter()
+                .filter_map(|entry| {
+                    let (name_match, symbol_match) =
+                        cached_token_name_symbol_match(entry, &pattern)?;
+                    Some((
+                        entry.id.clone(),
+                        entry.name.clone(),
+                        entry.symbol.clone(),
+                        name_match,
+                        symbol_match,
+                        entry.holders_count,
+                    ))
                 })
                 .collect();
 
-            token_matches.sort_by(|a, b| b.1.holders_count.cmp(&a.1.holders_count));
-            for (type_hash, info, name_match, symbol_match) in
+            token_matches.sort_by(|a, b| b.5.cmp(&a.5));
+            for (type_hash_hex, name, symbol, name_match, symbol_match, _) in
                 token_matches.into_iter().take(NAME_MATCH_LIMIT)
             {
-                let type_hash_hex = format!("0x{}", hex::encode(type_hash));
-                let display = info
-                    .symbol
+                let display = symbol
                     .as_deref()
-                    .or(info.name.as_deref())
+                    .or(name.as_deref())
                     .unwrap_or("Unknown token");
                 results.push(SearchResult {
                     result_type: "token".to_string(),
@@ -526,23 +578,16 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Cluster, SearchScope::Asset]) {
-            let mut cluster_matches: Vec<_> = state
-                .store
-                .list_cluster_aggregates()
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .into_iter()
-                .filter_map(|(cluster_id, agg)| {
-                    let name = agg.name?;
-                    if !name.to_ascii_lowercase().contains(&pattern) {
-                        return None;
-                    }
-                    Some((cluster_id, name, agg.total_count))
-                })
+            let cached = cached_nfts.as_ref().ok_or_else(|| {
+                ApiError::internal("nft asset cache unavailable; warmup in progress")
+            })?;
+            let mut cluster_matches: Vec<(String, String, i64)> = cached
+                .iter()
+                .filter_map(|entry| cached_cluster_match(entry, &pattern))
                 .collect();
 
             cluster_matches.sort_by(|a, b| b.2.cmp(&a.2));
-            for (cluster_id, name, _) in cluster_matches.into_iter().take(NAME_MATCH_LIMIT) {
-                let cluster_hex = format!("0x{}", hex::encode(cluster_id));
+            for (cluster_hex, name, _) in cluster_matches.into_iter().take(NAME_MATCH_LIMIT) {
                 results.push(SearchResult {
                     result_type: "cluster".to_string(),
                     id: cluster_hex.clone(),
@@ -554,25 +599,18 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Asset]) {
-            let mut nft_collection_matches: Vec<_> = state
-                .store
-                .list_nft_collection_aggregates()
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .into_iter()
-                .filter_map(|(collection_id, agg)| {
-                    let name = agg.name?;
-                    if !name.to_ascii_lowercase().contains(&pattern) {
-                        return None;
-                    }
-                    Some((collection_id, name, agg.live_count))
-                })
+            let cached = cached_nfts.as_ref().ok_or_else(|| {
+                ApiError::internal("nft asset cache unavailable; warmup in progress")
+            })?;
+            let mut nft_collection_matches: Vec<(String, String, i64)> = cached
+                .iter()
+                .filter_map(|entry| cached_nft_collection_match(entry, &pattern))
                 .collect();
 
             nft_collection_matches.sort_by(|a, b| b.2.cmp(&a.2));
-            for (collection_id, name, _) in
+            for (collection_hex, name, _) in
                 nft_collection_matches.into_iter().take(NAME_MATCH_LIMIT)
             {
-                let collection_hex = format!("0x{}", hex::encode(collection_id));
                 results.push(SearchResult {
                     result_type: "nft".to_string(),
                     id: collection_hex.clone(),
@@ -584,20 +622,21 @@ async fn search(
         }
 
         if scope_allows(scope, &[SearchScope::Spore]) {
-            let mut spore_matches: Vec<_> = state
-                .store
-                .list_spores(SPORE_NAME_SCAN_LIMIT)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .into_iter()
+            let cached = cached_spores
+                .as_ref()
+                .ok_or_else(|| ApiError::internal("spore cache unavailable; warmup in progress"))?;
+            let mut spore_matches: Vec<_> = cached
+                .iter()
+                .take(SPORE_NAME_SCAN_LIMIT)
                 .filter_map(|(spore_id, entry)| {
                     if entry.standard.is_cluster() {
                         return None;
                     }
-                    let name = entry.name?;
+                    let name = entry.name.clone()?;
                     if !name.to_ascii_lowercase().contains(&pattern) {
                         return None;
                     }
-                    Some((spore_id, name, entry.created_at_block))
+                    Some((spore_id.clone(), name, entry.created_at_block))
                 })
                 .collect();
 
@@ -698,5 +737,107 @@ mod tests {
         assert_eq!(json["ambiguous"], false);
         assert_eq!(json["results"][0]["resultType"], "block");
         assert_eq!(json["results"][0]["matchKind"], "exact_number");
+    }
+
+    #[test]
+    fn test_cached_token_name_symbol_match() {
+        let entry = CachedAssetEntry {
+            id: "0x01".to_string(),
+            asset_type: "token".to_string(),
+            standard: "xudt".to_string(),
+            name: Some("Nervos Token".to_string()),
+            symbol: Some("NERV".to_string()),
+            icon_url: None,
+            holders_count: 1,
+            transfers_count: 1,
+            transfers_24h: 0,
+            decimals: None,
+            total_supply: None,
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: None,
+            cluster_name: None,
+            live_capacity: None,
+            live_occupied_capacity: None,
+            storage_tier: None,
+            fully_onchain_ratio: None,
+            fully_onchain_count: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
+        };
+        let matched = cached_token_name_symbol_match(&entry, "nerv").unwrap();
+        assert_eq!(matched, (true, true));
+        assert!(cached_token_name_symbol_match(&entry, "zzz").is_none());
+    }
+
+    #[test]
+    fn test_cached_cluster_and_nft_collection_match() {
+        let cluster_entry = CachedAssetEntry {
+            id: "0xcluster".to_string(),
+            asset_type: "nft".to_string(),
+            standard: "spore".to_string(),
+            name: Some("Genesis Cluster".to_string()),
+            symbol: None,
+            icon_url: None,
+            holders_count: 3,
+            transfers_count: 9,
+            transfers_24h: 0,
+            decimals: None,
+            total_supply: None,
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: Some("0xcluster".to_string()),
+            cluster_name: Some("Genesis Cluster".to_string()),
+            live_capacity: None,
+            live_occupied_capacity: None,
+            storage_tier: None,
+            fully_onchain_ratio: None,
+            fully_onchain_count: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
+        };
+        let nft_entry = CachedAssetEntry {
+            id: "0xnft".to_string(),
+            asset_type: "nft".to_string(),
+            standard: "dotbit".to_string(),
+            name: Some("Dotbit Collection".to_string()),
+            symbol: None,
+            icon_url: None,
+            holders_count: 11,
+            transfers_count: 12,
+            transfers_24h: 0,
+            decimals: None,
+            total_supply: None,
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: Some("0xnft".to_string()),
+            cluster_name: Some("Dotbit Collection".to_string()),
+            live_capacity: None,
+            live_occupied_capacity: None,
+            storage_tier: None,
+            fully_onchain_ratio: None,
+            fully_onchain_count: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
+        };
+
+        let cluster = cached_cluster_match(&cluster_entry, "genesis").unwrap();
+        assert_eq!(cluster.0, "0xcluster");
+        assert_eq!(cluster.2, 9);
+        assert!(cached_cluster_match(&nft_entry, "dotbit").is_none());
+
+        let nft = cached_nft_collection_match(&nft_entry, "dotbit").unwrap();
+        assert_eq!(nft.0, "0xnft");
+        assert_eq!(nft.2, 11);
+        assert!(cached_nft_collection_match(&cluster_entry, "genesis").is_none());
     }
 }

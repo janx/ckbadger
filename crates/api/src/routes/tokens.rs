@@ -218,8 +218,9 @@ async fn list_tokens(
         return serve_tokens_from_cache(cached_tokens, &params, limit);
     }
 
-    // Cache cold — fall back to direct store reads
-    serve_tokens_from_store(&state, &params, limit)
+    Err(ApiError::internal(
+        "token cache unavailable; warmup in progress",
+    ))
 }
 
 /// Serve token list from pre-computed cache.
@@ -331,106 +332,6 @@ fn serve_tokens_from_cache(
                 total_capacity: None,
                 total_occupied_capacity: None,
             }
-        })
-        .collect();
-
-    ok(CursorPaginatedResponse::without_total(
-        tokens,
-        limit as i64,
-        next_cursor,
-    ))
-}
-
-/// Fallback: serve token list from direct store reads.
-fn serve_tokens_from_store(
-    state: &Arc<AppState>,
-    params: &ListParams,
-    limit: usize,
-) -> ApiResult<CursorPaginatedResponse<TokenResponse>> {
-    let all_tokens = state
-        .store
-        .list_tokens()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let search_hash = params.search.as_ref().and_then(|s| {
-        let s = s.strip_prefix("0x").unwrap_or(s);
-        hex::decode(s).ok()
-    });
-    let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
-
-    let mut filtered: Vec<_> = all_tokens
-        .into_iter()
-        .filter(|(type_hash, info)| {
-            if let Some(ref standard) = params.standard {
-                if &info.standard != standard {
-                    return false;
-                }
-            }
-            if let Some(ref hash) = search_hash {
-                if type_hash != hash {
-                    return false;
-                }
-            } else if let Some(ref pattern) = search_lower {
-                let name_match = info
-                    .name
-                    .as_ref()
-                    .map(|n| n.to_lowercase().contains(pattern))
-                    .unwrap_or(false);
-                let symbol_match = info
-                    .symbol
-                    .as_ref()
-                    .map(|s| s.to_lowercase().contains(pattern))
-                    .unwrap_or(false);
-                if !name_match && !symbol_match {
-                    return false;
-                }
-            }
-            true
-        })
-        .collect();
-
-    filtered.sort_by(|a, b| b.1.holders_count.cmp(&a.1.holders_count));
-
-    let cursor_holders = params.cursor.as_ref().and_then(|c| {
-        let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() >= 2 {
-            parts[1].parse::<i64>().ok()
-        } else {
-            c.parse::<i64>().ok()
-        }
-    });
-
-    let start_idx = if let Some(ch) = cursor_holders {
-        filtered
-            .iter()
-            .position(|(_, info)| info.holders_count < ch)
-            .unwrap_or(filtered.len())
-    } else {
-        0
-    };
-
-    let page: Vec<_> = filtered.iter().skip(start_idx).take(limit + 1).collect();
-    let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
-
-    let next_cursor = if has_more {
-        page.last()
-            .map(|(_, info)| format!("0:{}:0", info.holders_count))
-    } else {
-        None
-    };
-
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let tokens: Vec<TokenResponse> = page
-        .into_iter()
-        .map(|(type_hash, info)| {
-            // Read transfers_count from TokenInfo (no more N+1 stats lookup)
-            let transfers_count = info.transfers_count;
-            let transfers_24h = state
-                .store
-                .get_token_24h_transfers(type_hash, now_ms)
-                .unwrap_or(0);
-            token_info_to_response(type_hash, info, transfers_count, transfers_24h, None, None)
         })
         .collect();
 

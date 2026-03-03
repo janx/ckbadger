@@ -368,13 +368,25 @@ impl CkbadgerStore {
     }
 
     pub fn get_latest_reorg_event(&self) -> anyhow::Result<Option<ReorgEvent>> {
-        let iter = self.iterator_cf(self.cf_sync_meta(), rocksdb::IteratorMode::Start);
+        if let Some(value) = self.get_cf(self.cf_sync_meta(), sync_meta_keys::REORG_LATEST_EVENT)? {
+            let event: ReorgEvent = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize latest reorg event marker in sync_meta: key={}, error={}",
+                    std::str::from_utf8(sync_meta_keys::REORG_LATEST_EVENT).unwrap_or("reorg_latest_event"),
+                    e
+                )
+            })?;
+            return Ok(Some(event));
+        }
+
+        // Legacy fallback: scan only reorg:* keys and select the numerically latest one.
+        let iter = self.prefix_iterator_cf(self.cf_sync_meta(), b"reorg:");
         let mut latest: Option<((i64, u64), ReorgEvent)> = None;
 
         for item in iter {
             let (key, value) = item.map_err(|e| anyhow!("failed to iterate sync_meta: {}", e))?;
             if !key.starts_with(b"reorg:") {
-                continue;
+                break;
             }
 
             let ordering = Self::parse_reorg_event_key_ordering(&key).ok_or_else(|| {
@@ -723,6 +735,58 @@ mod tests {
         let err = store.get_latest_reorg_event().unwrap_err();
         assert!(
             err.to_string().contains("invalid reorg event key format"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_get_latest_reorg_event_uses_latest_marker_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let latest_event = ReorgEvent {
+            detected_at: 999,
+            rollback_from: 21,
+            rollback_to: 20,
+            depth: 1,
+        };
+
+        // Insert a malformed legacy key that would fail the fallback scanner.
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                b"reorg:bad-ts:1",
+                &bincode::serialize(&latest_event).unwrap(),
+            )
+            .unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::REORG_LATEST_EVENT,
+                &bincode::serialize(&latest_event).unwrap(),
+            )
+            .unwrap();
+
+        let latest = store.get_latest_reorg_event().unwrap().unwrap();
+        assert_eq!(latest.detected_at, 999);
+        assert_eq!(latest.rollback_from, 21);
+    }
+
+    #[test]
+    fn test_get_latest_reorg_event_fails_on_malformed_latest_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::REORG_LATEST_EVENT,
+                b"invalid-payload",
+            )
+            .unwrap();
+
+        let err = store.get_latest_reorg_event().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to deserialize latest reorg event marker"),
             "unexpected error: {err}"
         );
     }

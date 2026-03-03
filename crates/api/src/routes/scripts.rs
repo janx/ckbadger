@@ -20,9 +20,19 @@ use crate::utils::{
     ensure_derived_ready, is_known_script_name, merge_script_info_for_reference,
     parse_chart_date_range, related_code_hashes_for_reference,
 };
+use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
 
 type ApiRouteError = (StatusCode, Json<ApiError>);
+
+fn load_script_infos_cached(
+    state: &Arc<AppState>,
+) -> Result<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>, ApiRouteError> {
+    state
+        .mem_cache
+        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
+        .ok_or_else(|| ApiError::internal("script cache unavailable; warmup in progress"))
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -461,10 +471,7 @@ async fn lookup_scripts(
     let code_hash_bytes =
         code_hash_bytes.map_err(|_| ApiError::bad_request("Invalid hex in code_hashes"))?;
 
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?
         .into_iter()
         .map(|(_, info)| info)
         .collect();
@@ -574,10 +581,7 @@ async fn get_code_cell(
     )
     .map_err(|_| ApiError::bad_request("Invalid code_hash hex"))?;
 
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?
         .into_iter()
         .map(|(_, info)| info)
         .collect();
@@ -614,10 +618,7 @@ async fn list_scripts(
     let limit = params.limit.clamp(1, 100) as usize;
     let network = params.network.as_deref().unwrap_or(&state.ckb_network);
 
-    let all_scripts = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_scripts = load_script_infos_cached(&state)?;
 
     let search_pattern = params.search.as_ref().map(|s| s.to_lowercase());
 
@@ -727,10 +728,7 @@ async fn get_script(
 
     let network = &state.ckb_network;
 
-    let all_scripts = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_scripts = load_script_infos_cached(&state)?;
 
     let matching: Vec<_> = all_scripts
         .into_iter()
@@ -777,10 +775,7 @@ async fn get_script_usage(
 ) -> ApiResult<ScriptUsageResponse> {
     ensure_derived_ready(state.as_ref())?;
 
-    let all_scripts = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_scripts = load_script_infos_cached(&state)?;
 
     let matching: Vec<_> = all_scripts
         .into_iter()
@@ -1041,10 +1036,7 @@ async fn get_script_occupation_chart(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let all_scripts = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_scripts = load_script_infos_cached(&state)?;
 
     let code_hash_filter = params
         .code_hash
@@ -1090,10 +1082,7 @@ async fn get_script_occupation_chart_by_code_hash(
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
     let code_hash = parse_code_hash_hex(&params.code_hash)?;
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?
+    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(&state)?
         .into_iter()
         .map(|(_, info)| info)
         .collect();

@@ -14,13 +14,22 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::{
-    apply_live_capacity_delta, ensure_derived_ready, format_duration, resolve_dob_collection_name,
-    resolve_nft_collection_name,
+use crate::utils::{apply_live_capacity_delta, ensure_derived_ready, format_duration};
+use crate::warmup::{
+    CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
+
+fn load_script_infos_cached(
+    state: &Arc<AppState>,
+) -> Result<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>, ApiRouteError> {
+    state
+        .mem_cache
+        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
+        .ok_or_else(|| ApiError::internal("script cache unavailable; warmup in progress"))
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -708,10 +717,7 @@ async fn get_most_utilized_scripts_chart(
         return ok(cached);
     }
 
-    let all_scripts = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_scripts = load_script_infos_cached(&state)?;
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
     let mut final_by_key: HashMap<String, (i128, i128)> = HashMap::new();
@@ -869,14 +875,18 @@ async fn get_most_utilized_assets_chart(
     let mut entities: Vec<AssetEntity> = Vec::new();
     let mut deltas_by_date: BTreeMap<u32, Vec<(String, i128, i128)>> = BTreeMap::new();
 
-    let tokens = state
-        .store
-        .list_tokens()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    for (type_hash, info) in tokens {
-        if info.name.is_none() && info.symbol.is_none() && info.holders_count == 0 {
-            continue;
-        }
+    let token_assets = state
+        .mem_cache
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
+        .ok_or_else(|| ApiError::internal("token asset cache unavailable; warmup in progress"))?;
+    for token in token_assets {
+        let type_hash = hex::decode(token.id.strip_prefix("0x").unwrap_or(token.id.as_str()))
+            .map_err(|_| {
+                ApiError::internal(format!(
+                    "invalid token hash in warmup cache while building chart: {}",
+                    token.id
+                ))
+            })?;
         let deltas = state
             .store
             .list_token_daily_deltas(&type_hash)
@@ -891,11 +901,11 @@ async fn get_most_utilized_assets_chart(
         if total_cells_capacity <= 0 && occupied_capacity <= 0 {
             continue;
         }
-        let id = format!("0x{}", hex::encode(&type_hash));
-        let name = info
+        let id = token.id;
+        let name = token
             .symbol
             .clone()
-            .or_else(|| info.name.clone())
+            .or_else(|| token.name.clone())
             .unwrap_or_else(|| id.clone());
         let entity_key = format!("token:{id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "token"));
@@ -919,17 +929,71 @@ async fn get_most_utilized_assets_chart(
         }
     }
 
-    let clusters = state
-        .store
-        .list_cluster_aggregates()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    for (cluster_id, agg) in clusters {
-        if agg.total_count == 0 {
+    let nft_assets = state
+        .mem_cache
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+        .ok_or_else(|| ApiError::internal("nft asset cache unavailable; warmup in progress"))?;
+    for nft in nft_assets {
+        if nft.standard == "spore" {
+            let cluster_id = nft.cluster_id.clone().unwrap_or_else(|| nft.id.clone());
+            let cluster_bytes = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
+                .map_err(|_| {
+                ApiError::internal(format!(
+                    "invalid cluster id in warmup cache while building chart: {}",
+                    cluster_id
+                ))
+            })?;
+            let deltas = state
+                .store
+                .list_cluster_daily_deltas(&cluster_bytes)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let (total_cells_capacity, occupied_capacity) =
+                accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
+                    (
+                        delta.live_capacity_delta,
+                        delta.live_occupied_capacity_delta,
+                    )
+                }))?;
+            if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+                continue;
+            }
+            let name = nft.name.clone().unwrap_or_else(|| cluster_id.clone());
+            let entity_key = format!("dob:{cluster_id}");
+            labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
+            if occupied_capacity > total_cells_capacity {
+                return Err(ApiError::internal(format!(
+                    "DOB occupied capacity exceeds total for {}: occupied={}, total={}",
+                    entity_key, occupied_capacity, total_cells_capacity
+                )));
+            }
+            entities.push(AssetEntity {
+                key: entity_key.clone(),
+                final_total_cells_capacity: total_cells_capacity,
+                final_occupied_capacity: occupied_capacity,
+            });
+            for (date, delta) in deltas {
+                deltas_by_date.entry(date).or_default().push((
+                    entity_key.clone(),
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                ));
+            }
             continue;
         }
+
+        let collection_id = nft.id;
+        let collection_bytes = hex::decode(
+            collection_id.strip_prefix("0x").unwrap_or(&collection_id),
+        )
+        .map_err(|_| {
+            ApiError::internal(format!(
+                "invalid nft collection id in warmup cache while building chart: {}",
+                collection_id
+            ))
+        })?;
         let deltas = state
             .store
-            .list_cluster_daily_deltas(&cluster_id)
+            .list_nft_daily_deltas(&collection_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
             accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
@@ -941,61 +1005,8 @@ async fn get_most_utilized_assets_chart(
         if total_cells_capacity <= 0 && occupied_capacity <= 0 {
             continue;
         }
-
-        let id = format!("0x{}", hex::encode(&cluster_id));
-        let name =
-            resolve_dob_collection_name(state.store.as_ref(), &cluster_id, agg.name.as_deref())
-                .unwrap_or_else(|| id.clone());
-        let entity_key = format!("dob:{id}");
-        labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
-        if occupied_capacity > total_cells_capacity {
-            return Err(ApiError::internal(format!(
-                "DOB occupied capacity exceeds total for {}: occupied={}, total={}",
-                entity_key, occupied_capacity, total_cells_capacity
-            )));
-        }
-        entities.push(AssetEntity {
-            key: entity_key.clone(),
-            final_total_cells_capacity: total_cells_capacity,
-            final_occupied_capacity: occupied_capacity,
-        });
-        for (date, delta) in deltas {
-            deltas_by_date.entry(date).or_default().push((
-                entity_key.clone(),
-                delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
-            ));
-        }
-    }
-
-    let nft_collections = state
-        .store
-        .list_nft_collection_aggregates()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    for (collection_id, agg) in nft_collections {
-        if agg.total_count == 0 {
-            continue;
-        }
-        let deltas = state
-            .store
-            .list_nft_daily_deltas(&collection_id)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (total_cells_capacity, occupied_capacity) =
-            accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))?;
-        if total_cells_capacity <= 0 && occupied_capacity <= 0 {
-            continue;
-        }
-
-        let id = format!("0x{}", hex::encode(&collection_id));
-        let standard = agg.standard.asset_standard().to_string();
-        let name = resolve_nft_collection_name(&standard, agg.name.as_deref())
-            .unwrap_or_else(|| id.clone());
-        let entity_key = format!("nft:{id}");
+        let name = nft.name.clone().unwrap_or_else(|| collection_id.clone());
+        let entity_key = format!("nft:{collection_id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
         if occupied_capacity > total_cells_capacity {
             return Err(ApiError::internal(format!(
@@ -1330,10 +1341,7 @@ async fn get_common_knowledge_composition_chart(
         });
     }
 
-    let script_infos = state
-        .store
-        .list_script_infos()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let script_infos = load_script_infos_cached(&state)?;
     let type_code_hashes: HashSet<Vec<u8>> = script_infos
         .into_iter()
         .map(|(code_hash, _)| code_hash)
