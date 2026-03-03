@@ -2,7 +2,6 @@
 //!
 //! All types use `bincode` serialization for compact binary storage.
 
-use bincode::Options as _;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -30,50 +29,6 @@ pub struct LiveCellInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CompactConsumedCellInfo {
-    pub capacity: i64,
-    pub created_at_block: i64,
-    pub lock_script_hash: Vec<u8>,
-    pub lock_code_hash: Vec<u8>,
-    pub lock_hash_type: i16,
-    pub lock_args: Vec<u8>,
-    pub type_code_hash: Option<Vec<u8>>,
-    pub data_size: i32,
-}
-
-impl CompactConsumedCellInfo {
-    pub fn from_live_cell_info(info: &LiveCellInfo) -> Self {
-        Self {
-            capacity: info.capacity,
-            created_at_block: info.created_at_block,
-            lock_script_hash: info.lock_script_hash.clone(),
-            lock_code_hash: info.lock_code_hash.clone(),
-            lock_hash_type: info.lock_hash_type,
-            lock_args: info.lock_args.clone(),
-            type_code_hash: info.type_code_hash.clone(),
-            data_size: info.data_size,
-        }
-    }
-
-    pub fn to_live_cell_info(&self) -> LiveCellInfo {
-        LiveCellInfo {
-            capacity: self.capacity,
-            created_at_block: self.created_at_block,
-            lock_script_hash: self.lock_script_hash.clone(),
-            lock_code_hash: self.lock_code_hash.clone(),
-            lock_hash_type: self.lock_hash_type,
-            lock_args: self.lock_args.clone(),
-            type_script_hash: None,
-            type_code_hash: self.type_code_hash.clone(),
-            type_args: None,
-            data_size: self.data_size,
-            occupied_capacity: 0,
-            udt_amount: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsumedCellInfo {
     pub cell: LiveCellInfo,
     pub consumed_at_block: i64,
@@ -84,12 +39,6 @@ pub struct ConsumedCellInfo {
 pub struct ConsumedCellMeta {
     pub consumed_at_block: i64,
     pub consumed_by_tx: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LegacyConsumedCellInfoV2 {
-    pub cell: LiveCellInfo,
-    pub consumed_at_block: i64,
 }
 
 impl ConsumedCellInfo {
@@ -114,88 +63,9 @@ impl ConsumedCellInfo {
     }
 }
 
-/// Decode consumed cell bytes across storage schema versions.
-///
-/// Order:
-/// 1. `ConsumedCellInfo` (current schema, includes consumed_at_block + consumed_by_tx)
-/// 2. `LegacyConsumedCellInfoV2` (older schema, consumed_at_block only)
-/// 3. `CompactConsumedCellInfo` (legacy compact schema)
-/// 4. `LiveCellInfo` (very old schema)
-pub fn decode_consumed_cell_info(value: &[u8]) -> Option<ConsumedCellInfo> {
-    if let Ok(v3) = bincode::deserialize::<ConsumedCellInfo>(value) {
-        return Some(v3);
-    }
-    if let Ok(v2) = bincode::deserialize::<LegacyConsumedCellInfoV2>(value) {
-        return Some(v2.into());
-    }
-    if let Ok(compact) = bincode::deserialize::<CompactConsumedCellInfo>(value) {
-        return Some(ConsumedCellInfo {
-            cell: compact.to_live_cell_info(),
-            consumed_at_block: 0,
-            consumed_by_tx: None,
-        });
-    }
-    bincode::deserialize::<LiveCellInfo>(value)
-        .ok()
-        .map(|cell| ConsumedCellInfo {
-            cell,
-            consumed_at_block: 0,
-            consumed_by_tx: None,
-        })
-}
-
-impl From<LegacyConsumedCellInfoV2> for ConsumedCellInfo {
-    fn from(value: LegacyConsumedCellInfoV2) -> Self {
-        Self {
-            cell: value.cell,
-            consumed_at_block: value.consumed_at_block,
-            consumed_by_tx: None,
-        }
-    }
-}
-
-/// Decode consumed cell metadata across storage schema versions.
-///
-/// Order:
-/// 1. `ConsumedCellMeta` (current compact schema)
-/// 2. `ConsumedCellInfo` (legacy schema with embedded cell)
-/// 3. `LegacyConsumedCellInfoV2` (older schema, consumed_at_block only)
-/// 4. `CompactConsumedCellInfo` / `LiveCellInfo` (very old schemas, no consume metadata)
+/// Decode consumed cell metadata from the canonical schema.
 pub fn decode_consumed_cell_meta(value: &[u8]) -> Option<ConsumedCellMeta> {
-    fn deserialize_exact<'a, T>(bytes: &'a [u8]) -> bincode::Result<T>
-    where
-        T: serde::de::Deserialize<'a>,
-    {
-        bincode::options()
-            .with_fixint_encoding()
-            .reject_trailing_bytes()
-            .deserialize(bytes)
-    }
-
-    if let Ok(meta) = deserialize_exact::<ConsumedCellMeta>(value) {
-        return Some(meta);
-    }
-    if let Ok(v3) = deserialize_exact::<ConsumedCellInfo>(value) {
-        return Some(ConsumedCellMeta {
-            consumed_at_block: v3.consumed_at_block,
-            consumed_by_tx: v3.consumed_by_tx,
-        });
-    }
-    if let Ok(v2) = deserialize_exact::<LegacyConsumedCellInfoV2>(value) {
-        return Some(ConsumedCellMeta {
-            consumed_at_block: v2.consumed_at_block,
-            consumed_by_tx: None,
-        });
-    }
-    if deserialize_exact::<CompactConsumedCellInfo>(value).is_ok()
-        || deserialize_exact::<LiveCellInfo>(value).is_ok()
-    {
-        return Some(ConsumedCellMeta {
-            consumed_at_block: 0,
-            consumed_by_tx: None,
-        });
-    }
-    None
+    bincode::deserialize::<ConsumedCellMeta>(value).ok()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1056,65 +926,33 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_consumed_cell_info_current_schema_with_consumer() {
+    fn test_decode_consumed_cell_meta_current_schema() {
         let info = sample_live_cell_info();
         let consumed =
             ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 999, Some(&[0xAA; 32]));
-        let bytes = bincode::serialize(&consumed).unwrap();
-        let decoded = decode_consumed_cell_info(&bytes).unwrap();
-
-        assert_eq!(decoded.cell.capacity, info.capacity);
+        let meta = ConsumedCellMeta {
+            consumed_at_block: consumed.consumed_at_block,
+            consumed_by_tx: consumed.consumed_by_tx.clone(),
+        };
+        let bytes = bincode::serialize(&meta).unwrap();
+        let decoded = decode_consumed_cell_meta(&bytes).unwrap();
         assert_eq!(decoded.consumed_at_block, 999);
         assert_eq!(decoded.consumed_by_tx, Some(vec![0xAA; 32]));
     }
 
     #[test]
-    fn test_decode_consumed_cell_info_legacy_v2_schema() {
-        let info = sample_live_cell_info();
-        let legacy = LegacyConsumedCellInfoV2 {
-            cell: info.clone(),
-            consumed_at_block: 777,
-        };
-        let bytes = bincode::serialize(&legacy).unwrap();
-        let decoded = decode_consumed_cell_info(&bytes).unwrap();
-
-        assert_eq!(decoded.cell.capacity, info.capacity);
-        assert_eq!(decoded.consumed_at_block, 777);
-        assert_eq!(decoded.consumed_by_tx, None);
-    }
-
-    #[test]
-    fn test_decode_consumed_cell_meta_current_schema() {
-        let meta = ConsumedCellMeta {
-            consumed_at_block: 456,
-            consumed_by_tx: Some(vec![0xAB; 32]),
-        };
-        let bytes = bincode::serialize(&meta).unwrap();
-        let decoded = decode_consumed_cell_meta(&bytes).unwrap();
-        assert_eq!(decoded.consumed_at_block, 456);
-        assert_eq!(decoded.consumed_by_tx, Some(vec![0xAB; 32]));
-    }
-
-    #[test]
-    fn test_decode_consumed_cell_meta_legacy_info_schema() {
+    fn test_decode_consumed_cell_meta_rejects_legacy_info_schema() {
         let info = sample_live_cell_info();
         let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 888, None);
         let bytes = bincode::serialize(&legacy).unwrap();
-        let decoded = decode_consumed_cell_meta(&bytes).unwrap();
-        assert_eq!(decoded.consumed_at_block, 888);
-        assert_eq!(decoded.consumed_by_tx, None);
+        assert!(decode_consumed_cell_meta(&bytes).is_none());
     }
 
     #[test]
-    fn test_decode_consumed_cell_meta_legacy_info_rejects_trailing_match() {
-        let mut info = sample_live_cell_info();
-        // `created_at_block` low byte of 0 would look like `Option::None` for meta schema.
-        info.created_at_block = 0;
-        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 888, None);
-        let bytes = bincode::serialize(&legacy).unwrap();
-        let decoded = decode_consumed_cell_meta(&bytes).unwrap();
-        assert_eq!(decoded.consumed_at_block, 888);
-        assert_eq!(decoded.consumed_by_tx, None);
+    fn test_decode_consumed_cell_meta_rejects_live_cell_schema() {
+        let info = sample_live_cell_info();
+        let bytes = bincode::serialize(&info).unwrap();
+        assert!(decode_consumed_cell_meta(&bytes).is_none());
     }
 
     #[test]

@@ -4,9 +4,7 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{
-    decode_consumed_cell_info, decode_consumed_cell_meta, ConsumedCellInfo, LiveCellInfo,
-};
+use crate::types::{decode_consumed_cell_meta, ConsumedCellInfo, LiveCellInfo};
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -145,11 +143,6 @@ impl CkbadgerStore {
         let Some(value) = self.get_cf(self.cf_consumed_cells(), &key)? else {
             return Ok(None);
         };
-
-        // Legacy schema stored full ConsumedCellInfo in consumed_cells.
-        if let Some(info) = decode_consumed_cell_info(&value) {
-            return Ok(Some(info));
-        }
 
         let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
             anyhow::anyhow!(
@@ -660,6 +653,32 @@ mod tests {
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
         let err = store.get_consumed_cells_batch(&refs).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to decode consumed cell meta"));
+    }
+
+    #[test]
+    fn test_get_consumed_cell_info_rejects_legacy_consumed_payload() {
+        let (_dir, store) = test_store();
+        let tx_hash = [0xEF; 32];
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
+        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&cell, 123, None);
+        let legacy_payload = bincode::serialize(&legacy).unwrap();
+
+        store
+            .put_cf(
+                store.cf_cells(),
+                &outpoint_key,
+                &bincode::serialize(&cell).unwrap(),
+            )
+            .unwrap();
+        store
+            .put_cf(store.cf_consumed_cells(), &outpoint_key, &legacy_payload)
+            .unwrap();
+
+        let err = store.get_consumed_cell_info(&tx_hash, 0).unwrap_err();
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta"));

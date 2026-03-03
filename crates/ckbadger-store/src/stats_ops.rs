@@ -865,28 +865,22 @@ impl CkbadgerStore {
                     bytes_to_hex(&key)
                 );
             }
-            let consumed = if let Some(info) = decode_consumed_cell_info(&value) {
-                info
-            } else {
-                let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "failed to decode consumed cell payload while rebuilding script info: outpoint=0x{}",
-                        bytes_to_hex(&key)
-                    )
-                })?;
-                let cell = self
-                    .get_cell_by_outpoint_key(&key)?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "missing canonical cell for consumed marker while rebuilding script info: outpoint=0x{}",
-                            bytes_to_hex(&key)
-                        )
-                    })?;
-                ConsumedCellInfo {
-                    cell,
-                    consumed_at_block: meta.consumed_at_block,
-                    consumed_by_tx: meta.consumed_by_tx,
-                }
+            let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "failed to decode consumed cell payload while rebuilding script info: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let cell = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing canonical cell for consumed marker while rebuilding script info: outpoint=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let consumed = ConsumedCellInfo {
+                cell,
+                consumed_at_block: meta.consumed_at_block,
+                consumed_by_tx: meta.consumed_by_tx,
             };
             let cell = consumed.cell;
 
@@ -1276,6 +1270,50 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("invalid consumed cell key length while rebuilding script info"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_rebuild_script_infos_from_cells_fails_on_legacy_consumed_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let outpoint = crate::keys::encode_outpoint(&[0xAB; 32], 0);
+        let cell = LiveCellInfo {
+            capacity: 1000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 1000,
+            udt_amount: None,
+        };
+        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&cell, 2, None);
+
+        store
+            .put_cf(
+                store.cf_cells(),
+                &outpoint,
+                &bincode::serialize(&cell).unwrap(),
+            )
+            .unwrap();
+        store
+            .put_cf(
+                store.cf_consumed_cells(),
+                &outpoint,
+                &bincode::serialize(&legacy).unwrap(),
+            )
+            .unwrap();
+
+        let err = store.rebuild_script_infos_from_cells().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to decode consumed cell payload while rebuilding script info"),
             "unexpected error: {err:#}"
         );
     }
