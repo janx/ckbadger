@@ -1,6 +1,7 @@
 //! WriteBatch builder for atomic multi-CF writes.
 
 use rocksdb::{ColumnFamily, WriteBatch};
+use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::{CkbadgerStore, StoreWriteIntent};
@@ -11,6 +12,16 @@ struct AppendBatchOp {
     cf_name: &'static str,
     key: Vec<u8>,
     value: Option<Vec<u8>>,
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
 }
 
 /// Accumulates writes across all CFs and commits atomically.
@@ -56,7 +67,18 @@ impl<'a> StoreBatch<'a> {
 
     fn commit_inner(self, no_wal: bool) -> anyhow::Result<()> {
         if self.store.is_append_only_store() {
-            for op in &self.append_ops {
+            let mut seen_ops: HashMap<(&'static str, Vec<u8>), usize> = HashMap::new();
+            for (idx, op) in self.append_ops.iter().enumerate() {
+                let dedupe_key = (op.cf_name, op.key.clone());
+                if let Some(first_idx) = seen_ops.insert(dedupe_key, idx) {
+                    anyhow::bail!(
+                        "append-only batch duplicate key blocked: cf={}, key=0x{}, first_op_index={}, second_op_index={}",
+                        op.cf_name,
+                        bytes_to_hex(&op.key),
+                        first_idx,
+                        idx
+                    );
+                }
                 if let Some(value) = op.value.as_deref() {
                     self.store.validate_append_put_by_cf_name(
                         op.cf_name,
@@ -605,8 +627,7 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_nft_collection_activity_key(collection_id, block_num, tx_idx);
         let value = bincode::serialize(entry).expect("serialize NftCollectionActivityEntry");
-        self.batch
-            .put_cf(self.store.cf_nft_collection_activities(), key, &value);
+        self.put_cf(self.store.cf_nft_collection_activities(), key, &value);
     }
 
     // ---- Statistics ----
@@ -837,6 +858,14 @@ mod tests {
         }
     }
 
+    fn make_nft_collection_activity(tx_hash_byte: u8) -> NftCollectionActivityEntry {
+        NftCollectionActivityEntry {
+            tx_hash: vec![tx_hash_byte; 32],
+            timestamp_ms: 1_700_000_000_000 + i64::from(tx_hash_byte),
+            actions: vec![AssetAction::Transfer],
+        }
+    }
+
     #[test]
     fn test_put_and_list_activities() {
         let dir = TempDir::new().unwrap();
@@ -968,5 +997,47 @@ mod tests {
             .list_activities(&lock, 10, Some((100, i32::MAX)), None)
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_append_only_batch_rejects_duplicate_key_in_same_commit() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock = [0xA1u8; 32];
+        let tx_hash = [0xB2u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 100, 0, &tx_hash);
+        batch.put_addr_tx(&lock, 100, 0, &tx_hash);
+        let err = batch.commit().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("append-only batch duplicate key blocked"));
+    }
+
+    #[test]
+    fn test_append_only_nft_collection_activity_rejects_overwrite() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let collection_id = [0x11u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_activity(
+            &collection_id,
+            100,
+            0,
+            &make_nft_collection_activity(0x01),
+        );
+        batch.commit().unwrap();
+
+        let mut overwrite_batch = StoreBatch::new(&store);
+        overwrite_batch.put_nft_collection_activity(
+            &collection_id,
+            100,
+            0,
+            &make_nft_collection_activity(0x02),
+        );
+        let err = overwrite_batch.commit().unwrap_err();
+        assert!(err.to_string().contains("append-only overwrite blocked"));
     }
 }

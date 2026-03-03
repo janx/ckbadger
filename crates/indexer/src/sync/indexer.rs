@@ -337,23 +337,47 @@ fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
-fn next_undo_seq(undo_seq_by_block: &mut HashMap<i64, u64>, block_num: i64) -> u64 {
+const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
+const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+enum UndoSeqScope {
+    TxContext = 0x0001,
+    AppendAddrTx = 0x0002,
+    AppendActivity = 0x0003,
+    AppendNftCollectionActivity = 0x0004,
+}
+
+fn next_undo_seq(
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    block_num: i64,
+    scope: UndoSeqScope,
+) -> u64 {
     let seq_entry = undo_seq_by_block.entry(block_num).or_insert(0);
-    let seq = *seq_entry;
-    *seq_entry = seq
+    let local_seq = *seq_entry;
+    assert!(
+        local_seq <= UNDO_SEQ_LOCAL_MAX,
+        "undo seq local counter overflow: block_num={}, scope={:?}, local_seq={}",
+        block_num,
+        scope,
+        local_seq
+    );
+    *seq_entry = local_seq
         .checked_add(1)
         .expect("undo seq overflow for block-scoped rollback log");
-    seq
+    ((scope as u64) << UNDO_SEQ_SCOPE_SHIFT) | local_seq
 }
 
 fn put_append_delete_undo_entry(
     domain_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
+    scope: UndoSeqScope,
     block_num: i64,
     cf_name: &str,
     key: &[u8],
 ) {
-    let seq = next_undo_seq(undo_seq_by_block, block_num);
+    let seq = next_undo_seq(undo_seq_by_block, block_num, scope);
     let undo = ckbadger_store::types::UndoLogEntry::KeyMutation {
         target_store: ckbadger_store::types::UndoLogStoreTarget::AppendOnly,
         cf_name: cf_name.to_string(),
@@ -390,7 +414,7 @@ fn put_tx_context_undo_entries(
             outputs_count: tx.outputs_count,
             inputs,
         };
-        let seq = next_undo_seq(undo_seq_by_block, tx.block_number);
+        let seq = next_undo_seq(undo_seq_by_block, tx.block_number, UndoSeqScope::TxContext);
         domain_batch.put_reorg_undo_log_by_block(
             tx.block_number,
             seq,
@@ -414,6 +438,7 @@ fn put_addr_tx_with_undo_log(
     put_append_delete_undo_entry(
         domain_batch,
         undo_seq_by_block,
+        UndoSeqScope::AppendAddrTx,
         block_num,
         ckbadger_store::CF_ADDR_TXS,
         &append_key,
@@ -434,6 +459,7 @@ fn put_activity_with_undo_log(
     put_append_delete_undo_entry(
         domain_batch,
         undo_seq_by_block,
+        UndoSeqScope::AppendActivity,
         block_num,
         ckbadger_store::CF_ACTIVITIES,
         &append_key,
@@ -8310,6 +8336,7 @@ impl Indexer {
                 put_append_delete_undo_entry(
                     &mut consume_batch,
                     &mut append_undo_seq_by_block,
+                    UndoSeqScope::AppendNftCollectionActivity,
                     activity.block_number,
                     ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                     &append_key,
@@ -8323,6 +8350,7 @@ impl Indexer {
             put_append_delete_undo_entry(
                 &mut consume_batch,
                 &mut append_undo_seq_by_block,
+                UndoSeqScope::AppendNftCollectionActivity,
                 block_number,
                 ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                 &append_key,
@@ -9708,6 +9736,7 @@ impl Indexer {
                             put_append_delete_undo_entry(
                                 &mut batch,
                                 &mut append_undo_seq_by_block,
+                                UndoSeqScope::AppendNftCollectionActivity,
                                 activity.block_number,
                                 ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                                 &append_key,
@@ -9725,6 +9754,7 @@ impl Indexer {
                         put_append_delete_undo_entry(
                             &mut batch,
                             &mut append_undo_seq_by_block,
+                            UndoSeqScope::AppendNftCollectionActivity,
                             block_number,
                             ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                             &append_key,
@@ -11127,6 +11157,7 @@ impl Indexer {
                         put_append_delete_undo_entry(
                             &mut data_batch,
                             &mut append_undo_seq_by_block,
+                            UndoSeqScope::AppendNftCollectionActivity,
                             activity.block_number,
                             ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                             &append_key,
@@ -11144,6 +11175,7 @@ impl Indexer {
                     put_append_delete_undo_entry(
                         &mut data_batch,
                         &mut append_undo_seq_by_block,
+                        UndoSeqScope::AppendNftCollectionActivity,
                         block_number,
                         ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                         &append_key,
@@ -12753,6 +12785,26 @@ mod tests {
     }
 
     #[test]
+    fn test_next_undo_seq_scoped_prevents_cross_phase_collisions() {
+        let mut tx_scope_map = HashMap::new();
+        let mut addr_scope_map = HashMap::new();
+        let block_num = 42;
+
+        let tx_seq = next_undo_seq(&mut tx_scope_map, block_num, UndoSeqScope::TxContext);
+        let addr_seq = next_undo_seq(&mut addr_scope_map, block_num, UndoSeqScope::AppendAddrTx);
+
+        assert_ne!(tx_seq, addr_seq);
+        assert_eq!(
+            tx_seq >> UNDO_SEQ_SCOPE_SHIFT,
+            UndoSeqScope::TxContext as u64
+        );
+        assert_eq!(
+            addr_seq >> UNDO_SEQ_SCOPE_SHIFT,
+            UndoSeqScope::AppendAddrTx as u64
+        );
+    }
+
+    #[test]
     fn test_rollback_via_undo_log_preserves_append_history_cfs() {
         let domain_dir = tempfile::tempdir().unwrap();
         let append_dir = tempfile::tempdir().unwrap();
@@ -12801,6 +12853,7 @@ mod tests {
         put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
+            UndoSeqScope::AppendAddrTx,
             20,
             ckbadger_store::CF_ADDR_TXS,
             &addr_drop,
@@ -12808,6 +12861,7 @@ mod tests {
         put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
+            UndoSeqScope::AppendActivity,
             21,
             ckbadger_store::CF_ACTIVITIES,
             &act_drop,
@@ -12815,6 +12869,7 @@ mod tests {
         put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
+            UndoSeqScope::AppendNftCollectionActivity,
             22,
             ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
             &nft_drop,

@@ -141,12 +141,9 @@ crates/
   tui/            # Terminal monitoring UI (sync/memory/throughput)
 frontend/         # Next.js 15 App Router + React 19
 docs/AI_FORMATS.md           # AI-friendly page output details
-docs/ACTIVITY_SYSTEM.md      # Activity system design - READ BEFORE ACTIVITY CHANGES
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture + Redis sync data
-docs/PERFORMANCE_RESULTS.md  # Benchmark snapshots for perf work
-docs/REORG_HANDLING.md       # Chain reorganization handling
 docs/STORE_SCHEMA.md         # Column families reference (37 CFs)
 docs/VERIFY.md               # Data integrity verification details
 ```
@@ -232,16 +229,15 @@ cargo run -p ckbadger-indexer -- verify --list-checks      # List all checks
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic            | Document                      | Must Read Before                     |
-| ---------------- | ----------------------------- | ------------------------------------ |
-| **Worldview**    | `docs/WORLD_VIEW.md`          | **Any design or implementation**     |
-| CKB protocol     | `docs/rfcs/`                  | Understanding CKB internals          |
-| Nervos docs      | `docs/docs.nervos.org/`       | User-facing explanations             |
-| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`    | Any DAO/supply/circulation changes   |
-| Activity system  | `docs/ACTIVITY_SYSTEM.md`     | Activity feed or activity CF changes |
-| Reorg handling   | `docs/REORG_HANDLING.md`      | Reorg or fork-related changes        |
-| Architecture     | `docs/ARCHITECTURE_MAP.md`    | Module ownership questions           |
-| Performance      | `docs/PERFORMANCE_RESULTS.md` | Performance optimization work        |
+| Topic            | Document                          | Must Read Before                     |
+| ---------------- | --------------------------------- | ------------------------------------ |
+| **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**     |
+| Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes        |
+| Activity system  | `docs/prompts/ACTIVITY_SYSTEM.md` | Activity feed or activity CF changes |
+| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals          |
+| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations             |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes   |
+| Architecture     | `docs/ARCHITECTURE_MAP.md`        | Module ownership questions           |
 
 ### Common Knowledge (CKB Core Concept)
 
