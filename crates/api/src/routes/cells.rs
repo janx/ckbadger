@@ -24,7 +24,7 @@ use crate::utils::{
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::AppState;
-use ckbadger_store::keys;
+use ckbadger_store::{keys, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
 const UNKNOWN_SCRIPT_NAME: &str = "unknown";
@@ -53,6 +53,7 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x0bbe768b519d8ea7b96d58f1182eb7e6ef96c541fbd9526975077ee09f049058",
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
+const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
 
 fn is_known_script_label(name: &str) -> bool {
     let trimmed = name.trim();
@@ -2492,6 +2493,66 @@ async fn get_active_addresses(
     ok(addresses)
 }
 
+fn is_canonical_addr_tx(
+    store: &CkbadgerStore,
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) -> anyhow::Result<bool> {
+    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(tx_hash)? else {
+        return Ok(false);
+    };
+    if canonical_block != block_num || canonical_tx_idx != tx_idx {
+        return Ok(false);
+    }
+    Ok(store
+        .get_tx_index(canonical_block, canonical_tx_idx)?
+        .is_some())
+}
+
+fn list_canonical_addr_txs_page(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    lock_hash: &[u8],
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+) -> anyhow::Result<Vec<(i64, i32, Vec<u8>)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let scan_limit = ADDR_TX_SCAN_CHUNK_SIZE.max(limit);
+    let mut out = Vec::with_capacity(limit);
+    let mut scan_cursor = cursor;
+
+    loop {
+        let rows = append_only_store.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
+        if rows.is_empty() {
+            break;
+        }
+        let rows_len = rows.len();
+        let mut last_seen = None;
+        for (block_num, tx_idx, tx_hash) in rows {
+            last_seen = Some((block_num, tx_idx));
+            if is_canonical_addr_tx(store, block_num, tx_idx, &tx_hash)? {
+                out.push((block_num, tx_idx, tx_hash));
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
+        if rows_len < scan_limit {
+            break;
+        }
+        let Some(last_seen_cursor) = last_seen else {
+            break;
+        };
+        scan_cursor = Some(last_seen_cursor);
+    }
+
+    Ok(out)
+}
+
 async fn get_address_transactions(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
@@ -2511,11 +2572,15 @@ async fn get_address_transactions(
 
     let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
 
-    // Fetch recent transactions for this address (newest first)
-    let addr_txs = state
-        .append_only_store
-        .list_addr_txs_recent(&lock_hash, limit + 1, cursor)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Fetch canonical recent transactions for this address (newest first).
+    let addr_txs = list_canonical_addr_txs_page(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &lock_hash,
+        limit + 1,
+        cursor,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = addr_txs.len() > limit;
     let addr_txs: Vec<_> = addr_txs.into_iter().take(limit).collect();
@@ -2894,7 +2959,9 @@ async fn get_address_stats_history(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::LiveCellInfo;
+    use ckbadger_store::TxIndexEntry;
 
     fn encode_molecule_bytes(input: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(4 + input.len());
@@ -3553,5 +3620,47 @@ mod tests {
     fn test_format_script_code_hash_label() {
         let label = format_script_code_hash_label(&[0xAB; 32]);
         assert_eq!(label, "script:0xababababab...abababab");
+    }
+
+    #[test]
+    fn test_list_canonical_addr_txs_page_filters_orphaned_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let lock_hash = [0xAA; 32];
+
+        let stale_tx = vec![0x30; 32];
+        let canonical_tx_new = vec![0x20; 32];
+        let canonical_tx_old = vec![0x10; 32];
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);
+        append_batch.put_addr_tx(&lock_hash, 20, 0, &canonical_tx_new);
+        append_batch.put_addr_tx(&lock_hash, 10, 0, &canonical_tx_old);
+        append_batch.commit().unwrap();
+
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
+        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
+        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
+        domain_batch.put_tx_index(20, 0, &tx_index);
+        domain_batch.put_tx_index(10, 0, &tx_index);
+        domain_batch.commit().unwrap();
+
+        let rows = list_canonical_addr_txs_page(&domain, &append, &lock_hash, 3, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, 20);
+        assert_eq!(rows[1].0, 10);
+        assert_eq!(rows[0].2, canonical_tx_new);
+        assert_eq!(rows[1].2, canonical_tx_old);
     }
 }

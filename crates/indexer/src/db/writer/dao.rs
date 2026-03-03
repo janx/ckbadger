@@ -141,19 +141,32 @@ fn infer_withdraw_to_output_index_from_outputs(
     None
 }
 
-fn select_phase1_output_by_capacity<'a>(
+fn select_phase1_output_for_deposit<'a>(
     new_dao_outputs: &'a [(Vec<u8>, i16, Vec<u8>, i64, u64)],
     consumed_output_indices: &HashSet<usize>,
     capacity: i64,
-) -> Option<(usize, &'a (Vec<u8>, i16, Vec<u8>, i64, u64))> {
-    new_dao_outputs
+    deposit_block_number: i64,
+    lock_script_hash: &[u8],
+) -> Result<Option<(usize, &'a (Vec<u8>, i16, Vec<u8>, i64, u64))>> {
+    let deposit_block_u64 = u64::try_from(deposit_block_number).map_err(|_| {
+        anyhow!(
+            "invalid negative DAO deposit block number while matching phase-1 output: {}",
+            deposit_block_number
+        )
+    })?;
+    Ok(new_dao_outputs
         .iter()
         .enumerate()
-        .filter(|(pos, (_, _, _, cap, _))| {
-            *cap == capacity && !consumed_output_indices.contains(pos)
-        })
-        // Use output index as a deterministic tie-breaker when capacities repeat.
-        .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos))
+        .filter(
+            |(pos, (_, _, output_lock_hash, cap, output_deposit_block))| {
+                *cap == capacity
+                    && *output_deposit_block == deposit_block_u64
+                    && output_lock_hash.as_slice() == lock_script_hash
+                    && !consumed_output_indices.contains(pos)
+            },
+        )
+        // Use output index as a deterministic tie-breaker when exact metadata repeats.
+        .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos)))
 }
 
 fn infer_request_output_index_from_inputs(
@@ -287,24 +300,6 @@ impl BatchWriter {
             let outpoint_key = keys::encode_outpoint(original_tx_hash, *original_output_index);
 
             if *status == 0 {
-                // Phase 1: deposit -> withdraw_request
-                let (pos, (new_tx_hash, new_output_index, _, _, _)) =
-                    select_phase1_output_by_capacity(
-                        new_dao_outputs,
-                        &consumed_output_indices,
-                        capacity,
-                    )
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "DAO phase-1 output not found for consumed deposit: consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}",
-                            hex::encode(consuming_tx_hash),
-                            hex::encode(original_tx_hash),
-                            original_output_index,
-                            capacity
-                        )
-                    })?;
-                consumed_output_indices.insert(pos);
-
                 let Some(value) = self
                     .store
                     .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
@@ -326,6 +321,30 @@ impl BatchWriter {
                             e
                         )
                     })?;
+
+                // Phase 1: deposit -> withdraw_request
+                let (pos, (new_tx_hash, new_output_index, _, _, _)) =
+                    select_phase1_output_for_deposit(
+                        new_dao_outputs,
+                        &consumed_output_indices,
+                        capacity,
+                        entry.deposit_block_number,
+                        &entry.lock_script_hash,
+                    )
+                    ?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "DAO phase-1 output not found for consumed deposit: consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}, deposit_block={}, lock_hash=0x{}",
+                            hex::encode(consuming_tx_hash),
+                            hex::encode(original_tx_hash),
+                            original_output_index,
+                            capacity,
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash),
+                        )
+                    })?;
+                consumed_output_indices.insert(pos);
+
                 entry.status = 1;
                 entry.withdraw_request_block = Some(block_number);
                 entry.withdraw_request_tx = Some(new_tx_hash.clone());
@@ -612,22 +631,6 @@ impl BatchWriter {
                 let outpoint_key = keys::encode_outpoint(original_tx_hash, *original_output_index);
 
                 if *status == 0 {
-                    let (pos, (new_tx_hash, new_output_index, _, _, _)) =
-                        select_phase1_output_by_capacity(
-                            ctx.new_dao_outputs(),
-                            &consumed_output_indices,
-                            capacity,
-                        )
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "DAO phase-1 output not found for consumed deposit (batch): consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}",
-                                hex::encode(ctx.consuming_tx_hash()),
-                                hex::encode(original_tx_hash),
-                                original_output_index,
-                                capacity
-                            )
-                        })?;
-                    consumed_output_indices.insert(pos);
                     let maybe_entry: Option<DaoDepositCacheEntry> = if let Some(value) = self
                         .store
                         .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
@@ -655,6 +658,26 @@ impl BatchWriter {
                             capacity
                         );
                     };
+                    let (pos, (new_tx_hash, new_output_index, _, _, _)) =
+                        select_phase1_output_for_deposit(
+                            ctx.new_dao_outputs(),
+                            &consumed_output_indices,
+                            capacity,
+                            entry.deposit_block_number,
+                            &entry.lock_script_hash,
+                        )?
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "DAO phase-1 output not found for consumed deposit (batch): consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}, deposit_block={}, lock_hash=0x{}",
+                                hex::encode(ctx.consuming_tx_hash()),
+                                hex::encode(original_tx_hash),
+                                original_output_index,
+                                capacity,
+                                entry.deposit_block_number,
+                                hex::encode(&entry.lock_script_hash),
+                            )
+                        })?;
+                    consumed_output_indices.insert(pos);
 
                     entry.status = 1;
                     entry.withdraw_request_block = Some(ctx.block_number());
@@ -1754,14 +1777,14 @@ mod tests {
             (
                 withdraw_request_tx.clone(),
                 0i16,
-                vec![0xEE; 32],
+                vec![0xCC; 32],
                 capacity_a,
                 deposit_block as u64,
             ),
             (
                 withdraw_request_tx.clone(),
                 1i16,
-                vec![0xFF; 32],
+                vec![0xDD; 32],
                 capacity_b,
                 deposit_block as u64,
             ),
@@ -1854,6 +1877,173 @@ mod tests {
             found.len(),
             2,
             "both deposits should be found via their distinct withdrawal request outpoints"
+        );
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_phase1_uses_deposit_block_to_disambiguate_outputs() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let deposit_tx = vec![0xA1; 32];
+        let capacity: i64 = 500_00000000;
+        let outpoint = keys::encode_outpoint(&deposit_tx, 0);
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_dao_deposit(
+            &outpoint,
+            &DaoDepositCacheEntry {
+                capacity,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        seed.commit().unwrap();
+
+        let withdraw_tx = vec![0xCC; 32];
+        let new_dao_outputs = vec![
+            // Same capacity/lock but wrong deposit block -> must be ignored.
+            (withdraw_tx.clone(), 0i16, vec![0xBB; 32], capacity, 101u64),
+            // Correct match.
+            (withdraw_tx.clone(), 1i16, vec![0xBB; 32], capacity, 100u64),
+        ];
+        let consumed = vec![(
+            0,
+            deposit_tx.clone(),
+            0i16,
+            capacity.to_string(),
+            100i64,
+            0i16,
+        )];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_dao_withdrawals(
+                &consumed,
+                &new_dao_outputs,
+                &[],
+                &[],
+                200,
+                &[0xDD; 32],
+                chrono::Utc::now(),
+                &mut batch,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored: DaoDepositCacheEntry = bincode::deserialize(
+            &store
+                .get_cf(store.cf_dao_deposits(), &outpoint)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored.withdraw_request_output_index, Some(1));
+        assert_eq!(stored.withdraw_request_tx, Some(withdraw_tx.clone()));
+        assert!(store
+            .get_dao_deposit_by_withdraw_tx(&withdraw_tx, 0)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_dao_deposit_by_withdraw_tx(&withdraw_tx, 1)
+                .unwrap(),
+            Some(outpoint.to_vec())
+        );
+    }
+
+    #[test]
+    fn test_process_dao_withdrawals_batch_phase1_uses_deposit_block_to_disambiguate_outputs() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+
+        let deposit_tx = vec![0xA5; 32];
+        let deposit_output_index: i16 = 0;
+        let capacity: i64 = 500_00000000;
+        let outpoint = keys::encode_outpoint(&deposit_tx, deposit_output_index);
+
+        let mut pending_deposits: HashMap<[u8; 34], DaoDepositCacheEntry> = HashMap::new();
+        pending_deposits.insert(
+            outpoint,
+            DaoDepositCacheEntry {
+                capacity,
+                deposit_block_number: 100,
+                lock_script_hash: vec![0xBB; 32],
+                deposit_ar: 10,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+
+        let withdraw_tx = vec![0xC5; 32];
+        let ctx = BatchCtx {
+            consumed: vec![(
+                0,
+                deposit_tx,
+                deposit_output_index,
+                capacity.to_string(),
+                100,
+                0,
+            )],
+            new_outputs: vec![
+                (withdraw_tx.clone(), 0, vec![0xBB; 32], capacity, 101),
+                (withdraw_tx.clone(), 1, vec![0xBB; 32], capacity, 100),
+            ],
+            block_num: 200,
+            consuming_tx: vec![0xDD; 32],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_dao_withdrawals_batch(&[ctx], &mut batch, &pending_deposits)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored: DaoDepositCacheEntry = bincode::deserialize(
+            &store
+                .get_cf(store.cf_dao_deposits(), &outpoint)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored.withdraw_request_output_index, Some(1));
+        assert_eq!(stored.withdraw_request_tx, Some(withdraw_tx.clone()));
+        assert!(store
+            .get_dao_deposit_by_withdraw_tx(&withdraw_tx, 0)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .get_dao_deposit_by_withdraw_tx(&withdraw_tx, 1)
+                .unwrap(),
+            Some(outpoint.to_vec())
         );
     }
 }

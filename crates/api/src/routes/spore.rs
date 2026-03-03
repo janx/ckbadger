@@ -8,6 +8,9 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use super::assets::{
+    count_canonical_nft_collection_activities, list_canonical_nft_collection_activities_page,
+};
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{
@@ -1350,11 +1353,16 @@ async fn get_cluster_activities(
         return Err(ApiError::not_found("Cluster not found"));
     }
 
-    // Use pre-computed collection activity index — single O(limit) prefix scan
-    let results = state
-        .append_only_store
-        .list_nft_collection_activities(&id, (limit as usize) + 1, cursor, action_filter.as_deref())
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    // Use pre-computed collection activity index and drop orphaned history rows.
+    let results = list_canonical_nft_collection_activities_page(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &id,
+        (limit as usize) + 1,
+        cursor,
+        action_filter.as_deref(),
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
     let page: Vec<ClusterActivityResponse> = results
@@ -1479,10 +1487,12 @@ async fn get_cluster(
         .as_ref()
         .map(|agg| agg.owner_count)
         .unwrap_or(0);
-    let activities_count = state
-        .append_only_store
-        .count_nft_collection_activities(&id)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let activities_count = count_canonical_nft_collection_activities(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &id,
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
     let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
