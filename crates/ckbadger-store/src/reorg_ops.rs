@@ -1477,9 +1477,13 @@ impl CkbadgerStore {
 
         // Keep sync_status tip aligned with the rolled-back chain head.
         let tip_hash = if rollback_to >= 0 {
-            self.get_block_header(rollback_to)?
-                .map(|h| h.hash)
-                .unwrap_or_default()
+            let header = self.get_block_header(rollback_to)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing rollback target block header while updating sync status tip: rollback_to={}",
+                    rollback_to
+                )
+            })?;
+            header.hash
         } else {
             Vec::new()
         };
@@ -2560,6 +2564,32 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize block header during rollback cleanup"));
+    }
+
+    #[test]
+    fn test_rollback_to_block_fails_when_target_header_missing_for_tip_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(2, &header2);
+        batch.commit().unwrap();
+
+        let err = store.rollback_to_block(1).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing rollback target block header while updating sync status tip"));
+        assert!(err.to_string().contains("rollback_to=1"));
     }
 
     #[test]

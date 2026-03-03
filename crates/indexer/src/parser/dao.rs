@@ -92,7 +92,15 @@ impl DaoParser {
         }
 
         let data = parse_hex_to_bytes(data_hex);
-        let state = Self::parse_dao_state(&data)?;
+        if data.len() != 8 {
+            panic!(
+                "DAO cell data length invariant violation while parsing DAO cell: expected=8, got={}, data_hex={}",
+                data.len(),
+                data_hex
+            );
+        }
+        let state = Self::parse_dao_state(&data)
+            .unwrap_or_else(|| panic!("DAO state parse failed with validated 8-byte data"));
         let lock_script_hash = ScriptParser::compute_script_hash(&output.lock)
             .unwrap_or_else(|e| panic!("DAO lock script hash failed: {}", e));
         let deposit_block_number = Self::parse_deposit_block_number(&data);
@@ -283,6 +291,26 @@ mod tests {
     fn test_parse_deposit_block_number_zero_is_none() {
         let data = [0u8; 8];
         assert_eq!(DaoParser::parse_deposit_block_number(&data), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "DAO cell data length invariant violation while parsing DAO cell")]
+    fn test_parse_dao_cell_panics_on_invalid_data_length_for_dao_type() {
+        let output = crate::rpc::CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: crate::rpc::Script {
+                code_hash: "0x".to_string() + &"11".repeat(32),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            },
+            type_: Some(crate::rpc::Script {
+                code_hash: DAO_CODE_HASH.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }),
+        };
+
+        let _ = DaoParser::parse_dao_cell(&output, "0x0102");
     }
 
     #[test]
