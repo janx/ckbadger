@@ -337,6 +337,21 @@ fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
+fn parsed_input_outpoint_index_i16(previous_output_index: i32, context: &str) -> i16 {
+    if previous_output_index < 0 {
+        panic!(
+            "negative input previous_output_index while indexing outpoint: context={}, previous_output_index={}",
+            context, previous_output_index
+        );
+    }
+    i16::try_from(previous_output_index).unwrap_or_else(|_| {
+        panic!(
+            "input previous_output_index exceeds i16 range while indexing outpoint: context={}, previous_output_index={}",
+            context, previous_output_index
+        )
+    })
+}
+
 fn build_activity_input_views(
     tx_data: &TxData,
     block_number: i64,
@@ -1710,7 +1725,7 @@ fn load_activity_token_info_cache(
         for input in &tx.inputs {
             let key = (
                 input.previous_tx_hash.to_vec(),
-                input.previous_output_index as i16,
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
             );
             let cell_info = input_cell_info
                 .get(&key)
@@ -2242,7 +2257,7 @@ fn accumulate_dao_snapshot_deltas_for_txs(
         for input in &tx_data.inputs {
             let outpoint = (
                 input.previous_tx_hash.to_vec(),
-                input.previous_output_index as i16,
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
             );
             if let Some((_, _, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
                 if *status == 1 {
@@ -2260,7 +2275,7 @@ fn accumulate_dao_snapshot_deltas_for_txs(
         for input in &tx_data.inputs {
             let outpoint = (
                 input.previous_tx_hash.to_vec(),
-                input.previous_output_index as i16,
+                parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
             );
             let mut maybe_cap: Option<i64> = same_batch_dao_map.get(&outpoint).copied();
             if maybe_cap.is_none() {
@@ -4773,7 +4788,10 @@ impl Indexer {
                         for input in &tx_data.inputs {
                             let key = (
                                 input.previous_tx_hash.to_vec(),
-                                input.previous_output_index as i16,
+                                parsed_input_outpoint_index_i16(
+                                    input.previous_output_index,
+                                    "sync_indexer",
+                                ),
                             );
                             if let Some(info) = input_cell_info.get(&key) {
                                 tx_data.total_input_capacity += info.capacity;
@@ -5059,7 +5077,10 @@ impl Indexer {
                         for input in &tx_data.inputs {
                             let key = (
                                 input.previous_tx_hash.to_vec(),
-                                input.previous_output_index as i16,
+                                parsed_input_outpoint_index_i16(
+                                    input.previous_output_index,
+                                    "sync_indexer",
+                                ),
                             );
                             let info = input_cell_info
                                 .get(&key)
@@ -5506,7 +5527,10 @@ impl Indexer {
                             for input in &tx_data.inputs {
                                 let key = (
                                     input.previous_tx_hash.to_vec(),
-                                    input.previous_output_index as i16,
+                                    parsed_input_outpoint_index_i16(
+                                        input.previous_output_index,
+                                        "sync_indexer",
+                                    ),
                                 );
 
                                 // 1. Check same-batch first
@@ -6845,7 +6869,10 @@ impl Indexer {
                 for input in &tx_data.inputs {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     if let Some(info) = input_cell_info.get(&key) {
                         tx_data.total_input_capacity += info.capacity;
@@ -7023,12 +7050,18 @@ impl Indexer {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     if let Some(info) = input_cell_info.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                             info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
@@ -7037,7 +7070,10 @@ impl Indexer {
                     } else if let Some(info) = batch_cell_infos.get(&key) {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                             info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
@@ -7076,7 +7112,10 @@ impl Indexer {
                 for input in &tx_data.inputs {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     let info = input_cell_info
                         .get(&key)
@@ -7288,7 +7327,10 @@ impl Indexer {
                 for input in &tx_data.inputs {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     let info = input_cell_info
                         .get(&key)
@@ -7558,7 +7600,10 @@ impl Indexer {
                 tx.inputs.iter().map(|input| {
                     (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     )
                 })
             })
@@ -7628,7 +7673,10 @@ impl Indexer {
                 .filter_map(|input| {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     input_cell_info
                         .get(&key)
@@ -7643,7 +7691,10 @@ impl Indexer {
                 .filter_map(|input| {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     input_cell_info
                         .get(&key)
@@ -8523,7 +8574,10 @@ impl Indexer {
                 tx.inputs.iter().map(|input| {
                     (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     )
                 })
             })
@@ -8584,7 +8638,10 @@ impl Indexer {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     let info = input_cell_info
                         .get(&key)
@@ -8592,7 +8649,10 @@ impl Indexer {
                     if let Some(info) = info {
                         all_consumptions.push((
                             input.previous_tx_hash.as_slice(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                             info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
@@ -8698,7 +8758,10 @@ impl Indexer {
                 for input in &tx_data.inputs {
                     let key = (
                         input.previous_tx_hash.to_vec(),
-                        input.previous_output_index as i16,
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
                     );
                     let info = input_cell_info
                         .get(&key)
@@ -8822,7 +8885,10 @@ impl Indexer {
                                     for input in &tx_data.inputs {
                                         all_input_outpoints_dao.push((
                                             input.previous_tx_hash.to_vec(),
-                                            input.previous_output_index as i16,
+                                            parsed_input_outpoint_index_i16(
+                                                input.previous_output_index,
+                                                "sync_indexer",
+                                            ),
                                         ));
                                     }
                                 }
@@ -9382,7 +9448,7 @@ impl Indexer {
                                 for input in &tx_data.inputs {
                                     let key = (
                                         input.previous_tx_hash.to_vec(),
-                                        input.previous_output_index as i16,
+                                        parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
                                     );
                                     if let Some(deposit_info) = consumed_dao_map
                                         .get(&key)
@@ -9934,7 +10000,7 @@ impl Indexer {
                             .filter_map(|input| {
                                 let key = (
                                     input.previous_tx_hash.to_vec(),
-                                    input.previous_output_index as i16,
+                                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
                                 );
                                 input_cell_info
                                     .get(&key)
@@ -9951,7 +10017,7 @@ impl Indexer {
                             .filter_map(|input| {
                                 let key = (
                                     input.previous_tx_hash.to_vec(),
-                                    input.previous_output_index as i16,
+                                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
                                 );
                                 input_cell_info
                                     .get(&key)
@@ -10392,7 +10458,10 @@ impl Indexer {
                         for input in &tx_data.inputs {
                             all_input_outpoints_dao.push((
                                 input.previous_tx_hash.to_vec(),
-                                input.previous_output_index as i16,
+                                parsed_input_outpoint_index_i16(
+                                    input.previous_output_index,
+                                    "sync_indexer",
+                                ),
                             ));
                         }
                     }
@@ -10546,7 +10615,10 @@ impl Indexer {
                             for input in &tx_data.inputs {
                                 let key = (
                                     input.previous_tx_hash.to_vec(),
-                                    input.previous_output_index as i16,
+                                    parsed_input_outpoint_index_i16(
+                                        input.previous_output_index,
+                                        "sync_indexer",
+                                    ),
                                 );
                                 if let Some(deposit_info) = consumed_dao_map
                                     .get(&key)
@@ -11328,7 +11400,10 @@ impl Indexer {
                     tx.inputs.iter().map(|input| {
                         (
                             input.previous_tx_hash.to_vec(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                         )
                     })
                 })
@@ -11399,7 +11474,10 @@ impl Indexer {
                     .filter_map(|input| {
                         let key = (
                             input.previous_tx_hash.to_vec(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                         );
                         input_cell_info
                             .get(&key)
@@ -11416,7 +11494,10 @@ impl Indexer {
                     .filter_map(|input| {
                         let key = (
                             input.previous_tx_hash.to_vec(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                         );
                         input_cell_info
                             .get(&key)
@@ -11987,7 +12068,10 @@ impl Indexer {
                     for input in &tx_data.inputs {
                         let key = (
                             input.previous_tx_hash.to_vec(),
-                            input.previous_output_index as i16,
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "sync_indexer",
+                            ),
                         );
                         let info = input_cell_info
                             .get(&key)
@@ -13450,6 +13534,27 @@ mod tests {
         assert!(!should_invalidate_chart_caches_for_lag(
             CHART_INVALIDATION_MAX_LIVE_LAG + 1
         ));
+    }
+
+    #[test]
+    fn test_parsed_input_outpoint_index_i16_accepts_non_negative_i16_range() {
+        assert_eq!(parsed_input_outpoint_index_i16(0, "unit-test"), 0);
+        assert_eq!(
+            parsed_input_outpoint_index_i16(i16::MAX as i32, "unit-test"),
+            i16::MAX
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "negative input previous_output_index")]
+    fn test_parsed_input_outpoint_index_i16_rejects_negative() {
+        let _ = parsed_input_outpoint_index_i16(-1, "unit-test");
+    }
+
+    #[test]
+    #[should_panic(expected = "input previous_output_index exceeds i16 range")]
+    fn test_parsed_input_outpoint_index_i16_rejects_overflow() {
+        let _ = parsed_input_outpoint_index_i16(i16::MAX as i32 + 1, "unit-test");
     }
 
     #[test]

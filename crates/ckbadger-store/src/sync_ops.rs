@@ -94,9 +94,17 @@ impl CkbadgerStore {
     fn parse_reorg_event_key_ordering(key: &[u8]) -> Option<(i64, u64)> {
         let key_str = std::str::from_utf8(key).ok()?;
         let payload = key_str.strip_prefix("reorg:")?;
-        let (ts_ms_str, seq_str) = payload.split_once(':')?;
+        let mut parts = payload.split(':');
+        let ts_ms_str = parts.next()?;
+        let seq_str = parts.next();
+        if parts.next().is_some() {
+            return None;
+        }
         let ts_ms = ts_ms_str.parse::<i64>().ok()?;
-        let seq = seq_str.parse::<u64>().ok()?;
+        let seq = match seq_str {
+            Some(raw) => raw.parse::<u64>().ok()?,
+            None => 0,
+        };
         Some((ts_ms, seq))
     }
 
@@ -667,6 +675,31 @@ mod tests {
 
         let latest = store.get_latest_reorg_event().unwrap().unwrap();
         assert_eq!(latest.detected_at, 222);
+    }
+
+    #[test]
+    fn test_get_latest_reorg_event_accepts_legacy_single_segment_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let event = ReorgEvent {
+            detected_at: 333,
+            rollback_from: 12,
+            rollback_to: 11,
+            depth: 1,
+        };
+
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                b"reorg:1700000000001",
+                &bincode::serialize(&event).unwrap(),
+            )
+            .unwrap();
+
+        let latest = store.get_latest_reorg_event().unwrap().unwrap();
+        assert_eq!(latest.detected_at, 333);
+        assert_eq!(latest.rollback_from, 12);
+        assert_eq!(latest.rollback_to, 11);
     }
 
     #[test]

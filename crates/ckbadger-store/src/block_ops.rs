@@ -120,6 +120,48 @@ impl CkbadgerStore {
         Ok(result)
     }
 
+    pub fn get_block_headers_batch(
+        &self,
+        block_numbers: &[i64],
+    ) -> anyhow::Result<std::collections::HashMap<i64, CachedBlockHeader>> {
+        let mut result = std::collections::HashMap::with_capacity(block_numbers.len());
+        let cf = self.cf_block_headers();
+
+        let keys: Vec<[u8; 8]> = block_numbers
+            .iter()
+            .map(|n| keys::encode_block_num(*n))
+            .collect();
+
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (cf, k.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+
+        for (i, value_result) in values.into_iter().enumerate() {
+            match value_result {
+                Ok(Some(value)) => {
+                    let header: CachedBlockHeader =
+                        bincode::deserialize(&value).map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to deserialize block header in get_block_headers_batch: block_number={}, error={}",
+                                block_numbers[i],
+                                e
+                            )
+                        })?;
+                    result.insert(block_numbers[i], header);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_block_headers_batch: block_number={}, error={}",
+                        block_numbers[i],
+                        e
+                    ));
+                }
+            }
+        }
+        Ok(result)
+    }
+
     pub fn block_headers_count(&self) -> usize {
         let mut count = 0;
         let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
@@ -310,5 +352,27 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize block header in get_dao_fields_batch"));
+    }
+
+    #[test]
+    fn test_get_block_headers_batch_reads_multiple_headers() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+
+        let mut h10 = make_header(10);
+        h10.timestamp = 1_700_000_000_000;
+        let mut h11 = make_header(11);
+        h11.timestamp = 1_700_000_010_000;
+
+        batch.put_block_header(10, &h10);
+        batch.put_block_header(11, &h11);
+        batch.commit().unwrap();
+
+        let headers = store.get_block_headers_batch(&[10, 11, 12]).unwrap();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.get(&10).unwrap().timestamp, h10.timestamp);
+        assert_eq!(headers.get(&11).unwrap().timestamp, h11.timestamp);
+        assert!(!headers.contains_key(&12));
     }
 }

@@ -6,7 +6,7 @@ use axum::{
 use ckbadger_common::dao::calculate_estimated_apc;
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -801,36 +801,6 @@ pub struct ChartResponse {
     pub y2_axis_label: Option<String>,
 }
 
-fn block_date_for_height(
-    store: &ckbadger_store::CkbadgerStore,
-    cache: &mut HashMap<i64, String>,
-    block_number: i64,
-) -> Result<String, ApiRouteError> {
-    if let Some(date) = cache.get(&block_number) {
-        return Ok(date.clone());
-    }
-    let header = store
-        .get_block_header(block_number)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing block header while building dao depositor series: block_number={}",
-                block_number
-            ))
-        })?;
-    let ts = chrono::DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
-        ApiError::internal(format!(
-            "invalid block header timestamp while building dao depositor series: block_number={}, timestamp={}",
-            block_number, header.timestamp
-        ))
-    })?;
-    let date = ckbadger_common::block_date(ts)
-        .format("%Y-%m-%d")
-        .to_string();
-    cache.insert(block_number, date.clone());
-    Ok(date)
-}
-
 fn build_total_depositors_series(
     store: &ckbadger_store::CkbadgerStore,
     snapshot_dates: &[String],
@@ -842,19 +812,64 @@ fn build_total_depositors_series(
     let dao_deposits = store
         .list_dao_deposits()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut date_cache: HashMap<i64, String> = HashMap::new();
+    let mut unique_block_numbers: HashSet<i64> = HashSet::new();
+    for (_, entry) in &dao_deposits {
+        unique_block_numbers.insert(entry.deposit_block_number);
+        if let Some(request_block) = entry.withdraw_request_block {
+            unique_block_numbers.insert(request_block);
+        }
+    }
+
+    let block_numbers: Vec<i64> = unique_block_numbers.into_iter().collect();
+    let block_headers = store
+        .get_block_headers_batch(&block_numbers)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut date_cache: HashMap<i64, String> = HashMap::with_capacity(block_headers.len());
+    for block_number in block_numbers {
+        let header = block_headers.get(&block_number).ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing block header while building dao depositor series: block_number={}",
+                block_number
+            ))
+        })?;
+        let ts = chrono::DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
+            ApiError::internal(format!(
+                "invalid block header timestamp while building dao depositor series: block_number={}, timestamp={}",
+                block_number, header.timestamp
+            ))
+        })?;
+        date_cache.insert(
+            block_number,
+            ckbadger_common::block_date(ts)
+                .format("%Y-%m-%d")
+                .to_string(),
+        );
+    }
+
     let mut events_by_date: BTreeMap<String, Vec<(Vec<u8>, i32)>> = BTreeMap::new();
 
     for (_, entry) in dao_deposits {
-        let deposit_date =
-            block_date_for_height(store, &mut date_cache, entry.deposit_block_number)?;
+        let deposit_date = date_cache
+            .get(&entry.deposit_block_number)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing cached deposit block date while building dao depositor series: block_number={}",
+                    entry.deposit_block_number
+                ))
+            })?;
         events_by_date
             .entry(deposit_date)
             .or_default()
             .push((entry.lock_script_hash.clone(), 1));
 
         if let Some(request_block) = entry.withdraw_request_block {
-            let request_date = block_date_for_height(store, &mut date_cache, request_block)?;
+            let request_date = date_cache.get(&request_block).cloned().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing cached withdraw-request block date while building dao depositor series: block_number={}",
+                    request_block
+                ))
+            })?;
             events_by_date
                 .entry(request_date)
                 .or_default()
