@@ -234,7 +234,6 @@ pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
 pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
 pub const CF_ACTIVITIES: &str = "activities";
-pub const CF_ADDR_DAILY_STATS: &str = "addr_daily_stats";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
 pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
@@ -295,7 +294,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
     CF_ACTIVITIES,
-    CF_ADDR_DAILY_STATS,
     CF_CLUSTER_AGG,
     CF_NFT_COLLECTION_AGG,
     CF_NFT_COLLECTION_ACTIVITIES,
@@ -338,7 +336,6 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
-    CF_ADDR_DAILY_STATS,
     CF_CLUSTER_AGG,
     CF_NFT_COLLECTION_AGG,
 ];
@@ -1024,9 +1021,6 @@ impl CkbadgerStore {
     }
     pub fn cf_activities(&self) -> &ColumnFamily {
         self.cf(CF_ACTIVITIES)
-    }
-    pub fn cf_addr_daily_stats(&self) -> &ColumnFamily {
-        self.cf(CF_ADDR_DAILY_STATS)
     }
     pub fn cf_cluster_agg(&self) -> &ColumnFamily {
         self.cf(CF_CLUSTER_AGG)

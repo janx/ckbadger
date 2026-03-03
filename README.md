@@ -329,7 +329,6 @@ GET  /api/v1/addresses/{addr}                    # Address info & balance
 GET  /api/v1/addresses/{addr}/transactions       # Address transaction history
 GET  /api/v1/addresses/{addr}/tokens             # Address token holdings
 GET  /api/v1/addresses/{addr}/activities         # Address activity feed
-GET  /api/v1/addresses/{addr}/stats-history      # Address daily stats history
 GET  /api/v1/addresses/top                       # Top addresses by balance
 GET  /api/v1/addresses/active                    # Recently active addresses
 GET  /api/v1/cells/live                          # Query live cells

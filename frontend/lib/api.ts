@@ -1400,10 +1400,6 @@ export const api = {
     return fetchApi(`/addresses/${addr}/activities?${query}`);
   },
 
-  getAddressStatsHistory: (addr: string): Promise<StackedAreaChartResponse> => {
-    return fetchApi(`/addresses/${addr}/stats-history`);
-  },
-
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));

@@ -3,7 +3,6 @@
 use crate::keys;
 use crate::store::*;
 use crate::types::*;
-use rocksdb::IteratorMode;
 
 impl CkbadgerStore {
     /// List activities for an address (lock_hash), newest first.
@@ -62,51 +61,6 @@ impl CkbadgerStore {
                         break;
                     }
                 }
-            }
-        }
-        Ok(results)
-    }
-
-    /// List daily stats for an address in a date range (inclusive).
-    /// Returns (date_yyyymmdd, stats) tuples in ascending date order.
-    pub fn list_addr_daily_stats(
-        &self,
-        lock_hash: &[u8],
-        from_date: u32,
-        to_date: u32,
-    ) -> anyhow::Result<Vec<(u32, AddressDailyStats)>> {
-        if lock_hash.len() != 32 {
-            anyhow::bail!(
-                "list_addr_daily_stats expects 32-byte lock_hash, got {} bytes",
-                lock_hash.len()
-            );
-        }
-        let start_key = keys::encode_addr_daily_stats_key(lock_hash, from_date);
-        let prefix = &lock_hash[..32];
-
-        let iter = self.iterator_cf(
-            self.cf_addr_daily_stats(),
-            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
-
-        let mut results = Vec::new();
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate addr_daily_stats in list_addr_daily_stats: {}",
-                    e
-                )
-            })?;
-            if !key.starts_with(prefix) {
-                break;
-            }
-            if key.len() == keys::ADDR_DAILY_STATS_KEY_SIZE {
-                let (_, date) = keys::decode_addr_daily_stats_key(&key);
-                if date > to_date {
-                    break;
-                }
-                let stats: AddressDailyStats = bincode::deserialize(&value)?;
-                results.push((date, stats));
             }
         }
         Ok(results)
@@ -183,18 +137,5 @@ mod tests {
 
         let rows = store.list_activities(&lock, 10, None, Some("tok")).unwrap();
         assert!(rows.is_empty());
-    }
-
-    #[test]
-    fn test_list_addr_daily_stats_rejects_non_32_byte_lock_hash() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-
-        let err = store
-            .list_addr_daily_stats(&[0xAA; 31], 20240101, 20240131)
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("list_addr_daily_stats expects 32-byte lock_hash"));
     }
 }

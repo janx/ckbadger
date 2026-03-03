@@ -12,7 +12,6 @@ vi.mock('@/lib/api', () => ({
     getAddressTransactions: vi.fn(),
     getAddressDaoSummary: vi.fn(),
     getDaoDepositsByAddress: vi.fn(),
-    getAddressStatsHistory: vi.fn(),
     getAddressActivities: vi.fn(),
   },
 }));
@@ -149,7 +148,6 @@ describe('AddressDetailPage', () => {
     vi.mocked(api.getAddressTransactions).mockResolvedValue(emptyTransactions);
     vi.mocked(api.getAddressDaoSummary).mockResolvedValue(noDaoActivity);
     vi.mocked(api.getDaoDepositsByAddress).mockResolvedValue(emptyDaoDeposits);
-    vi.mocked(api.getAddressStatsHistory).mockResolvedValue({ title: '', data: [], series: [] });
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       data: [],
       total: 0,

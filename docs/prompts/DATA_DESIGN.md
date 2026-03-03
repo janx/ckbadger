@@ -183,7 +183,6 @@ Sub-namespaces:
 - 0x0B HODL wave, 0x0F Script daily deltas
 - 0x10 Token daily deltas, 0x11 Cluster daily deltas
 - 0x12 Spore daily deltas, 0x15 NFT daily deltas
-- 0x20 Addr daily stats (lock_hash + date)
 - 0x21 Script info (code_hash -> ScriptInfo)
 - 0xF0 Sync meta (tip, status, runtime, reorg, hodl_tracker)  
   Purpose: All time-series, chart data, script info, sync metadata

@@ -890,20 +890,6 @@ pub struct TokenActivityTransfer {
     pub is_burn: bool,
 }
 
-// ============================================
-// Group J: Address Daily Stats
-// ============================================
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct AddressDailyStats {
-    /// Number of activity entries for this address on this day.
-    pub activities: i32,
-    /// Number of unique transactions for this address on this day.
-    pub txs: i32,
-    /// Net change in live cells (created - consumed) on this day.
-    pub cells_delta: i32,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1144,30 +1130,6 @@ mod tests {
     fn test_nft_type_index_default() {
         let index = NftTypeIndex::default();
         assert!(index.collection_id.is_empty());
-    }
-
-    // ---- AddressDailyStats ----
-
-    #[test]
-    fn test_address_daily_stats_roundtrip() {
-        let stats = AddressDailyStats {
-            activities: 42,
-            txs: 10,
-            cells_delta: -3,
-        };
-        let bytes = bincode::serialize(&stats).unwrap();
-        let decoded: AddressDailyStats = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.activities, 42);
-        assert_eq!(decoded.txs, 10);
-        assert_eq!(decoded.cells_delta, -3);
-    }
-
-    #[test]
-    fn test_address_daily_stats_default() {
-        let stats = AddressDailyStats::default();
-        assert_eq!(stats.activities, 0);
-        assert_eq!(stats.txs, 0);
-        assert_eq!(stats.cells_delta, 0);
     }
 
     // ---- ActivityEntry ----

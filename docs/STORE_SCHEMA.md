@@ -1,4 +1,4 @@
-# ckbadger-store Column Families (41 total)
+# ckbadger-store Column Families (40 total)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
@@ -25,7 +25,6 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `tx_hash_map`               | tx_hash (32B)                                         | block_number + tx_index | Reverse lookup: tx_hash -> position          |
 | `addr_balance`              | lock_script_hash (32B)                                | AddressBalance          | Address balance and cell counts              |
 | `addr_txs`                  | lock_hash + block + tx_index                          | empty                   | Address transaction history index            |
-| `addr_daily_stats`          | lock_hash + date                                      | AddressDailyStats       | Per-address daily aggregates                 |
 | `dao_deposits`              | tx_hash + output_index (34B)                          | DaoDepositCacheEntry    | DAO deposit lifecycle cache                  |
 | `dao_by_withdraw_tx`        | withdraw_outpoint (34B)                               | deposit outpoint        | Reverse lookup: withdraw outpoint -> deposit |
 | `dao_by_block`              | block_desc (8B BE) + outpoint (34B)                   | empty                   | DAO index ordered by deposit block DESC      |

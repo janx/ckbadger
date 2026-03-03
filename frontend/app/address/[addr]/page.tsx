@@ -25,9 +25,7 @@ import {
   type DaoDeposit,
   type Activity,
   type ActivityAssetChange,
-  type StackedAreaChartResponse,
 } from '@/lib/api';
-import { MultiSeriesLineChart } from '@/components/ui/multi-series-line-chart';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 
@@ -79,12 +77,6 @@ export default function AddressDetailPage() {
       }),
     enabled: !!address && !!daoSummary?.hasDaoActivity,
     placeholderData: keepPreviousData,
-  });
-
-  const { data: statsHistory } = useQuery<StackedAreaChartResponse>({
-    queryKey: ['address-stats-history', address?.lockScriptHash],
-    queryFn: () => api.getAddressStatsHistory(address!.lockScriptHash),
-    enabled: !!address,
   });
 
   const { data: activities, isLoading: activitiesLoading } = useQuery({
@@ -405,19 +397,6 @@ export default function AddressDetailPage() {
             })()}
           </TerminalPanelContent>
         </TerminalPanel>
-
-        {statsHistory && statsHistory.data.length > 0 && (
-          <TerminalPanel className="mb-8">
-            <TerminalPanelHeader>Address Stats History</TerminalPanelHeader>
-            <TerminalPanelContent>
-              <MultiSeriesLineChart
-                data={statsHistory.data}
-                series={statsHistory.series}
-                height={300}
-              />
-            </TerminalPanelContent>
-          </TerminalPanel>
-        )}
 
         {daoSummary?.hasDaoActivity && (
           <TerminalPanel className="mb-8" variant="elevated">

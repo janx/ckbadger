@@ -1366,10 +1366,6 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(get_address_transactions),
         )
         .route("/addresses/{addr}/tokens", get(get_address_tokens))
-        .route(
-            "/addresses/{addr}/stats-history",
-            get(get_address_stats_history),
-        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -2857,103 +2853,6 @@ async fn get_address_tokens(
         limit as i64,
         next_cursor,
     ))
-}
-
-async fn get_address_stats_history(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Path(addr): axum::extract::Path<String>,
-) -> ApiResult<crate::routes::statistics::StackedAreaChartResponse> {
-    use crate::routes::statistics::{
-        StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries,
-    };
-
-    let lock_hash = if is_ckb_address(&addr) {
-        address_to_lock_script_hash(&addr)
-            .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?
-    } else {
-        hex::decode(addr.strip_prefix("0x").unwrap_or(&addr))
-            .map_err(|_| ApiError::bad_request("Invalid address/lock script hash"))?
-    };
-
-    // Date range: today - 365 days to today
-    let now = chrono::Utc::now();
-    let today = now.format("%Y%m%d").to_string().parse::<u32>().unwrap_or(0);
-    let one_year_ago = (now - chrono::Duration::days(365))
-        .format("%Y%m%d")
-        .to_string()
-        .parse::<u32>()
-        .unwrap_or(0);
-
-    let daily_stats = state
-        .store
-        .list_addr_daily_stats(&lock_hash, one_year_ago, today)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Get current live_cells_count to compute baseline
-    let addr_balance = state
-        .store
-        .get_addr_balance(&lock_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let current_live_cells = addr_balance
-        .map(|ab| ab.live_cells_count as i64)
-        .unwrap_or(0);
-
-    // Sum all cells_delta in range to find baseline
-    let total_delta: i64 = daily_stats.iter().map(|(_, s)| s.cells_delta as i64).sum();
-    let baseline_live_cells = current_live_cells - total_delta;
-
-    // Build cumulative series
-    let mut cum_activities: i64 = 0;
-    let mut cum_txs: i64 = 0;
-    let mut live_cells = baseline_live_cells;
-
-    let data: Vec<StackedAreaDataPoint> = daily_stats
-        .into_iter()
-        .map(|(date, stats)| {
-            cum_activities += stats.activities as i64;
-            cum_txs += stats.txs as i64;
-            live_cells += stats.cells_delta as i64;
-
-            let date_str = format!("{}-{}-{}", date / 10000, (date / 100) % 100, date % 100);
-
-            let mut values = std::collections::HashMap::new();
-            values.insert(
-                "cumulativeActivities".to_string(),
-                cum_activities.to_string(),
-            );
-            values.insert("liveCells".to_string(), live_cells.to_string());
-            values.insert("cumulativeTransactions".to_string(), cum_txs.to_string());
-
-            StackedAreaDataPoint {
-                date: date_str,
-                values,
-            }
-        })
-        .collect();
-
-    let series = vec![
-        StackedAreaSeries {
-            key: "cumulativeActivities".to_string(),
-            label: "Cumulative Activities".to_string(),
-            color: "#22c55e".to_string(),
-        },
-        StackedAreaSeries {
-            key: "liveCells".to_string(),
-            label: "Live Cells".to_string(),
-            color: "#f59e0b".to_string(),
-        },
-        StackedAreaSeries {
-            key: "cumulativeTransactions".to_string(),
-            label: "Cumulative Transactions".to_string(),
-            color: "#8b5cf6".to_string(),
-        },
-    ];
-
-    ok(StackedAreaChartResponse {
-        data,
-        series,
-        title: "Address Stats History".to_string(),
-    })
 }
 
 #[cfg(test)]

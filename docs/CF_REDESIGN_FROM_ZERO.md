@@ -48,7 +48,7 @@
 
 ### Layer 2: Time-Series / Activity / Aggregates
 
-- `activities`, `nft_collection_activities`, `addr_txs`, `addr_balance`, `addr_daily_stats`
+- `activities`, `nft_collection_activities`, `addr_txs`, `addr_balance`
 - `stats_chain`, `stats_dao`, `stats_hodl`, `stats_script`, `stats_token`, `stats_spore`, `stats_nft`
 - `sync_meta`
 
