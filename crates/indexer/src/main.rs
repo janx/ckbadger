@@ -8,7 +8,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::LabelImportConfig;
 use ckbadger_indexer::{
-    cycles_worker::spawn_cycles_task_worker, db::Repository, label_import::run_label_import,
+    cycles_worker::spawn_cycles_task_worker, db::Repository, label_import::run_label_import_staged,
     runtime_diag::generate_run_id, runtime_diag::read_cgroup_memory_snapshot, sync::Indexer,
     verify, Config,
 };
@@ -920,27 +920,7 @@ async fn run_label_import_command(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut summary = ckbadger_common::LabelImportResult::default();
-
-        if base_config.import_udt {
-            let mut core_config = base_config.clone();
-            core_config.import_scripts = false;
-            let core_result =
-                run_label_import(core_store.as_ref(), ckb_store.as_deref(), &core_config)?;
-            summary.udt_labels_imported += core_result.udt_labels_imported;
-            summary.errors.extend(core_result.errors);
-        }
-
-        if base_config.import_scripts {
-            let mut script_config = base_config;
-            script_config.import_udt = false;
-            let script_result =
-                run_label_import(core_store.as_ref(), ckb_store.as_deref(), &script_config)?;
-            summary.script_labels_imported += script_result.script_labels_imported;
-            summary.errors.extend(script_result.errors);
-        }
-
-        Ok::<ckbadger_common::LabelImportResult, anyhow::Error>(summary)
+        run_label_import_staged(core_store.as_ref(), ckb_store.as_deref(), &base_config)
     })
     .await
     .expect("label import task panicked")?;

@@ -146,6 +146,36 @@ pub fn run_label_import(
     Ok(result)
 }
 
+/// Run label import in two passes (UDT then script) based on enabled flags.
+/// This keeps per-kind import behavior consistent across CLI and background startup paths.
+pub fn run_label_import_staged(
+    store: &CkbadgerStore,
+    ckb_store: Option<&CkbChainReader>,
+    config: &LabelImportConfig,
+) -> Result<LabelImportResult> {
+    let mut summary = LabelImportResult::default();
+
+    if config.import_udt {
+        let mut udt_config = config.clone();
+        udt_config.import_scripts = false;
+        let udt_result = run_label_import(store, ckb_store, &udt_config)?;
+        summary.udt_labels_imported += udt_result.udt_labels_imported;
+        summary.script_labels_imported += udt_result.script_labels_imported;
+        summary.errors.extend(udt_result.errors);
+    }
+
+    if config.import_scripts {
+        let mut script_config = config.clone();
+        script_config.import_udt = false;
+        let script_result = run_label_import(store, ckb_store, &script_config)?;
+        summary.udt_labels_imported += script_result.udt_labels_imported;
+        summary.script_labels_imported += script_result.script_labels_imported;
+        summary.errors.extend(script_result.errors);
+    }
+
+    Ok(summary)
+}
+
 fn load_token_labels(base_path: &str) -> Result<Vec<UdtLabelInfo>> {
     let mut labels = Vec::new();
 
@@ -609,5 +639,55 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to parse script overrides file"));
+    }
+
+    #[test]
+    fn test_run_label_import_staged_imports_script_labels_when_both_flags_enabled() {
+        let dir = TempDir::new().unwrap();
+        let labels_root = dir.path().join("token-labels");
+        let script_dir = labels_root
+            .join("information")
+            .join("script")
+            .join("test-script");
+        std::fs::create_dir_all(&script_dir).unwrap();
+
+        let script_index = r#"{
+  "name": "Test Script",
+  "description": "test",
+  "rfc": "",
+  "website": "",
+  "sourceUrl": "",
+  "deployments": {
+    "mainnet": [
+      {
+        "tag": "",
+        "deprecated": false,
+        "hashType": "type",
+        "dataHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+        "typeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+      }
+    ],
+    "testnet": []
+  }
+}"#;
+        std::fs::write(script_dir.join("index.json"), script_index).unwrap();
+
+        let store = CkbadgerStore::open_domain(dir.path().join("store")).unwrap();
+        let config = LabelImportConfig {
+            token_labels_path: labels_root.to_string_lossy().to_string(),
+            network: "mainnet".to_string(),
+            import_udt: true,
+            import_scripts: true,
+        };
+
+        let result = run_label_import_staged(&store, None, &config).unwrap();
+        assert_eq!(result.script_labels_imported, 1);
+
+        let code_hash =
+            hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+                .unwrap();
+        let script = store.get_script_info(&code_hash).unwrap().unwrap();
+        assert_eq!(script.name.as_deref(), Some("Test Script"));
     }
 }
