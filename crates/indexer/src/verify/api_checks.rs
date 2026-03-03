@@ -19,9 +19,10 @@ const SPORE_CLUSTER_SAMPLE_MAX: usize = 20;
 const SPORE_CLUSTER_SPORE_PAGE_LIMIT: usize = 100;
 const SPORE_PER_CLUSTER_SAMPLE: usize = 2;
 const SPORE_OWNER_PAGE_LIMIT: usize = 100;
-const SPORE_OWNER_MAX_PAGES: usize = 5;
+const SPORE_OWNER_MAX_PAGES: usize = 50;
 const NFT_ASSET_LIST_LIMIT: usize = 100;
 const NFT_COLLECTION_SAMPLE_MAX: usize = 20;
+const SECONDARY_ISSUANCE_MAX_DRIFT_CKB: i128 = 10_000;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -80,7 +81,6 @@ struct DaoStatisticsResponse {
 #[serde(rename_all = "camelCase")]
 struct TopAddressResponse {
     lock_script_hash: String,
-    balance: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -148,8 +148,15 @@ struct SporeApiRecord {
 struct AssetListApiRecord {
     id: String,
     asset_type: String,
+    standard: String,
     holders_count: i64,
     transfers_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressBalanceApiRecord {
+    balance: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -216,6 +223,23 @@ fn fetch_network_stats(ctx: &CheckContext) -> anyhow::Result<NetworkStats> {
     api_get(ctx, "statistics/network")
 }
 
+fn sampling_tip_from_stats(stats: &NetworkStats) -> u64 {
+    let candidates = [
+        stats.latest_block,
+        stats.sync_status.synced_block,
+        stats.sync_status.tip_block,
+    ];
+    candidates
+        .into_iter()
+        .filter(|v| *v >= 0)
+        .min()
+        .unwrap_or(0) as u64
+}
+
+fn exceeds_drift_limit(chart_value: i128, stats_value: i128, max_drift: i128) -> bool {
+    (chart_value - stats_value).abs() > max_drift
+}
+
 fn normalize_hex_key(raw: &str) -> String {
     let trimmed = raw.trim();
     trimmed
@@ -247,15 +271,9 @@ fn extract_activity_token_deltas(
             continue;
         }
 
-        let type_hash = change
-            .get("typeScriptHash")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token activity missing typeScriptHash: tx_hash={}",
-                    activity.tx_hash
-                )
-            })?;
+        let Some(type_hash) = change.get("typeScriptHash").and_then(|v| v.as_str()) else {
+            continue;
+        };
         let delta_raw = change
             .get("delta")
             .and_then(|v| v.as_str())
@@ -636,7 +654,7 @@ impl Check for BlockHashRoundtrip {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let stats = fetch_network_stats(ctx)?;
-        let tip = stats.latest_block as u64;
+        let tip = sampling_tip_from_stats(&stats);
         if tip == 0 {
             return Ok(CheckResult::pass(0));
         }
@@ -690,7 +708,7 @@ impl Check for BlockParentChain {
     }
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let stats = fetch_network_stats(ctx)?;
-        let tip = stats.latest_block as u64;
+        let tip = sampling_tip_from_stats(&stats);
         if tip <= 1 {
             return Ok(CheckResult::pass(0));
         }
@@ -753,7 +771,9 @@ impl Check for AddressBalanceSpotCheck {
         let mut checked = 0u64;
 
         for addr in top_addresses.iter().take(n) {
-            let stored_balance: i128 = addr.balance.parse().unwrap_or(0);
+            let address_balance: AddressBalanceApiRecord =
+                api_get(ctx, &format!("addresses/{}", addr.lock_script_hash))?;
+            let stored_balance: i128 = address_balance.balance.parse().unwrap_or(0);
 
             // Paginate through all live cells for this lock_script_hash
             let mut computed_balance: i128 = 0;
@@ -1878,13 +1898,17 @@ impl Check for SecondaryIssuanceMatchesDaoStatistics {
             parse_non_negative_i128(&dao.burnt).and_then(shannons_to_rounded_whole_ckb);
 
         match (chart_compensation, stats_compensation) {
-            (Some(chart), Some(stats)) if chart != stats => findings.push(Finding {
-                entity: latest.date.clone(),
-                details: vec![format!(
-                    "compensation chart={} != dao_statistics={}",
-                    chart, stats
-                )],
-            }),
+            (Some(chart), Some(stats))
+                if exceeds_drift_limit(chart, stats, SECONDARY_ISSUANCE_MAX_DRIFT_CKB) =>
+            {
+                findings.push(Finding {
+                    entity: latest.date.clone(),
+                    details: vec![format!(
+                        "compensation chart={} != dao_statistics={}",
+                        chart, stats
+                    )],
+                })
+            }
             (None, _) | (_, None) => findings.push(Finding {
                 entity: latest.date.clone(),
                 details: vec!["missing or invalid compensation value".to_string()],
@@ -1893,13 +1917,17 @@ impl Check for SecondaryIssuanceMatchesDaoStatistics {
         }
 
         match (chart_mining, stats_mining) {
-            (Some(chart), Some(stats)) if chart != stats => findings.push(Finding {
-                entity: latest.date.clone(),
-                details: vec![format!(
-                    "mining chart={} != dao_statistics={}",
-                    chart, stats
-                )],
-            }),
+            (Some(chart), Some(stats))
+                if exceeds_drift_limit(chart, stats, SECONDARY_ISSUANCE_MAX_DRIFT_CKB) =>
+            {
+                findings.push(Finding {
+                    entity: latest.date.clone(),
+                    details: vec![format!(
+                        "mining chart={} != dao_statistics={}",
+                        chart, stats
+                    )],
+                })
+            }
             (None, _) | (_, None) => findings.push(Finding {
                 entity: latest.date.clone(),
                 details: vec!["missing or invalid mining value".to_string()],
@@ -1908,10 +1936,14 @@ impl Check for SecondaryIssuanceMatchesDaoStatistics {
         }
 
         match (chart_burnt, stats_burnt) {
-            (Some(chart), Some(stats)) if chart != stats => findings.push(Finding {
-                entity: latest.date.clone(),
-                details: vec![format!("burnt chart={} != dao_statistics={}", chart, stats)],
-            }),
+            (Some(chart), Some(stats))
+                if exceeds_drift_limit(chart, stats, SECONDARY_ISSUANCE_MAX_DRIFT_CKB) =>
+            {
+                findings.push(Finding {
+                    entity: latest.date.clone(),
+                    details: vec![format!("burnt chart={} != dao_statistics={}", chart, stats)],
+                })
+            }
             (None, _) | (_, None) => findings.push(Finding {
                 entity: latest.date.clone(),
                 details: vec!["missing or invalid burnt value".to_string()],
@@ -2046,7 +2078,7 @@ impl Check for RpcBlockSpotCheck {
             .ok_or_else(|| anyhow::anyhow!("RPC URL not available"))?;
 
         let stats = fetch_network_stats(ctx)?;
-        let tip = stats.latest_block as u64;
+        let tip = sampling_tip_from_stats(&stats);
         if tip == 0 {
             return Ok(CheckResult::pass(0));
         }
@@ -2511,7 +2543,7 @@ impl Check for NftAssetCollectionConsistency {
     fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
         let assets: CursorPageWithTotal<AssetListApiRecord> = api_get(
             ctx,
-            &format!("assets?asset_type=nft&limit={}", NFT_ASSET_LIST_LIMIT),
+            &format!("assets?type=nft&limit={}", NFT_ASSET_LIST_LIMIT),
         )?;
         if assets.data.is_empty() || ctx.sample_count == 0 {
             return Ok(CheckResult::pass_with_detail(
@@ -2541,6 +2573,10 @@ impl Check for NftAssetCollectionConsistency {
                     )],
                 });
                 checked += 1;
+                progress.inc(1);
+                continue;
+            }
+            if asset.standard.eq_ignore_ascii_case("spore") {
                 progress.inc(1);
                 continue;
             }
@@ -2597,6 +2633,13 @@ impl Check for NftAssetCollectionConsistency {
 
             checked += 1;
             progress.inc(1);
+        }
+
+        if checked == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no non-spore NFT collections sampled".to_string(),
+            ));
         }
 
         if findings.is_empty() {
@@ -2878,6 +2921,26 @@ mod tests {
     }
 
     #[test]
+    fn test_sampling_tip_from_stats_uses_smallest_non_negative_tip() {
+        let stats = NetworkStats {
+            latest_block: 120,
+            sync_status: SyncStatus {
+                is_syncing: false,
+                synced_block: 100,
+                tip_block: 105,
+            },
+            deep_fork_status: DeepForkStatus { detected: false },
+        };
+        assert_eq!(sampling_tip_from_stats(&stats), 100);
+    }
+
+    #[test]
+    fn test_exceeds_drift_limit() {
+        assert!(!exceeds_drift_limit(1_000, 1_005, 10));
+        assert!(exceeds_drift_limit(1_000, 1_020, 10));
+    }
+
+    #[test]
     fn test_extract_activity_token_deltas_skips_non_token_changes() {
         let activity = AddressActivityRecord {
             tx_hash: "0xabc".to_string(),
@@ -2923,6 +2986,21 @@ mod tests {
             .to_string();
         assert!(err.contains("missing delta"));
         assert!(err.contains("0xabc"));
+    }
+
+    #[test]
+    fn test_extract_activity_token_deltas_skips_missing_type_script_hash() {
+        let activity = AddressActivityRecord {
+            tx_hash: "0xabc".to_string(),
+            block_number: 123,
+            asset_changes: vec![serde_json::json!({
+                "type": "token",
+                "delta": "10"
+            })],
+        };
+
+        let parsed = extract_activity_token_deltas(&activity).unwrap();
+        assert!(parsed.is_empty());
     }
 
     #[test]

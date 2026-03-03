@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use ckb_hash::new_blake2b;
-use ckbadger_common::{LabelImportConfig, LabelImportResult, PipelineProgressData};
+use ckbadger_common::{LabelImportConfig, PipelineProgressData};
 use dashmap::DashMap;
 use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
@@ -1099,6 +1099,20 @@ fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished
 
 fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> bool {
     blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
+}
+
+fn enqueue_issuance_blocks_in_order(
+    pending: &mut VecDeque<IssuanceBlockMeta>,
+    issuance_blocks: Vec<IssuanceBlockMeta>,
+) {
+    let mut last_enqueued_number = pending.back().map(|entry| entry.2).unwrap_or(i64::MIN);
+    for block in issuance_blocks {
+        if block.2 <= last_enqueued_number {
+            continue;
+        }
+        last_enqueued_number = block.2;
+        pending.push_back(block);
+    }
 }
 
 fn mempool_short_tx_id(tx_hash: &str) -> Result<&str> {
@@ -2721,6 +2735,10 @@ const ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS: u64 = 1_000_000;
 const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS: u64 = 40_000;
 const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT: u64 = 6;
 
+fn recovery_start_from_header_gap(first_header_gap: Option<i64>) -> Option<i64> {
+    first_header_gap.map(|gap| gap.saturating_sub(1))
+}
+
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchSnapshot {
     target_batch_txs: u64,
@@ -3411,6 +3429,9 @@ fn parse_blocks_parallel(
 const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
 const CHART_INVALIDATION_MAX_LIVE_LAG: u64 = 100;
 const SECONDARY_ISSUANCE_BACKFILL_THRESHOLD: u64 = 1000;
+const SECONDARY_ISSUANCE_PENDING_MAX_BLOCKS: usize = 2048;
+
+type IssuanceBlockMeta = (String, String, i64, DateTime<Utc>);
 
 pub struct Indexer {
     run_id: String,
@@ -3443,6 +3464,7 @@ pub struct Indexer {
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     /// Limits concurrent background secondary issuance tasks to prevent unbounded spawning.
     secondary_issuance_semaphore: Arc<tokio::sync::Semaphore>,
+    secondary_issuance_pending: tokio::sync::Mutex<VecDeque<IssuanceBlockMeta>>,
 }
 
 impl Indexer {
@@ -3540,6 +3562,7 @@ impl Indexer {
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             secondary_issuance_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            secondary_issuance_pending: tokio::sync::Mutex::new(VecDeque::new()),
         })
     }
 
@@ -3950,7 +3973,7 @@ impl Indexer {
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
         let consistent_block = self.writer.find_last_consistent_block()?;
-        let actual_start = match consistent_block {
+        let mut actual_start = match consistent_block {
             Some(cb) if cb < start_block => {
                 warn!(
                     "Rolling back from block {} to {} due to data inconsistency",
@@ -3963,7 +3986,7 @@ impl Indexer {
         let continuity_probe = self.writer.probe_startup_continuity(
             actual_start,
             STARTUP_CONTINUITY_WINDOW_BLOCKS,
-            self.config.force_startup_cleanup || actual_start < start_block,
+            true,
         )?;
         if continuity_probe.has_inconsistency() {
             warn!(
@@ -3994,9 +4017,24 @@ impl Indexer {
             );
         }
 
+        if let Some(recovery_start) =
+            recovery_start_from_header_gap(continuity_probe.first_header_gap)
+        {
+            if recovery_start < actual_start {
+                warn!(
+                    run_id = %self.run_id,
+                    first_header_gap = continuity_probe.first_header_gap,
+                    previous_start = actual_start,
+                    recovery_start,
+                    "Detected block header gap; rolling back startup point to replay missing range"
+                );
+                actual_start = recovery_start;
+            }
+        }
+
         if bulk_sync_mode && actual_start < start_block {
             bail!(
-                "bulk sync fail-fast: inconsistent local DB state detected at startup (sync_tip={}, consistent_block={}). \
+                "bulk sync fail-fast: inconsistent local DB state detected at startup (sync_tip={}, recovery_start={}). \
                  bulk sync does not auto-rollback; delete RocksDB and restart from genesis",
                 start_block,
                 actual_start
@@ -6345,7 +6383,7 @@ impl Indexer {
                         );
 
                         if !self.is_secondary_issuance_bulk_active() {
-                            let issuance_blocks: Vec<_> = all_parsed_blocks
+                            let issuance_blocks: Vec<IssuanceBlockMeta> = all_parsed_blocks
                                 .iter()
                                 .map(|b| {
                                     (
@@ -6356,16 +6394,15 @@ impl Indexer {
                                     )
                                 })
                                 .collect();
-                            if let Err(e) = self
-                                .run_secondary_issuance_batch_with_cleanup_on_failure(
-                                    issuance_blocks,
-                                    start_block,
-                                    end_block,
-                                    chain_tip,
-                                    "pipeline",
-                                )
-                                .await
-                            {
+                            let enqueue_result = self
+                                .enqueue_secondary_issuance_blocks(issuance_blocks)
+                                .await;
+                            let flush_result = if enqueue_result.is_ok() {
+                                self.flush_secondary_issuance_pending(chain_tip).await
+                            } else {
+                                Ok(())
+                            };
+                            if let Err(e) = enqueue_result.and(flush_result) {
                                 let incident_id = self.report_incident(
                                     "pipeline_secondary_issuance_failed",
                                     format!(
@@ -6740,7 +6777,7 @@ impl Indexer {
 
         if !blocks.is_empty() {
             if !self.is_secondary_issuance_bulk_active() {
-                let mut issuance_blocks = Vec::new();
+                let mut issuance_blocks: Vec<IssuanceBlockMeta> = Vec::new();
                 for block_response in &blocks {
                     let block_number =
                         i64::try_from(BlockParser::parse_block_number(&block_response.block))
@@ -6760,14 +6797,32 @@ impl Indexer {
                         block_timestamp,
                     ));
                 }
-                self.run_secondary_issuance_batch_with_cleanup_on_failure(
-                    issuance_blocks,
-                    start_block,
-                    end_block,
-                    chain_tip,
-                    "sequential",
-                )
-                .await?;
+                self.enqueue_secondary_issuance_blocks(issuance_blocks)
+                    .await?;
+                if let Err(e) = self.flush_secondary_issuance_pending(chain_tip).await {
+                    let bulk_sync_mode =
+                        is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+                    if bulk_sync_mode {
+                        return Err(e).with_context(|| {
+                            format!(
+                                "bulk sync fail-fast for range {}-{} (chain_tip={}): secondary issuance write failed; no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
+                                start_block, end_block, chain_tip
+                            )
+                        });
+                    }
+                    self.cleanup_failed_batch_range(
+                        start_block,
+                        end_block,
+                        chain_tip,
+                        "sequential",
+                    )?;
+                    return Err(e).with_context(|| {
+                        format!(
+                            "secondary issuance update failed for range {}-{} (chain_tip={})",
+                            start_block, end_block, chain_tip
+                        )
+                    });
+                }
             }
 
             self.maybe_invalidate_chart_caches(end_block).await;
@@ -6886,42 +6941,100 @@ impl Indexer {
         Ok(())
     }
 
-    async fn run_secondary_issuance_batch_with_cleanup_on_failure(
+    fn should_defer_secondary_issuance(error: &anyhow::Error) -> bool {
+        error.chain().any(|cause| {
+            cause
+                .to_string()
+                .contains("missing economic state for block")
+        })
+    }
+
+    async fn enqueue_secondary_issuance_blocks(
         &self,
-        issuance_blocks: Vec<(String, String, i64, DateTime<Utc>)>,
-        start_block: u64,
-        end_block: u64,
-        chain_tip: u64,
-        mode: &str,
+        issuance_blocks: Vec<IssuanceBlockMeta>,
     ) -> Result<()> {
-        let spawned_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
-        if let Err(e) = Self::run_secondary_issuance_batch(
-            self.rpc.clone(),
-            self.writer.clone(),
-            Arc::clone(&self.secondary_issuance_semaphore),
-            issuance_blocks,
-            Arc::clone(&self.pipeline_reset_epoch),
-            spawned_epoch,
+        let mut pending = self.secondary_issuance_pending.lock().await;
+        enqueue_issuance_blocks_in_order(&mut pending, issuance_blocks);
+        if pending.len() > SECONDARY_ISSUANCE_PENDING_MAX_BLOCKS {
+            bail!(
+                "secondary issuance pending queue overflow: pending_blocks={}, max_pending={}",
+                pending.len(),
+                SECONDARY_ISSUANCE_PENDING_MAX_BLOCKS
+            );
+        }
+        Ok(())
+    }
+
+    async fn flush_secondary_issuance_pending(&self, chain_tip: u64) -> Result<()> {
+        let _permit = match tokio::time::timeout(
+            Duration::from_secs(5),
+            self.secondary_issuance_semaphore.acquire(),
         )
         .await
         {
-            let bulk_sync_mode =
-                is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
-            if bulk_sync_mode {
-                return Err(e).with_context(|| {
-                    format!(
-                        "bulk sync fail-fast for range {}-{} (chain_tip={}): secondary issuance write failed; no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
-                        start_block, end_block, chain_tip
-                    )
-                });
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_closed)) => bail!("secondary issuance semaphore closed"),
+            Err(_timeout) => {
+                warn!("Secondary issuance permit acquisition took >5s, issuance backlog");
+                match self.secondary_issuance_semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => bail!("secondary issuance semaphore closed after timeout"),
+                }
             }
-            self.cleanup_failed_batch_range(start_block, end_block, chain_tip, mode)?;
-            return Err(e).with_context(|| {
-                format!(
-                    "secondary issuance update failed for range {}-{} (chain_tip={})",
-                    start_block, end_block, chain_tip
-                )
-            });
+        };
+
+        loop {
+            let next_block = {
+                let pending = self.secondary_issuance_pending.lock().await;
+                pending.front().cloned()
+            };
+            let Some((hash, dao, number, timestamp)) = next_block else {
+                break;
+            };
+
+            match Self::update_secondary_issuance(
+                &self.rpc,
+                &self.writer,
+                &hash,
+                &dao,
+                number,
+                timestamp,
+            )
+            .await
+            {
+                Ok(()) => {
+                    let mut pending = self.secondary_issuance_pending.lock().await;
+                    if pending.front().map(|entry| entry.2) == Some(number) {
+                        pending.pop_front();
+                    } else {
+                        pending.retain(|entry| entry.2 != number);
+                    }
+                }
+                Err(e) => {
+                    if Self::should_defer_secondary_issuance(&e) {
+                        let pending_blocks = self.secondary_issuance_pending.lock().await.len();
+                        let block_number_u64 = u64::try_from(number).map_err(|_| {
+                            anyhow!(
+                                "secondary issuance pending block number must be non-negative: {}",
+                                number
+                            )
+                        })?;
+                        let lag_blocks = chain_tip.saturating_sub(block_number_u64);
+                        info!(
+                            run_id = %self.run_id,
+                            chain_tip,
+                            block_number = number,
+                            lag_blocks,
+                            pending_blocks,
+                            "Secondary issuance not settled yet; deferring pending updates"
+                        );
+                        break;
+                    }
+                    return Err(e).with_context(|| {
+                        format!("failed to update secondary issuance for block {}", number)
+                    });
+                }
+            }
         }
 
         Ok(())
@@ -6954,20 +7067,11 @@ impl Indexer {
 
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                let mut summary = LabelImportResult::default();
-
-                let mut core_config = config.clone();
-                core_config.import_scripts = false;
-                let core_result = crate::label_import::run_label_import(
+                crate::label_import::run_label_import_staged(
                     core_store.as_ref(),
                     ckb_store.as_deref(),
-                    &core_config,
-                )?;
-                summary.udt_labels_imported += core_result.udt_labels_imported;
-                summary.script_labels_imported += core_result.script_labels_imported;
-                summary.errors.extend(core_result.errors);
-
-                Ok::<LabelImportResult, anyhow::Error>(summary)
+                    &config,
+                )
             })
             .await;
 
@@ -12763,6 +12867,7 @@ impl Indexer {
     /// Run secondary issuance updates for a batch of blocks, gated by the semaphore.
     /// Returns error on first failed update so caller can fail fast and cleanup batch.
     /// The `pipeline_epoch` / `spawned_epoch` pair aborts stale tasks after reorg.
+    #[cfg(test)]
     async fn run_secondary_issuance_batch(
         rpc: CkbRpcClient,
         writer: BatchWriter,
@@ -12945,6 +13050,13 @@ mod tests {
             tx_size: 1,
             cycles: None,
         }
+    }
+
+    #[test]
+    fn test_recovery_start_from_header_gap() {
+        assert_eq!(recovery_start_from_header_gap(None), None);
+        assert_eq!(recovery_start_from_header_gap(Some(10)), Some(9));
+        assert_eq!(recovery_start_from_header_gap(Some(0)), Some(-1));
     }
 
     fn molecule_u32(value: usize) -> [u8; 4] {
@@ -13894,6 +14006,43 @@ mod tests {
         assert!(!should_invalidate_chart_caches_for_lag(
             CHART_INVALIDATION_MAX_LIVE_LAG + 1
         ));
+    }
+
+    fn issuance_block_meta(number: i64) -> IssuanceBlockMeta {
+        (
+            format!("0xblock-{number}"),
+            "0xdao".to_string(),
+            number,
+            DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_enqueue_issuance_blocks_in_order_keeps_strictly_increasing_numbers() {
+        let mut pending = VecDeque::from(vec![issuance_block_meta(100), issuance_block_meta(101)]);
+        let incoming = vec![
+            issuance_block_meta(101),
+            issuance_block_meta(100),
+            issuance_block_meta(102),
+            issuance_block_meta(102),
+            issuance_block_meta(103),
+            issuance_block_meta(99),
+        ];
+
+        enqueue_issuance_blocks_in_order(&mut pending, incoming);
+
+        let numbers: Vec<i64> = pending.into_iter().map(|entry| entry.2).collect();
+        assert_eq!(numbers, vec![100, 101, 102, 103]);
+    }
+
+    #[test]
+    fn test_should_defer_secondary_issuance_only_for_missing_economic_state() {
+        let deferred =
+            anyhow::anyhow!("rpc returned null").context("missing economic state for block 123456");
+        assert!(Indexer::should_defer_secondary_issuance(&deferred));
+
+        let non_deferred = anyhow::anyhow!("rpc timeout while loading economic state");
+        assert!(!Indexer::should_defer_secondary_issuance(&non_deferred));
     }
 
     #[test]
