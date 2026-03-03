@@ -6433,11 +6433,15 @@ async fn test_dao_deposits_cursor_pagination_descending() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["depositBlockNumber"], 30);
     assert_eq!(rows[1]["depositBlockNumber"], 20);
-    assert_eq!(json["nextCursor"], "20");
+    let next_cursor = json["nextCursor"].as_str().unwrap();
+    assert!(next_cursor.starts_with("0x"));
     assert_eq!(json["hasMore"], true);
 
     let request = Request::builder()
-        .uri("/api/v1/dao/deposits?limit=2&cursor=20")
+        .uri(format!(
+            "/api/v1/dao/deposits?limit=2&cursor={}",
+            next_cursor
+        ))
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -6449,6 +6453,71 @@ async fn test_dao_deposits_cursor_pagination_descending() {
     assert_eq!(rows[0]["depositBlockNumber"], 10);
     assert!(json["nextCursor"].is_null());
     assert_eq!(json["hasMore"], false);
+}
+
+#[tokio::test]
+async fn test_dao_deposits_cursor_pagination_keeps_same_block_rows() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+
+    let entries = [
+        (vec![0xD1; 32], 0i16, 30i64),
+        (vec![0xD2; 32], 1i16, 30i64),
+        (vec![0xD3; 32], 2i16, 30i64),
+        (vec![0xD4; 32], 0i16, 20i64),
+    ];
+    for (tx_hash, output_index, block_number) in entries {
+        batch.put_dao_deposit(
+            &ckbadger_store::keys::encode_outpoint(&tx_hash, output_index),
+            &DaoDepositCacheEntry {
+                capacity: 100_00000000,
+                deposit_block_number: block_number,
+                lock_script_hash: vec![0x33; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/deposits?limit=2")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["depositBlockNumber"], 30);
+    assert_eq!(rows[1]["depositBlockNumber"], 30);
+    let next_cursor = json["nextCursor"].as_str().unwrap();
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/dao/deposits?limit=2&cursor={}",
+            next_cursor
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["depositBlockNumber"], 30);
+    assert_eq!(rows[1]["depositBlockNumber"], 20);
 }
 
 #[tokio::test]
@@ -6550,12 +6619,14 @@ async fn test_dao_deposits_by_lock_hash_cursor_pagination() {
     let rows = json["data"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["depositBlockNumber"], 30);
-    assert_eq!(json["nextCursor"], "30");
+    let next_cursor = json["nextCursor"].as_str().unwrap();
+    assert!(next_cursor.starts_with("0x"));
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/dao/deposits/0x{}?limit=1&cursor=30",
-            hex::encode(&lock_a)
+            "/api/v1/dao/deposits/0x{}?limit=1&cursor={}",
+            hex::encode(&lock_a),
+            next_cursor
         ))
         .body(Body::empty())
         .unwrap();

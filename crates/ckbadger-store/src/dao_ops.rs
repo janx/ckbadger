@@ -291,11 +291,18 @@ impl CkbadgerStore {
     pub fn list_dao_deposits_paginated(
         &self,
         limit: usize,
-        cursor_block_exclusive: Option<i64>,
+        cursor_key_exclusive: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, DaoDepositCacheEntry)>> {
         let mut rows = Vec::with_capacity(limit);
-        let threshold = cursor_block_exclusive.unwrap_or(i64::MAX);
         let iter = self.iterator_cf(self.cf_dao_by_block(), IteratorMode::Start);
+        if let Some(cursor_key) = cursor_key_exclusive {
+            anyhow::ensure!(
+                cursor_key.len() == keys::DAO_BY_BLOCK_KEY_SIZE,
+                "invalid dao_by_block cursor key length: expected {}, got {}",
+                keys::DAO_BY_BLOCK_KEY_SIZE,
+                cursor_key.len()
+            );
+        }
 
         for item in iter {
             let (key, _) = item.map_err(|e| {
@@ -307,6 +314,11 @@ impl CkbadgerStore {
                 keys::DAO_BY_BLOCK_KEY_SIZE,
                 key.len()
             );
+            if let Some(cursor_key) = cursor_key_exclusive {
+                if key.as_ref() <= cursor_key {
+                    continue;
+                }
+            }
 
             let deposit_block = i64::MAX
                 - i64::from_be_bytes(
@@ -314,9 +326,6 @@ impl CkbadgerStore {
                         .try_into()
                         .expect("block index prefix should be exactly 8 bytes"),
                 );
-            if deposit_block >= threshold {
-                continue;
-            }
 
             let outpoint_key = &key[DAO_BY_BLOCK_OUTPOINT_OFFSET
                 ..DAO_BY_BLOCK_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
@@ -342,11 +351,23 @@ impl CkbadgerStore {
         &self,
         status: i16,
         limit: usize,
-        cursor_block_exclusive: Option<i64>,
+        cursor_key_exclusive: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, DaoDepositCacheEntry)>> {
         let mut rows = Vec::with_capacity(limit);
-        let threshold = cursor_block_exclusive.unwrap_or(i64::MAX);
         let prefix = keys::encode_dao_by_status_prefix(status);
+        if let Some(cursor_key) = cursor_key_exclusive {
+            anyhow::ensure!(
+                cursor_key.len() == keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                "invalid dao_by_status_block cursor key length: expected {}, got {}",
+                keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                cursor_key.len()
+            );
+            anyhow::ensure!(
+                cursor_key.starts_with(&prefix),
+                "dao_by_status_block cursor does not match status prefix: status={}",
+                status
+            );
+        }
         let iter = self.prefix_iterator_cf(self.cf_dao_by_status_block(), &prefix);
 
         for item in iter {
@@ -366,6 +387,11 @@ impl CkbadgerStore {
                 keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
                 key.len()
             );
+            if let Some(cursor_key) = cursor_key_exclusive {
+                if key.as_ref() <= cursor_key {
+                    continue;
+                }
+            }
 
             let indexed_status = i16::from_be_bytes(
                 key[..2]
@@ -378,9 +404,6 @@ impl CkbadgerStore {
                         .try_into()
                         .expect("status key block section should be exactly 8 bytes"),
                 );
-            if deposit_block >= threshold {
-                continue;
-            }
 
             let outpoint_key = &key[DAO_BY_STATUS_OUTPOINT_OFFSET
                 ..DAO_BY_STATUS_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
@@ -420,7 +443,7 @@ impl CkbadgerStore {
         &self,
         lock_hash: &[u8],
         limit: usize,
-        cursor_block_exclusive: Option<i64>,
+        cursor_key_exclusive: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, DaoDepositCacheEntry)>> {
         anyhow::ensure!(
             lock_hash.len() >= 32,
@@ -429,8 +452,20 @@ impl CkbadgerStore {
         );
 
         let mut rows = Vec::with_capacity(limit);
-        let threshold = cursor_block_exclusive.unwrap_or(i64::MAX);
         let prefix = keys::encode_dao_by_lock_prefix(lock_hash);
+        if let Some(cursor_key) = cursor_key_exclusive {
+            anyhow::ensure!(
+                cursor_key.len() == keys::DAO_BY_LOCK_BLOCK_KEY_SIZE,
+                "invalid dao_by_lock_block cursor key length: expected {}, got {}",
+                keys::DAO_BY_LOCK_BLOCK_KEY_SIZE,
+                cursor_key.len()
+            );
+            anyhow::ensure!(
+                cursor_key.starts_with(&prefix),
+                "dao_by_lock_block cursor does not match lock prefix: lock_hash=0x{}",
+                bytes_to_hex(&prefix)
+            );
+        }
         let iter = self.prefix_iterator_cf(self.cf_dao_by_lock_block(), &prefix);
 
         for item in iter {
@@ -450,6 +485,11 @@ impl CkbadgerStore {
                 keys::DAO_BY_LOCK_BLOCK_KEY_SIZE,
                 key.len()
             );
+            if let Some(cursor_key) = cursor_key_exclusive {
+                if key.as_ref() <= cursor_key {
+                    continue;
+                }
+            }
 
             let deposit_block = i64::MAX
                 - i64::from_be_bytes(
@@ -457,9 +497,6 @@ impl CkbadgerStore {
                         .try_into()
                         .expect("lock index block section should be exactly 8 bytes"),
                 );
-            if deposit_block >= threshold {
-                continue;
-            }
 
             let outpoint_key = &key[DAO_BY_LOCK_OUTPOINT_OFFSET
                 ..DAO_BY_LOCK_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
@@ -605,8 +642,13 @@ mod tests {
         assert_eq!(first_page[0].1.deposit_block_number, 30);
         assert_eq!(first_page[1].1.deposit_block_number, 10);
 
+        let cursor = keys::encode_dao_by_status_block_key(
+            0,
+            first_page[1].1.deposit_block_number,
+            &first_page[1].0,
+        );
         let second_page = store
-            .list_dao_deposits_by_status_paginated(0, 2, Some(10))
+            .list_dao_deposits_by_status_paginated(0, 2, Some(&cursor))
             .unwrap();
         assert!(second_page.is_empty());
     }
@@ -793,11 +835,59 @@ mod tests {
         assert_eq!(first[0].1.deposit_block_number, 30);
         assert_eq!(first[1].1.deposit_block_number, 20);
 
+        let cursor =
+            keys::encode_dao_by_lock_block_key(&lock, first[1].1.deposit_block_number, &first[1].0);
         let second = store
-            .list_dao_deposits_by_lock_paginated(&lock, 2, Some(20))
+            .list_dao_deposits_by_lock_paginated(&lock, 2, Some(&cursor))
             .unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].1.deposit_block_number, 10);
+    }
+
+    #[test]
+    fn test_list_dao_deposits_paginated_cursor_handles_same_block_multiple_rows() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        for (tx, output_index, block) in [
+            ([0xD1; 32], 0i16, 30i64),
+            ([0xD2; 32], 1i16, 30i64),
+            ([0xD3; 32], 2i16, 30i64),
+            ([0xD4; 32], 0i16, 20i64),
+        ] {
+            batch.put_dao_deposit(
+                &keys::encode_outpoint(&tx, output_index),
+                &DaoDepositCacheEntry {
+                    capacity: 100,
+                    deposit_block_number: block,
+                    lock_script_hash: vec![0x55; 32],
+                    deposit_ar: 1,
+                    status: 0,
+                    withdraw_request_tx: None,
+                    withdraw_request_output_index: None,
+                    withdraw_request_block: None,
+                    withdraw_request_ar: None,
+                    withdraw_block: None,
+                    withdraw_tx: None,
+                    withdraw_to_output_index: None,
+                    compensation: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        let first_page = store.list_dao_deposits_paginated(2, None).unwrap();
+        assert_eq!(first_page.len(), 2);
+        assert_eq!(first_page[0].1.deposit_block_number, 30);
+        assert_eq!(first_page[1].1.deposit_block_number, 30);
+
+        let cursor =
+            keys::encode_dao_by_block_key(first_page[1].1.deposit_block_number, &first_page[1].0);
+        let second_page = store.list_dao_deposits_paginated(2, Some(&cursor)).unwrap();
+        assert_eq!(second_page.len(), 2);
+        assert_eq!(second_page[0].1.deposit_block_number, 30);
+        assert_eq!(second_page[1].1.deposit_block_number, 20);
     }
 
     #[test]

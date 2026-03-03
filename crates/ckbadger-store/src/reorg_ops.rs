@@ -531,15 +531,24 @@ impl CkbadgerStore {
 
         // 4-5. Roll back cell/live/consumed/index state.
         // Prefer tx-context entries from reorg_undo_log_by_block to derive touched outpoints.
-        // Fallback to full scans for legacy data where tx contexts are absent.
+        // Fallback to full scans when tx-context coverage is missing or partial.
         let tx_contexts = load_tx_contexts_from_undo_log(self, rollback_to)?;
-        if tx_contexts.is_empty() {
+        let tx_context_count = tx_contexts.len() as u64;
+        let use_tx_context = tx_context_count > 0 && tx_context_count == txs_removed;
+        if !use_tx_context {
             if txs_removed > 0 {
+                let reason = if tx_context_count == 0 {
+                    "no tx-context undo entries found"
+                } else {
+                    "tx-context undo entries are partial"
+                };
                 info!(
                     rollback_to,
                     txs_removed,
+                    tx_context_count,
                     replay_start,
-                    "No tx-context undo entries found; falling back to full cell scans"
+                    reason,
+                    "Falling back to full cell scans for rollback cell cleanup"
                 );
             }
 
@@ -1501,6 +1510,125 @@ mod tests {
         assert!(store.get_cell(&input_tx, 0).unwrap().is_some());
         assert!(store.get_cell(&consuming_tx, 0).unwrap().is_none());
         assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_rollback_falls_back_to_full_scan_when_tx_contexts_are_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 2,
+        };
+
+        let input_tx = vec![0x41; 32];
+        let consuming_tx_a = vec![0x42; 32];
+        let consuming_tx_b = vec![0x43; 32];
+        let input_cell = LiveCellInfo {
+            capacity: 400,
+            created_at_block: 1,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 400,
+            udt_amount: None,
+        };
+        let rollback_output_cell_a = LiveCellInfo {
+            capacity: 200,
+            created_at_block: 2,
+            lock_script_hash: vec![0xBB; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 200,
+            udt_amount: None,
+        };
+        let rollback_output_cell_b = LiveCellInfo {
+            capacity: 180,
+            created_at_block: 2,
+            lock_script_hash: vec![0xCC; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 180,
+            udt_amount: None,
+        };
+
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header2.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_index(2, 0, &tx_index);
+        batch.put_tx_index(2, 1, &tx_index);
+        batch.put_cell(&input_tx, 0, &input_cell);
+        batch.put_cell(&consuming_tx_a, 0, &rollback_output_cell_a);
+        batch.put_cell(&consuming_tx_b, 0, &rollback_output_cell_b);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 2, Some(&consuming_tx_a));
+        batch.delete_cell(&input_tx, 0);
+        // Seed only one tx-context entry while tx_index indicates two txs in block 2.
+        // rollback_to_block should detect partial coverage and use full-scan fallback.
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: consuming_tx_a.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: input_tx.clone(),
+                    output_index: 0,
+                }],
+            }),
+        );
+        batch.commit().unwrap();
+
+        assert!(store.get_cell(&input_tx, 0).unwrap().is_none());
+        assert!(store.get_cell(&consuming_tx_a, 0).unwrap().is_some());
+        assert!(store.get_cell(&consuming_tx_b, 0).unwrap().is_some());
+        assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_some());
+
+        store.rollback_to_block(1).unwrap();
+
+        assert!(store.get_cell(&input_tx, 0).unwrap().is_some());
+        assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_none());
+        assert!(store.get_cell(&consuming_tx_a, 0).unwrap().is_none());
+        assert!(store.get_cell(&consuming_tx_b, 0).unwrap().is_none());
     }
 
     #[test]

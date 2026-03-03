@@ -44,6 +44,27 @@ fn default_limit() -> i64 {
     20
 }
 
+fn parse_dao_cursor_key(
+    cursor: Option<&str>,
+    expected_len: usize,
+    label: &str,
+) -> Result<Option<Vec<u8>>, ApiRouteError> {
+    let Some(raw) = cursor else {
+        return Ok(None);
+    };
+    let decoded = hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
+        .map_err(|_| ApiError::bad_request(format!("Invalid {} cursor", label)))?;
+    if decoded.len() != expected_len {
+        return Err(ApiError::bad_request(format!(
+            "Invalid {} cursor length: expected {} bytes, got {}",
+            label,
+            expected_len,
+            decoded.len()
+        )));
+    }
+    Ok(Some(decoded))
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoDepositResponse {
@@ -199,16 +220,25 @@ async fn list_deposits(
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
-    let page = if let Some(status) = params.status {
+    let status_filter = params.status;
+    let cursor_key = parse_dao_cursor_key(
+        params.cursor.as_deref(),
+        if status_filter.is_some() {
+            keys::DAO_BY_STATUS_BLOCK_KEY_SIZE
+        } else {
+            keys::DAO_BY_BLOCK_KEY_SIZE
+        },
+        "dao deposits",
+    )?;
+    let page = if let Some(status) = status_filter {
         state
             .store
-            .list_dao_deposits_by_status_paginated(status, limit + 1, cursor_block)
+            .list_dao_deposits_by_status_paginated(status, limit + 1, cursor_key.as_deref())
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         state
             .store
-            .list_dao_deposits_paginated(limit + 1, cursor_block)
+            .list_dao_deposits_paginated(limit + 1, cursor_key.as_deref())
             .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
@@ -220,8 +250,19 @@ async fn list_deposits(
     }
 
     let next_cursor = if has_more {
-        page.last()
-            .map(|(_, entry)| entry.deposit_block_number.to_string())
+        page.last().map(|(outpoint_key, entry)| {
+            let cursor_key = if let Some(status) = status_filter {
+                keys::encode_dao_by_status_block_key(
+                    status,
+                    entry.deposit_block_number,
+                    outpoint_key,
+                )
+                .to_vec()
+            } else {
+                keys::encode_dao_by_block_key(entry.deposit_block_number, outpoint_key).to_vec()
+            };
+            format!("0x{}", hex::encode(cursor_key))
+        })
     } else {
         None
     };
@@ -250,10 +291,14 @@ async fn get_deposits_by_address(
     }
 
     let limit = params.limit.clamp(1, 100) as usize;
-    let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
+    let cursor_key = parse_dao_cursor_key(
+        params.cursor.as_deref(),
+        keys::DAO_BY_LOCK_BLOCK_KEY_SIZE,
+        "dao deposits by address",
+    )?;
     let mut page = state
         .store
-        .list_dao_deposits_by_lock_paginated(&hash, limit + 1, cursor_block)
+        .list_dao_deposits_by_lock_paginated(&hash, limit + 1, cursor_key.as_deref())
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = page.len() > limit;
@@ -262,8 +307,11 @@ async fn get_deposits_by_address(
     }
 
     let next_cursor = if has_more {
-        page.last()
-            .map(|(_, entry)| entry.deposit_block_number.to_string())
+        page.last().map(|(outpoint_key, entry)| {
+            let cursor_key =
+                keys::encode_dao_by_lock_block_key(&hash, entry.deposit_block_number, outpoint_key);
+            format!("0x{}", hex::encode(cursor_key))
+        })
     } else {
         None
     };

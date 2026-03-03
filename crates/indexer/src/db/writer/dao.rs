@@ -208,8 +208,22 @@ impl BatchWriter {
         let mut seen_keys: HashSet<(Vec<u8>, i16)> = HashSet::new();
 
         // Check direct deposits (tx_hash, output_index)
-        for (tx_hash, output_index) in inputs {
-            let outpoint_key = keys::encode_outpoint(tx_hash, *output_index as i16);
+        for (tx_hash, output_index_raw) in inputs {
+            if *output_index_raw < 0 {
+                bail!(
+                    "negative DAO input output_index in find_consumed_dao_deposits: tx_hash=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index_raw
+                );
+            }
+            let output_index = i16::try_from(*output_index_raw).map_err(|_| {
+                anyhow!(
+                    "DAO input output_index exceeds i16 range in find_consumed_dao_deposits: tx_hash=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index_raw
+                )
+            })?;
+            let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
             if let Some(value) = self
                 .store
                 .get_cf(self.store.cf_dao_deposits(), &outpoint_key)?
@@ -218,15 +232,15 @@ impl BatchWriter {
                     anyhow!(
                         "failed to deserialize DAO deposit: outpoint=0x{}:{}, error={}",
                         hex::encode(tx_hash),
-                        output_index,
+                        output_index_raw,
                         e
                     )
                 })?;
-                let key = (tx_hash.to_vec(), *output_index as i16);
+                let key = (tx_hash.to_vec(), output_index);
                 seen_keys.insert(key);
                 results.push(dao_cache_entry_to_row(
                     tx_hash.to_vec(),
-                    *output_index as i16,
+                    output_index,
                     entry,
                 ));
             }
@@ -235,8 +249,22 @@ impl BatchWriter {
         // Check by withdraw_request_tx outpoint (Phase 2 withdrawals).
         // Each input's (tx_hash, output_index) is the full outpoint of the
         // withdrawal request cell being consumed.
-        for (tx_hash, output_index) in inputs {
-            let withdraw_outpoint_key = keys::encode_outpoint(tx_hash, *output_index as i16);
+        for (tx_hash, output_index_raw) in inputs {
+            if *output_index_raw < 0 {
+                bail!(
+                    "negative DAO input output_index in find_consumed_dao_deposits: tx_hash=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index_raw
+                );
+            }
+            let output_index = i16::try_from(*output_index_raw).map_err(|_| {
+                anyhow!(
+                    "DAO input output_index exceeds i16 range in find_consumed_dao_deposits: tx_hash=0x{}, output_index={}",
+                    hex::encode(tx_hash),
+                    output_index_raw
+                )
+            })?;
+            let withdraw_outpoint_key = keys::encode_outpoint(tx_hash, output_index);
             if let Some(deposit_outpoint_key) = self
                 .store
                 .get_cf(self.store.cf_dao_by_withdraw_tx(), &withdraw_outpoint_key)?
@@ -1878,6 +1906,42 @@ mod tests {
             2,
             "both deposits should be found via their distinct withdrawal request outpoints"
         );
+    }
+
+    #[test]
+    fn test_find_consumed_dao_deposits_rejects_negative_output_index() {
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store);
+
+        let tx_hash = [0xAB; 32];
+        let err = writer
+            .find_consumed_dao_deposits(&[(&tx_hash, -1)])
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("negative DAO input output_index in find_consumed_dao_deposits"));
+    }
+
+    #[test]
+    fn test_find_consumed_dao_deposits_rejects_output_index_over_i16() {
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store);
+
+        let tx_hash = [0xCD; 32];
+        let err = writer
+            .find_consumed_dao_deposits(&[(&tx_hash, i16::MAX as i32 + 1)])
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("DAO input output_index exceeds i16 range in find_consumed_dao_deposits"));
     }
 
     #[test]
