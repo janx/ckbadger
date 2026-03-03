@@ -65,21 +65,38 @@ The API returns `cellType: "genesis_special_burn"` and `virtualOccupiedCapacity:
 
 Each block header contains a 32-byte `dao` field with 4 little-endian u64 values:
 
-| Bytes | Field                 | Description                                                     |
-| ----- | --------------------- | --------------------------------------------------------------- |
-| 0-7   | C (total_issuance)    | Cumulative issuance (genesis + primary + secondary) in shannons |
-| 8-15  | AR (accumulated_rate) | Accumulated Rate for compensation calculation (scaled by 10^16) |
-| 16-23 | S (secondary_pool)    | Cumulative secondary issuance allocated to DAO depositors       |
-| 24-31 | U (occupied_capacity) | Total occupied capacity (cell storage costs) in shannons        |
+| Bytes | Field                 | Description                                                       |
+| ----- | --------------------- | ----------------------------------------------------------------- |
+| 0-7   | C (total_issuance)    | Cumulative issuance (genesis + primary + secondary) in shannons   |
+| 8-15  | AR (accumulated_rate) | Accumulated Rate for compensation calculation (scaled by 10^16)   |
+| 16-23 | S (secondary_pool)    | Total unissued secondary issuance pool (DAO + treasury unclaimed) |
+| 24-31 | U (occupied_capacity) | Total occupied capacity (cell storage costs) in shannons          |
 
 ```rust
 pub struct DaoField {
     pub total_issuance: u64,      // C - includes genesis burnt (33.6B at genesis)
     pub accumulated_rate: u64,    // AR - starts at 10^16
-    pub secondary_pool: u64,      // S
+    pub secondary_pool: u64,      // S (unissued secondary pool)
     pub occupied_capacity: u64,   // U
 }
 ```
+
+### S Field Dynamics (RFC-0023)
+
+`S` is a `u64` pool value and remains non-negative, but block-to-block delta `S_i - S_{i-1}` can be negative.
+
+Per RFC-0023:
+
+```
+S_i = S_{i-1} - I_i + s_i - floor(s_i * U_{i-1} / C_{i-1})
+```
+
+Where:
+
+- `s_i`: secondary issuance in block `i`
+- `I_i`: total compensation of completed DAO withdrawals in block `i` (phase-2 completions)
+
+So if `I_i` exceeds the block's net inflow to `S`, the delta is negative even though `S_i` itself is still a valid non-negative `u64`.
 
 ## Constants
 

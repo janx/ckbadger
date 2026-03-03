@@ -2119,13 +2119,10 @@ fn resolve_non_miner_secondary_delta_for_snapshot(
 
     let delta = secondary_pool - prev_secondary_pool;
     if delta < 0 {
-        bail!(
-            "secondary pool decreased while building DAO daily snapshot without precomputed delta: date={}, previous_secondary_pool={}, secondary_pool={}, delta={}",
-            date,
-            prev_secondary_pool,
-            secondary_pool,
-            delta
-        );
+        // RFC-0023 S_i includes completed withdrawal compensation (I_i),
+        // so block/day-level S deltas can be negative. For issuance chart
+        // cumulatives we only accumulate positive non-miner growth.
+        return Ok(0);
     }
     Ok(delta)
 }
@@ -2430,26 +2427,22 @@ fn accumulate_secondary_issuance_deltas(
         let _c_delta = c - prev_c;
         let s_delta = s - prev_s;
 
-        if s_delta < 0 {
-            bail!(
-                "secondary issuance S delta underflow: date={}, prev_s={}, current_s={}, delta={}",
-                block_date,
-                prev_s,
-                s,
-                s_delta
-            );
+        // RFC-0023: S_i can decrease when completed DAO withdrawals are
+        // larger than current non-miner secondary issuance in the same block.
+        // For issuance chart cumulatives we only track positive growth.
+        if s_delta > 0 {
+            *stats
+                .daily_secondary_non_miner_delta
+                .entry(block_date)
+                .or_default() += s_delta;
+            // Derive miner share directly from C/U ratio to avoid compact-target
+            // and primary-issuance approximation drift.
+            let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta)?;
+            *stats
+                .daily_secondary_miner_delta
+                .entry(block_date)
+                .or_default() += miner;
         }
-        *stats
-            .daily_secondary_non_miner_delta
-            .entry(block_date)
-            .or_default() += s_delta;
-        // Derive miner share directly from C/U ratio to avoid compact-target
-        // and primary-issuance approximation drift.
-        let (miner, _, _) = split_secondary_issuance(c, u, 0, s_delta)?;
-        *stats
-            .daily_secondary_miner_delta
-            .entry(block_date)
-            .or_default() += miner;
     }
 
     *prev_dao_cs = Some((c, s));
@@ -15395,17 +15388,15 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_non_miner_secondary_delta_for_snapshot_errors_on_negative_fallback_delta() {
+    fn test_resolve_non_miner_secondary_delta_for_snapshot_ignores_negative_fallback_delta() {
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
-        let err =
-            resolve_non_miner_secondary_delta_for_snapshot(date, None, 8_999, 9_000).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("secondary pool decreased while building DAO daily snapshot"));
+        let delta =
+            resolve_non_miner_secondary_delta_for_snapshot(date, None, 8_999, 9_000).unwrap();
+        assert_eq!(delta, 0);
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_errors_on_negative_adjustment() {
+    fn test_accumulate_secondary_issuance_deltas_ignores_negative_adjustment() {
         let mut stats = BatchStats::default();
         let mut prev = Some((20_000_000_000_000_i128, 8_000_i128));
         let block = dummy_parsed_block(
@@ -15419,27 +15410,51 @@ mod tests {
         );
         let date = ckbadger_common::block_date(block.timestamp);
 
-        let err =
-            accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("secondary issuance S delta underflow"));
+        accumulate_secondary_issuance_deltas(&mut stats, &block, date, &mut prev).unwrap();
+        assert!(
+            !stats.daily_secondary_non_miner_delta.contains_key(&date),
+            "negative S delta must not contribute to non-miner daily delta"
+        );
+        assert!(
+            !stats.daily_secondary_miner_delta.contains_key(&date),
+            "negative S delta must not contribute to miner daily delta"
+        );
+        assert_eq!(
+            prev,
+            Some((20_000_000_000_000_i128 + 500, 8_000_i128 - 100)),
+            "previous DAO C/S baseline must still advance to the latest block"
+        );
     }
 
     #[test]
-    fn test_accumulate_secondary_issuance_deltas_same_day_fails_on_negative_s_drop() {
+    fn test_accumulate_secondary_issuance_deltas_same_day_drop_then_growth_tracks_only_growth() {
         let mut stats = BatchStats::default();
         let mut prev = Some((30_000_000_000_000_i128, 10_000_i128));
         let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
 
-        // First block in the day has an S drop (protocol adjustment) and must fail fast.
+        // First block in the day has an S drop (protocol adjustment).
         let block_drop =
             dummy_parsed_block(build_dao_field(30_000_000_000_500, 9_950, 100), 0, 1000);
-        let err = accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev)
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("secondary issuance S delta underflow"));
+        accumulate_secondary_issuance_deltas(&mut stats, &block_drop, date, &mut prev).unwrap();
+
+        // Next block rebounds above the dropped value; only positive growth is counted.
+        let block_growth =
+            dummy_parsed_block(build_dao_field(30_000_000_001_000, 10_020, 100), 1, 2000);
+        accumulate_secondary_issuance_deltas(&mut stats, &block_growth, date, &mut prev).unwrap();
+
+        assert_eq!(
+            stats.daily_secondary_non_miner_delta.get(&date),
+            Some(&70),
+            "daily delta should include only positive growth after the drop"
+        );
+        assert!(
+            stats
+                .daily_secondary_miner_delta
+                .get(&date)
+                .copied()
+                .unwrap_or_default()
+                >= 0
+        );
     }
 
     #[test]
