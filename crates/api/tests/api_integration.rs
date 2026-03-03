@@ -9,10 +9,10 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DobEntry, DobExtra, DobStandard, EpochStats, HourlyStats,
-    LiveCellInfo, MinerStats, NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta,
-    NftEntry, NftExtra, NftStandard, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
-    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    DailyBlockStats, DailyStats, DeepForkInfo, DobEntry, DobExtra, DobStandard, EpochStats,
+    HourlyStats, LiveCellInfo, MinerStats, NftCollectionActivityEntry, NftCollectionAggregate,
+    NftDailyDelta, NftEntry, NftExtra, NftStandard, ReorgEvent, ScriptDailyDelta, ScriptInfo,
+    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -177,6 +177,101 @@ async fn test_hardforks_endpoint_returns_503_when_derived_store_lags() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "derived_syncing");
+}
+
+#[tokio::test]
+async fn test_forks_recent_fails_on_deep_fork_invariant_violation() {
+    let store = test_store();
+    store
+        .update_sync_status(|s| {
+            s.deep_fork_detected = true;
+            s.deep_fork_info = None;
+        })
+        .unwrap();
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/forks/recent")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("deep_fork_detected=true but deep_fork_info is missing"));
+}
+
+#[tokio::test]
+async fn test_forks_uses_persisted_reorg_detected_at_timestamp() {
+    let store = test_store();
+    store
+        .set_deep_fork(DeepForkInfo {
+            db_tip: 100,
+            db_tip_hash: vec![0x11; 32],
+            chain_tip: 160,
+            chain_tip_hash: vec![0x22; 32],
+            depth: 60,
+            fork_point: 100,
+        })
+        .unwrap();
+
+    let detected_at = 1_700_000_123i64;
+    let event = ReorgEvent {
+        detected_at,
+        rollback_from: 101,
+        rollback_to: 100,
+        depth: 60,
+    };
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            b"reorg:1700000123000:0",
+            &bincode::serialize(&event).unwrap(),
+        )
+        .unwrap();
+
+    let expected_detected_at = chrono::DateTime::<chrono::Utc>::from_timestamp(detected_at, 0)
+        .unwrap()
+        .to_rfc3339();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request_recent = Request::builder()
+        .uri("/api/v1/forks/recent")
+        .body(Body::empty())
+        .unwrap();
+    let response_recent = app.clone().oneshot(request_recent).await.unwrap();
+    assert_eq!(response_recent.status(), StatusCode::OK);
+    let body_recent = response_recent
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let json_recent: serde_json::Value = serde_json::from_slice(&body_recent).unwrap();
+    assert_eq!(json_recent["reorg"]["detectedAt"], expected_detected_at);
+
+    let request_list = Request::builder()
+        .uri("/api/v1/forks")
+        .body(Body::empty())
+        .unwrap();
+    let response_list = app.oneshot(request_list).await.unwrap();
+    assert_eq!(response_list.status(), StatusCode::OK);
+    let body_list = response_list
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let json_list: serde_json::Value = serde_json::from_slice(&body_list).unwrap();
+    assert_eq!(json_list["data"][0]["detectedAt"], expected_detected_at);
 }
 
 #[tokio::test]

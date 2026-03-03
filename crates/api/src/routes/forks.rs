@@ -2,14 +2,16 @@
 
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     routing::get,
-    Router,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
+use ckbadger_store::types::{DeepForkInfo, SyncStatus};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +100,67 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/forks/{id}", get(get_fork_detail))
 }
 
+type ApiRouteError = (StatusCode, Json<ApiError>);
+
+fn deep_fork_info_if_consistent(
+    status: &SyncStatus,
+) -> Result<Option<&DeepForkInfo>, ApiRouteError> {
+    match (status.deep_fork_detected, status.deep_fork_info.as_ref()) {
+        (false, None) => Ok(None),
+        (true, Some(info)) => Ok(Some(info)),
+        (true, None) => Err(ApiError::internal(format!(
+            "sync_status invariant violated: deep_fork_detected=true but deep_fork_info is missing (tip_block={})",
+            status.tip_block_number
+        ))),
+        (false, Some(_)) => Err(ApiError::internal(format!(
+            "sync_status invariant violated: deep_fork_detected=false but deep_fork_info exists (tip_block={})",
+            status.tip_block_number
+        ))),
+    }
+}
+
+fn latest_reorg_detected_at(state: &AppState) -> Result<String, ApiRouteError> {
+    let latest = state
+        .store
+        .get_latest_reorg_event()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(
+                "missing persisted reorg event while deep fork is active; check sync_meta reorg records",
+            )
+        })?;
+    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(latest.detected_at, 0).ok_or_else(
+        || {
+            ApiError::internal(format!(
+                "invalid reorg detected_at timestamp in sync_meta: {}",
+                latest.detected_at
+            ))
+        },
+    )?;
+    Ok(dt.to_rfc3339())
+}
+
+fn build_deep_fork_event(info: &DeepForkInfo, detected_at: String) -> ReorgEventResponse {
+    ReorgEventResponse {
+        id: 1,
+        detected_at,
+        fork_point_number: info.fork_point,
+        fork_point_hash: String::new(),
+        old_tip_number: info.db_tip,
+        old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
+        new_tip_number: info.chain_tip,
+        new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
+        depth: info.depth,
+        orphaned_blocks_count: 0,
+        orphaned_txs_count: 0,
+        event_type: "deep".to_string(),
+        resolved_at: None,
+        resolved_by: None,
+        resolution_action: None,
+        resolution_notes: None,
+    }
+}
+
 /// List forks.
 ///
 /// With the migration to RocksDB, we no longer have a `reorg_events` table.
@@ -115,28 +178,9 @@ async fn list_forks(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut events = Vec::new();
-
-    if sync_status.deep_fork_detected {
-        if let Some(ref info) = sync_status.deep_fork_info {
-            events.push(ReorgEventResponse {
-                id: 1,
-                detected_at: chrono::Utc::now().to_rfc3339(),
-                fork_point_number: info.fork_point,
-                fork_point_hash: String::new(),
-                old_tip_number: info.db_tip,
-                old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
-                new_tip_number: info.chain_tip,
-                new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
-                depth: info.depth,
-                orphaned_blocks_count: 0,
-                orphaned_txs_count: 0,
-                event_type: "deep".to_string(),
-                resolved_at: None,
-                resolved_by: None,
-                resolution_action: None,
-                resolution_notes: None,
-            });
-        }
+    if let Some(info) = deep_fork_info_if_consistent(&sync_status)? {
+        let detected_at = latest_reorg_detected_at(state.as_ref())?;
+        events.push(build_deep_fork_event(info, detected_at));
     }
 
     let total = events.len() as i64;
@@ -157,32 +201,15 @@ async fn get_fork_detail(
         .get_sync_status()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if id != 1 || !sync_status.deep_fork_detected {
+    if id != 1 {
         return Err(ApiError::not_found("Reorg event not found"));
     }
 
-    let info = sync_status
-        .deep_fork_info
-        .ok_or_else(|| ApiError::not_found("Reorg event not found"))?;
-
-    let event = ReorgEventResponse {
-        id: 1,
-        detected_at: chrono::Utc::now().to_rfc3339(),
-        fork_point_number: info.fork_point,
-        fork_point_hash: String::new(),
-        old_tip_number: info.db_tip,
-        old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
-        new_tip_number: info.chain_tip,
-        new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
-        depth: info.depth,
-        orphaned_blocks_count: 0,
-        orphaned_txs_count: 0,
-        event_type: "deep".to_string(),
-        resolved_at: None,
-        resolved_by: None,
-        resolution_action: None,
-        resolution_notes: None,
+    let Some(info) = deep_fork_info_if_consistent(&sync_status)? else {
+        return Err(ApiError::not_found("Reorg event not found"));
     };
+    let detected_at = latest_reorg_detected_at(state.as_ref())?;
+    let event = build_deep_fork_event(info, detected_at);
 
     ok(ReorgDetailResponse {
         event,
@@ -197,9 +224,10 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
         .get_sync_status()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let deep_fork = if let Some(ref info) = sync_status.deep_fork_info {
+    let deep_fork_info = deep_fork_info_if_consistent(&sync_status)?;
+    let deep_fork = if let Some(info) = deep_fork_info {
         DeepForkStatusResponse {
-            detected: sync_status.deep_fork_detected,
+            detected: true,
             detected_at: None,
             db_tip: Some(info.db_tip),
             db_tip_hash: Some(format!("0x{}", hex::encode(&info.db_tip_hash))),
@@ -223,28 +251,9 @@ async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<Recen
 
     // With RocksDB we don't have a reorg_events table with timestamps, so we
     // only surface the deep fork if one is currently detected.
-    let reorg = if sync_status.deep_fork_detected {
-        sync_status
-            .deep_fork_info
-            .as_ref()
-            .map(|info| ReorgEventResponse {
-                id: 1,
-                detected_at: chrono::Utc::now().to_rfc3339(),
-                fork_point_number: info.fork_point,
-                fork_point_hash: String::new(),
-                old_tip_number: info.db_tip,
-                old_tip_hash: format!("0x{}", hex::encode(&info.db_tip_hash)),
-                new_tip_number: info.chain_tip,
-                new_tip_hash: format!("0x{}", hex::encode(&info.chain_tip_hash)),
-                depth: info.depth,
-                orphaned_blocks_count: 0,
-                orphaned_txs_count: 0,
-                event_type: "deep".to_string(),
-                resolved_at: None,
-                resolved_by: None,
-                resolution_action: None,
-                resolution_notes: None,
-            })
+    let reorg = if let Some(info) = deep_fork_info {
+        let detected_at = latest_reorg_detected_at(state.as_ref())?;
+        Some(build_deep_fork_event(info, detected_at))
     } else {
         None
     };

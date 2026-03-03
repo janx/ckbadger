@@ -5,7 +5,17 @@ use serde::Deserialize;
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
-use crate::types::{DeepForkInfo, RuntimeStatus, SyncStatus};
+use crate::types::{DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct LegacyRuntimeStatusV1 {
@@ -81,6 +91,15 @@ impl From<LegacyRuntimeStatusV2> for RuntimeStatus {
 }
 
 impl CkbadgerStore {
+    fn parse_reorg_event_key_ordering(key: &[u8]) -> Option<(i64, u64)> {
+        let key_str = std::str::from_utf8(key).ok()?;
+        let payload = key_str.strip_prefix("reorg:")?;
+        let (ts_ms_str, seq_str) = payload.split_once(':')?;
+        let ts_ms = ts_ms_str.parse::<i64>().ok()?;
+        let seq = seq_str.parse::<u64>().ok()?;
+        Some((ts_ms, seq))
+    }
+
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
             Some(value) => Ok(bincode::deserialize(&value)?),
@@ -339,6 +358,39 @@ impl CkbadgerStore {
             status.deep_fork_info = None;
         })
     }
+
+    pub fn get_latest_reorg_event(&self) -> anyhow::Result<Option<ReorgEvent>> {
+        let iter = self.iterator_cf(self.cf_sync_meta(), rocksdb::IteratorMode::Start);
+        let mut latest: Option<((i64, u64), ReorgEvent)> = None;
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| anyhow!("failed to iterate sync_meta: {}", e))?;
+            if !key.starts_with(b"reorg:") {
+                continue;
+            }
+
+            let ordering = Self::parse_reorg_event_key_ordering(&key).ok_or_else(|| {
+                anyhow!(
+                    "invalid reorg event key format in sync_meta: key=0x{}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            let event: ReorgEvent = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize reorg event in sync_meta: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+
+            match &latest {
+                Some((existing_ordering, _)) if *existing_ordering >= ordering => {}
+                _ => latest = Some((ordering, event)),
+            }
+        }
+
+        Ok(latest.map(|(_, event)| event))
+    }
 }
 
 #[cfg(test)]
@@ -578,5 +630,67 @@ mod tests {
 
         store.set_rollback_cleanup_in_progress(false).unwrap();
         assert!(!store.is_rollback_cleanup_in_progress().unwrap());
+    }
+
+    #[test]
+    fn test_get_latest_reorg_event_uses_numeric_ordering() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let event_seq_9 = ReorgEvent {
+            detected_at: 111,
+            rollback_from: 10,
+            rollback_to: 9,
+            depth: 1,
+        };
+        let event_seq_10 = ReorgEvent {
+            detected_at: 222,
+            rollback_from: 11,
+            rollback_to: 10,
+            depth: 1,
+        };
+
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                b"reorg:1700000000000:9",
+                &bincode::serialize(&event_seq_9).unwrap(),
+            )
+            .unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                b"reorg:1700000000000:10",
+                &bincode::serialize(&event_seq_10).unwrap(),
+            )
+            .unwrap();
+
+        let latest = store.get_latest_reorg_event().unwrap().unwrap();
+        assert_eq!(latest.detected_at, 222);
+    }
+
+    #[test]
+    fn test_get_latest_reorg_event_fails_on_malformed_reorg_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let event = ReorgEvent {
+            detected_at: 1,
+            rollback_from: 1,
+            rollback_to: 0,
+            depth: 1,
+        };
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                b"reorg:bad-ts:1",
+                &bincode::serialize(&event).unwrap(),
+            )
+            .unwrap();
+
+        let err = store.get_latest_reorg_event().unwrap_err();
+        assert!(
+            err.to_string().contains("invalid reorg event key format"),
+            "unexpected error: {err}"
+        );
     }
 }
