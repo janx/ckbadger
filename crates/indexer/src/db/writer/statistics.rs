@@ -1,5 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
+use rocksdb::{Direction, IteratorMode};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
@@ -196,21 +197,22 @@ impl BatchWriter {
                 // Carry forward cumulative totals from the previous day.
                 // Prefer in-memory stats (from same batch) over DB to handle
                 // cross-day batches where the previous day isn't committed yet.
-                let (prev_live, prev_dead, prev_all, prev_data_size) =
-                    if let Some(p) = prev_day_stats {
-                        (
-                            p.total_live_cells,
-                            p.total_dead_cells,
-                            p.total_all_cells,
-                            p.total_data_size,
-                        )
-                    } else {
-                        let prev_date = date - Duration::days(1);
-                        let prev_key = keys::encode_stats_key(
-                            keys::STATS_PREFIX_DAILY,
-                            prev_date.format("%Y%m%d").to_string().as_bytes(),
-                        );
-                        self.store
+                let (prev_live, prev_dead, prev_all, prev_data_size) = if let Some(p) =
+                    prev_day_stats
+                {
+                    (
+                        p.total_live_cells,
+                        p.total_dead_cells,
+                        p.total_all_cells,
+                        p.total_data_size,
+                    )
+                } else {
+                    let prev_date = date - Duration::days(1);
+                    let prev_key = keys::encode_stats_key(
+                        keys::STATS_PREFIX_DAILY,
+                        prev_date.format("%Y%m%d").to_string().as_bytes(),
+                    );
+                    self.store
                             .get_stats_key(&prev_key)?
                             .map(|v| deserialize_stats::<DailyStats>(&v, "previous day stats"))
                             .transpose()?
@@ -222,8 +224,42 @@ impl BatchWriter {
                                     p.total_data_size,
                                 )
                             })
-                            .unwrap_or((0, 0, 0, 0))
-                    };
+                            .map_or_else(
+                                || -> Result<(i64, i64, i64, i64)> {
+                                    let daily_prefix = [keys::STATS_PREFIX_DAILY];
+                                    let mut latest_prior_daily_date: Option<String> = None;
+                                    let iter = self.store.iterator_cf(
+                                        self.store.cf_stats_chain(),
+                                        IteratorMode::From(&key, Direction::Reverse),
+                                    );
+                                    for item in iter {
+                                        let (candidate_key, _) = item.map_err(|e| {
+                                            anyhow!(
+                                                "failed to iterate stats_chain while checking previous day stats gap: date={}, error={}",
+                                                date,
+                                                e
+                                            )
+                                        })?;
+                                        if !candidate_key.starts_with(&daily_prefix) {
+                                            continue;
+                                        }
+                                        latest_prior_daily_date =
+                                            Some(String::from_utf8_lossy(&candidate_key[1..]).to_string());
+                                        break;
+                                    }
+                                    if let Some(found_date) = latest_prior_daily_date {
+                                        bail!(
+                                            "missing previous day stats while carrying daily totals: date={}, expected_prev_date={}, found_latest_prior_date={}",
+                                            date.format("%Y%m%d"),
+                                            prev_date.format("%Y%m%d"),
+                                            found_date
+                                        );
+                                    }
+                                    Ok((0, 0, 0, 0))
+                                },
+                                Ok,
+                            )?
+                };
 
                 DailyStats {
                     blocks_count,
@@ -974,5 +1010,59 @@ mod tests {
             bincode::deserialize(&store.get_stats_key(&key2).unwrap().unwrap()).unwrap();
         assert_eq!(persisted.total_live_cells, d2.total_live_cells);
         assert_eq!(persisted.total_all_cells, d2.total_all_cells);
+    }
+
+    #[test]
+    fn test_daily_stats_errors_when_previous_day_missing_but_earlier_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        let day3 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();
+
+        let mut seed_batch = StoreBatch::new(&store);
+        writer
+            .update_daily_statistics(
+                day1,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                0,
+                1,
+                0,
+                None,
+                None,
+                None,
+                &mut seed_batch,
+            )
+            .unwrap();
+        seed_batch.commit().unwrap();
+
+        let mut gap_batch = StoreBatch::new(&store);
+        let err = writer
+            .update_daily_statistics(
+                day3,
+                1,
+                1,
+                1,
+                0,
+                1,
+                1,
+                0,
+                1,
+                0,
+                None,
+                None,
+                None,
+                &mut gap_batch,
+            )
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing previous day stats while carrying daily totals"));
     }
 }

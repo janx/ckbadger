@@ -74,6 +74,50 @@ fn map_dao_pagination_error(err: anyhow::Error, label: &str) -> ApiRouteError {
     }
 }
 
+fn resolve_latest_block_and_ar_from_tip(
+    tip: Option<(i64, ckbadger_store::CachedBlockHeader)>,
+    context: &str,
+) -> Result<(i64, u64), ApiRouteError> {
+    let (block_number, header) = tip.ok_or_else(|| {
+        ApiError::internal(format!(
+            "missing sync tip block while computing DAO {}",
+            context
+        ))
+    })?;
+    let ar = extract_ar(&header.dao).ok_or_else(|| {
+        ApiError::internal(format!(
+            "invalid DAO field in sync tip block while computing DAO {}: block_number={}, dao_len={}",
+            context,
+            block_number,
+            header.dao.len()
+        ))
+    })?;
+    Ok((block_number, ar))
+}
+
+fn resolve_latest_block_and_ar(
+    state: &AppState,
+    context: &str,
+) -> Result<(i64, u64), ApiRouteError> {
+    let tip = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(format!("failed to load sync tip block: {}", e)))?;
+    resolve_latest_block_and_ar_from_tip(tip, context)
+}
+
+fn depositor_series_value(
+    depositors_series: &HashMap<String, i64>,
+    date: &str,
+) -> Result<i64, ApiRouteError> {
+    depositors_series.get(date).copied().ok_or_else(|| {
+        ApiError::internal(format!(
+            "missing dao depositor series point for date={}",
+            date
+        ))
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoDepositResponse {
@@ -400,16 +444,7 @@ async fn get_address_dao_summary(
         return Err(ApiError::bad_request("Invalid lock script hash"));
     }
 
-    // Get latest block header for AR
-    let latest_block = state.store.get_sync_tip_block().ok().flatten();
-
-    let (latest_block_number, latest_ar) = match &latest_block {
-        Some((num, header)) => {
-            let ar = extract_ar(&header.dao).unwrap_or(1);
-            (*num, ar)
-        }
-        None => (0, 1),
-    };
+    let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "summary")?;
 
     let mut active_count = 0i32;
     let mut pending_count = 0i32;
@@ -526,16 +561,7 @@ async fn get_address_dao_summary(
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
     ensure_derived_ready(state.as_ref())?;
 
-    // Get latest block for AR
-    let latest_block = state.store.get_sync_tip_block().ok().flatten();
-
-    let (latest_block_number, latest_ar) = match &latest_block {
-        Some((num, header)) => {
-            let ar = extract_ar(&header.dao).unwrap_or(1);
-            (*num, ar)
-        }
-        None => (0, 1),
-    };
+    let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "statistics")?;
 
     let mut total_deposited: i128 = 0;
     let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
@@ -947,18 +973,14 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 
     let data: Vec<ChartDataPoint> = snapshots
         .iter()
-        .map(|s| ChartDataPoint {
-            date: s.date.clone(),
-            value: shannon_to_ckb(&s.total_deposited.to_string()),
-            value2: Some(
-                depositors_series
-                    .get(&s.date)
-                    .copied()
-                    .unwrap_or(0)
-                    .to_string(),
-            ),
+        .map(|s| -> Result<ChartDataPoint, ApiRouteError> {
+            Ok(ChartDataPoint {
+                date: s.date.clone(),
+                value: shannon_to_ckb(&s.total_deposited.to_string()),
+                value2: Some(depositor_series_value(&depositors_series, &s.date)?.to_string()),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let response = ChartResponse {
         data,
@@ -1219,6 +1241,44 @@ mod tests {
         assert_eq!(series.get("2026-02-17"), Some(&1));
         assert_eq!(series.get("2026-02-18"), Some(&2));
         assert_eq!(series.get("2026-02-19"), Some(&1));
+    }
+
+    #[test]
+    fn test_resolve_latest_block_and_ar_from_tip_errors_on_missing_tip() {
+        let err = resolve_latest_block_and_ar_from_tip(None, "summary").unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("missing sync tip block while computing DAO summary"));
+    }
+
+    #[test]
+    fn test_resolve_latest_block_and_ar_from_tip_errors_on_invalid_dao() {
+        let mut header = header_at(0);
+        header.dao = vec![0u8; 8];
+        let err =
+            resolve_latest_block_and_ar_from_tip(Some((42, header)), "statistics").unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("invalid DAO field in sync tip block while computing DAO statistics"));
+    }
+
+    #[test]
+    fn test_depositor_series_value_errors_on_missing_date() {
+        let mut series = HashMap::new();
+        series.insert("2026-02-18".to_string(), 7);
+
+        assert_eq!(depositor_series_value(&series, "2026-02-18").unwrap(), 7);
+
+        let err = depositor_series_value(&series, "2026-02-19").unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("missing dao depositor series point for date=2026-02-19"));
     }
 
     #[test]
