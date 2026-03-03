@@ -30,7 +30,9 @@ use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
-use crate::db::{BatchWriter, ReorgResult, Repository, SecondaryIssuanceBreakdown};
+use crate::db::{
+    BatchWriter, DaoWithdrawalContext, ReorgResult, Repository, SecondaryIssuanceBreakdown,
+};
 use crate::parser::{
     analyze_spore_media_profile, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser,
     ParsedClusterCell, ParsedDotbitAccountOutput, ParsedMnftClass, ParsedMnftIssuer,
@@ -1190,6 +1192,16 @@ fn sender_queue_depth<T>(sender: &tokio::sync::mpsc::Sender<T>) -> u64 {
     (sender.max_capacity() - sender.capacity()) as u64
 }
 
+fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        return (*msg).to_string();
+    }
+    if let Some(msg) = payload.downcast_ref::<String>() {
+        return msg.clone();
+    }
+    "non-string panic payload".to_string()
+}
+
 fn atomic_saturating_sub_u64(counter: &AtomicU64, value: u64) {
     if value == 0 {
         return;
@@ -1211,7 +1223,7 @@ fn should_trim_cell_cache(cache_len: usize) -> bool {
 }
 
 fn evict_committed_cell_cache_entries(
-    cell_cache: &DashMap<([u8; 32], i32), CachedCellInfo>,
+    cell_cache: &DashMap<([u8; 32], i16), CachedCellInfo>,
     committed_tip: i64,
 ) -> usize {
     if committed_tip < 0 {
@@ -3415,7 +3427,7 @@ pub struct Indexer {
     writer: BatchWriter,
     append_only_store: Arc<CkbadgerStore>,
     progress: Arc<SyncProgress>,
-    cell_cache: Arc<DashMap<([u8; 32], i32), CachedCellInfo>>,
+    cell_cache: Arc<DashMap<([u8; 32], i16), CachedCellInfo>>,
     udt_cell_cache: Arc<DashMap<([u8; 32], i16), CachedUdtCellInfo>>,
     perf: PerfStats,
     pipeline_perf: Arc<PipelinePerfStats>,
@@ -3579,8 +3591,9 @@ impl Indexer {
     ///   BUT only if compaction pressure has drained (L0 files < 10, pending < 2 GB).
     ///   Otherwise defers the transition and logs.
     fn ensure_compaction_mode(&self, blocks_behind: u64) {
-        let store = self.writer.store();
-        let in_bulk = store.is_bulk_sync_mode();
+        let domain_store = self.writer.store();
+        let append_store = &self.append_only_store;
+        let in_bulk = domain_store.is_bulk_sync_mode();
         let should_be_bulk = blocks_behind > self.config.bulk_sync_threshold;
 
         if should_be_bulk && !in_bulk {
@@ -3589,11 +3602,13 @@ impl Indexer {
                 threshold = self.config.bulk_sync_threshold,
                 "Re-entering bulk compaction mode"
             );
-            store.set_bulk_sync_compaction_options();
+            domain_store.set_bulk_sync_compaction_options();
+            append_store.set_bulk_sync_compaction_options();
         } else if !should_be_bulk && in_bulk {
-            let (l0_files_max, compaction_pending_bytes, _imm) = store.compaction_pressure();
+            let (l0_files_max, compaction_pending_bytes, _imm) = domain_store.compaction_pressure();
             const DRAIN_L0_THRESHOLD: u64 = 10;
-            let drain_pending_threshold = store.memory_profile().drain_pending_bytes_threshold;
+            let drain_pending_threshold =
+                domain_store.memory_profile().drain_pending_bytes_threshold;
             if l0_files_max < DRAIN_L0_THRESHOLD
                 && compaction_pending_bytes < drain_pending_threshold
             {
@@ -3602,7 +3617,8 @@ impl Indexer {
                     compaction_pending_mb = compaction_pending_bytes / (1024 * 1024),
                     "Compaction drained, restoring normal compaction options"
                 );
-                store.restore_normal_compaction_options();
+                domain_store.restore_normal_compaction_options();
+                append_store.restore_normal_compaction_options();
             } else {
                 debug!(
                     l0_files_max,
@@ -3936,6 +3952,7 @@ impl Indexer {
                 blocks_behind, self.config.bulk_sync_threshold,
             );
             self.writer.store().set_bulk_sync_compaction_options();
+            self.append_only_store.set_bulk_sync_compaction_options();
         }
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
@@ -4569,9 +4586,26 @@ impl Indexer {
                 let mut batch_cells: HashMap<(Vec<u8>, i16), ()> = HashMap::new();
                 for td in &all_tx_data {
                     for (idx, _) in td.cells.iter().enumerate() {
-                        let output_index =
-                            checked_usize_to_i16(idx, "pipeline parser batch cell output index")
-                                .unwrap_or_else(|e| panic!("{}", e));
+                        let output_index = match checked_usize_to_i16(
+                            idx,
+                            "pipeline parser batch cell output index",
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "pipeline parser batch cell output index conversion failed for range {}-{}: tx_hash=0x{}, output_index={}, error={}",
+                                            start_block,
+                                            end_block,
+                                            hex::encode(td.hash),
+                                            idx,
+                                            e
+                                        ),
+                                    );
+                                return;
+                            }
+                        };
                         batch_cells.insert((td.hash.to_vec(), output_index), ());
                     }
                 }
@@ -4600,10 +4634,26 @@ impl Indexer {
                     let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> =
                         HashMap::new();
                     for (tx_hash, idx) in &all_input_outpoints {
-                        let hash_arr =
-                            tx_hash_key32(tx_hash, "pipeline parser input cell cache lookup")
-                                .unwrap_or_else(|e| panic!("{}", e));
-                        let key = (hash_arr, *idx as i32);
+                        let hash_arr = match tx_hash_key32(
+                            tx_hash,
+                            "pipeline parser input cell cache lookup",
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "pipeline parser input cell cache key conversion failed for range {}-{}: tx_hash_len={}, error={}",
+                                        start_block,
+                                        end_block,
+                                        tx_hash.len(),
+                                        e
+                                    ),
+                                );
+                                return;
+                            }
+                        };
+                        let key = (hash_arr, *idx);
                         if let Some(cached) = cell_cache_for_parser.get(&key) {
                             attempt_cache_hits += 1;
                             attempt_input_cell_info.insert(
@@ -5089,7 +5139,7 @@ impl Indexer {
                             cell.data_size,
                         );
                         cell_cache_for_parser.insert(
-                            (tx_data.hash, output_index as i32),
+                            (tx_data.hash, output_index_i16),
                             CachedCellInfo {
                                 capacity: cell.capacity,
                                 created_at_block: tx_data.block_number,
@@ -6941,7 +6991,7 @@ impl Indexer {
         let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
         for (tx_hash, idx) in &all_input_outpoints {
             let hash_arr = tx_hash_key32(tx_hash, "sync batch input cell cache lookup")?;
-            let key = (hash_arr, *idx as i32);
+            let key = (hash_arr, *idx);
             if let Some(cached) = self.cell_cache.get(&key) {
                 input_cell_info.insert(
                     (tx_hash.clone(), *idx),
@@ -7063,7 +7113,7 @@ impl Indexer {
                     cell.data_size,
                 );
                 self.cell_cache.insert(
-                    (tx_data.hash, output_index as i32),
+                    (tx_data.hash, output_index_i16),
                     CachedCellInfo {
                         capacity: cell.capacity,
                         created_at_block: tx_data.block_number,
@@ -9085,46 +9135,47 @@ impl Indexer {
         ) = if bulk_sync_mode {
             let writer = &self.writer;
             let udt_cache = &self.udt_cell_cache;
-            rayon::join(
-                || {
-                    rayon::join(
-                        || {
-                            // DAO: collect input outpoints, deduplicate, batch query DB
-                            let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
-                            let mut block_tx_idx = 0usize;
-                            for parsed in all_parsed_blocks.iter() {
-                                let tx_count_for_block = parsed.transactions_count as usize;
-                                let tx_slice =
-                                    &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                                block_tx_idx += tx_count_for_block;
-                                for tx_data in tx_slice {
-                                    if tx_data.is_cellbase || tx_data.inputs.is_empty() {
-                                        continue;
-                                    }
-                                    for input in &tx_data.inputs {
-                                        all_input_outpoints_dao.push((
-                                            input.previous_tx_hash.to_vec(),
-                                            parsed_input_outpoint_index_i16(
-                                                input.previous_output_index,
-                                                "sync_indexer",
-                                            ),
-                                        ));
+            let prefetch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rayon::join(
+                    || {
+                        rayon::join(
+                            || {
+                                // DAO: collect input outpoints, deduplicate, batch query DB
+                                let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
+                                let mut block_tx_idx = 0usize;
+                                for parsed in all_parsed_blocks.iter() {
+                                    let tx_count_for_block = parsed.transactions_count as usize;
+                                    let tx_slice = &all_tx_data
+                                        [block_tx_idx..block_tx_idx + tx_count_for_block];
+                                    block_tx_idx += tx_count_for_block;
+                                    for tx_data in tx_slice {
+                                        if tx_data.is_cellbase || tx_data.inputs.is_empty() {
+                                            continue;
+                                        }
+                                        for input in &tx_data.inputs {
+                                            all_input_outpoints_dao.push((
+                                                input.previous_tx_hash.to_vec(),
+                                                parsed_input_outpoint_index_i16(
+                                                    input.previous_output_index,
+                                                    "sync_indexer",
+                                                ),
+                                            ));
+                                        }
                                     }
                                 }
-                            }
-                            if !all_input_outpoints_dao.is_empty() {
-                                let unique_outpoints: Vec<(Vec<u8>, i16)> = {
-                                    let mut seen = HashSet::new();
-                                    all_input_outpoints_dao
-                                        .into_iter()
-                                        .filter(|x| seen.insert(x.clone()))
-                                        .collect()
-                                };
-                                let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
-                                    .iter()
-                                    .map(|(h, i)| (h.as_slice(), *i))
-                                    .collect();
-                                writer
+                                if !all_input_outpoints_dao.is_empty() {
+                                    let unique_outpoints: Vec<(Vec<u8>, i16)> = {
+                                        let mut seen = HashSet::new();
+                                        all_input_outpoints_dao
+                                            .into_iter()
+                                            .filter(|x| seen.insert(x.clone()))
+                                            .collect()
+                                    };
+                                    let outpoint_refs: Vec<(&[u8], i16)> = unique_outpoints
+                                        .iter()
+                                        .map(|(h, i)| (h.as_slice(), *i))
+                                        .collect();
+                                    writer
                                     .find_consumed_dao_deposits_batch(&outpoint_refs)
                                     .unwrap_or_else(|e| {
                                         panic!(
@@ -9133,42 +9184,42 @@ impl Indexer {
                                             e
                                         )
                                     })
-                            } else {
-                                HashMap::new()
-                            }
-                        },
-                        || {
-                            // UDT: parse outputs, populate cache, collect input outpoints,
-                            // cache lookup + DB fallback
-                            struct TxInfoForUdt {
-                                tx_hash: Vec<u8>,
-                                block_number: i64,
-                                timestamp: chrono::DateTime<Utc>,
-                                output_udts: Vec<crate::parser::ParsedUdtCell>,
-                                input_outpoints: Vec<(Vec<u8>, i16)>,
-                            }
-                            let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
-                            let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
-                            let mut batch_udt_cells: HashMap<
-                                (Vec<u8>, i16),
-                                crate::parser::ParsedUdtCell,
-                            > = HashMap::new();
+                                } else {
+                                    HashMap::new()
+                                }
+                            },
+                            || {
+                                // UDT: parse outputs, populate cache, collect input outpoints,
+                                // cache lookup + DB fallback
+                                struct TxInfoForUdt {
+                                    tx_hash: Vec<u8>,
+                                    block_number: i64,
+                                    timestamp: chrono::DateTime<Utc>,
+                                    output_udts: Vec<crate::parser::ParsedUdtCell>,
+                                    input_outpoints: Vec<(Vec<u8>, i16)>,
+                                }
+                                let mut all_tx_infos_for_udt: Vec<TxInfoForUdt> = Vec::new();
+                                let mut all_input_outpoints_udt: Vec<(Vec<u8>, i16)> = Vec::new();
+                                let mut batch_udt_cells: HashMap<
+                                    (Vec<u8>, i16),
+                                    crate::parser::ParsedUdtCell,
+                                > = HashMap::new();
 
-                            let mut block_tx_idx = 0usize;
-                            for (block_idx, block_response) in blocks.iter().enumerate() {
-                                let parsed = &all_parsed_blocks[block_idx];
-                                let tx_count_for_block = parsed.transactions_count as usize;
-                                let tx_slice =
-                                    &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                                block_tx_idx += tx_count_for_block;
-                                for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
-                                    if tx_data.is_cellbase {
-                                        continue;
-                                    }
-                                    let tx = &block_response.block.transactions[tx_idx];
-                                    let mut output_udts: Vec<crate::parser::ParsedUdtCell> =
-                                        Vec::new();
-                                    for (output_index, udt_cell) in self
+                                let mut block_tx_idx = 0usize;
+                                for (block_idx, block_response) in blocks.iter().enumerate() {
+                                    let parsed = &all_parsed_blocks[block_idx];
+                                    let tx_count_for_block = parsed.transactions_count as usize;
+                                    let tx_slice = &all_tx_data
+                                        [block_tx_idx..block_tx_idx + tx_count_for_block];
+                                    block_tx_idx += tx_count_for_block;
+                                    for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
+                                        if tx_data.is_cellbase {
+                                            continue;
+                                        }
+                                        let tx = &block_response.block.transactions[tx_idx];
+                                        let mut output_udts: Vec<crate::parser::ParsedUdtCell> =
+                                            Vec::new();
+                                        for (output_index, udt_cell) in self
                                         .parse_udt_cells_with_store_fallback(tx)
                                         .unwrap_or_else(|e| {
                                             panic!(
@@ -9197,7 +9248,7 @@ impl Indexer {
                                         );
                                         output_udts.push(udt_cell);
                                     }
-                                    let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
+                                        let input_outpoints: Vec<(Vec<u8>, i16)> = tx_data
                                         .inputs
                                         .iter()
                                         .map(|i| {
@@ -9215,24 +9266,25 @@ impl Indexer {
                                             (i.previous_tx_hash.to_vec(), previous_output_index)
                                         })
                                         .collect();
-                                    all_input_outpoints_udt.extend(input_outpoints.iter().cloned());
-                                    all_tx_infos_for_udt.push(TxInfoForUdt {
-                                        tx_hash: tx_data.hash.to_vec(),
-                                        block_number: parsed.number,
-                                        timestamp: parsed.timestamp,
-                                        output_udts,
-                                        input_outpoints,
-                                    });
+                                        all_input_outpoints_udt
+                                            .extend(input_outpoints.iter().cloned());
+                                        all_tx_infos_for_udt.push(TxInfoForUdt {
+                                            tx_hash: tx_data.hash.to_vec(),
+                                            block_number: parsed.number,
+                                            timestamp: parsed.timestamp,
+                                            output_udts,
+                                            input_outpoints,
+                                        });
+                                    }
                                 }
-                            }
 
-                            // Resolve UDT inputs from live_cells only.
-                            let mut input_udt_info: HashMap<
-                                (Vec<u8>, i16),
-                                (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String),
-                            > = HashMap::new();
-                            if !skip_token && !all_input_outpoints_udt.is_empty() {
-                                let db_results = resolve_input_udt_info_from_live_cells(
+                                // Resolve UDT inputs from live_cells only.
+                                let mut input_udt_info: HashMap<
+                                    (Vec<u8>, i16),
+                                    (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String),
+                                > = HashMap::new();
+                                if !skip_token && !all_input_outpoints_udt.is_empty() {
+                                    let db_results = resolve_input_udt_info_from_live_cells(
                                     writer,
                                     udt_cache,
                                     &all_input_outpoints_udt,
@@ -9244,47 +9296,47 @@ impl Indexer {
                                         e
                                     )
                                 });
-                                input_udt_info.extend(db_results);
-                            }
-
-                            // Build tx contexts for UDT processing
-                            struct UdtTxInfo {
-                                tx_hash: Vec<u8>,
-                                block_number: i64,
-                                #[allow(dead_code)]
-                                timestamp: chrono::DateTime<Utc>,
-                                output_udts: Vec<crate::parser::ParsedUdtCell>,
-                                input_outpoints: Vec<(Vec<u8>, i16)>,
-                            }
-                            let mut udt_tx_contexts: Vec<UdtTxInfo> = Vec::new();
-                            for tx_info in all_tx_infos_for_udt {
-                                let has_udt_outputs = !tx_info.output_udts.is_empty();
-                                let has_udt_inputs =
-                                    tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
-                                        input_udt_info.contains_key(&(tx_hash.clone(), *idx))
-                                            || batch_udt_cells
-                                                .contains_key(&(tx_hash.clone(), *idx))
-                                    });
-                                if has_udt_outputs || has_udt_inputs {
-                                    udt_tx_contexts.push(UdtTxInfo {
-                                        tx_hash: tx_info.tx_hash,
-                                        block_number: tx_info.block_number,
-                                        timestamp: tx_info.timestamp,
-                                        output_udts: tx_info.output_udts,
-                                        input_outpoints: tx_info.input_outpoints,
-                                    });
+                                    input_udt_info.extend(db_results);
                                 }
-                            }
 
-                            (input_udt_info, batch_udt_cells, udt_tx_contexts)
-                        },
-                    )
-                },
-                || {
-                    rayon::join(
-                        || {
-                            if !lock_hash_keys.is_empty() {
-                                writer
+                                // Build tx contexts for UDT processing
+                                struct UdtTxInfo {
+                                    tx_hash: Vec<u8>,
+                                    block_number: i64,
+                                    #[allow(dead_code)]
+                                    timestamp: chrono::DateTime<Utc>,
+                                    output_udts: Vec<crate::parser::ParsedUdtCell>,
+                                    input_outpoints: Vec<(Vec<u8>, i16)>,
+                                }
+                                let mut udt_tx_contexts: Vec<UdtTxInfo> = Vec::new();
+                                for tx_info in all_tx_infos_for_udt {
+                                    let has_udt_outputs = !tx_info.output_udts.is_empty();
+                                    let has_udt_inputs =
+                                        tx_info.input_outpoints.iter().any(|(tx_hash, idx)| {
+                                            input_udt_info.contains_key(&(tx_hash.clone(), *idx))
+                                                || batch_udt_cells
+                                                    .contains_key(&(tx_hash.clone(), *idx))
+                                        });
+                                    if has_udt_outputs || has_udt_inputs {
+                                        udt_tx_contexts.push(UdtTxInfo {
+                                            tx_hash: tx_info.tx_hash,
+                                            block_number: tx_info.block_number,
+                                            timestamp: tx_info.timestamp,
+                                            output_udts: tx_info.output_udts,
+                                            input_outpoints: tx_info.input_outpoints,
+                                        });
+                                    }
+                                }
+
+                                (input_udt_info, batch_udt_cells, udt_tx_contexts)
+                            },
+                        )
+                    },
+                    || {
+                        rayon::join(
+                            || {
+                                if !lock_hash_keys.is_empty() {
+                                    writer
                                     .read_address_balances(&lock_hash_keys)
                                     .unwrap_or_else(|e| {
                                         panic!(
@@ -9293,28 +9345,37 @@ impl Indexer {
                                             e
                                         )
                                     })
-                            } else {
-                                HashMap::new()
-                            }
-                        },
-                        || {
-                            if !code_hash_refs.is_empty() {
-                                writer
-                                    .read_script_info(&code_hash_refs)
-                                    .unwrap_or_else(|e| {
-                                        panic!(
+                                } else {
+                                    HashMap::new()
+                                }
+                            },
+                            || {
+                                if !code_hash_refs.is_empty() {
+                                    writer
+                                        .read_script_info(&code_hash_refs)
+                                        .unwrap_or_else(|e| {
+                                            panic!(
                                         "failed to prefetch script info: code_hashes={}, error={}",
                                         code_hash_refs.len(),
                                         e
                                     )
-                                    })
-                            } else {
-                                HashMap::new()
-                            }
-                        },
-                    )
-                },
-            )
+                                        })
+                                } else {
+                                    HashMap::new()
+                                }
+                            },
+                        )
+                    },
+                )
+            }));
+            prefetch_result.map_err(|panic_payload| {
+                anyhow!(
+                    "bulk prefetch worker panicked for blocks {}-{}: {}",
+                    first_block,
+                    last_block,
+                    panic_payload_to_string(panic_payload.as_ref())
+                )
+            })?
         } else {
             (
                 (HashMap::new(), (HashMap::new(), HashMap::new(), Vec::new())),
@@ -9591,72 +9652,6 @@ impl Indexer {
                     }
 
                     if !consumed_dao_map.is_empty() || !same_batch_dao_deposits.is_empty() {
-                        use crate::db::DaoWithdrawalContextTrait;
-                        #[derive(Clone)]
-                        struct DaoWithdrawalContext {
-                            consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
-                            new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
-                            tx_inputs: Vec<(Vec<u8>, i16)>,
-                            candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
-                            block_number: i64,
-                            consuming_tx_hash: Vec<u8>,
-                            timestamp: DateTime<Utc>,
-                        }
-                        impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
-                            fn consumed_deposits(
-                                &self,
-                            ) -> &[(i64, Vec<u8>, i16, String, i64, i16)]
-                            {
-                                &self.consumed_deposits
-                            }
-                            fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
-                                &self.new_dao_outputs
-                            }
-                            fn block_number(&self) -> i64 {
-                                self.block_number
-                            }
-                            fn consuming_tx_hash(&self) -> &[u8] {
-                                &self.consuming_tx_hash
-                            }
-                            fn timestamp(&self) -> DateTime<Utc> {
-                                self.timestamp
-                            }
-                            fn withdraw_to_output_index_for_lock(
-                                &self,
-                                lock_script_hash: &[u8],
-                            ) -> Option<i16> {
-                                let mut same_lock = self
-                                    .candidate_withdraw_to_outputs
-                                    .iter()
-                                    .filter_map(|(output_index, output_lock_hash)| {
-                                        (output_lock_hash.as_slice() == lock_script_hash)
-                                            .then_some(*output_index)
-                                    });
-                                if let Some(first) = same_lock.next() {
-                                    if same_lock.next().is_none() {
-                                        return Some(first);
-                                    }
-                                    return None;
-                                }
-                                (self.candidate_withdraw_to_outputs.len() == 1)
-                                    .then_some(self.candidate_withdraw_to_outputs[0].0)
-                            }
-                            fn infer_request_output_index(&self, request_tx_hash: &[u8]) -> Option<i16> {
-                                let mut matches = self
-                                    .tx_inputs
-                                    .iter()
-                                    .filter_map(|(tx_hash, output_index)| {
-                                        (tx_hash.as_slice() == request_tx_hash).then_some(*output_index)
-                                    })
-                                    .take(2);
-                                let first = matches.next()?;
-                                if matches.next().is_some() {
-                                    return None;
-                                }
-                                Some(first)
-                            }
-                        }
-
                         let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
                         let mut block_tx_idx = 0usize;
                         for parsed in all_parsed_blocks {
@@ -10797,72 +10792,6 @@ impl Indexer {
                 }
 
                 if !consumed_dao_map.is_empty() || !same_batch_dao_deposits.is_empty() {
-                    use crate::db::DaoWithdrawalContextTrait;
-                    #[derive(Clone)]
-                    struct DaoWithdrawalContext {
-                        consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
-                        new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
-                        tx_inputs: Vec<(Vec<u8>, i16)>,
-                        candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
-                        block_number: i64,
-                        consuming_tx_hash: Vec<u8>,
-                        timestamp: DateTime<Utc>,
-                    }
-                    impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
-                        fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
-                            &self.consumed_deposits
-                        }
-                        fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
-                            &self.new_dao_outputs
-                        }
-                        fn block_number(&self) -> i64 {
-                            self.block_number
-                        }
-                        fn consuming_tx_hash(&self) -> &[u8] {
-                            &self.consuming_tx_hash
-                        }
-                        fn timestamp(&self) -> DateTime<Utc> {
-                            self.timestamp
-                        }
-                        fn withdraw_to_output_index_for_lock(
-                            &self,
-                            lock_script_hash: &[u8],
-                        ) -> Option<i16> {
-                            let mut same_lock = self
-                                .candidate_withdraw_to_outputs
-                                .iter()
-                                .filter_map(|(output_index, output_lock_hash)| {
-                                    (output_lock_hash.as_slice() == lock_script_hash)
-                                        .then_some(*output_index)
-                                });
-                            if let Some(first) = same_lock.next() {
-                                if same_lock.next().is_none() {
-                                    return Some(first);
-                                }
-                                return None;
-                            }
-                            (self.candidate_withdraw_to_outputs.len() == 1)
-                                .then_some(self.candidate_withdraw_to_outputs[0].0)
-                        }
-                        fn infer_request_output_index(
-                            &self,
-                            request_tx_hash: &[u8],
-                        ) -> Option<i16> {
-                            let mut matches = self
-                                .tx_inputs
-                                .iter()
-                                .filter_map(|(tx_hash, output_index)| {
-                                    (tx_hash.as_slice() == request_tx_hash).then_some(*output_index)
-                                })
-                                .take(2);
-                            let first = matches.next()?;
-                            if matches.next().is_some() {
-                                return None;
-                            }
-                            Some(first)
-                        }
-                    }
-
                     let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
@@ -13895,6 +13824,16 @@ mod tests {
             get_worker_exit_reason(&slot).as_deref(),
             Some("first failure")
         );
+    }
+
+    #[test]
+    fn test_panic_payload_to_string_handles_common_payload_types() {
+        assert_eq!(panic_payload_to_string(&"panic-str"), "panic-str");
+        assert_eq!(
+            panic_payload_to_string(&"panic-owned".to_string()),
+            "panic-owned"
+        );
+        assert_eq!(panic_payload_to_string(&123u32), "non-string panic payload");
     }
 
     #[test]

@@ -118,6 +118,21 @@ fn depositor_series_value(
     })
 }
 
+fn dao_deposit_ar_as_u64(
+    entry: &ckbadger_store::types::DaoDepositCacheEntry,
+    context: &str,
+) -> anyhow::Result<u64> {
+    u64::try_from(entry.deposit_ar).map_err(|_| {
+        anyhow::anyhow!(
+            "invalid negative DAO deposit AR while computing {}: deposit_block={}, lock_script_hash=0x{}, deposit_ar={}",
+            context,
+            entry.deposit_block_number,
+            hex::encode(&entry.lock_script_hash),
+            entry.deposit_ar
+        )
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoDepositResponse {
@@ -491,7 +506,7 @@ async fn get_address_dao_summary(
                         capacity
                     )
                 })?;
-                let ar_deposit = entry.deposit_ar as u64;
+                let ar_deposit = dao_deposit_ar_as_u64(entry, "summary")?;
                 if ar_deposit > 0 && latest_ar > ar_deposit {
                     let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
                     let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
@@ -600,7 +615,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
                         capacity
                     )
                 })?;
-                let ar_deposit = entry.deposit_ar as u64;
+                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
                 if ar_deposit > 0 && latest_ar > ar_deposit {
                     let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
                     let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
@@ -1013,6 +1028,7 @@ async fn get_circulation_ratio_chart(
 mod tests {
     use super::*;
     use ckbadger_store::types::CachedBlockHeader;
+    use ckbadger_store::types::DaoDepositCacheEntry;
 
     fn snapshot(total_issuance: i128, cum_treasury: i128) -> ckbadger_store::DaoDailySnapshot {
         ckbadger_store::DaoDailySnapshot {
@@ -1140,5 +1156,51 @@ mod tests {
             "withdraw_block must be greater than or equal to deposit_block"
         );
         assert!(ensure_withdraw_block_not_before_deposit(100, 100).is_ok());
+    }
+
+    #[test]
+    fn test_dao_deposit_ar_as_u64_rejects_negative_values() {
+        let entry = DaoDepositCacheEntry {
+            capacity: 200_00000000,
+            deposit_block_number: 123,
+            lock_script_hash: vec![0xAB; 32],
+            deposit_ar: -1,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+
+        let err = dao_deposit_ar_as_u64(&entry, "summary").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid negative DAO deposit AR while computing summary"));
+        assert!(err.to_string().contains("deposit_block=123"));
+    }
+
+    #[test]
+    fn test_dao_deposit_ar_as_u64_accepts_non_negative_values() {
+        let entry = DaoDepositCacheEntry {
+            capacity: 200_00000000,
+            deposit_block_number: 456,
+            lock_script_hash: vec![0xCD; 32],
+            deposit_ar: 42,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+
+        assert_eq!(dao_deposit_ar_as_u64(&entry, "statistics").unwrap(), 42);
     }
 }

@@ -1,7 +1,7 @@
 //! Reorg (rollback) operations.
 
 use rocksdb::{IteratorMode, WriteBatch};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -558,39 +558,58 @@ impl CkbadgerStore {
         }
         stage.finish(txs_removed);
 
-        // 3. Delete tx_hash_map entries whose mapped block is > rollback_to.
+        // 3. Delete tx_hash_map entries for rolled-back transactions.
+        // Prefer tx-context hashes from undo log to avoid full-CF scans.
+        let tx_contexts = load_tx_contexts_from_undo_log(self, rollback_to)?;
+        let tx_context_count = tx_contexts.len() as u64;
+        let use_tx_context = tx_context_count > 0 && tx_context_count == txs_removed;
         let mut tx_hash_map_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_tx_hash_map");
-        let iter = self.iterator_cf(self.cf_tx_hash_map(), IteratorMode::Start);
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate tx_hash_map in rollback_to_block cleanup: {}",
-                    e
-                )
-            })?;
-            if value.len() != 12 {
-                anyhow::bail!(
-                    "invalid tx_hash_map value length during rollback cleanup: key=0x{}, value_len={}, expected=12",
-                    bytes_to_hex(&key),
-                    value.len()
-                );
-            }
-            let mapped_block = keys::decode_block_num(&value[..8]);
-            if mapped_block > rollback_to {
-                batch.delete_cf(self.cf_tx_hash_map(), &key);
+        if use_tx_context {
+            let mut seen_tx_hashes: HashSet<&[u8]> = HashSet::new();
+            for ctx in &tx_contexts {
+                if ctx.tx_hash.len() != 32 {
+                    anyhow::bail!(
+                        "invalid tx-context hash length while deleting tx_hash_map: expected=32, got={}",
+                        ctx.tx_hash.len()
+                    );
+                }
+                if !seen_tx_hashes.insert(ctx.tx_hash.as_slice()) {
+                    continue;
+                }
+                batch.delete_cf(self.cf_tx_hash_map(), &ctx.tx_hash);
                 tx_hash_map_removed += 1;
+                stage.tick(tx_hash_map_removed);
             }
-            stage.tick(tx_hash_map_removed);
+        } else {
+            let iter = self.iterator_cf(self.cf_tx_hash_map(), IteratorMode::Start);
+            for item in iter {
+                let (key, value) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate tx_hash_map in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if value.len() != 12 {
+                    anyhow::bail!(
+                        "invalid tx_hash_map value length during rollback cleanup: key=0x{}, value_len={}, expected=12",
+                        bytes_to_hex(&key),
+                        value.len()
+                    );
+                }
+                let mapped_block = keys::decode_block_num(&value[..8]);
+                if mapped_block > rollback_to {
+                    batch.delete_cf(self.cf_tx_hash_map(), &key);
+                    tx_hash_map_removed += 1;
+                }
+                stage.tick(tx_hash_map_removed);
+            }
         }
         stage.finish(tx_hash_map_removed);
 
         // 4-5. Roll back cell/live/consumed/index state.
         // Prefer tx-context entries from reorg_undo_log_by_block to derive touched outpoints.
         // Fallback to full scans when tx-context coverage is missing or partial.
-        let tx_contexts = load_tx_contexts_from_undo_log(self, rollback_to)?;
-        let tx_context_count = tx_contexts.len() as u64;
-        let use_tx_context = tx_context_count > 0 && tx_context_count == txs_removed;
         if !use_tx_context {
             if txs_removed > 0 {
                 let reason = if tx_context_count == 0 {
@@ -2116,6 +2135,71 @@ mod tests {
         assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
         assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
         assert!(store.get_tx_index(2, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_rollback_uses_tx_context_for_tx_hash_map_without_scanning() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let keep_tx = vec![0x11; 32];
+        let drop_tx = vec![0x22; 32];
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header2.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_hash_map(&keep_tx, 1, 0);
+        batch.put_tx_hash_map(&drop_tx, 2, 0);
+        batch.put_tx_index(2, 0, &tx_index);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: drop_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![],
+            }),
+        );
+        batch.commit().unwrap();
+
+        // Corrupt unrelated tx_hash_map row to prove rollback does not full-scan tx_hash_map
+        // when tx-context coverage is complete.
+        store
+            .put_cf(store.cf_tx_hash_map(), &[0xFF; 32], &[0xAA; 8])
+            .unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
+        assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
     }
 
     #[test]

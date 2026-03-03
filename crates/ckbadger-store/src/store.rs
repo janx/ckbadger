@@ -252,6 +252,8 @@ pub(crate) enum StoreWriteIntent {
     Normal,
     /// StoreBatch already validated per-op append-only invariants.
     AppendValidated,
+    /// Bulk sync mode for append-only StoreBatch commits: skip per-key DB existence reads.
+    BulkSyncAppendValidated,
 }
 
 /// All column family names, used during DB open.
@@ -453,9 +455,12 @@ impl CkbadgerStore {
         cf_name: &str,
         key: &[u8],
         value: &[u8],
-        _intent: StoreWriteIntent,
+        intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
         if !self.is_append_only_store() {
+            return Ok(());
+        }
+        if matches!(intent, StoreWriteIntent::BulkSyncAppendValidated) {
             return Ok(());
         }
         let cf = self
@@ -1071,7 +1076,12 @@ impl CkbadgerStore {
         batch: WriteBatch,
         intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
-        if self.is_append_only_store() && !matches!(intent, StoreWriteIntent::AppendValidated) {
+        if self.is_append_only_store()
+            && !matches!(
+                intent,
+                StoreWriteIntent::AppendValidated | StoreWriteIntent::BulkSyncAppendValidated
+            )
+        {
             anyhow::bail!(
                 "append-only raw write_batch blocked for intent={:?}; \
                  use StoreBatch commit path",
@@ -1098,7 +1108,12 @@ impl CkbadgerStore {
         batch: WriteBatch,
         intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
-        if self.is_append_only_store() && !matches!(intent, StoreWriteIntent::AppendValidated) {
+        if self.is_append_only_store()
+            && !matches!(
+                intent,
+                StoreWriteIntent::AppendValidated | StoreWriteIntent::BulkSyncAppendValidated
+            )
+        {
             anyhow::bail!(
                 "append-only raw write_batch_no_wal blocked for intent={:?}; \
                  use StoreBatch commit_no_wal path",

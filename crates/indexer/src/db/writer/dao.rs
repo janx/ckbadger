@@ -62,6 +62,50 @@ pub trait DaoWithdrawalContextTrait {
     }
 }
 
+#[derive(Clone)]
+pub struct DaoWithdrawalContext {
+    pub consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+    pub new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
+    pub tx_inputs: Vec<(Vec<u8>, i16)>,
+    pub candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
+    pub block_number: i64,
+    pub consuming_tx_hash: Vec<u8>,
+    pub timestamp: DateTime<Utc>,
+}
+
+impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
+    fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+        &self.consumed_deposits
+    }
+
+    fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
+        &self.new_dao_outputs
+    }
+
+    fn block_number(&self) -> i64 {
+        self.block_number
+    }
+
+    fn consuming_tx_hash(&self) -> &[u8] {
+        &self.consuming_tx_hash
+    }
+
+    fn timestamp(&self) -> DateTime<Utc> {
+        self.timestamp
+    }
+
+    fn withdraw_to_output_index_for_lock(&self, lock_script_hash: &[u8]) -> Option<i16> {
+        infer_withdraw_to_output_index_from_outputs(
+            &self.candidate_withdraw_to_outputs,
+            lock_script_hash,
+        )
+    }
+
+    fn infer_request_output_index(&self, request_tx_hash: &[u8]) -> Option<i16> {
+        infer_request_output_index_from_inputs(&self.tx_inputs, request_tx_hash)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SecondaryIssuanceBreakdown {
     pub secondary_issuance: i64,
