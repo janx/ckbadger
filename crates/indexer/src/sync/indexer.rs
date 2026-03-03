@@ -94,7 +94,6 @@ const ADAPTIVE_REASON_ADJUSTED: u8 = 9;
 const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
 const ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF: u8 = 11;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
-const APPEND_ROLLBACK_DELETE_BATCH: u64 = 100_000;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
 
 /// Pre-parsed mNFT/DotBit data computed in the parser stage.
@@ -338,120 +337,107 @@ fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
-fn flush_append_rollback_batch(
-    store: &CkbadgerStore,
-    batch: &mut rocksdb::WriteBatch,
-    pending: &mut u64,
-) -> Result<()> {
-    if !batch.is_empty() {
-        store.write_batch(std::mem::take(batch))?;
-        *batch = rocksdb::WriteBatch::default();
-        *pending = 0;
-    }
-    Ok(())
+fn next_undo_seq(undo_seq_by_block: &mut HashMap<i64, u64>, block_num: i64) -> u64 {
+    let seq_entry = undo_seq_by_block.entry(block_num).or_insert(0);
+    let seq = *seq_entry;
+    *seq_entry = seq
+        .checked_add(1)
+        .expect("undo seq overflow for block-scoped rollback log");
+    seq
 }
 
-fn delete_append_history_cf_entries<F>(
-    store: &CkbadgerStore,
-    cf: &rocksdb::ColumnFamily,
+fn put_append_delete_undo_entry(
+    domain_batch: &mut StoreBatch<'_>,
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    block_num: i64,
     cf_name: &str,
-    rollback_to: i64,
-    batch: &mut rocksdb::WriteBatch,
-    pending: &mut u64,
-    mut block_num_from_key: F,
-) -> Result<()>
-where
-    F: FnMut(&[u8]) -> Option<i64>,
-{
-    let iter = store.iterator_cf(cf, rocksdb::IteratorMode::Start);
-    for item in iter {
-        let (key, _) = item.map_err(|e| {
-            anyhow!(
-                "failed to iterate append-only CF '{}' during rollback_to={}: {}",
-                cf_name,
-                rollback_to,
-                e
-            )
-        })?;
-        if let Some(block_num) = block_num_from_key(&key) {
-            if block_num > rollback_to {
-                batch.delete_cf(cf, &key);
-                *pending += 1;
-                if *pending >= APPEND_ROLLBACK_DELETE_BATCH {
-                    flush_append_rollback_batch(store, batch, pending)?;
-                }
-            }
-        }
-    }
-    Ok(())
+    key: &[u8],
+) {
+    let seq = next_undo_seq(undo_seq_by_block, block_num);
+    let undo = ckbadger_store::types::UndoLogEntry::KeyMutation {
+        target_store: ckbadger_store::types::UndoLogStoreTarget::AppendOnly,
+        cf_name: cf_name.to_string(),
+        key: key.to_vec(),
+        previous_value: None,
+    };
+    domain_batch.put_reorg_undo_log_by_block(block_num, seq, &undo);
 }
 
-fn rollback_append_only_history_store(store: &CkbadgerStore, rollback_to: i64) -> Result<()> {
-    if rollback_to < -1 {
-        bail!(
-            "invalid append-only rollback target: rollback_to={} (expected >= -1)",
-            rollback_to
+fn put_tx_context_undo_entries(
+    domain_batch: &mut StoreBatch<'_>,
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    txs: &[TxData],
+) -> Result<()> {
+    for tx in txs {
+        let mut inputs = Vec::with_capacity(tx.inputs.len());
+        for input in &tx.inputs {
+            let output_index = i16::try_from(input.previous_output_index).map_err(|_| {
+                anyhow!(
+                    "rollback tx-context input index exceeds i16 range: tx_hash=0x{}, block={}, previous_output_index={}",
+                    hex::encode(tx.hash),
+                    tx.block_number,
+                    input.previous_output_index
+                )
+            })?;
+            inputs.push(ckbadger_store::types::UndoInputOutPoint {
+                tx_hash: input.previous_tx_hash.to_vec(),
+                output_index,
+            });
+        }
+
+        let ctx = ckbadger_store::types::UndoTxContext {
+            tx_hash: tx.hash.to_vec(),
+            outputs_count: tx.outputs_count,
+            inputs,
+        };
+        let seq = next_undo_seq(undo_seq_by_block, tx.block_number);
+        domain_batch.put_reorg_undo_log_by_block(
+            tx.block_number,
+            seq,
+            &ckbadger_store::types::UndoLogEntry::TxContext(ctx),
         );
     }
-
-    let mut batch = rocksdb::WriteBatch::default();
-    let mut pending = 0u64;
-
-    // addr_txs: lock_hash(32) + block_num(8) + tx_idx(4)
-    delete_append_history_cf_entries(
-        store,
-        store.cf_addr_txs(),
-        "addr_txs",
-        rollback_to,
-        &mut batch,
-        &mut pending,
-        |key| {
-            if key.len() == 44 {
-                Some(keys::decode_block_num(&key[32..40]))
-            } else {
-                None
-            }
-        },
-    )?;
-
-    // activities: lock_hash(32) + block_num_desc(8) + tx_idx(4)
-    delete_append_history_cf_entries(
-        store,
-        store.cf_activities(),
-        "activities",
-        rollback_to,
-        &mut batch,
-        &mut pending,
-        |key| {
-            if key.len() == 44 {
-                let (_, block_num, _) = keys::decode_activity_key(key);
-                Some(block_num)
-            } else {
-                None
-            }
-        },
-    )?;
-
-    // nft_collection_activities: collection_id(32) + block_num_desc(8) + tx_idx(4)
-    delete_append_history_cf_entries(
-        store,
-        store.cf_nft_collection_activities(),
-        "nft_collection_activities",
-        rollback_to,
-        &mut batch,
-        &mut pending,
-        |key| {
-            if key.len() == keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
-                let (_, block_num, _) = keys::decode_nft_collection_activity_key(key);
-                Some(block_num)
-            } else {
-                None
-            }
-        },
-    )?;
-
-    flush_append_rollback_batch(store, &mut batch, &mut pending)?;
     Ok(())
+}
+
+fn put_addr_tx_with_undo_log(
+    domain_batch: &mut StoreBatch<'_>,
+    append_batch: &mut StoreBatch<'_>,
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    lock_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) {
+    let append_key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
+    append_batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
+    put_append_delete_undo_entry(
+        domain_batch,
+        undo_seq_by_block,
+        block_num,
+        ckbadger_store::CF_ADDR_TXS,
+        &append_key,
+    );
+}
+
+fn put_activity_with_undo_log(
+    domain_batch: &mut StoreBatch<'_>,
+    append_batch: &mut StoreBatch<'_>,
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    lock_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    entry: &ckbadger_store::types::ActivityEntry,
+) {
+    let append_key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
+    append_batch.put_activity(lock_hash, block_num, tx_idx, entry);
+    put_append_delete_undo_entry(
+        domain_batch,
+        undo_seq_by_block,
+        block_num,
+        ckbadger_store::CF_ACTIVITIES,
+        &append_key,
+    );
 }
 
 fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> String {
@@ -3832,13 +3818,15 @@ impl Indexer {
             info!(
                 run_id = %self.run_id,
                 rollback_to = actual_start,
-                "Startup append-only rollback cleanup phase started"
+                "Startup undo-log rollback phase started"
             );
-            self.rollback_append_only_history(actual_start)?;
+            self.writer
+                .store()
+                .rollback_via_undo_log(self.append_only_store.as_ref(), actual_start)?;
             info!(
                 run_id = %self.run_id,
                 rollback_to = actual_start,
-                "Startup append-only rollback cleanup phase completed"
+                "Startup undo-log rollback phase completed"
             );
         }
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
@@ -5858,6 +5846,16 @@ impl Indexer {
                                         start_block
                                     )
                                 })? - 1;
+                                if let Err(undo_err) = self.writer.store().rollback_via_undo_log(
+                                    self.append_only_store.as_ref(),
+                                    cleanup_tip,
+                                ) {
+                                    error!(
+                                        cleanup_tip,
+                                        "Failed to rollback undo log after batch cleanup: {:?}",
+                                        undo_err
+                                    );
+                                }
                                 if let Err(consistency_err) =
                                     self.reconcile_hodl_tracker_with_tip(cleanup_tip)
                                 {
@@ -6331,6 +6329,16 @@ impl Indexer {
                             start_block
                         )
                     })? - 1;
+                    if let Err(undo_err) = self
+                        .writer
+                        .store()
+                        .rollback_via_undo_log(self.append_only_store.as_ref(), cleanup_tip)
+                    {
+                        error!(
+                            cleanup_tip,
+                            "Failed to rollback undo log after batch cleanup: {:?}", undo_err
+                        );
+                    }
                     if let Err(consistency_err) = self.reconcile_hodl_tracker_with_tip(cleanup_tip)
                     {
                         error!(
@@ -6867,8 +6875,12 @@ impl Indexer {
         let t_headers = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
+            let mut tx_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
             if !block_refs.is_empty() {
                 self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
+            }
+            if !all_tx_data.is_empty() {
+                put_tx_context_undo_entries(&mut batch, &mut tx_undo_seq_by_block, &all_tx_data)?;
             }
             if !txs_for_batch.is_empty() {
                 self.writer
@@ -6939,6 +6951,7 @@ impl Indexer {
         let mut consume_addr_batch = StoreBatch::new(self.writer.store());
         let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
         let mut append_history_batch = StoreBatch::new(&self.append_only_store);
+        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
         if !all_consumptions.is_empty() {
             self.writer.consume_cells_batch_preloaded(
                 &all_consumptions,
@@ -7031,7 +7044,10 @@ impl Indexer {
                 entry.6 += occupied_change;
 
                 // Index address → transaction
-                append_history_batch.put_addr_tx(
+                put_addr_tx_with_undo_log(
+                    &mut consume_addr_batch,
+                    &mut append_history_batch,
+                    &mut append_undo_seq_by_block,
                     &lock_hash,
                     tx_data.block_number,
                     tx_data.tx_index,
@@ -8154,6 +8170,7 @@ impl Indexer {
         // Spore consumption runs in live sync mode only, DotBit consumption runs in all sync modes.
         let bulk_sync_active = self.is_bulk_sync_active();
         let mut consume_batch = StoreBatch::new(self.writer.store());
+        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
         let mut spore_state = self.writer.new_spore_batch_state();
         let mut dotbit_state = self.writer.new_dotbit_batch_state();
         let mut block_tx_idx = 0usize;
@@ -8257,7 +8274,7 @@ impl Indexer {
         let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
         // Write .bit collection activities directly (bypassing accumulator)
         for (_tx_hash, activity) in &dotbit_tx_activity_data {
-            resolve_dotbit_tx_activity(
+            let inserted = resolve_dotbit_tx_activity(
                 activity.das_action.as_deref(),
                 &activity.created_account_ids,
                 &activity.consumed_account_ids,
@@ -8267,8 +8284,33 @@ impl Indexer {
                 activity.timestamp_ms,
                 &mut nft_activity_batch,
             );
+            if inserted {
+                let append_key = keys::encode_nft_collection_activity_key(
+                    &DOTBIT_SENTINEL_COLLECTION,
+                    activity.block_number,
+                    activity.tx_idx,
+                );
+                put_append_delete_undo_entry(
+                    &mut consume_batch,
+                    &mut append_undo_seq_by_block,
+                    activity.block_number,
+                    ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                    &append_key,
+                );
+            }
         }
-        nft_activity_acc.flush(&mut nft_activity_batch);
+        for (collection_id, block_number, tx_idx) in nft_activity_acc.flush(&mut nft_activity_batch)
+        {
+            let append_key =
+                keys::encode_nft_collection_activity_key(&collection_id, block_number, tx_idx);
+            put_append_delete_undo_entry(
+                &mut consume_batch,
+                &mut append_undo_seq_by_block,
+                block_number,
+                ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                &append_key,
+            );
+        }
         let commit_started = Instant::now();
         consume_batch.commit()?;
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -8959,12 +9001,20 @@ impl Indexer {
                     });
 
                     // T2: Transactions + Address Balances + Script Usage + Addr TX index
-                    // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, ADDR_TX
+                    // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, REORG_UNDO_LOG_BY_BLOCK, ADDR_TX
                     let h2 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         let mut domain_analytics_batch = StoreBatch::new(store);
                         let mut append_history_batch = StoreBatch::new(append_only_store);
+                        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+                        if !all_tx_data.is_empty() {
+                            put_tx_context_undo_entries(
+                                &mut batch,
+                                &mut append_undo_seq_by_block,
+                                &all_tx_data,
+                            )?;
+                        }
                         if !txs_for_batch.is_empty() {
                             writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
                         }
@@ -9023,8 +9073,15 @@ impl Indexer {
                             )?;
                         }
                         for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                            append_history_batch
-                                .put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
+                            put_addr_tx_with_undo_log(
+                                &mut batch,
+                                &mut append_history_batch,
+                                &mut append_undo_seq_by_block,
+                                lock_hash,
+                                *block_num,
+                                *tx_idx,
+                                tx_hash,
+                            );
                         }
                         let mut commit_ms =
                             commit_phase_no_wal("T2_txs_addr", first_block, last_block, batch)?;
@@ -9470,6 +9527,7 @@ impl Indexer {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut activity_batch = StoreBatch::new(append_only_store);
+                    let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut mnft_state = writer.new_mnft_batch_state();
                     let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
@@ -9614,7 +9672,7 @@ impl Indexer {
 
                     // Write .bit collection activities directly (bypassing accumulator)
                     for (tx_hash, activity) in &dotbit_pipeline_activity {
-                        resolve_dotbit_tx_activity(
+                        let inserted = resolve_dotbit_tx_activity(
                             activity.das_action.as_deref(),
                             &activity.created_account_ids,
                             &activity.consumed_account_ids,
@@ -9624,8 +9682,37 @@ impl Indexer {
                             activity.timestamp_ms,
                             &mut activity_batch,
                         );
+                        if inserted {
+                            let append_key = keys::encode_nft_collection_activity_key(
+                                &DOTBIT_SENTINEL_COLLECTION,
+                                activity.block_number,
+                                activity.tx_idx,
+                            );
+                            put_append_delete_undo_entry(
+                                &mut batch,
+                                &mut append_undo_seq_by_block,
+                                activity.block_number,
+                                ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                                &append_key,
+                            );
+                        }
                     }
-                    nft_activity_acc.flush(&mut activity_batch);
+                    for (collection_id, block_number, tx_idx) in
+                        nft_activity_acc.flush(&mut activity_batch)
+                    {
+                        let append_key = keys::encode_nft_collection_activity_key(
+                            &collection_id,
+                            block_number,
+                            tx_idx,
+                        );
+                        put_append_delete_undo_entry(
+                            &mut batch,
+                            &mut append_undo_seq_by_block,
+                            block_number,
+                            ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                            &append_key,
+                        );
+                    }
                     let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     if !activity_batch.is_empty() {
@@ -9902,11 +9989,14 @@ impl Indexer {
                     Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
                 });
 
-                    // T_ACT: Activity builder (writes only CF_ACTIVITIES — no conflicts)
+                    // T_ACT: Activity builder
+                    // CFs: REORG_UNDO_LOG_BY_BLOCK, ACTIVITIES
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
-                        let mut batch = StoreBatch::new(append_only_store);
+                        let mut domain_batch = StoreBatch::new(store);
+                        let mut append_batch = StoreBatch::new(append_only_store);
+                        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                         let token_info_cache = load_activity_token_info_cache(
                             store,
                             &all_tx_data,
@@ -9986,7 +10076,10 @@ impl Indexer {
                                 &token_info_cache,
                             );
                             for (lock_hash, entry) in activities {
-                                batch.put_activity(
+                                put_activity_with_undo_log(
+                                    &mut domain_batch,
+                                    &mut append_batch,
+                                    &mut append_undo_seq_by_block,
                                     &lock_hash,
                                     entry.block_number,
                                     entry.tx_index,
@@ -9994,12 +10087,23 @@ impl Indexer {
                                 );
                             }
                         }
-                        let commit_ms = commit_phase_no_wal(
-                            "T_ACT_activities",
-                            first_block,
-                            last_block,
-                            batch,
-                        )?;
+                        let mut commit_ms = 0.0;
+                        if !domain_batch.is_empty() {
+                            commit_ms += commit_phase_no_wal(
+                                "T_ACT_reorg_history",
+                                first_block,
+                                last_block,
+                                domain_batch,
+                            )?;
+                        }
+                        if !append_batch.is_empty() {
+                            commit_ms += commit_phase_no_wal(
+                                "T_ACT_activities",
+                                first_block,
+                                last_block,
+                                append_batch,
+                            )?;
+                        }
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     }))
                     } else {
@@ -10035,6 +10139,14 @@ impl Indexer {
         } else {
             // Live sync: serial writes in a single batch
             let mut data_batch = StoreBatch::new(self.writer.store());
+            let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+            if !all_tx_data.is_empty() {
+                put_tx_context_undo_entries(
+                    &mut data_batch,
+                    &mut append_undo_seq_by_block,
+                    &all_tx_data,
+                )?;
+            }
             if !txs_for_batch.is_empty() {
                 self.writer
                     .insert_transactions_batch(&txs_for_batch, &mut data_batch)?;
@@ -10158,7 +10270,15 @@ impl Indexer {
 
             // Write addr_txs entries
             for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                append_history_batch.put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
+                put_addr_tx_with_undo_log(
+                    &mut data_batch,
+                    &mut append_history_batch,
+                    &mut append_undo_seq_by_block,
+                    lock_hash,
+                    *block_num,
+                    *tx_idx,
+                    tx_hash,
+                );
             }
 
             // Group A: DAO processing
@@ -10971,7 +11091,7 @@ impl Indexer {
                 let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
                 // Write .bit collection activities directly (bypassing accumulator)
                 for (tx_hash, activity) in &dotbit_tx_activity_data {
-                    resolve_dotbit_tx_activity(
+                    let inserted = resolve_dotbit_tx_activity(
                         activity.das_action.as_deref(),
                         &activity.created_account_ids,
                         &activity.consumed_account_ids,
@@ -10981,8 +11101,37 @@ impl Indexer {
                         activity.timestamp_ms,
                         &mut nft_activity_batch,
                     );
+                    if inserted {
+                        let append_key = keys::encode_nft_collection_activity_key(
+                            &DOTBIT_SENTINEL_COLLECTION,
+                            activity.block_number,
+                            activity.tx_idx,
+                        );
+                        put_append_delete_undo_entry(
+                            &mut data_batch,
+                            &mut append_undo_seq_by_block,
+                            activity.block_number,
+                            ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                            &append_key,
+                        );
+                    }
                 }
-                nft_activity_acc.flush(&mut nft_activity_batch);
+                for (collection_id, block_number, tx_idx) in
+                    nft_activity_acc.flush(&mut nft_activity_batch)
+                {
+                    let append_key = keys::encode_nft_collection_activity_key(
+                        &collection_id,
+                        block_number,
+                        tx_idx,
+                    );
+                    put_append_delete_undo_entry(
+                        &mut data_batch,
+                        &mut append_undo_seq_by_block,
+                        block_number,
+                        ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                        &append_key,
+                    );
+                }
                 if !nft_activity_batch.is_empty() {
                     nft_activity_batch.commit()?;
                 }
@@ -11066,7 +11215,10 @@ impl Indexer {
                         &token_info_cache,
                     );
                     for (lock_hash, entry) in activities {
-                        activity_batch.put_activity(
+                        put_activity_with_undo_log(
+                            &mut data_batch,
+                            &mut activity_batch,
+                            &mut append_undo_seq_by_block,
                             &lock_hash,
                             entry.block_number,
                             entry.tx_index,
@@ -12029,6 +12181,7 @@ impl Indexer {
         let result = self
             .writer
             .execute_reorg(
+                self.append_only_store.as_ref(),
                 i64::try_from(fork_point)
                     .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?,
                 &fork_hash,
@@ -12040,15 +12193,8 @@ impl Indexer {
                 &chain_tip_hash_bytes,
             )
             .await?;
-        let fork_point_i64 = i64::try_from(fork_point)
-            .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?;
-        self.rollback_append_only_history(fork_point_i64)?;
 
         Ok(Some(ReorgAction::Handled(result)))
-    }
-
-    fn rollback_append_only_history(&self, rollback_to: i64) -> Result<()> {
-        rollback_append_only_history_store(self.append_only_store.as_ref(), rollback_to)
     }
 
     async fn find_fork_point(&self, db_tip: u64, min_height: u64) -> Result<(u64, Vec<u8>)> {
@@ -12590,108 +12736,100 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_append_history_cf_entries_prunes_rows_above_rollback_height() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let lock_hash = [0x11; 32];
-        let keep_key = keys::encode_addr_tx_key(&lock_hash, 10, 0);
-        let drop_key = keys::encode_addr_tx_key(&lock_hash, 20, 0);
-
-        store
-            .put_cf(store.cf_addr_txs(), &keep_key, &[0xAA])
-            .unwrap();
-        store
-            .put_cf(store.cf_addr_txs(), &drop_key, &[0xBB])
-            .unwrap();
-
-        let mut batch = rocksdb::WriteBatch::default();
-        let mut pending = 0u64;
-        delete_append_history_cf_entries(
-            &store,
-            store.cf_addr_txs(),
-            "addr_txs",
-            15,
-            &mut batch,
-            &mut pending,
-            |key| {
-                if key.len() == 44 {
-                    Some(keys::decode_block_num(&key[32..40]))
-                } else {
-                    None
-                }
-            },
-        )
-        .unwrap();
-        flush_append_rollback_batch(&store, &mut batch, &mut pending).unwrap();
-
-        assert!(store
-            .get_cf(store.cf_addr_txs(), &keep_key)
-            .unwrap()
-            .is_some());
-        assert!(store
-            .get_cf(store.cf_addr_txs(), &drop_key)
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn test_rollback_append_only_history_store_prunes_all_append_history_cfs() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let lock_hash = [0x11; 32];
-        let collection_id = [0x22; 24];
+    fn test_rollback_via_undo_log_prunes_append_history_cfs() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let lock_hash = [0x44; 32];
+        let collection_id = [0x55; 24];
 
         let addr_keep = keys::encode_addr_tx_key(&lock_hash, 10, 0);
         let addr_drop = keys::encode_addr_tx_key(&lock_hash, 20, 0);
-        store
-            .put_cf(store.cf_addr_txs(), &addr_keep, &[0x01])
+        append_store
+            .put_cf(append_store.cf_addr_txs(), &addr_keep, &[0x01])
             .unwrap();
-        store
-            .put_cf(store.cf_addr_txs(), &addr_drop, &[0x02])
+        append_store
+            .put_cf(append_store.cf_addr_txs(), &addr_drop, &[0x02])
             .unwrap();
 
         let act_keep = keys::encode_activity_key(&lock_hash, 11, 0);
         let act_drop = keys::encode_activity_key(&lock_hash, 21, 0);
-        store
-            .put_cf(store.cf_activities(), &act_keep, &[0x03])
+        append_store
+            .put_cf(append_store.cf_activities(), &act_keep, &[0x03])
             .unwrap();
-        store
-            .put_cf(store.cf_activities(), &act_drop, &[0x04])
+        append_store
+            .put_cf(append_store.cf_activities(), &act_drop, &[0x04])
             .unwrap();
 
         let nft_keep = keys::encode_nft_collection_activity_key(&collection_id, 12, 0);
         let nft_drop = keys::encode_nft_collection_activity_key(&collection_id, 22, 0);
-        store
-            .put_cf(store.cf_nft_collection_activities(), &nft_keep, &[0x05])
+        append_store
+            .put_cf(
+                append_store.cf_nft_collection_activities(),
+                &nft_keep,
+                &[0x05],
+            )
             .unwrap();
-        store
-            .put_cf(store.cf_nft_collection_activities(), &nft_drop, &[0x06])
+        append_store
+            .put_cf(
+                append_store.cf_nft_collection_activities(),
+                &nft_drop,
+                &[0x06],
+            )
             .unwrap();
 
-        rollback_append_only_history_store(&store, 15).unwrap();
+        let mut domain_batch = StoreBatch::new(&domain_store);
+        let mut undo_seq_by_block = HashMap::new();
+        put_append_delete_undo_entry(
+            &mut domain_batch,
+            &mut undo_seq_by_block,
+            20,
+            ckbadger_store::CF_ADDR_TXS,
+            &addr_drop,
+        );
+        put_append_delete_undo_entry(
+            &mut domain_batch,
+            &mut undo_seq_by_block,
+            21,
+            ckbadger_store::CF_ACTIVITIES,
+            &act_drop,
+        );
+        put_append_delete_undo_entry(
+            &mut domain_batch,
+            &mut undo_seq_by_block,
+            22,
+            ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+            &nft_drop,
+        );
+        domain_batch.commit().unwrap();
 
-        assert!(store
-            .get_cf(store.cf_addr_txs(), &addr_keep)
+        domain_store
+            .rollback_via_undo_log(&append_store, 15)
+            .unwrap();
+
+        assert!(append_store
+            .get_cf(append_store.cf_addr_txs(), &addr_keep)
             .unwrap()
             .is_some());
-        assert!(store
-            .get_cf(store.cf_addr_txs(), &addr_drop)
+        assert!(append_store
+            .get_cf(append_store.cf_addr_txs(), &addr_drop)
             .unwrap()
             .is_none());
-        assert!(store
-            .get_cf(store.cf_activities(), &act_keep)
+        assert!(append_store
+            .get_cf(append_store.cf_activities(), &act_keep)
             .unwrap()
             .is_some());
-        assert!(store
-            .get_cf(store.cf_activities(), &act_drop)
+        assert!(append_store
+            .get_cf(append_store.cf_activities(), &act_drop)
             .unwrap()
             .is_none());
-        assert!(store
-            .get_cf(store.cf_nft_collection_activities(), &nft_keep)
+        assert!(append_store
+            .get_cf(append_store.cf_nft_collection_activities(), &nft_keep)
             .unwrap()
             .is_some());
-        assert!(store
-            .get_cf(store.cf_nft_collection_activities(), &nft_drop)
+        assert!(append_store
+            .get_cf(append_store.cf_nft_collection_activities(), &nft_drop)
             .unwrap()
             .is_none());
     }

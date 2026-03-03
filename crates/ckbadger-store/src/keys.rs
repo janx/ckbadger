@@ -10,6 +10,8 @@ pub const OUTPOINT_KEY_SIZE: usize = 34;
 pub const BLOCK_NUM_KEY_SIZE: usize = 8;
 /// Block outpoint key: block_number(8B BE) + outpoint(34B) = 42 bytes
 pub const BLOCK_OUTPOINT_KEY_SIZE: usize = BLOCK_NUM_KEY_SIZE + OUTPOINT_KEY_SIZE;
+/// Reorg undo-log key: block_number(8B BE) + seq(8B BE) = 16 bytes
+pub const REORG_UNDO_LOG_KEY_SIZE: usize = 16;
 
 pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; OUTPOINT_KEY_SIZE];
@@ -73,6 +75,25 @@ pub fn decode_tx_idx(key: &[u8]) -> i32 {
             .try_into()
             .expect("decode_tx_idx: slice length checked"),
     )
+}
+
+pub fn encode_reorg_undo_log_key(block_num: i64, seq: u64) -> [u8; REORG_UNDO_LOG_KEY_SIZE] {
+    let mut key = [0u8; REORG_UNDO_LOG_KEY_SIZE];
+    key[..8].copy_from_slice(&block_num.to_be_bytes());
+    key[8..16].copy_from_slice(&seq.to_be_bytes());
+    key
+}
+
+pub fn decode_reorg_undo_log_key(key: &[u8]) -> (i64, u64) {
+    assert!(
+        key.len() == REORG_UNDO_LOG_KEY_SIZE,
+        "decode_reorg_undo_log_key: expected {} bytes, got {}",
+        REORG_UNDO_LOG_KEY_SIZE,
+        key.len()
+    );
+    let block_num = i64::from_be_bytes(key[..8].try_into().unwrap());
+    let seq = u64::from_be_bytes(key[8..16].try_into().unwrap());
+    (block_num, seq)
 }
 
 /// Encode composite key from multiple parts concatenated.
@@ -940,6 +961,24 @@ mod tests {
         let key = encode_nft_by_collection_key(&collection_id, &nft_id);
         assert_eq!(prefix.len(), 32);
         assert!(key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_reorg_undo_log_key_roundtrip() {
+        let key = encode_reorg_undo_log_key(12345, 67890);
+        assert_eq!(key.len(), REORG_UNDO_LOG_KEY_SIZE);
+        let (block_num, seq) = decode_reorg_undo_log_key(&key);
+        assert_eq!(block_num, 12345);
+        assert_eq!(seq, 67890);
+    }
+
+    #[test]
+    fn test_reorg_undo_log_key_sort_order() {
+        let k1 = encode_reorg_undo_log_key(100, 1);
+        let k2 = encode_reorg_undo_log_key(100, 2);
+        let k3 = encode_reorg_undo_log_key(101, 0);
+        assert!(k1 < k2);
+        assert!(k2 < k3);
     }
 
     // ---- Activity key ----

@@ -1,10 +1,11 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::ActivityEntry;
+use ckbadger_store::types::{ActivityEntry, UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
-    CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, SecondaryIssuance, TxIndexEntry,
+    keys, CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, SecondaryIssuance,
+    TxIndexEntry, CF_ACTIVITIES,
 };
 use std::sync::Arc;
 
@@ -255,7 +256,7 @@ fn test_rollback_removes_activities() {
 
     // Insert activities at blocks 100, 200, 300, 400, 500
     let mut batch = StoreBatch::new(&store);
-    for i in 1..=5 {
+    for (rollback_seq, i) in (1..=5).enumerate() {
         let block = i * 100;
         let entry = ActivityEntry {
             tx_hash: vec![i as u8; 32],
@@ -269,6 +270,17 @@ fn test_rollback_removes_activities() {
             peers: vec![],
         };
         batch.put_activity(&lock_hash, block, 0, &entry);
+        let activity_key = keys::encode_activity_key(&lock_hash, block, 0);
+        batch.put_reorg_undo_log_by_block(
+            block,
+            rollback_seq as u64,
+            &UndoLogEntry::KeyMutation {
+                target_store: UndoLogStoreTarget::AppendOnly,
+                cf_name: CF_ACTIVITIES.to_string(),
+                key: activity_key,
+                previous_value: None,
+            },
+        );
     }
     batch.commit().unwrap();
 
@@ -286,6 +298,7 @@ fn test_rollback_removes_activities() {
     batch.commit().unwrap();
 
     store.rollback_to_block(300).unwrap();
+    store.rollback_via_undo_log(&store, 300).unwrap();
 
     let after = store.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(after.len(), 3, "should have 3 activities after rollback");

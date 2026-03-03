@@ -50,16 +50,9 @@ impl<'a> StoreBatch<'a> {
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         let value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        let by_block_key =
-            keys::encode_block_outpoint_key(info.created_at_block, tx_hash, output_index);
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
         self.batch.put_cf(self.store.cf_cells(), key, &value);
         self.batch.put_cf(self.store.cf_live_cells(), key, []);
-        self.batch.put_cf(
-            self.store.cf_reorg_cells_created_by_block(),
-            by_block_key,
-            [],
-        );
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
@@ -94,15 +87,8 @@ impl<'a> StoreBatch<'a> {
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
-        let by_block_key =
-            keys::encode_block_outpoint_key(consumed_at_block, tx_hash, output_index);
         self.batch
             .put_cf(self.store.cf_consumed_cells(), key, &value);
-        self.batch.put_cf(
-            self.store.cf_reorg_consumed_cells_by_block(),
-            by_block_key,
-            [],
-        );
     }
 
     // ---- Cell indexes ----
@@ -282,6 +268,13 @@ impl<'a> StoreBatch<'a> {
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
         self.batch.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
+    }
+
+    pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
+        let key = keys::encode_reorg_undo_log_key(block_num, seq);
+        let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
+        self.batch
+            .put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
     }
 
     // ---- DAO ----
@@ -648,26 +641,17 @@ mod tests {
         batch.commit().unwrap();
 
         let key = keys::encode_outpoint(&tx_hash, 0);
-        let created_idx_key = keys::encode_block_outpoint_key(info.created_at_block, &tx_hash, 0);
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_some());
-        assert!(store
-            .get_cf(store.cf_reorg_cells_created_by_block(), &created_idx_key)
-            .unwrap()
-            .is_some());
 
         let mut batch = StoreBatch::new(&store);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
         assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_none());
-        assert!(store
-            .get_cf(store.cf_reorg_cells_created_by_block(), &created_idx_key)
-            .unwrap()
-            .is_some());
     }
 
     #[test]
-    fn test_consumed_cell_writes_reorg_block_index() {
+    fn test_consumed_cell_writes_metadata() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open(dir.path()).unwrap();
 
@@ -691,11 +675,38 @@ mod tests {
         batch.put_consumed_cell_with_consumer(&tx_hash, 0, &info, 22, Some(&[0x44; 32]));
         batch.commit().unwrap();
 
-        let consumed_idx_key = keys::encode_block_outpoint_key(22, &tx_hash, 0);
-        assert!(store
-            .get_cf(store.cf_reorg_consumed_cells_by_block(), &consumed_idx_key)
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        let meta = store
+            .get_cf(store.cf_consumed_cells(), &outpoint_key)
             .unwrap()
-            .is_some());
+            .unwrap();
+        let decoded: ConsumedCellMeta = bincode::deserialize(&meta).unwrap();
+        assert_eq!(decoded.consumed_at_block, 22);
+        assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
+    }
+
+    #[test]
+    fn test_reorg_undo_log_by_block_batch_write() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let entry = UndoLogEntry::KeyMutation {
+            target_store: UndoLogStoreTarget::Domain,
+            cf_name: crate::store::CF_SYNC_META.to_string(),
+            key: b"k".to_vec(),
+            previous_value: Some(b"v1".to_vec()),
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_reorg_undo_log_by_block(88, 3, &entry);
+        batch.commit().unwrap();
+
+        let key = keys::encode_reorg_undo_log_key(88, 3);
+        let value = store
+            .get_cf(store.cf_reorg_undo_log_by_block(), &key)
+            .unwrap()
+            .unwrap();
+        let decoded: UndoLogEntry = bincode::deserialize(&value).unwrap();
+        assert_eq!(decoded, entry);
     }
 
     #[test]

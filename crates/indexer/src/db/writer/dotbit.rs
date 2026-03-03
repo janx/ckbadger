@@ -70,7 +70,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
     tx_idx: i32,
     timestamp_ms: i64,
     batch: &mut StoreBatch,
-) {
+) -> bool {
     let actions = match das_action.and_then(das_action_to_asset_action) {
         Some(asset_action) => {
             match asset_action {
@@ -81,7 +81,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
                         .filter(|id| !consumed_account_ids.contains(*id))
                         .collect();
                     if new_only.is_empty() {
-                        return;
+                        return false;
                     }
                     vec![AssetAction::Mint]
                 }
@@ -92,7 +92,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
                         .filter(|id| !created_account_ids.contains(*id))
                         .collect();
                     if removed_only.is_empty() {
-                        return;
+                        return false;
                     }
                     vec![AssetAction::Recycle]
                 }
@@ -123,7 +123,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
     };
 
     if actions.is_empty() {
-        return;
+        return false;
     }
 
     let entry = NftCollectionActivityEntry {
@@ -133,6 +133,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
     };
 
     batch.put_nft_collection_activity(&DOTBIT_SENTINEL_COLLECTION, block_number, tx_idx, &entry);
+    true
 }
 
 /// Generic fallback: same-account in both → Transfer, output-only → Mint, input-only → Burn.

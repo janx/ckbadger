@@ -200,8 +200,7 @@ fn detect_system_resources() -> (u64, usize) {
 pub const CF_CELLS: &str = "cells";
 pub const CF_LIVE_CELLS: &str = "live_cells";
 pub const CF_CONSUMED_CELLS: &str = "consumed_cells";
-pub const CF_REORG_CELLS_CREATED_BY_BLOCK: &str = "reorg_cells_created_by_block";
-pub const CF_REORG_CONSUMED_CELLS_BY_BLOCK: &str = "reorg_consumed_cells_by_block";
+pub const CF_REORG_UNDO_LOG_BY_BLOCK: &str = "reorg_undo_log_by_block";
 pub const CF_BLOCK_HEADERS: &str = "block_headers";
 pub const CF_BLOCK_HASH_INDEX: &str = "block_hash_index";
 pub const CF_CELL_BY_LOCK: &str = "cell_by_lock";
@@ -249,8 +248,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_CELLS,
     CF_LIVE_CELLS,
     CF_CONSUMED_CELLS,
-    CF_REORG_CELLS_CREATED_BY_BLOCK,
-    CF_REORG_CONSUMED_CELLS_BY_BLOCK,
+    CF_REORG_UNDO_LOG_BY_BLOCK,
     CF_BLOCK_HEADERS,
     CF_BLOCK_HASH_INDEX,
     CF_CELL_BY_LOCK,
@@ -292,8 +290,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_CELLS,
     CF_LIVE_CELLS,
     CF_CONSUMED_CELLS,
-    CF_REORG_CELLS_CREATED_BY_BLOCK,
-    CF_REORG_CONSUMED_CELLS_BY_BLOCK,
+    CF_REORG_UNDO_LOG_BY_BLOCK,
     CF_BLOCK_HEADERS,
     CF_BLOCK_HASH_INDEX,
     CF_CELL_BY_LOCK,
@@ -612,8 +609,7 @@ impl CkbadgerStore {
         CF_CELLS,
         CF_LIVE_CELLS,
         CF_CONSUMED_CELLS,
-        CF_REORG_CELLS_CREATED_BY_BLOCK,
-        CF_REORG_CONSUMED_CELLS_BY_BLOCK,
+        CF_REORG_UNDO_LOG_BY_BLOCK,
         CF_CELL_BY_LOCK,
         CF_CELL_BY_TYPE,
         CF_CELL_BY_LOCK_CODE,
@@ -630,8 +626,7 @@ impl CkbadgerStore {
         CF_CELLS,
         CF_LIVE_CELLS,
         CF_CONSUMED_CELLS,
-        CF_REORG_CELLS_CREATED_BY_BLOCK,
-        CF_REORG_CONSUMED_CELLS_BY_BLOCK,
+        CF_REORG_UNDO_LOG_BY_BLOCK,
         CF_BLOCK_HEADERS,
         CF_BLOCK_HASH_INDEX,
         CF_CELL_BY_LOCK,
@@ -817,11 +812,8 @@ impl CkbadgerStore {
     pub fn cf_consumed_cells(&self) -> &ColumnFamily {
         self.cf(CF_CONSUMED_CELLS)
     }
-    pub fn cf_reorg_cells_created_by_block(&self) -> &ColumnFamily {
-        self.cf(CF_REORG_CELLS_CREATED_BY_BLOCK)
-    }
-    pub fn cf_reorg_consumed_cells_by_block(&self) -> &ColumnFamily {
-        self.cf(CF_REORG_CONSUMED_CELLS_BY_BLOCK)
+    pub fn cf_reorg_undo_log_by_block(&self) -> &ColumnFamily {
+        self.cf(CF_REORG_UNDO_LOG_BY_BLOCK)
     }
     pub fn cf_block_headers(&self) -> &ColumnFamily {
         self.cf(CF_BLOCK_HEADERS)
@@ -957,6 +949,33 @@ impl CkbadgerStore {
         let mut opts = rocksdb::WriteOptions::default();
         opts.disable_wal(true);
         Ok(self.db.write_opt(batch, &opts)?)
+    }
+
+    pub(crate) fn apply_batch_op_by_cf_name(
+        &self,
+        batch: &mut WriteBatch,
+        cf_name: &str,
+        key: &[u8],
+        value: Option<&[u8]>,
+    ) -> anyhow::Result<()> {
+        if !Self::cf_allowed(self.store_class, cf_name) {
+            anyhow::bail!(
+                "CF '{}' is not allowed in {:?} store",
+                cf_name,
+                self.store_class
+            );
+        }
+
+        let cf = self
+            .db
+            .cf_handle(cf_name)
+            .ok_or_else(|| anyhow::anyhow!("CF '{}' not found", cf_name))?;
+        if let Some(v) = value {
+            batch.put_cf(cf, key, v);
+        } else {
+            batch.delete_cf(cf, key);
+        }
+        Ok(())
     }
 
     /// Resolve the target stats CF by stats key prefix.
@@ -1778,8 +1797,7 @@ mod tests {
             CF_CELLS,
             CF_LIVE_CELLS,
             CF_CONSUMED_CELLS,
-            CF_REORG_CELLS_CREATED_BY_BLOCK,
-            CF_REORG_CONSUMED_CELLS_BY_BLOCK,
+            CF_REORG_UNDO_LOG_BY_BLOCK,
             CF_CELL_BY_LOCK,
             CF_CELL_BY_TYPE,
             CF_CELL_BY_LOCK_CODE,

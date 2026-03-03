@@ -169,6 +169,22 @@ The 36-block limit balances:
 
 With ~10s block time, 36 blocks is about 6 minutes.
 
+## Unified Undo-Log Direction
+
+ckbadger moves toward a unified rollback mechanism:
+
+- Write path records undo entries into `reorg_undo_log_by_block`
+- Key: `block_number + seq`
+- Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
+- Rollback replays entries for `block > rollback_to` in reverse order
+
+Design notes:
+
+1. `previous_value = None` means key did not exist before forward write, so rollback must `delete`.
+2. `previous_value = Some(bytes)` means rollback must `put` original bytes back.
+3. Undo entries are deleted only after replay apply, so crash recovery remains idempotent.
+4. Append-history rollback no longer uses dedicated history CF; replay is driven by undo-log only.
+
 ## Monitoring
 
 Recommended checks:
@@ -179,4 +195,4 @@ Recommended checks:
 
 ---
 
-_Last updated: 2026-03-02_
+_Last updated: 2026-03-03_

@@ -7,6 +7,7 @@ use tracing::info;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys::sync_meta_keys;
 use ckbadger_store::types::{DeepForkInfo, ReorgEvent};
+use ckbadger_store::CkbadgerStore;
 
 use super::BatchWriter;
 
@@ -60,6 +61,7 @@ impl BatchWriter {
 
     pub async fn execute_reorg(
         &self,
+        append_store: &CkbadgerStore,
         fork_point: i64,
         fork_hash: &[u8],
         old_tip: i64,
@@ -69,8 +71,10 @@ impl BatchWriter {
     ) -> Result<ReorgResult> {
         let depth = (old_tip - fork_point) as i32;
 
-        // Use the store's atomic rollback which handles all CFs
+        // Domain rollback for canonical mutable state.
         self.store.rollback_to_block(fork_point)?;
+        // Revert append-only/domain mutations recorded by unified undo-log.
+        self.store.rollback_via_undo_log(append_store, fork_point)?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
         let event = ReorgEvent {
@@ -180,7 +184,9 @@ mod tests {
             .put_cf(store.cf_block_headers(), &key, b"invalid-header-payload")
             .unwrap();
 
-        let result = writer.execute_reorg(0, &[0xAA; 32], 1, &[], 1, &[]).await;
+        let result = writer
+            .execute_reorg(store.as_ref(), 0, &[0xAA; 32], 1, &[], 1, &[])
+            .await;
         assert!(result.is_err());
         assert_eq!(reorg_event_count(store.as_ref()), 0);
     }

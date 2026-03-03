@@ -834,6 +834,39 @@ pub struct ReorgEvent {
     pub depth: i32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UndoLogStoreTarget {
+    Domain,
+    AppendOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UndoInputOutPoint {
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UndoTxContext {
+    pub tx_hash: Vec<u8>,
+    pub outputs_count: i16,
+    pub inputs: Vec<UndoInputOutPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UndoLogEntry {
+    /// Previous value before the forward write.
+    /// `None` means the key did not exist and rollback should delete it.
+    KeyMutation {
+        target_store: UndoLogStoreTarget,
+        cf_name: String,
+        key: Vec<u8>,
+        previous_value: Option<Vec<u8>>,
+    },
+    /// Transaction context for deriving cell/consumed rollback from canonical tx data.
+    TxContext(UndoTxContext),
+}
+
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
@@ -1059,6 +1092,53 @@ mod tests {
         let decoded = decode_consumed_cell_meta(&bytes).unwrap();
         assert_eq!(decoded.consumed_at_block, 888);
         assert_eq!(decoded.consumed_by_tx, None);
+    }
+
+    #[test]
+    fn test_undo_log_entry_roundtrip() {
+        let entry = UndoLogEntry::KeyMutation {
+            target_store: UndoLogStoreTarget::AppendOnly,
+            cf_name: "addr_txs".to_string(),
+            key: vec![0xAA; 12],
+            previous_value: Some(vec![0xBB; 8]),
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn test_undo_log_entry_none_previous_value_roundtrip() {
+        let entry = UndoLogEntry::KeyMutation {
+            target_store: UndoLogStoreTarget::Domain,
+            cf_name: "sync_meta".to_string(),
+            key: b"new_key".to_vec(),
+            previous_value: None,
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, entry);
+    }
+
+    #[test]
+    fn test_undo_log_tx_context_roundtrip() {
+        let entry = UndoLogEntry::TxContext(UndoTxContext {
+            tx_hash: vec![0x11; 32],
+            outputs_count: 2,
+            inputs: vec![
+                UndoInputOutPoint {
+                    tx_hash: vec![0x22; 32],
+                    output_index: 0,
+                },
+                UndoInputOutPoint {
+                    tx_hash: vec![0x33; 32],
+                    output_index: 1,
+                },
+            ],
+        });
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, entry);
     }
 
     // ---- ScriptDailyDelta ----
