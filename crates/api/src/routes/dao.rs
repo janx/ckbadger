@@ -6,7 +6,7 @@ use axum::{
 use ckbadger_common::dao::calculate_estimated_apc;
 use ckbadger_store::keys;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -853,107 +853,16 @@ pub struct ChartResponse {
 }
 
 fn build_total_depositors_series(
-    store: &ckbadger_store::CkbadgerStore,
-    snapshot_dates: &[String],
+    snapshots: &[ckbadger_store::DaoDailySnapshot],
 ) -> Result<HashMap<String, i64>, ApiRouteError> {
-    if snapshot_dates.is_empty() {
+    if snapshots.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let mut events_by_block: BTreeMap<i64, Vec<(Vec<u8>, i32)>> = BTreeMap::new();
-    store
-        .scan_dao_deposits(|_, entry| {
-            events_by_block
-                .entry(entry.deposit_block_number)
-                .or_default()
-                .push((entry.lock_script_hash.clone(), 1));
-            if let Some(request_block) = entry.withdraw_request_block {
-                events_by_block
-                    .entry(request_block)
-                    .or_default()
-                    .push((entry.lock_script_hash.clone(), -1));
-            }
-            Ok(())
-        })
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let block_numbers: Vec<i64> = events_by_block.keys().copied().collect();
-    let block_headers = store
-        .get_block_headers_batch(&block_numbers)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut date_cache: HashMap<i64, String> = HashMap::with_capacity(block_headers.len());
-    for block_number in block_numbers {
-        let header = block_headers.get(&block_number).ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing block header while building dao depositor series: block_number={}",
-                block_number
-            ))
-        })?;
-        let ts = chrono::DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
-            ApiError::internal(format!(
-                "invalid block header timestamp while building dao depositor series: block_number={}, timestamp={}",
-                block_number, header.timestamp
-            ))
-        })?;
-        date_cache.insert(
-            block_number,
-            ckbadger_common::block_date(ts)
-                .format("%Y-%m-%d")
-                .to_string(),
-        );
-    }
-
-    let mut events_by_date: BTreeMap<String, Vec<(Vec<u8>, i32)>> = BTreeMap::new();
-    for (block_number, events) in events_by_block {
-        let event_date = date_cache.get(&block_number).cloned().ok_or_else(|| {
-            ApiError::internal(format!(
-                "missing cached block date while building dao depositor series: block_number={}",
-                block_number
-            ))
-        })?;
-        events_by_date.entry(event_date).or_default().extend(events);
-    }
-
-    let mut ordered_dates = snapshot_dates.to_vec();
-    ordered_dates.sort();
-    let mut events_iter = events_by_date.into_iter().peekable();
-    let mut lock_active_counts: HashMap<Vec<u8>, i32> = HashMap::new();
-    let mut total_depositors = 0i64;
-    let mut series: HashMap<String, i64> = HashMap::new();
-
-    for date in ordered_dates {
-        while let Some((event_date, _)) = events_iter.peek() {
-            if event_date > &date {
-                break;
-            }
-            let (_, events) = events_iter.next().expect("peeked item should exist");
-            for (lock_hash, delta) in events {
-                let current = lock_active_counts.get(&lock_hash).copied().unwrap_or(0);
-                let next = current + delta;
-                if next < 0 {
-                    return Err(ApiError::internal(format!(
-                        "dao depositor series underflow for lock_hash=0x{}: current={}, delta={}",
-                        hex::encode(lock_hash),
-                        current,
-                        delta
-                    )));
-                }
-                if current == 0 && next > 0 {
-                    total_depositors += 1;
-                } else if current > 0 && next == 0 {
-                    total_depositors -= 1;
-                }
-                if next == 0 {
-                    lock_active_counts.remove(&lock_hash);
-                } else {
-                    lock_active_counts.insert(lock_hash, next);
-                }
-            }
-        }
-        series.insert(date, total_depositors);
-    }
-
-    Ok(series)
+    Ok(snapshots
+        .iter()
+        .map(|snapshot| (snapshot.date.clone(), snapshot.depositors_count))
+        .collect())
 }
 
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
@@ -968,8 +877,7 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         .store
         .list_dao_daily_snapshots()
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let snapshot_dates: Vec<String> = snapshots.iter().map(|s| s.date.clone()).collect();
-    let depositors_series = build_total_depositors_series(state.store.as_ref(), &snapshot_dates)?;
+    let depositors_series = build_total_depositors_series(&snapshots)?;
 
     let data: Vec<ChartDataPoint> = snapshots
         .iter()
@@ -1104,9 +1012,7 @@ async fn get_circulation_ratio_chart(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{CachedBlockHeader, DaoDepositCacheEntry};
-    use ckbadger_store::CkbadgerStore;
+    use ckbadger_store::types::CachedBlockHeader;
 
     fn snapshot(total_issuance: i128, cum_treasury: i128) -> ckbadger_store::DaoDailySnapshot {
         ckbadger_store::DaoDailySnapshot {
@@ -1165,79 +1071,24 @@ mod tests {
 
     #[test]
     fn test_build_total_depositors_series_tracks_deposit_and_withdraw_request_transitions() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let mut batch = StoreBatch::new(&store);
-
-        let d1 = chrono::NaiveDate::from_ymd_opt(2026, 2, 17)
-            .unwrap()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
-        let d2 = chrono::NaiveDate::from_ymd_opt(2026, 2, 18)
-            .unwrap()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
-        let d3 = chrono::NaiveDate::from_ymd_opt(2026, 2, 19)
-            .unwrap()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
-
-        batch.put_block_header(1, &header_at(d1));
-        batch.put_block_header(2, &header_at(d2));
-        batch.put_block_header(3, &header_at(d3));
-
-        let lock_a = vec![0x11; 32];
-        let lock_b = vec![0x22; 32];
-        batch.put_dao_deposit(
-            &keys::encode_outpoint(&[0xAA; 32], 0),
-            &DaoDepositCacheEntry {
-                capacity: 100_00000000,
-                deposit_block_number: 1,
-                lock_script_hash: lock_a,
-                deposit_ar: 1,
-                status: 1,
-                withdraw_request_tx: Some(vec![0xAB; 32]),
-                withdraw_request_output_index: Some(0),
-                withdraw_request_block: Some(3),
-                withdraw_request_ar: Some(2),
-                withdraw_block: None,
-                withdraw_tx: None,
-                withdraw_to_output_index: None,
-                compensation: None,
+        let snapshots = vec![
+            ckbadger_store::DaoDailySnapshot {
+                date: "2026-02-17".to_string(),
+                depositors_count: 1,
+                ..snapshot(1, 0)
             },
-        );
-        batch.put_dao_deposit(
-            &keys::encode_outpoint(&[0xBB; 32], 0),
-            &DaoDepositCacheEntry {
-                capacity: 100_00000000,
-                deposit_block_number: 2,
-                lock_script_hash: lock_b,
-                deposit_ar: 1,
-                status: 0,
-                withdraw_request_tx: None,
-                withdraw_request_output_index: None,
-                withdraw_request_block: None,
-                withdraw_request_ar: None,
-                withdraw_block: None,
-                withdraw_tx: None,
-                withdraw_to_output_index: None,
-                compensation: None,
+            ckbadger_store::DaoDailySnapshot {
+                date: "2026-02-18".to_string(),
+                depositors_count: 2,
+                ..snapshot(1, 0)
             },
-        );
-        batch.commit().unwrap();
-
-        let dates = vec![
-            "2026-02-17".to_string(),
-            "2026-02-18".to_string(),
-            "2026-02-19".to_string(),
+            ckbadger_store::DaoDailySnapshot {
+                date: "2026-02-19".to_string(),
+                depositors_count: 1,
+                ..snapshot(1, 0)
+            },
         ];
-        let series = build_total_depositors_series(&store, &dates).unwrap();
+        let series = build_total_depositors_series(&snapshots).unwrap();
         assert_eq!(series.get("2026-02-17"), Some(&1));
         assert_eq!(series.get("2026-02-18"), Some(&2));
         assert_eq!(series.get("2026-02-19"), Some(&1));

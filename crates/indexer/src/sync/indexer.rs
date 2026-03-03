@@ -353,6 +353,7 @@ fn parsed_input_outpoint_index_i16(previous_output_index: i32, context: &str) ->
 }
 
 fn build_activity_input_views(
+    store: &CkbadgerStore,
     tx_data: &TxData,
     block_number: i64,
     input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
@@ -361,6 +362,8 @@ fn build_activity_input_views(
     if tx_data.is_cellbase {
         return Ok(Vec::new());
     }
+
+    let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
 
     tx_data
         .inputs
@@ -393,6 +396,28 @@ fn build_activity_input_views(
                         previous_output_index
                     )
                 })?;
+            let outpoint_key = keys::encode_outpoint(&input.previous_tx_hash, previous_output_index);
+            let is_dao_withdraw_request = if info.type_code_hash.as_deref()
+                == Some(dao_code_hash.as_slice())
+            {
+                store
+                    .get_cf(store.cf_dao_by_withdraw_tx(), &outpoint_key)
+                    .map_err(|e| {
+                        anyhow!(
+                            "failed to check DAO withdraw index while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, prev_outpoint=0x{}:{}, error={}",
+                            block_number,
+                            hex::encode(tx_data.hash),
+                            tx_data.tx_index,
+                            input_index,
+                            hex::encode(input.previous_tx_hash),
+                            previous_output_index,
+                            e
+                        )
+                    })?
+                    .is_some()
+            } else {
+                false
+            };
 
             Ok(crate::db::writer::activities::InputCellView {
                 lock_script_hash: info.lock_script_hash.clone(),
@@ -403,7 +428,7 @@ fn build_activity_input_views(
                 type_args: info.type_args.clone(),
                 udt_amount: info.udt_amount,
                 data: Vec::new(),
-                data_size: info.data_size,
+                is_dao_withdraw_request,
             })
         })
         .collect()
@@ -576,6 +601,10 @@ fn checked_usize_to_i16(value: usize, label: &str) -> Result<i16> {
 
 fn checked_i32_to_i16(value: i32, label: &str) -> Result<i16> {
     i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
+}
+
+fn checked_usize_to_i32(value: usize, label: &str) -> i32 {
+    i32::try_from(value).unwrap_or_else(|_| panic!("{} exceeds i32 range: {}", label, value))
 }
 
 fn tx_hash_key32(tx_hash: &[u8], context: &str) -> Result<[u8; 32]> {
@@ -3836,7 +3865,12 @@ impl Indexer {
 
     pub fn get_memory_stats(&self) -> ckbadger_common::MemoryStatsData {
         let stats = self.writer.store().memory_stats();
-        let sync_status = self.writer.store().get_sync_status().unwrap_or_default();
+        let sync_status = self.writer.store().get_sync_status().unwrap_or_else(|e| {
+            panic!(
+                "failed to read sync_status while collecting memory stats: {}",
+                e
+            )
+        });
         ckbadger_common::MemoryStatsData {
             live_cells_count: stats.live_cells_count as u64,
             consumed_cells_count: stats.consumed_cells_count as u64,
@@ -4064,7 +4098,7 @@ impl Indexer {
                 continue;
             }
 
-            if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
+            if self.repo.has_unresolved_deep_fork()? {
                 if let Some(repeat) = self.repeated_warning_snapshot(
                     "sequential_deep_fork_unresolved",
                     Duration::from_secs(120),
@@ -5650,7 +5684,7 @@ impl Indexer {
                                             account_id: account_id.clone(),
                                             block_number: parsed.number,
                                             consuming_tx_hash: tx_data.hash,
-                                            tx_idx: tx_idx as i32,
+                                            tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                             ts_ms: parsed.timestamp.timestamp_millis(),
                                         });
                                     }
@@ -5687,7 +5721,7 @@ impl Indexer {
                                             account_id,
                                             block_number: parsed.number,
                                             consuming_tx_hash: tx_data.hash,
-                                            tx_idx: tx_idx as i32,
+                                            tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                             ts_ms: parsed.timestamp.timestamp_millis(),
                                         });
                                     }
@@ -5804,7 +5838,7 @@ impl Indexer {
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
         loop {
-            if self.repo.has_unresolved_deep_fork().unwrap_or(false) {
+            if self.repo.has_unresolved_deep_fork()? {
                 let drained = Self::drain_channel(&mut parse_rx).await;
                 parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
                 if let Some(repeat) = self.repeated_warning_snapshot(
@@ -8273,12 +8307,14 @@ impl Indexer {
                     .map(|p| (p.number, p.timestamp.timestamp_millis()))
                     .collect();
                 {
+                    let mut udt_state = self.writer.new_udt_batch_state();
                     let mut batch = StoreBatch::new(self.writer.store());
-                    self.writer.process_udt_transfers_batch(
+                    self.writer.process_udt_transfers_batch_with_state(
                         &transfer_refs,
                         &max_supply_observations,
                         &block_timestamps,
                         &mut batch,
+                        &mut udt_state,
                     )?;
                     let commit_started = Instant::now();
                     batch.commit()?;
@@ -8357,7 +8393,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 &spore.spore_id,
                                 parsed.number,
-                                tx_idx as i32,
+                                checked_usize_to_i32(tx_idx, "tx_idx"),
                                 parsed.timestamp.timestamp_millis(),
                                 true,
                             );
@@ -8414,7 +8450,7 @@ impl Indexer {
                             &tx_data.hash,
                             &token.token_id,
                             parsed.number,
-                            tx_idx as i32,
+                            checked_usize_to_i32(tx_idx, "tx_idx"),
                             parsed.timestamp.timestamp_millis(),
                             true,
                         );
@@ -8454,7 +8490,7 @@ impl Indexer {
                                 created_account_ids: created_ids,
                                 consumed_account_ids: HashSet::new(),
                                 block_number: parsed.number,
-                                tx_idx: tx_idx as i32,
+                                tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                 timestamp_ms: parsed.timestamp.timestamp_millis(),
                             },
                         );
@@ -8520,7 +8556,7 @@ impl Indexer {
                                         &tx_data.hash,
                                         &spore_id,
                                         parsed.number,
-                                        tx_idx as i32,
+                                        checked_usize_to_i32(tx_idx, "tx_idx"),
                                         parsed.timestamp.timestamp_millis(),
                                         false,
                                     );
@@ -8560,7 +8596,7 @@ impl Indexer {
                                         created_account_ids: HashSet::new(),
                                         consumed_account_ids: HashSet::new(),
                                         block_number: parsed.number,
-                                        tx_idx: tx_idx as i32,
+                                        tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                         timestamp_ms: parsed.timestamp.timestamp_millis(),
                                     }
                                 });
@@ -9803,11 +9839,13 @@ impl Indexer {
                                         .iter()
                                         .map(|p| (p.number, p.timestamp.timestamp_millis()))
                                         .collect();
-                                    writer.process_udt_transfers_batch(
+                                    let mut udt_state = writer.new_udt_batch_state();
+                                    writer.process_udt_transfers_batch_with_state(
                                         &transfer_refs,
                                         &max_supply_observations,
                                         &block_timestamps,
                                         &mut batch,
+                                        &mut udt_state,
                                     )?;
                                 }
                             }
@@ -9883,7 +9921,7 @@ impl Indexer {
                                         &tx_data.hash,
                                         &spore.spore_id,
                                         parsed.number,
-                                        tx_idx as i32,
+                                        checked_usize_to_i32(tx_idx, "tx_idx"),
                                         ts_ms,
                                         true,
                                     );
@@ -9983,7 +10021,7 @@ impl Indexer {
                             &all_tx_data[tx_gi].hash,
                             &token.token_id,
                             block_number,
-                            tx_idx as i32,
+                            checked_usize_to_i32(tx_idx, "tx_idx"),
                             ts_ms,
                             true,
                         );
@@ -10013,7 +10051,7 @@ impl Indexer {
                                 created_account_ids: HashSet::new(),
                                 consumed_account_ids: HashSet::new(),
                                 block_number,
-                                tx_idx: tx_idx as i32,
+                                tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                 timestamp_ms: ts_ms,
                             });
                         activity
@@ -10038,7 +10076,7 @@ impl Indexer {
                                     // Find the tx_global_index for this consume event
                                     let tx_gi = tx_lookup.iter().position(|&(tx_idx, bn, ts)| {
                                         bn == event.block_number
-                                            && tx_idx as i32 == event.tx_idx
+                                            && checked_usize_to_i32(tx_idx, "tx_idx") == event.tx_idx
                                             && ts == event.ts_ms
                                     });
                                     let das_action = tx_gi.and_then(|gi| {
@@ -10400,6 +10438,7 @@ impl Indexer {
                                                 crate::db::writer::activities::TxView<'_>,
                                             > {
                                                 let inputs = build_activity_input_views(
+                                                    store,
                                                     td,
                                                     parsed.number,
                                                     &input_cell_info,
@@ -11085,11 +11124,13 @@ impl Indexer {
                             .iter()
                             .map(|p| (p.number, p.timestamp.timestamp_millis()))
                             .collect();
-                        self.writer.process_udt_transfers_batch(
+                        let mut udt_state = self.writer.new_udt_batch_state();
+                        self.writer.process_udt_transfers_batch_with_state(
                             &transfer_refs,
                             &max_supply_observations,
                             &block_timestamps,
                             &mut data_batch,
+                            &mut udt_state,
                         )?;
                     }
                 }
@@ -11167,7 +11208,7 @@ impl Indexer {
                                     &tx_data.hash,
                                     &spore.spore_id,
                                     parsed.number,
-                                    tx_idx as i32,
+                                    checked_usize_to_i32(tx_idx, "tx_idx"),
                                     ts_ms,
                                     true,
                                 );
@@ -11231,7 +11272,7 @@ impl Indexer {
                                 &tx_data.hash,
                                 &token.token_id,
                                 parsed.number,
-                                tx_idx as i32,
+                                checked_usize_to_i32(tx_idx, "tx_idx"),
                                 ts_ms,
                                 true,
                             );
@@ -11271,7 +11312,7 @@ impl Indexer {
                                     created_account_ids: created_ids,
                                     consumed_account_ids: HashSet::new(),
                                     block_number: parsed.number,
-                                    tx_idx: tx_idx as i32,
+                                    tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                     timestamp_ms: ts_ms,
                                 },
                             );
@@ -11319,7 +11360,7 @@ impl Indexer {
                                 parsed.number,
                                 tx_data.hash.to_vec(),
                                 dotbit_consume_order,
-                                tx_idx as i32,
+                                checked_usize_to_i32(tx_idx, "tx_idx"),
                                 parsed.timestamp.timestamp_millis(),
                             ));
                         }
@@ -11547,6 +11588,7 @@ impl Indexer {
                         .iter()
                         .map(|td| -> Result<crate::db::writer::activities::TxView<'_>> {
                             let inputs = build_activity_input_views(
+                                self.writer.store(),
                                 td,
                                 parsed.number,
                                 &input_cell_info,
@@ -13105,6 +13147,8 @@ mod tests {
 
     #[test]
     fn test_build_activity_input_views_errors_when_input_cell_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
         let previous_tx_hash = [0x44; 32];
         let tx = dummy_tx_data(
             [0x11; 32],
@@ -13119,10 +13163,11 @@ mod tests {
             vec![],
         );
 
-        let err = match build_activity_input_views(&tx, 99, &HashMap::new(), &HashMap::new()) {
-            Ok(_) => panic!("missing input cell info should fail fast"),
-            Err(err) => err,
-        };
+        let err =
+            match build_activity_input_views(&store, &tx, 99, &HashMap::new(), &HashMap::new()) {
+                Ok(_) => panic!("missing input cell info should fail fast"),
+                Err(err) => err,
+            };
         assert!(err
             .to_string()
             .contains("missing input cell info while building activities"));
@@ -13131,6 +13176,8 @@ mod tests {
 
     #[test]
     fn test_build_activity_input_views_uses_batch_fallback_cell_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
         let previous_tx_hash = [0x55; 32];
         let tx = dummy_tx_data(
             [0x22; 32],
@@ -13154,13 +13201,50 @@ mod tests {
         let mut batch_cell_infos = HashMap::new();
         batch_cell_infos.insert((previous_tx_hash.to_vec(), 3), info.clone());
 
-        let inputs = build_activity_input_views(&tx, 100, &HashMap::new(), &batch_cell_infos)
-            .expect("input lookup should fall back to same-batch cell cache");
+        let inputs =
+            build_activity_input_views(&store, &tx, 100, &HashMap::new(), &batch_cell_infos)
+                .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].capacity, info.capacity);
         assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity);
-        assert_eq!(inputs[0].data_size, info.data_size);
         assert_eq!(inputs[0].lock_script_hash, info.lock_script_hash);
+    }
+
+    #[test]
+    fn test_build_activity_input_views_marks_dao_withdraw_request_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let previous_tx_hash = [0x66; 32];
+        let tx = dummy_tx_data(
+            [0x33; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash,
+                previous_output_index: 1,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let mut info = dummy_live_cell_info();
+        info.type_code_hash = Some(crate::rpc::parse_hex_to_bytes(
+            crate::parser::dao::DAO_CODE_HASH,
+        ));
+        let mut input_cell_info = HashMap::new();
+        input_cell_info.insert((previous_tx_hash.to_vec(), 1), info);
+
+        let mut seed = StoreBatch::new(&store);
+        let deposit_outpoint_key = keys::encode_outpoint(&[0x77; 32], 0);
+        seed.put_dao_by_withdraw_tx(&previous_tx_hash, 1, &deposit_outpoint_key);
+        seed.commit().unwrap();
+
+        let inputs =
+            build_activity_input_views(&store, &tx, 200, &input_cell_info, &HashMap::new())
+                .unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert!(inputs[0].is_dao_withdraw_request);
     }
 
     #[test]

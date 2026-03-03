@@ -4,12 +4,54 @@ use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{TokenDailyDelta, TokenInfo, TokenTransferRecord};
+use ckbadger_store::CkbadgerStore;
 
 use crate::parser::ParsedUdtTransfer;
 
 use super::BatchWriter;
 
+#[derive(Default)]
+pub(crate) struct UdtBatchState {
+    hourly_transfers: HashMap<Vec<u8>, i64>,
+}
+
+impl UdtBatchState {
+    fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
+        if let Some(cached) = self.hourly_transfers.get(key) {
+            return Ok(*cached);
+        }
+        let loaded = match store.get_stats_key(key)? {
+            Some(v) => {
+                if v.len() != 8 {
+                    bail!(
+                        "invalid token hourly transfer value length: key=0x{}, len={}",
+                        hex::encode(key),
+                        v.len()
+                    );
+                }
+                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "failed to decode token hourly transfer value as i64: key=0x{}",
+                        hex::encode(key)
+                    )
+                })?)
+            }
+            None => 0,
+        };
+        self.hourly_transfers.insert(key.to_vec(), loaded);
+        Ok(loaded)
+    }
+
+    fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
+        self.hourly_transfers.insert(key, count);
+    }
+}
+
 impl BatchWriter {
+    pub(crate) fn new_udt_batch_state(&self) -> UdtBatchState {
+        UdtBatchState::default()
+    }
+
     pub fn update_token_daily_deltas_batch(
         &self,
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
@@ -200,6 +242,24 @@ impl BatchWriter {
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        let mut state = self.new_udt_batch_state();
+        self.process_udt_transfers_batch_with_state(
+            transfers,
+            max_supply_observations,
+            block_timestamps,
+            batch,
+            &mut state,
+        )
+    }
+
+    pub(crate) fn process_udt_transfers_batch_with_state(
+        &self,
+        transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
+        max_supply_observations: &HashMap<Vec<u8>, i128>,
+        block_timestamps: &HashMap<i64, i64>,
+        batch: &mut StoreBatch,
+        state: &mut UdtBatchState,
+    ) -> Result<()> {
         if transfers.is_empty() {
             // Even if this batch has no transfer deltas, a transaction can still expose
             // supply-info cells that reveal token hard caps.
@@ -330,26 +390,7 @@ impl BatchWriter {
         // Step 2.6: Update per-hour transfer counts using each transfer's block timestamp.
         for ((type_hash, hour_bucket), count_delta) in hourly_transfer_updates {
             let key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, hour_bucket);
-            let current_hourly = match self.store.get_stats_key(&key)? {
-                Some(v) => {
-                    if v.len() != 8 {
-                        bail!(
-                            "invalid token hourly transfer value length: type_hash=0x{}, hour_bucket={}, len={}",
-                            hex::encode(&type_hash),
-                            hour_bucket,
-                            v.len()
-                        );
-                    }
-                    i64::from_le_bytes(v[..8].try_into().map_err(|_| {
-                        anyhow::anyhow!(
-                            "failed to decode token hourly transfer value as i64: type_hash=0x{}, hour_bucket={}",
-                            hex::encode(&type_hash),
-                            hour_bucket
-                        )
-                    })?)
-                }
-                None => 0,
-            };
+            let current_hourly = state.get_hourly_transfer(self.store.as_ref(), &key)?;
             let updated_hourly = current_hourly.checked_add(count_delta).ok_or_else(|| {
                 anyhow::anyhow!(
                     "token hourly transfer overflow: type_hash=0x{}, hour_bucket={}, current={}, delta={}",
@@ -360,6 +401,7 @@ impl BatchWriter {
                 )
             })?;
             batch.put_token_hourly_transfer(&type_hash, hour_bucket, updated_hourly);
+            state.put_hourly_transfer(key, updated_hourly);
         }
 
         // Step 3: Aggregate balance changes per (type_hash, lock_hash)
@@ -1040,6 +1082,91 @@ mod tests {
         let hour1 = store.get_stats_key(&hour1_key).unwrap().unwrap();
         assert_eq!(i64::from_le_bytes(hour0[..8].try_into().unwrap()), 1);
         assert_eq!(i64::from_le_bytes(hour1[..8].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_with_state_accumulates_hourly_in_same_uncommitted_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_hash = vec![0xB1; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 10,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+
+        let transfer_a = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: vec![0x77; 32],
+            amount: 1u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+        let transfer_b = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: vec![0x88; 32],
+            amount: 1u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+
+        let tx_hash_a = [0xF1; 32];
+        let tx_hash_b = [0xF2; 32];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(401i64, 1_800_000i64);
+        block_timestamps.insert(402i64, 2_000_000i64);
+
+        let first = vec![(&transfer_a, tx_hash_a.as_slice(), 401i64)];
+        let second = vec![(&transfer_b, tx_hash_b.as_slice(), 402i64)];
+        let mut batch = StoreBatch::new(&store);
+        let mut state = writer.new_udt_batch_state();
+        writer
+            .process_udt_transfers_batch_with_state(
+                &first,
+                &HashMap::new(),
+                &block_timestamps,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .process_udt_transfers_batch_with_state(
+                &second,
+                &HashMap::new(),
+                &block_timestamps,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let hour0_key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, 0);
+        let hour0 = store.get_stats_key(&hour0_key).unwrap().unwrap();
+        assert_eq!(i64::from_le_bytes(hour0[..8].try_into().unwrap()), 2);
     }
 
     #[test]

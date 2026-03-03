@@ -497,7 +497,14 @@ impl BatchWriter {
 
         for (deposit, block_number, _timestamp, ar) in deposits {
             let entry = build_dao_cache_entry(deposit, *block_number, *ar);
-            let outpoint_key = keys::encode_outpoint(&deposit.tx_hash, deposit.output_index as i16);
+            let output_index = i16::try_from(deposit.output_index).map_err(|_| {
+                anyhow!(
+                    "DAO deposit output_index exceeds i16 range while batching insert: tx_hash=0x{}, output_index={}",
+                    hex::encode(&deposit.tx_hash),
+                    deposit.output_index
+                )
+            })?;
+            let outpoint_key = keys::encode_outpoint(&deposit.tx_hash, output_index);
             batch.put_dao_deposit(&outpoint_key, &entry);
         }
 
@@ -2109,5 +2116,34 @@ mod tests {
                 .unwrap(),
             Some(outpoint.to_vec())
         );
+    }
+
+    #[test]
+    fn test_insert_dao_deposits_batch_errors_on_output_index_overflow() {
+        use ckbadger_store::batch::StoreBatch;
+        use ckbadger_store::CkbadgerStore;
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = super::super::BatchWriter::new(store.clone());
+        let mut batch = StoreBatch::new(&store);
+
+        let deposits = vec![(
+            ParsedDaoDeposit {
+                tx_hash: vec![0xAB; 32],
+                output_index: i32::from(i16::MAX) + 1,
+                lock_script_hash: vec![0xCD; 32],
+                capacity: 123,
+            },
+            42_i64,
+            chrono::Utc::now(),
+            1_i64,
+        )];
+
+        let err = writer
+            .insert_dao_deposits_batch(&deposits, &mut batch)
+            .unwrap_err();
+        assert!(err.to_string().contains("output_index exceeds i16 range"));
     }
 }

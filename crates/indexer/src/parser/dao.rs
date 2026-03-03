@@ -40,6 +40,15 @@ pub struct ParsedDaoWithdrawRequest {
 
 pub struct DaoParser;
 
+fn checked_usize_to_i32(value: usize, context: &str) -> i32 {
+    i32::try_from(value).unwrap_or_else(|_| {
+        panic!(
+            "DAO index exceeds i32 range while parsing {}: {}",
+            context, value
+        )
+    })
+}
+
 impl DaoParser {
     pub fn is_dao_code_hash(code_hash: &[u8]) -> bool {
         let dao_hash = parse_hex_to_bytes(DAO_CODE_HASH);
@@ -117,7 +126,7 @@ impl DaoParser {
                 }
                 Some(ParsedDaoDeposit {
                     tx_hash: tx_hash.to_vec(),
-                    output_index: idx as i32,
+                    output_index: checked_usize_to_i32(idx, "deposit output index"),
                     lock_script_hash: cell.lock_script_hash.clone(),
                     capacity: cell.capacity,
                 })
@@ -154,7 +163,7 @@ impl DaoParser {
 
                 Some(ParsedDaoWithdrawRequest {
                     tx_hash: tx_hash.to_vec(),
-                    output_index: idx as i32,
+                    output_index: checked_usize_to_i32(idx, "withdraw request output index"),
                     lock_script_hash: dao_cell.lock_script_hash,
                     capacity: dao_cell.capacity,
                     deposit_block_number,
@@ -257,6 +266,17 @@ mod tests {
             DaoParser::parse_deposit_block_number(&data),
             Some(123456789)
         );
+    }
+
+    #[test]
+    fn test_checked_usize_to_i32_accepts_valid_value() {
+        assert_eq!(checked_usize_to_i32(123, "test"), 123);
+    }
+
+    #[test]
+    #[should_panic(expected = "DAO index exceeds i32 range while parsing deposit output index")]
+    fn test_checked_usize_to_i32_panics_on_overflow() {
+        let _ = checked_usize_to_i32((i32::MAX as usize) + 1, "deposit output index");
     }
 
     #[test]

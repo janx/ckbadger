@@ -78,7 +78,7 @@ pub struct InputCellView {
     pub type_args: Option<Vec<u8>>,
     pub udt_amount: Option<u128>,
     pub data: Vec<u8>,
-    pub data_size: i32,
+    pub is_dao_withdraw_request: bool,
 }
 
 /// Transaction data needed for activity building.
@@ -171,7 +171,7 @@ fn build_tx_activities(
                 input.type_args.as_deref(),
                 input.udt_amount,
                 &input.data,
-                input.data_size,
+                input.is_dao_withdraw_request,
                 hashes,
                 input.capacity,
             );
@@ -330,7 +330,7 @@ fn classify_input(
     type_args: Option<&[u8]>,
     udt_amount: Option<u128>,
     data: &[u8],
-    _data_size: i32,
+    is_dao_withdraw_request: bool,
     hashes: &CodeHashes,
     capacity: i64,
 ) {
@@ -343,15 +343,9 @@ fn classify_input(
         }
     } else if type_code_hash == hashes.dao {
         // DAO withdraw request cell consumed as input = withdrawal completing.
-        // Note: data.len() == 8 may not hold during bulk sync when cell data
-        // is not yet available in the prefetch cache. In that case the DAO
-        // withdrawal is silently skipped in the activity feed — this is a known
-        // limitation that does not affect DAO accounting (handled in dao.rs).
-        if data.len() == 8 {
-            let val = u64::from_le_bytes(data[..8].try_into().unwrap_or([0; 8]));
-            if val != 0 {
-                accum.dao_withdraw_completes.push(capacity);
-            }
+        // This is determined from DAO secondary indexes at input-view build time.
+        if is_dao_withdraw_request {
+            accum.dao_withdraw_completes.push(capacity);
         }
     } else if type_code_hash == hashes.spore_did {
         if let Some(args) = type_args {
@@ -406,16 +400,25 @@ fn classify_output(
         if data_size == 8 {
             if let Some(data_hex) = outputs_data.get(output_idx) {
                 let data_bytes = crate::rpc::parse_hex_to_bytes(data_hex);
-                if data_bytes.len() == 8 {
-                    let deposit_block =
-                        u64::from_le_bytes(data_bytes[..8].try_into().unwrap_or([0; 8]));
-                    if deposit_block == 0 {
-                        accum.dao_deposits.push(capacity);
-                    } else {
-                        accum
-                            .dao_withdraw_requests
-                            .push((capacity, deposit_block as i64));
-                    }
+                if data_bytes.len() != 8 {
+                    panic!(
+                        "invalid DAO output data length while classifying activity: expected=8, got={}",
+                        data_bytes.len()
+                    );
+                }
+                let bytes: [u8; 8] = data_bytes.as_slice().try_into().unwrap_or_else(|_| {
+                    panic!(
+                        "failed to decode DAO output data while classifying activity: len={}",
+                        data_bytes.len()
+                    )
+                });
+                let deposit_block = u64::from_le_bytes(bytes);
+                if deposit_block == 0 {
+                    accum.dao_deposits.push(capacity);
+                } else {
+                    accum
+                        .dao_withdraw_requests
+                        .push((capacity, deposit_block as i64));
                 }
             }
         }
@@ -561,7 +564,7 @@ mod tests {
             type_args: None,
             udt_amount: None,
             data: vec![],
-            data_size: 0,
+            is_dao_withdraw_request: false,
         }
     }
 
@@ -1012,5 +1015,36 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn test_dao_withdraw_complete_is_classified_from_input_view_flag() {
+        let owner = 0xAA;
+        let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
+
+        let mut dao_input = make_input(owner, 102_00000000, 102_00000000);
+        dao_input.type_code_hash = Some(dao_code_hash);
+        dao_input.is_dao_withdraw_request = true;
+
+        let outputs: Vec<ParsedCell> = vec![];
+        let outputs_data: Vec<String> = vec![];
+        let tx = TxView {
+            tx_hash: &[0x09; 32],
+            tx_index: 1,
+            block_number: 200,
+            timestamp: 1_700_000_200,
+            is_cellbase: false,
+            inputs: vec![dao_input],
+            outputs: &outputs,
+            outputs_data: &outputs_data,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        assert_eq!(activities.len(), 1);
+        let (_, entry) = &activities[0];
+        assert!(entry
+            .asset_changes
+            .iter()
+            .any(|change| matches!(change, AssetChange::DaoWithdrawComplete { capacity, .. } if *capacity == 102_00000000)));
     }
 }

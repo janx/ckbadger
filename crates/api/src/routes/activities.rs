@@ -158,6 +158,20 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     Ok(())
 }
 
+fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
+    let parts: Vec<&str> = value.split(':').collect();
+    match parts.as_slice() {
+        // Current format: block_num:tx_idx
+        [block_num, tx_idx] => Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?)),
+        // Backward-compatible format: block_num:tx_idx:seq
+        [block_num, tx_idx, seq] => {
+            let _ = seq.parse::<u64>().ok()?;
+            Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?))
+        }
+        _ => None,
+    }
+}
+
 fn is_canonical_activity_entry(
     store: &CkbadgerStore,
     block_num: i64,
@@ -239,17 +253,10 @@ async fn get_address_activities(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    // Parse cursor: "block_num:tx_idx"
-    let cursor = params.cursor.as_ref().and_then(|c| {
-        let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() == 2 {
-            let block_num = parts[0].parse::<i64>().ok()?;
-            let tx_idx = parts[1].parse::<i32>().ok()?;
-            Some((block_num, tx_idx))
-        } else {
-            None
-        }
-    });
+    let cursor = params
+        .cursor
+        .as_ref()
+        .and_then(|c| parse_activity_cursor(c));
 
     let results = list_canonical_activities_page(
         state.store.as_ref(),
@@ -326,6 +333,13 @@ mod tests {
         let err = validate_activity_filter(Some("tok")).unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
         assert!(err.1 .0.message.contains("invalid activity filter"));
+    }
+
+    #[test]
+    fn test_parse_activity_cursor_supports_legacy_three_component_format() {
+        assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
+        assert_eq!(parse_activity_cursor("100:2:7"), Some((100, 2)));
+        assert_eq!(parse_activity_cursor("100:2:not-a-seq"), None);
     }
 
     #[test]

@@ -195,8 +195,7 @@ impl<'a> StoreBatch<'a> {
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
-        self.batch
-            .put_cf(self.store.cf_consumed_cells(), key, &value);
+        self.put_cf(self.store.cf_consumed_cells(), key, &value);
     }
 
     // ---- Cell indexes ----
@@ -253,8 +252,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
-        self.batch
-            .put_cf(self.store.cf_cell_by_lock_code(), key, []);
+        self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
     }
 
     pub fn delete_cell_by_lock_code(
@@ -265,8 +263,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
-        self.batch
-            .delete_cf(self.store.cf_cell_by_lock_code(), &key);
+        self.delete_cf(self.store.cf_cell_by_lock_code(), &key);
     }
 
     pub fn put_cell_by_type_code(
@@ -277,8 +274,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
-        self.batch
-            .put_cf(self.store.cf_cell_by_type_code(), key, []);
+        self.put_cf(self.store.cf_cell_by_type_code(), key, []);
     }
 
     pub fn delete_cell_by_type_code(
@@ -289,8 +285,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
-        self.batch
-            .delete_cf(self.store.cf_cell_by_type_code(), &key);
+        self.delete_cf(self.store.cf_cell_by_type_code(), &key);
     }
 
     // ---- Cell index (raw pre-computed key) ----
@@ -312,8 +307,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.batch
-            .put_cf(self.store.cf_cell_by_lock_code(), key, []);
+        self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
     }
 
     pub fn delete_cell_by_lock_code_raw(&mut self, key: &[u8]) {
@@ -321,8 +315,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.batch
-            .put_cf(self.store.cf_cell_by_type_code(), key, []);
+        self.put_cf(self.store.cf_cell_by_type_code(), key, []);
     }
 
     pub fn delete_cell_by_type_code_raw(&mut self, key: &[u8]) {
@@ -334,8 +327,7 @@ impl<'a> StoreBatch<'a> {
     pub fn put_block_header(&mut self, block_number: i64, header: &CachedBlockHeader) {
         let key = keys::encode_block_num(block_number);
         let value = bincode::serialize(header).expect("serialize CachedBlockHeader");
-        self.batch
-            .put_cf(self.store.cf_block_headers(), key, &value);
+        self.put_cf(self.store.cf_block_headers(), key, &value);
 
         // Also update hash -> number index
         self.put_cf(
@@ -361,16 +353,14 @@ impl<'a> StoreBatch<'a> {
             &keys::encode_block_num(block_num),
             &keys::encode_tx_idx(tx_idx),
         ]);
-        self.batch
-            .put_cf(self.store.cf_tx_hash_map(), tx_hash, &value);
+        self.put_cf(self.store.cf_tx_hash_map(), tx_hash, &value);
     }
 
     // ---- Address balance ----
 
     pub fn put_addr_balance(&mut self, lock_hash: &[u8], balance: &AddressBalance) {
         let value = bincode::serialize(balance).expect("serialize AddressBalance");
-        self.batch
-            .put_cf(self.store.cf_addr_balance(), lock_hash, &value);
+        self.put_cf(self.store.cf_addr_balance(), lock_hash, &value);
     }
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -381,8 +371,7 @@ impl<'a> StoreBatch<'a> {
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
         let key = keys::encode_reorg_undo_log_key(block_num, seq);
         let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
-        self.batch
-            .put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
+        self.put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
     }
 
     // ---- DAO ----
@@ -418,12 +407,9 @@ impl<'a> StoreBatch<'a> {
             outpoint_key,
         );
 
-        self.batch
-            .put_cf(self.store.cf_dao_by_block(), by_block_key, []);
-        self.batch
-            .put_cf(self.store.cf_dao_by_lock_block(), by_lock_key, []);
-        self.batch
-            .put_cf(self.store.cf_dao_by_status_block(), by_status_key, []);
+        self.put_cf(self.store.cf_dao_by_block(), by_block_key, []);
+        self.put_cf(self.store.cf_dao_by_lock_block(), by_lock_key, []);
+        self.put_cf(self.store.cf_dao_by_status_block(), by_status_key, []);
     }
 
     pub fn put_dao_deposit(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {
@@ -455,8 +441,7 @@ impl<'a> StoreBatch<'a> {
         }
 
         let value = bincode::serialize(entry).expect("serialize DaoDepositCacheEntry");
-        self.batch
-            .put_cf(self.store.cf_dao_deposits(), outpoint_key, &value);
+        self.put_cf(self.store.cf_dao_deposits(), outpoint_key, &value);
         self.put_dao_secondary_indexes(outpoint_key, entry);
         self.pending_dao_deposits
             .insert(outpoint_key.to_vec(), entry.clone());
@@ -479,8 +464,7 @@ impl<'a> StoreBatch<'a> {
     pub fn put_block_issuance(&mut self, block_num: i64, issuance: &SecondaryIssuance) {
         let key = keys::encode_block_num(block_num);
         let value = bincode::serialize(issuance).expect("serialize SecondaryIssuance");
-        self.batch
-            .put_cf(self.store.cf_block_issuance(), key, &value);
+        self.put_cf(self.store.cf_block_issuance(), key, &value);
     }
 
     // ---- Tokens ----
@@ -492,32 +476,27 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8], balance: i128) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
-        self.batch
-            .put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
+        self.put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
     }
 
     pub fn put_token_transfers_count(&mut self, type_hash: &[u8], count: i64) {
         let key = keys::encode_token_transfers_key(type_hash);
-        self.batch
-            .put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
     }
 
     pub fn put_token_hourly_transfer(&mut self, type_hash: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_token_hourly_key(type_hash, hour_bucket);
-        self.batch
-            .put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
     }
 
     pub fn put_spore_hourly_transfer(&mut self, cluster_id: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_spore_hourly_key(cluster_id, hour_bucket);
-        self.batch
-            .put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
     }
 
     pub fn put_nft_hourly_transfer(&mut self, collection_id: &[u8], hour_bucket: i64, count: i64) {
         let key = keys::encode_nft_hourly_key(collection_id, hour_bucket);
-        self.batch
-            .put_cf(self.store.cf_stats_nft(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_nft(), key, count.to_le_bytes());
     }
 
     pub fn put_nft_daily_delta(
@@ -567,12 +546,10 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
         let key = keys::encode_spore_outpoint_key(tx_hash, output_index);
-        self.batch
-            .put_cf(self.store.cf_stats_spore(), key, spore_id);
+        self.put_cf(self.store.cf_stats_spore(), key, spore_id);
         // Reverse index: spore_id → outpoints
         let rev_key = keys::encode_spore_outpoint_by_id_key(spore_id, tx_hash, output_index);
-        self.batch
-            .put_cf(self.store.cf_stats_spore(), rev_key, &[] as &[u8]);
+        self.put_cf(self.store.cf_stats_spore(), rev_key, &[] as &[u8]);
     }
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
@@ -592,8 +569,7 @@ impl<'a> StoreBatch<'a> {
         account_id: &[u8],
     ) {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        self.batch
-            .put_cf(self.store.cf_stats_nft(), key, account_id);
+        self.put_cf(self.store.cf_stats_nft(), key, account_id);
     }
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
@@ -610,8 +586,7 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_token_transfer_key(type_hash, block_num, tx_idx);
         let value = bincode::serialize(record).expect("serialize TokenTransferRecord");
-        self.batch
-            .put_cf(self.store.cf_token_transfers(), key, &value);
+        self.put_cf(self.store.cf_token_transfers(), key, &value);
     }
 
     // ---- Spore/NFT ----
@@ -638,22 +613,19 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
         let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
-        self.batch
-            .put_cf(self.store.cf_nft_by_collection(), key, []);
+        self.put_cf(self.store.cf_nft_by_collection(), key, []);
     }
 
     // ---- Cluster aggregates ----
 
     pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {
         let value = bincode::serialize(agg).expect("serialize ClusterAggregate");
-        self.batch
-            .put_cf(self.store.cf_cluster_agg(), cluster_id, &value);
+        self.put_cf(self.store.cf_cluster_agg(), cluster_id, &value);
     }
 
     pub fn put_cluster_owner_count(&mut self, cluster_id: &[u8], lock_hash: &[u8], count: i64) {
         let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
-        self.batch
-            .put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
     }
 
     pub fn delete_cluster_owner(&mut self, cluster_id: &[u8], lock_hash: &[u8]) {
@@ -669,8 +641,7 @@ impl<'a> StoreBatch<'a> {
         agg: &NftCollectionAggregate,
     ) {
         let value = bincode::serialize(agg).expect("serialize NftCollectionAggregate");
-        self.batch
-            .put_cf(self.store.cf_nft_collection_agg(), collection_id, &value);
+        self.put_cf(self.store.cf_nft_collection_agg(), collection_id, &value);
     }
 
     // ---- Activities ----
@@ -729,8 +700,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
         let value = bincode::serialize(info).expect("serialize ScriptInfo");
-        self.batch
-            .put_cf(self.store.cf_script_info(), code_hash, &value);
+        self.put_cf(self.store.cf_script_info(), code_hash, &value);
     }
 
     // ---- Sync meta ----

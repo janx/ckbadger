@@ -1,6 +1,7 @@
 //! Reorg (rollback) operations.
 
 use rocksdb::{IteratorMode, WriteBatch};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -94,6 +95,8 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow:
 
 const ROLLBACK_PROGRESS_CHECK_EVERY: u64 = 16_384;
 const ROLLBACK_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(5);
+const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 
 fn should_log_rollback_progress(scanned: u64, since_last_log: Duration) -> bool {
     scanned > 0
@@ -296,6 +299,59 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
         let _ = write!(&mut out, "{:02x}", b);
     }
     out
+}
+
+fn truncate_hodl_tracker_state_for_rollback(
+    state: &mut HodlTrackerState,
+    rollback_to: i64,
+) -> anyhow::Result<bool> {
+    if rollback_to < 0 {
+        return Ok(true);
+    }
+
+    let mut changed = false;
+    let original_transitions = state.date_transitions.len();
+    state
+        .date_transitions
+        .retain(|(block_num, _)| *block_num <= rollback_to);
+    if state.date_transitions.len() != original_transitions {
+        changed = true;
+    }
+
+    if state.date_transitions.is_empty() {
+        anyhow::bail!(
+            "invalid HODL tracker state after rollback truncate: rollback_to={}, no remaining date transitions",
+            rollback_to
+        );
+    }
+
+    let max_date = state
+        .date_transitions
+        .last()
+        .map(|(_, date)| date.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing last date transition while truncating HODL tracker state: rollback_to={}",
+                rollback_to
+            )
+        })?;
+
+    let original_capacity_dates = state.capacity_by_date.len();
+    state
+        .capacity_by_date
+        .retain(|(date, _)| date.as_str() <= max_date.as_str());
+    if state.capacity_by_date.len() != original_capacity_dates {
+        changed = true;
+    }
+
+    if let Some(last_snapshot_date) = state.last_snapshot_date.as_ref() {
+        if last_snapshot_date.as_str() > max_date.as_str() {
+            state.last_snapshot_date = Some(max_date);
+            changed = true;
+        }
+    }
+
+    Ok(changed)
 }
 
 fn normalize_dao_entry_for_rollback(
@@ -938,6 +994,414 @@ impl CkbadgerStore {
         }
         stage.finish(token_transfers_removed);
 
+        // 10. Repair Spore/NFT domain state for orphaned blocks and rebuild secondary indexes.
+        let mut stage = RollbackStageProgress::new("repair_spore_nft_domain");
+        let mut spore_deleted = 0u64;
+        let mut nft_deleted = 0u64;
+        let mut secondary_keys_deleted = 0u64;
+        let mut secondary_keys_written = 0u64;
+        let mut aggregate_rows_written = 0u64;
+        let mut cluster_owner_rows_written = 0u64;
+
+        let secondary_cfs = [
+            self.cf_spore_by_cluster(),
+            self.cf_cluster_agg(),
+            self.cf_nft_by_collection(),
+            self.cf_nft_collection_agg(),
+        ];
+        for cf in secondary_cfs {
+            let iter = self.iterator_cf(cf, IteratorMode::Start);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate spore/nft secondary CF during rollback cleanup: {}",
+                        e
+                    )
+                })?;
+                batch.delete_cf(cf, &key);
+                secondary_keys_deleted += 1;
+                stage.tick(
+                    spore_deleted
+                        + nft_deleted
+                        + secondary_keys_deleted
+                        + secondary_keys_written
+                        + aggregate_rows_written
+                        + cluster_owner_rows_written,
+                );
+            }
+        }
+
+        // Cluster-owner counters are stored in stats_spore CF under a dedicated prefix.
+        let iter = self.iterator_cf(self.cf_stats_spore(), IteratorMode::Start);
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_spore while clearing cluster owner counters in rollback cleanup: {}",
+                    e
+                )
+            })?;
+            if key.first() == Some(&keys::STATS_PREFIX_CLUSTER_OWNER) {
+                batch.delete_cf(self.cf_stats_spore(), &key);
+                secondary_keys_deleted += 1;
+            }
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
+        let mut cluster_aggs: HashMap<Vec<u8>, ClusterAggregate> = HashMap::new();
+        let mut cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
+        let mut nft_collection_aggs: HashMap<Vec<u8>, NftCollectionAggregate> = HashMap::new();
+
+        let iter = self.iterator_cf(self.cf_spore_data(), IteratorMode::Start);
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate spore_data while repairing rollback state: {}",
+                    e
+                )
+            })?;
+            let spore_id = key.to_vec();
+            let entry: DobEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize spore_data entry during rollback repair: spore_id=0x{}, error={}",
+                    bytes_to_hex(&spore_id),
+                    e
+                )
+            })?;
+
+            if entry.created_at_block > rollback_to {
+                batch.delete_cf(self.cf_spore_data(), &key);
+                spore_deleted += 1;
+                stage.tick(
+                    spore_deleted
+                        + nft_deleted
+                        + secondary_keys_deleted
+                        + secondary_keys_written
+                        + aggregate_rows_written
+                        + cluster_owner_rows_written,
+                );
+                continue;
+            }
+
+            match entry.standard {
+                DobStandard::SporeCluster => {
+                    let agg = cluster_aggs.entry(spore_id).or_default();
+                    agg.name = entry.name.clone();
+                    agg.description = entry.description.clone();
+                }
+                DobStandard::Spore => {
+                    if let Some(cluster_id) = entry.collection_id.as_ref() {
+                        let idx_key = keys::encode_spore_by_cluster_key(cluster_id, &spore_id);
+                        batch.put_cf(self.cf_spore_by_cluster(), idx_key, []);
+                        secondary_keys_written += 1;
+
+                        let agg = cluster_aggs.entry(cluster_id.clone()).or_default();
+                        agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "cluster total_count overflow while repairing rollback state: cluster_id=0x{}",
+                                bytes_to_hex(cluster_id)
+                            )
+                        })?;
+                        if entry.is_live {
+                            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "cluster live_count overflow while repairing rollback state: cluster_id=0x{}",
+                                    bytes_to_hex(cluster_id)
+                                )
+                            })?;
+
+                            if let Some(owner_lock_hash) = entry.owner_lock_hash.as_ref() {
+                                let owner_key = (cluster_id.clone(), owner_lock_hash.clone());
+                                let owner_count =
+                                    cluster_owner_counts.entry(owner_key).or_insert(0);
+                                *owner_count = owner_count.checked_add(1).ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "cluster owner count overflow while repairing rollback state: cluster_id=0x{}",
+                                        bytes_to_hex(cluster_id)
+                                    )
+                                })?;
+                            }
+
+                            let tier = match &entry.extra {
+                                DobExtra::Spore { media_profile, .. } => media_profile.tier,
+                                _ => StorageDependencyTier::Unknown,
+                            };
+                            let tier_slot = match tier {
+                                StorageDependencyTier::FullyOnchain => &mut agg.fully_onchain_count,
+                                StorageDependencyTier::DecentralizedExternal => {
+                                    &mut agg.decentralized_external_count
+                                }
+                                StorageDependencyTier::CentralizedDependent => {
+                                    &mut agg.centralized_dependent_count
+                                }
+                                StorageDependencyTier::Unknown => &mut agg.unknown_count,
+                            };
+                            *tier_slot = tier_slot.checked_add(1).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "cluster media tier count overflow while repairing rollback state: cluster_id=0x{}, tier={}",
+                                    bytes_to_hex(cluster_id),
+                                    tier.as_str()
+                                )
+                            })?;
+                        }
+                    }
+                }
+                DobStandard::DidCkb => {
+                    let idx_key =
+                        keys::encode_nft_by_collection_key(&DID_CKB_SENTINEL_COLLECTION, &spore_id);
+                    batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
+                    secondary_keys_written += 1;
+
+                    let agg = nft_collection_aggs
+                        .entry(DID_CKB_SENTINEL_COLLECTION.to_vec())
+                        .or_insert_with(|| NftCollectionAggregate {
+                            name: Some("did:ckb".to_string()),
+                            standard: NftStandard::DidCkb,
+                            ..Default::default()
+                        });
+                    agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "did:ckb total_count overflow while repairing rollback state"
+                        )
+                    })?;
+                    if entry.is_live {
+                        agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "did:ckb live_count overflow while repairing rollback state"
+                            )
+                        })?;
+                    }
+                }
+            }
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
+        let iter = self.iterator_cf(self.cf_nft_data(), IteratorMode::Start);
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft_data while repairing rollback state: {}",
+                    e
+                )
+            })?;
+            let nft_id = key.to_vec();
+            let entry: NftEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize nft_data entry during rollback repair: nft_id=0x{}, error={}",
+                    bytes_to_hex(&nft_id),
+                    e
+                )
+            })?;
+
+            if entry.created_at_block > rollback_to {
+                batch.delete_cf(self.cf_nft_data(), &key);
+                nft_deleted += 1;
+                stage.tick(
+                    spore_deleted
+                        + nft_deleted
+                        + secondary_keys_deleted
+                        + secondary_keys_written
+                        + aggregate_rows_written
+                        + cluster_owner_rows_written,
+                );
+                continue;
+            }
+
+            match entry.standard {
+                NftStandard::DotBit => {
+                    let idx_key =
+                        keys::encode_nft_by_collection_key(&DOTBIT_SENTINEL_COLLECTION, &nft_id);
+                    batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
+                    secondary_keys_written += 1;
+                    let agg = nft_collection_aggs
+                        .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                        .or_insert_with(|| NftCollectionAggregate {
+                            name: Some(".bit".to_string()),
+                            standard: NftStandard::DotBit,
+                            ..Default::default()
+                        });
+                    agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "dotbit total_count overflow while repairing rollback state"
+                        )
+                    })?;
+                    if entry.is_live {
+                        agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "dotbit live_count overflow while repairing rollback state"
+                            )
+                        })?;
+                    }
+                }
+                NftStandard::MnftClass => {
+                    let agg = nft_collection_aggs.entry(nft_id).or_insert_with(|| {
+                        NftCollectionAggregate {
+                            standard: NftStandard::MnftClass,
+                            ..Default::default()
+                        }
+                    });
+                    agg.standard = NftStandard::MnftClass;
+                    if entry.name.is_some() {
+                        agg.name = entry.name.clone();
+                    }
+                }
+                NftStandard::MnftToken => {
+                    if let Some(collection_id) = entry.collection_id.as_ref() {
+                        let idx_key = keys::encode_nft_by_collection_key(collection_id, &nft_id);
+                        batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
+                        secondary_keys_written += 1;
+                        let agg = nft_collection_aggs
+                            .entry(collection_id.clone())
+                            .or_insert_with(|| NftCollectionAggregate {
+                                standard: NftStandard::MnftClass,
+                                ..Default::default()
+                            });
+                        agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "mNFT total_count overflow while repairing rollback state: collection_id=0x{}",
+                                bytes_to_hex(collection_id)
+                            )
+                        })?;
+                        if entry.is_live {
+                            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "mNFT live_count overflow while repairing rollback state: collection_id=0x{}",
+                                    bytes_to_hex(collection_id)
+                                )
+                            })?;
+                        }
+                    }
+                }
+                NftStandard::DidCkb => {
+                    let idx_key =
+                        keys::encode_nft_by_collection_key(&DID_CKB_SENTINEL_COLLECTION, &nft_id);
+                    batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
+                    secondary_keys_written += 1;
+                    let agg = nft_collection_aggs
+                        .entry(DID_CKB_SENTINEL_COLLECTION.to_vec())
+                        .or_insert_with(|| NftCollectionAggregate {
+                            name: Some("did:ckb".to_string()),
+                            standard: NftStandard::DidCkb,
+                            ..Default::default()
+                        });
+                    agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "did:ckb total_count overflow while repairing rollback state"
+                        )
+                    })?;
+                    if entry.is_live {
+                        agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "did:ckb live_count overflow while repairing rollback state"
+                            )
+                        })?;
+                    }
+                }
+                NftStandard::MnftIssuer => {}
+            }
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
+        let mut cluster_owner_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        for ((cluster_id, lock_hash), count) in &cluster_owner_counts {
+            let owner_key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
+            batch.put_cf(
+                self.cf_stats_spore(),
+                owner_key,
+                count.to_le_bytes().as_slice(),
+            );
+            cluster_owner_rows_written += 1;
+            let owner_total = cluster_owner_totals.entry(cluster_id.clone()).or_insert(0);
+            *owner_total = owner_total.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "cluster owner_count overflow while repairing rollback state: cluster_id=0x{}",
+                    bytes_to_hex(cluster_id)
+                )
+            })?;
+        }
+        for (cluster_id, agg) in &mut cluster_aggs {
+            agg.owner_count = cluster_owner_totals.get(cluster_id).copied().unwrap_or(0);
+            let encoded = bincode::serialize(agg).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to serialize cluster aggregate during rollback repair: cluster_id=0x{}, error={}",
+                    bytes_to_hex(cluster_id),
+                    e
+                )
+            })?;
+            batch.put_cf(self.cf_cluster_agg(), cluster_id, &encoded);
+            aggregate_rows_written += 1;
+        }
+
+        for (collection_id, agg) in &nft_collection_aggs {
+            let encoded = bincode::serialize(agg).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to serialize nft collection aggregate during rollback repair: collection_id=0x{}, error={}",
+                    bytes_to_hex(collection_id),
+                    e
+                )
+            })?;
+            batch.put_cf(self.cf_nft_collection_agg(), collection_id, &encoded);
+            aggregate_rows_written += 1;
+        }
+        stage.finish(
+            spore_deleted
+                + nft_deleted
+                + secondary_keys_deleted
+                + secondary_keys_written
+                + aggregate_rows_written
+                + cluster_owner_rows_written,
+        );
+
+        // 11. Keep HODL tracker state aligned with rollback tip in the same write batch.
+        let mut stage = RollbackStageProgress::new("repair_hodl_tracker_state");
+        let mut hodl_tracker_repaired = 0u64;
+        if rollback_to < 0 {
+            if self
+                .get_cf(self.cf_sync_meta(), keys::sync_meta_keys::HODL_TRACKER)?
+                .is_some()
+            {
+                batch.delete_cf(self.cf_sync_meta(), keys::sync_meta_keys::HODL_TRACKER);
+                hodl_tracker_repaired += 1;
+            }
+        } else if let Some(mut state) = self.get_hodl_tracker_state()? {
+            if truncate_hodl_tracker_state_for_rollback(&mut state, rollback_to)? {
+                let encoded = bincode::serialize(&state).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to serialize repaired HODL tracker state during rollback cleanup: {}",
+                        e
+                    )
+                })?;
+                batch.put_cf(
+                    self.cf_sync_meta(),
+                    keys::sync_meta_keys::HODL_TRACKER,
+                    &encoded,
+                );
+                hodl_tracker_repaired += 1;
+            }
+        }
+        stage.tick(hodl_tracker_repaired);
+        stage.finish(hodl_tracker_repaired);
+
         // Commit all deletes atomically
         self.write_batch(batch)?;
 
@@ -1039,9 +1503,10 @@ mod tests {
     use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{
-        AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, LiveCellInfo, ScriptInfo,
-        TokenDailyDelta, TokenInfo, TokenTransferRecord, TxIndexEntry, UndoInputOutPoint,
-        UndoLogEntry, UndoTxContext,
+        AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, DobEntry, DobExtra, DobStandard,
+        HodlTrackerState, LiveCellInfo, NftCollectionAggregate, NftEntry, NftExtra, NftStandard,
+        ScriptInfo, SporeMediaProfile, StorageDependencyTier, TokenDailyDelta, TokenInfo,
+        TokenTransferRecord, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     #[test]
@@ -2375,5 +2840,237 @@ mod tests {
             .list_token_transfers(&type_hash, 10, None)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn test_rollback_repairs_spore_nft_domain_indexes_and_aggregates() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let cluster_id = vec![0xAA; 32];
+        let owner = vec![0xCC; 32];
+        let spore_keep_id = vec![0x11; 32];
+        let spore_drop_id = vec![0x22; 32];
+        let nft_keep_id = vec![0x33; 32];
+        let nft_drop_id = vec![0x44; 32];
+        let class_id = vec![0x55; 24];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_spore(
+            &cluster_id,
+            &DobEntry {
+                standard: DobStandard::SporeCluster,
+                collection_id: None,
+                owner_lock_hash: None,
+                name: Some("cluster-a".to_string()),
+                description: Some("desc".to_string()),
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x01; 32],
+                extra: DobExtra::SporeCluster,
+            },
+        );
+        batch.put_spore(
+            &spore_keep_id,
+            &DobEntry {
+                standard: DobStandard::Spore,
+                collection_id: Some(cluster_id.clone()),
+                owner_lock_hash: Some(owner.clone()),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x02; 32],
+                extra: DobExtra::Spore {
+                    content_type: "image/png".to_string(),
+                    content_length: 8,
+                    media_profile: SporeMediaProfile {
+                        tier: StorageDependencyTier::FullyOnchain,
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+        batch.put_spore(
+            &spore_drop_id,
+            &DobEntry {
+                standard: DobStandard::Spore,
+                collection_id: Some(cluster_id.clone()),
+                owner_lock_hash: Some(owner.clone()),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: 2,
+                created_at_tx: vec![0x03; 32],
+                extra: DobExtra::Spore {
+                    content_type: "image/png".to_string(),
+                    content_length: 8,
+                    media_profile: SporeMediaProfile {
+                        tier: StorageDependencyTier::FullyOnchain,
+                        ..Default::default()
+                    },
+                },
+            },
+        );
+        batch.put_nft(
+            &nft_keep_id,
+            &NftEntry {
+                standard: NftStandard::MnftToken,
+                collection_id: Some(class_id.clone()),
+                token_id: Some(nft_keep_id.clone()),
+                owner_lock_hash: Some(owner.clone()),
+                name: None,
+                is_live: true,
+                created_at_block: 1,
+                extra: NftExtra::MnftToken {
+                    token_index: 1,
+                    characteristic: vec![],
+                    configure: 0,
+                    state: 0,
+                },
+            },
+        );
+        batch.put_nft(
+            &nft_drop_id,
+            &NftEntry {
+                standard: NftStandard::MnftToken,
+                collection_id: Some(class_id.clone()),
+                token_id: Some(nft_drop_id.clone()),
+                owner_lock_hash: Some(owner.clone()),
+                name: None,
+                is_live: true,
+                created_at_block: 2,
+                extra: NftExtra::MnftToken {
+                    token_index: 2,
+                    characteristic: vec![],
+                    configure: 0,
+                    state: 0,
+                },
+            },
+        );
+        // Seed stale rows that should be replaced by rollback repair.
+        batch.put_spore_by_cluster(&cluster_id, &[0xFF; 32]);
+        batch.put_cluster_aggregate(
+            &cluster_id,
+            &ClusterAggregate {
+                total_count: 99,
+                live_count: 99,
+                owner_count: 99,
+                ..Default::default()
+            },
+        );
+        batch.put_nft_by_collection(&class_id, &[0xEE; 32]);
+        batch.put_nft_collection_aggregate(
+            &class_id,
+            &NftCollectionAggregate {
+                name: Some("stale".to_string()),
+                standard: NftStandard::MnftClass,
+                total_count: 99,
+                live_count: 99,
+            },
+        );
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        assert!(store.get_spore(&spore_keep_id).unwrap().is_some());
+        assert!(store.get_spore(&spore_drop_id).unwrap().is_none());
+        assert!(store.get_nft(&nft_keep_id).unwrap().is_some());
+        assert!(store.get_nft(&nft_drop_id).unwrap().is_none());
+
+        let spores_in_cluster = store.list_spores_by_cluster(&cluster_id, 10).unwrap();
+        assert_eq!(spores_in_cluster.len(), 1);
+        assert_eq!(spores_in_cluster[0].0, spore_keep_id);
+
+        let class_tokens = store
+            .list_nft_ids_by_collection(&class_id, None, 10)
+            .unwrap();
+        assert_eq!(class_tokens.len(), 1);
+        assert_eq!(class_tokens[0], nft_keep_id);
+
+        let cluster_agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(cluster_agg.total_count, 1);
+        assert_eq!(cluster_agg.live_count, 1);
+        assert_eq!(cluster_agg.owner_count, 1);
+        assert_eq!(cluster_agg.fully_onchain_count, 1);
+
+        let class_agg = store
+            .get_nft_collection_aggregate(&class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(class_agg.total_count, 1);
+        assert_eq!(class_agg.live_count, 1);
+    }
+
+    #[test]
+    fn test_rollback_truncates_hodl_tracker_state_to_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_086_400_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.commit().unwrap();
+
+        store
+            .put_hodl_tracker_state(&HodlTrackerState {
+                capacity_by_date: vec![
+                    ("20231114".to_string(), 100),
+                    ("20231115".to_string(), 200),
+                ],
+                date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
+                holder_count: 9,
+                last_snapshot_date: Some("20231115".to_string()),
+            })
+            .unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        let repaired = store.get_hodl_tracker_state().unwrap().unwrap();
+        assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
+        assert_eq!(
+            repaired.capacity_by_date,
+            vec![("20231114".to_string(), 100)]
+        );
+        assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
     }
 }
