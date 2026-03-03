@@ -41,13 +41,7 @@ impl Repository {
             return Ok((num, Some(header.hash)));
         }
 
-        // Legacy fallback for older stores that may only have sync_status.
-        let (num, hash) = self.store.get_sync_tip()?;
-        if num > 0 || hash.is_some() {
-            Ok((num, hash))
-        } else {
-            Ok((0, None))
-        }
+        Ok((0, None))
     }
 
     pub async fn update_sync_tip(
@@ -123,7 +117,7 @@ mod tests {
 
     fn setup() -> TestCtx {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let repo = Repository::new(store.clone());
         TestCtx {
             _dir: dir,
@@ -156,7 +150,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_sync_tip_falls_back_to_sync_status_when_no_headers() {
+    async fn test_get_sync_tip_returns_default_when_no_headers() {
         let ctx = setup();
 
         ctx.store
@@ -167,7 +161,7 @@ mod tests {
             .unwrap();
 
         let (tip, hash) = ctx.repo.get_sync_tip().await.unwrap();
-        assert_eq!(tip, 7);
-        assert_eq!(hash, Some(vec![0xCD; 32]));
+        assert_eq!(tip, 0);
+        assert_eq!(hash, None);
     }
 }

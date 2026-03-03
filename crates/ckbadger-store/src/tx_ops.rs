@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn test_update_tx_cycles_by_hash() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let tx_hash = [0x11u8; 32];
         let block_num = 123;
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_update_tx_cycles_by_hash_not_found() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let tx_hash = [0x22u8; 32];
         let err = store.update_tx_cycles_by_hash(&tx_hash, 9_999).unwrap_err();

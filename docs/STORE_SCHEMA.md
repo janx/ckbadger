@@ -60,8 +60,8 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 
 ## Key Design
 
-- `CkbadgerStore::open(path)` — primary read-write mode for indexer and maintenance CLI commands (domain + append-only)
-- `CkbadgerStore::open_secondary(primary_path, secondary_path)` — read-only mode for API (domain + append-only)
+- `CkbadgerStore::open_domain(path)` / `open_append_only(path)` — primary read-write mode for indexer and maintenance commands (split domain + append-only)
+- `CkbadgerStore::open_domain_secondary(primary_path, secondary_path)` / `open_append_only_secondary(primary_path, secondary_path)` — read-only mode for API/TUI (split secondary stores)
 - All store operations are synchronous (RocksDB reads are fast)
 
 ## Memory Considerations

@@ -163,11 +163,6 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     match parts.as_slice() {
         // Current format: block_num:tx_idx
         [block_num, tx_idx] => Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?)),
-        // Backward-compatible format: block_num:tx_idx:seq
-        [block_num, tx_idx, seq] => {
-            let _ = seq.parse::<u64>().ok()?;
-            Some((block_num.parse::<i64>().ok()?, tx_idx.parse::<i32>().ok()?))
-        }
         _ => None,
     }
 }
@@ -336,10 +331,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_activity_cursor_supports_legacy_three_component_format() {
+    fn test_parse_activity_cursor_rejects_non_current_format() {
         assert_eq!(parse_activity_cursor("100:2"), Some((100, 2)));
-        assert_eq!(parse_activity_cursor("100:2:7"), Some((100, 2)));
-        assert_eq!(parse_activity_cursor("100:2:not-a-seq"), None);
+        assert_eq!(parse_activity_cursor("100:2:7"), None);
+        assert_eq!(parse_activity_cursor("100"), None);
     }
 
     #[test]

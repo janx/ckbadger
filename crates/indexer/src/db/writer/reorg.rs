@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn test_record_deep_fork_writes_event_and_sync_status_together() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         writer
@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_reorg_does_not_persist_event_when_rollback_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let key = keys::encode_block_num(1);

@@ -13168,7 +13168,7 @@ mod tests {
     #[test]
     fn test_build_activity_input_views_errors_when_input_cell_is_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let previous_tx_hash = [0x44; 32];
         let tx = dummy_tx_data(
             [0x11; 32],
@@ -13197,7 +13197,7 @@ mod tests {
     #[test]
     fn test_build_activity_input_views_uses_batch_fallback_cell_info() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let previous_tx_hash = [0x55; 32];
         let tx = dummy_tx_data(
             [0x22; 32],
@@ -13233,7 +13233,7 @@ mod tests {
     #[test]
     fn test_build_activity_input_views_marks_dao_withdraw_request_inputs() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let previous_tx_hash = [0x66; 32];
         let tx = dummy_tx_data(
             [0x33; 32],
@@ -13546,7 +13546,7 @@ mod tests {
     #[test]
     fn test_load_latest_dao_daily_snapshot_propagates_deserialize_error() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260101");
         store.put_cf(store.cf_stats_dao(), &key, b"broken").unwrap();
 
@@ -13668,7 +13668,7 @@ mod tests {
     #[test]
     fn test_resolve_input_udt_info_ignores_stale_cache_entry_for_non_live_outpoint() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store);
         let cache = DashMap::new();
 
@@ -13700,7 +13700,7 @@ mod tests {
     #[test]
     fn test_resolve_input_udt_info_reads_live_cells_and_refreshes_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let cache = DashMap::new();
 
@@ -13796,7 +13796,7 @@ mod tests {
     #[test]
     fn test_classify_unresolved_local_probe_marks_missing_everywhere() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store);
 
         let unresolved = vec![(vec![0x12; 32], 0i16)];
@@ -13813,7 +13813,7 @@ mod tests {
     #[test]
     fn test_classify_unresolved_local_probe_marks_tx_location_exists_without_cell() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let tx_hash = vec![0x34; 32];
 
@@ -15141,7 +15141,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_secondary_issuance_batch_propagates_error() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(Arc::clone(&store));
         let rpc = CkbRpcClient::new("http://127.0.0.1:1");
         let sem = Arc::new(tokio::sync::Semaphore::new(1));
@@ -15285,7 +15285,7 @@ mod tests {
     #[test]
     fn test_load_activity_token_info_cache_prefers_symbol_and_converts_decimals() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let type_hash = vec![0xAA; 32];
         let mut batch = StoreBatch::new(&store);
@@ -15316,7 +15316,7 @@ mod tests {
     #[test]
     fn test_load_activity_token_info_cache_errors_on_invalid_decimals() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let type_hash = vec![0xAB; 32];
         let mut batch = StoreBatch::new(&store);
@@ -16048,7 +16048,7 @@ mod tests {
         // to normal, if compaction_pressure reports high L0 files, we should NOT restore
         // normal mode yet.
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
 
         // Enter bulk mode
         store.set_bulk_sync_compaction_options();
@@ -16069,7 +16069,7 @@ mod tests {
     fn test_ensure_compaction_mode_reentry() {
         // Verifies that after restoring normal mode, re-entering bulk mode works
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
 
         // Enter bulk
         store.set_bulk_sync_compaction_options();

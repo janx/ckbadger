@@ -1,113 +1,12 @@
 //! Sync status operations.
 
 use anyhow::anyhow;
-use serde::Deserialize;
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
 use crate::types::{DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct LegacyRuntimeStatusV1 {
-    pub active_run_id: Option<String>,
-    pub last_run_id: Option<String>,
-    pub run_started_at: i64,
-    pub last_heartbeat_at: i64,
-    pub last_heartbeat_block: i64,
-    pub last_shutdown_reason: Option<String>,
-    pub last_exit_code: Option<i32>,
-    pub last_incident_id: Option<String>,
-    pub last_incident_at: i64,
-    pub last_incident_summary: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct LegacyRuntimeStatusV2 {
-    pub active_run_id: Option<String>,
-    pub last_run_id: Option<String>,
-    pub run_started_at: i64,
-    pub last_heartbeat_at: i64,
-    pub last_heartbeat_block: i64,
-    pub last_shutdown_reason: Option<String>,
-    pub last_exit_code: Option<i32>,
-    pub last_incident_id: Option<String>,
-    pub last_incident_at: i64,
-    pub last_incident_summary: Option<String>,
-    pub last_shutdown_at: i64,
-}
-
-impl From<LegacyRuntimeStatusV1> for RuntimeStatus {
-    fn from(value: LegacyRuntimeStatusV1) -> Self {
-        Self {
-            active_run_id: value.active_run_id,
-            last_run_id: value.last_run_id,
-            run_started_at: value.run_started_at,
-            last_heartbeat_at: value.last_heartbeat_at,
-            last_heartbeat_block: value.last_heartbeat_block,
-            last_heartbeat_target_block: value.last_heartbeat_block,
-            last_heartbeat_stage: None,
-            last_heartbeat_oom_events: None,
-            last_heartbeat_oom_kill_events: None,
-            last_shutdown_reason: value.last_shutdown_reason,
-            last_exit_code: value.last_exit_code,
-            last_shutdown_at: 0,
-            last_incident_id: value.last_incident_id,
-            last_incident_at: value.last_incident_at,
-            last_incident_summary: value.last_incident_summary,
-        }
-    }
-}
-
-impl From<LegacyRuntimeStatusV2> for RuntimeStatus {
-    fn from(value: LegacyRuntimeStatusV2) -> Self {
-        Self {
-            active_run_id: value.active_run_id,
-            last_run_id: value.last_run_id,
-            run_started_at: value.run_started_at,
-            last_heartbeat_at: value.last_heartbeat_at,
-            last_heartbeat_block: value.last_heartbeat_block,
-            last_heartbeat_target_block: value.last_heartbeat_block,
-            last_heartbeat_stage: None,
-            last_heartbeat_oom_events: None,
-            last_heartbeat_oom_kill_events: None,
-            last_shutdown_reason: value.last_shutdown_reason,
-            last_exit_code: value.last_exit_code,
-            last_shutdown_at: value.last_shutdown_at,
-            last_incident_id: value.last_incident_id,
-            last_incident_at: value.last_incident_at,
-            last_incident_summary: value.last_incident_summary,
-        }
-    }
-}
-
 impl CkbadgerStore {
-    fn parse_reorg_event_key_ordering(key: &[u8]) -> Option<(i64, u64)> {
-        let key_str = std::str::from_utf8(key).ok()?;
-        let payload = key_str.strip_prefix("reorg:")?;
-        let mut parts = payload.split(':');
-        let ts_ms_str = parts.next()?;
-        let seq_str = parts.next();
-        if parts.next().is_some() {
-            return None;
-        }
-        let ts_ms = ts_ms_str.parse::<i64>().ok()?;
-        let seq = match seq_str {
-            Some(raw) => raw.parse::<u64>().ok()?,
-            None => 0,
-        };
-        Some((ts_ms, seq))
-    }
-
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_STATUS)? {
             Some(value) => Ok(bincode::deserialize(&value)?),
@@ -131,21 +30,7 @@ impl CkbadgerStore {
 
     pub fn get_runtime_status(&self) -> anyhow::Result<RuntimeStatus> {
         match self.get_cf(self.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS)? {
-            Some(value) => match bincode::deserialize::<RuntimeStatus>(&value) {
-                Ok(status) => Ok(status),
-                Err(primary_err) => match bincode::deserialize::<LegacyRuntimeStatusV2>(&value) {
-                    Ok(legacy_v2) => Ok(legacy_v2.into()),
-                    Err(v2_err) => match bincode::deserialize::<LegacyRuntimeStatusV1>(&value) {
-                        Ok(legacy_v1) => Ok(legacy_v1.into()),
-                        Err(v1_err) => Err(anyhow!(
-                            "failed to deserialize runtime_status as current or legacy format: current={:#} legacy_v2={:#} legacy_v1={:#}",
-                            primary_err,
-                            v2_err,
-                            v1_err
-                        )),
-                    },
-                },
-            },
+            Some(value) => Ok(bincode::deserialize::<RuntimeStatus>(&value)?),
             None => Ok(RuntimeStatus::default()),
         }
     }
@@ -379,37 +264,7 @@ impl CkbadgerStore {
             return Ok(Some(event));
         }
 
-        // Legacy fallback: scan only reorg:* keys and select the numerically latest one.
-        let iter = self.prefix_iterator_cf(self.cf_sync_meta(), b"reorg:");
-        let mut latest: Option<((i64, u64), ReorgEvent)> = None;
-
-        for item in iter {
-            let (key, value) = item.map_err(|e| anyhow!("failed to iterate sync_meta: {}", e))?;
-            if !key.starts_with(b"reorg:") {
-                break;
-            }
-
-            let ordering = Self::parse_reorg_event_key_ordering(&key).ok_or_else(|| {
-                anyhow!(
-                    "invalid reorg event key format in sync_meta: key=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
-            let event: ReorgEvent = bincode::deserialize(&value).map_err(|e| {
-                anyhow!(
-                    "failed to deserialize reorg event in sync_meta: key=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
-                )
-            })?;
-
-            match &latest {
-                Some((existing_ordering, _)) if *existing_ordering >= ordering => {}
-                _ => latest = Some((ordering, event)),
-            }
-        }
-
-        Ok(latest.map(|(_, event)| event))
+        Ok(None)
     }
 }
 
@@ -417,41 +272,11 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use crate::keys::sync_meta_keys;
-    use serde::Serialize;
-
-    #[derive(Debug, Clone, Serialize)]
-    struct LegacyRuntimeStatusForTest {
-        pub active_run_id: Option<String>,
-        pub last_run_id: Option<String>,
-        pub run_started_at: i64,
-        pub last_heartbeat_at: i64,
-        pub last_heartbeat_block: i64,
-        pub last_shutdown_reason: Option<String>,
-        pub last_exit_code: Option<i32>,
-        pub last_incident_id: Option<String>,
-        pub last_incident_at: i64,
-        pub last_incident_summary: Option<String>,
-    }
-
-    #[derive(Debug, Clone, Serialize)]
-    struct LegacyRuntimeStatusV2ForTest {
-        pub active_run_id: Option<String>,
-        pub last_run_id: Option<String>,
-        pub run_started_at: i64,
-        pub last_heartbeat_at: i64,
-        pub last_heartbeat_block: i64,
-        pub last_shutdown_reason: Option<String>,
-        pub last_exit_code: Option<i32>,
-        pub last_incident_id: Option<String>,
-        pub last_incident_at: i64,
-        pub last_incident_summary: Option<String>,
-        pub last_shutdown_at: i64,
-    }
 
     #[test]
     fn test_runtime_status_lifecycle() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let initial = store.get_runtime_status().unwrap();
         assert!(initial.active_run_id.is_none());
@@ -513,7 +338,7 @@ mod tests {
     #[test]
     fn test_runtime_heartbeat_noop_after_shutdown_marker() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         store.mark_runtime_run_start("run-1", 120).unwrap();
         store
@@ -529,7 +354,7 @@ mod tests {
     #[test]
     fn test_runtime_heartbeat_fails_on_active_run_mismatch() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         store.mark_runtime_run_start("run-2", 120).unwrap();
         let err = store.mark_runtime_heartbeat("run-1", 130).unwrap_err();
@@ -543,7 +368,7 @@ mod tests {
     #[test]
     fn test_runtime_shutdown_fails_on_run_mismatch() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         store.mark_runtime_run_start("run-2", 120).unwrap();
         let err = store
@@ -557,91 +382,25 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_status_deserialize_legacy_v1() {
+    fn test_runtime_status_deserialize_invalid_payload_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let legacy = LegacyRuntimeStatusForTest {
-            active_run_id: Some("run-legacy".to_string()),
-            last_run_id: Some("run-legacy".to_string()),
-            run_started_at: 10,
-            last_heartbeat_at: 20,
-            last_heartbeat_block: 30,
-            last_shutdown_reason: Some("sigterm_shutdown".to_string()),
-            last_exit_code: Some(0),
-            last_incident_id: Some("inc-1".to_string()),
-            last_incident_at: 40,
-            last_incident_summary: Some("legacy".to_string()),
-        };
-        let bytes = bincode::serialize(&legacy).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         store
-            .put_cf(store.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &bytes)
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::RUNTIME_STATUS,
+                b"invalid-payload",
+            )
             .unwrap();
 
-        let status = store.get_runtime_status().unwrap();
-        assert_eq!(status.active_run_id.as_deref(), Some("run-legacy"));
-        assert_eq!(status.last_run_id.as_deref(), Some("run-legacy"));
-        assert_eq!(status.run_started_at, 10);
-        assert_eq!(status.last_heartbeat_at, 20);
-        assert_eq!(status.last_heartbeat_block, 30);
-        assert_eq!(status.last_heartbeat_target_block, 30);
-        assert!(status.last_heartbeat_stage.is_none());
-        assert!(status.last_heartbeat_oom_events.is_none());
-        assert!(status.last_heartbeat_oom_kill_events.is_none());
-        assert_eq!(
-            status.last_shutdown_reason.as_deref(),
-            Some("sigterm_shutdown")
-        );
-        assert_eq!(status.last_exit_code, Some(0));
-        assert_eq!(status.last_shutdown_at, 0);
-        assert_eq!(status.last_incident_id.as_deref(), Some("inc-1"));
-        assert_eq!(status.last_incident_at, 40);
-        assert_eq!(status.last_incident_summary.as_deref(), Some("legacy"));
-    }
-
-    #[test]
-    fn test_runtime_status_deserialize_legacy_v2() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let legacy = LegacyRuntimeStatusV2ForTest {
-            active_run_id: Some("run-v2".to_string()),
-            last_run_id: Some("run-v2".to_string()),
-            run_started_at: 11,
-            last_heartbeat_at: 22,
-            last_heartbeat_block: 33,
-            last_shutdown_reason: Some("run_error".to_string()),
-            last_exit_code: Some(1),
-            last_incident_id: Some("inc-v2".to_string()),
-            last_incident_at: 44,
-            last_incident_summary: Some("legacy-v2".to_string()),
-            last_shutdown_at: 55,
-        };
-        let bytes = bincode::serialize(&legacy).unwrap();
-        store
-            .put_cf(store.cf_sync_meta(), sync_meta_keys::RUNTIME_STATUS, &bytes)
-            .unwrap();
-
-        let status = store.get_runtime_status().unwrap();
-        assert_eq!(status.active_run_id.as_deref(), Some("run-v2"));
-        assert_eq!(status.last_run_id.as_deref(), Some("run-v2"));
-        assert_eq!(status.run_started_at, 11);
-        assert_eq!(status.last_heartbeat_at, 22);
-        assert_eq!(status.last_heartbeat_block, 33);
-        assert_eq!(status.last_heartbeat_target_block, 33);
-        assert!(status.last_heartbeat_stage.is_none());
-        assert!(status.last_heartbeat_oom_events.is_none());
-        assert!(status.last_heartbeat_oom_kill_events.is_none());
-        assert_eq!(status.last_shutdown_reason.as_deref(), Some("run_error"));
-        assert_eq!(status.last_exit_code, Some(1));
-        assert_eq!(status.last_shutdown_at, 55);
-        assert_eq!(status.last_incident_id.as_deref(), Some("inc-v2"));
-        assert_eq!(status.last_incident_at, 44);
-        assert_eq!(status.last_incident_summary.as_deref(), Some("legacy-v2"));
+        let err = store.get_runtime_status().unwrap_err();
+        assert!(!err.to_string().is_empty(), "unexpected empty error");
     }
 
     #[test]
     fn test_rollback_cleanup_in_progress_marker_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         assert!(!store.is_rollback_cleanup_in_progress().unwrap());
 
@@ -653,96 +412,17 @@ mod tests {
     }
 
     #[test]
-    fn test_get_latest_reorg_event_uses_numeric_ordering() {
+    fn test_get_latest_reorg_event_returns_none_without_latest_marker() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-
-        let event_seq_9 = ReorgEvent {
-            detected_at: 111,
-            rollback_from: 10,
-            rollback_to: 9,
-            depth: 1,
-        };
-        let event_seq_10 = ReorgEvent {
-            detected_at: 222,
-            rollback_from: 11,
-            rollback_to: 10,
-            depth: 1,
-        };
-
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                b"reorg:1700000000000:9",
-                &bincode::serialize(&event_seq_9).unwrap(),
-            )
-            .unwrap();
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                b"reorg:1700000000000:10",
-                &bincode::serialize(&event_seq_10).unwrap(),
-            )
-            .unwrap();
-
-        let latest = store.get_latest_reorg_event().unwrap().unwrap();
-        assert_eq!(latest.detected_at, 222);
-    }
-
-    #[test]
-    fn test_get_latest_reorg_event_accepts_legacy_single_segment_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let event = ReorgEvent {
-            detected_at: 333,
-            rollback_from: 12,
-            rollback_to: 11,
-            depth: 1,
-        };
-
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                b"reorg:1700000000001",
-                &bincode::serialize(&event).unwrap(),
-            )
-            .unwrap();
-
-        let latest = store.get_latest_reorg_event().unwrap().unwrap();
-        assert_eq!(latest.detected_at, 333);
-        assert_eq!(latest.rollback_from, 12);
-        assert_eq!(latest.rollback_to, 11);
-    }
-
-    #[test]
-    fn test_get_latest_reorg_event_fails_on_malformed_reorg_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
-        let event = ReorgEvent {
-            detected_at: 1,
-            rollback_from: 1,
-            rollback_to: 0,
-            depth: 1,
-        };
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                b"reorg:bad-ts:1",
-                &bincode::serialize(&event).unwrap(),
-            )
-            .unwrap();
-
-        let err = store.get_latest_reorg_event().unwrap_err();
-        assert!(
-            err.to_string().contains("invalid reorg event key format"),
-            "unexpected error: {err}"
-        );
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let latest = store.get_latest_reorg_event().unwrap();
+        assert!(latest.is_none());
     }
 
     #[test]
     fn test_get_latest_reorg_event_uses_latest_marker_when_present() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let latest_event = ReorgEvent {
             detected_at: 999,
             rollback_from: 21,
@@ -750,7 +430,7 @@ mod tests {
             depth: 1,
         };
 
-        // Insert a malformed legacy key that would fail the fallback scanner.
+        // Legacy-style keys no longer participate in reads.
         store
             .put_cf(
                 store.cf_sync_meta(),
@@ -774,7 +454,7 @@ mod tests {
     #[test]
     fn test_get_latest_reorg_event_fails_on_malformed_latest_marker() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         store
             .put_cf(
                 store.cf_sync_meta(),

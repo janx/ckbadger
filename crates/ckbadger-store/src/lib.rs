@@ -10,10 +10,10 @@
 //! use ckbadger_store::CkbadgerStore;
 //!
 //! // Primary (read-write) — used by indexer
-//! let store = CkbadgerStore::open("./data/ckbadger-store").unwrap();
+//! let store = CkbadgerStore::open_domain("./data/ckbadger-store").unwrap();
 //!
 //! // Secondary (read-only) — used by API/TUI
-//! let reader = CkbadgerStore::open_secondary(
+//! let reader = CkbadgerStore::open_domain_secondary(
 //!     "./data/ckbadger-store",
 //!     "./data/ckbadger-store-secondary",
 //! ).unwrap();

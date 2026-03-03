@@ -364,7 +364,7 @@ mod tests {
 
     fn setup() -> (TempDir, Arc<CkbadgerStore>, BatchWriter) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         (dir, store, writer)
     }

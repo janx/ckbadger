@@ -20,7 +20,7 @@ use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
-type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::SporeEntry)>;
+type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::DobEntry)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -261,7 +261,7 @@ pub struct SporeDobDecodeResponse {
 /// Convert a DobEntry from the store into a SporeResponse.
 fn spore_to_response(
     spore_id: &[u8],
-    entry: &ckbadger_store::SporeEntry,
+    entry: &ckbadger_store::DobEntry,
     live_capacity: Option<i128>,
     live_occupied_capacity: Option<i128>,
 ) -> SporeResponse {
@@ -827,7 +827,7 @@ fn is_text_like_content_type(content_type: &str) -> bool {
 fn load_spore_content_from_ckb(
     state: &Arc<AppState>,
     spore_id: &[u8],
-    entry: &ckbadger_store::SporeEntry,
+    entry: &ckbadger_store::DobEntry,
 ) -> anyhow::Result<(String, Vec<u8>)> {
     let ckb_store = state
         .ckb_store
@@ -1184,14 +1184,14 @@ fn load_spores_cached_or_store(state: &Arc<AppState>) -> Result<CachedSporeRows,
 }
 
 fn collect_spore_page<F>(
-    all_spores: &[(Vec<u8>, ckbadger_store::SporeEntry)],
+    all_spores: &[(Vec<u8>, ckbadger_store::DobEntry)],
     limit: usize,
     mut predicate: F,
-) -> Vec<(&Vec<u8>, &ckbadger_store::SporeEntry)>
+) -> Vec<(&Vec<u8>, &ckbadger_store::DobEntry)>
 where
-    F: FnMut(&ckbadger_store::SporeEntry) -> bool,
+    F: FnMut(&ckbadger_store::DobEntry) -> bool,
 {
-    let mut page: Vec<(&Vec<u8>, &ckbadger_store::SporeEntry)> = Vec::with_capacity(limit + 1);
+    let mut page: Vec<(&Vec<u8>, &ckbadger_store::DobEntry)> = Vec::with_capacity(limit + 1);
     for (spore_id, entry) in all_spores {
         if !predicate(entry) {
             continue;
@@ -1833,8 +1833,8 @@ mod tests {
     fn make_spore_entry(
         created_at_block: i64,
         owner_lock_hash: Option<Vec<u8>>,
-    ) -> ckbadger_store::SporeEntry {
-        ckbadger_store::SporeEntry {
+    ) -> ckbadger_store::DobEntry {
+        ckbadger_store::DobEntry {
             standard: ckbadger_store::DobStandard::Spore,
             collection_id: None,
             owner_lock_hash,

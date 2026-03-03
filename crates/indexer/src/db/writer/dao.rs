@@ -1137,7 +1137,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_tx_hash = vec![0xAA; 32];
@@ -1194,7 +1194,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let mut batch = StoreBatch::new(&store);
@@ -1254,7 +1254,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let original_tx_hash = vec![0xAA; 32];
@@ -1313,7 +1313,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let original_tx_hash = vec![0xAB; 32];
@@ -1373,7 +1373,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let mut batch = StoreBatch::new(&store);
@@ -1461,7 +1461,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         // A deposit that exists only in pending_deposits, NOT in the committed store
@@ -1578,7 +1578,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_a_tx = vec![0xA1; 32];
@@ -1665,7 +1665,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_tx_hash = vec![0xAA; 32];
@@ -1724,7 +1724,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_tx_hash = vec![0xA1; 32];
@@ -1799,7 +1799,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_a_tx = vec![0xA1; 32];
@@ -1965,7 +1965,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store);
 
         let tx_hash = [0xAB; 32];
@@ -1983,7 +1983,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store);
 
         let tx_hash = [0xCD; 32];
@@ -2002,7 +2002,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_tx = vec![0xA1; 32];
@@ -2089,7 +2089,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
 
         let deposit_tx = vec![0xA5; 32];
@@ -2169,7 +2169,7 @@ mod tests {
         use std::sync::Arc;
 
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = super::super::BatchWriter::new(store.clone());
         let mut batch = StoreBatch::new(&store);
 

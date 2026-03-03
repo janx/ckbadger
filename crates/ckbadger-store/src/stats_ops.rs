@@ -970,7 +970,7 @@ mod tests {
     #[test]
     fn test_hodl_wave_put_get_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         let wave = DailyHodlWave {
             band_24h: 100_000_000,
@@ -998,7 +998,7 @@ mod tests {
     #[test]
     fn test_hodl_wave_list_sorted() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         let wave1 = DailyHodlWave {
             band_24h: 100,
@@ -1035,7 +1035,7 @@ mod tests {
     #[test]
     fn test_list_hodl_waves_fails_on_invalid_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let key = keys::encode_stats_key(stats_prefix::HODL_WAVE, b"20240115");
         store
             .put_cf(store.cf_stats_hodl(), &key, b"invalid-hodl-wave")
@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn test_hodl_tracker_state_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         // Initially none
         assert!(store.get_hodl_tracker_state().unwrap().is_none());
@@ -1077,7 +1077,7 @@ mod tests {
     #[test]
     fn test_script_daily_delta_roundtrip_and_list() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let code_hash = vec![0xAB; 32];
 
         let d1 = ScriptDailyDelta {
@@ -1120,7 +1120,7 @@ mod tests {
     #[test]
     fn test_rebuild_script_infos_from_cells_preserves_metadata_and_recomputes_usage() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         let lock_code_hash = vec![0x11; 32];
         let type_code_hash = vec![0x22; 32];
@@ -1243,7 +1243,7 @@ mod tests {
     #[test]
     fn test_list_script_infos_fails_on_invalid_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let code_hash = vec![0xAB; 32];
         store
             .put_cf(store.cf_script_info(), &code_hash, b"invalid-script-info")
@@ -1258,7 +1258,7 @@ mod tests {
     #[test]
     fn test_rebuild_script_infos_from_cells_fails_on_invalid_consumed_key_length() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         let bad_key = [0xAB; 3];
         let bad_value = [0xCD; 5];
@@ -1277,7 +1277,7 @@ mod tests {
     #[test]
     fn test_rebuild_script_infos_from_cells_fails_on_legacy_consumed_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let outpoint = crate::keys::encode_outpoint(&[0xAB; 32], 0);
         let cell = LiveCellInfo {
             capacity: 1000,
@@ -1331,7 +1331,7 @@ mod tests {
     #[test]
     fn test_dao_daily_snapshot_get_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         let snap = DaoDailySnapshot {
             date: "2024-01-15".to_string(),
@@ -1396,7 +1396,7 @@ mod tests {
         // Simulates a multi-day batch where each date must chain from the
         // previous date's cumulative values (not a stale store snapshot).
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
         // Seed an initial "day 0" snapshot in the store
         let day0 = DaoDailySnapshot {

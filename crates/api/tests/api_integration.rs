@@ -19,7 +19,7 @@ use ckbadger_store::CkbadgerStore;
 
 fn test_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
-    Arc::new(CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap())
+    Arc::new(CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap())
 }
 
 fn test_config_with_append_only(
@@ -232,7 +232,7 @@ async fn test_forks_uses_persisted_reorg_detected_at_timestamp() {
     store
         .put_cf(
             store.cf_sync_meta(),
-            b"reorg:1700000123000:0",
+            ckbadger_store::keys::sync_meta_keys::REORG_LATEST_EVENT,
             &bincode::serialize(&event).unwrap(),
         )
         .unwrap();
@@ -1325,7 +1325,14 @@ async fn test_dao_stats_empty_db() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("missing sync tip block while computing DAO statistics"));
 }
 
 #[tokio::test]
@@ -2965,6 +2972,64 @@ async fn test_get_token_includes_maximum_supply() {
 }
 
 #[tokio::test]
+async fn test_get_token_errors_when_token_cache_unavailable() {
+    let store = test_store();
+    let type_hash = vec![0x78; 32];
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Broken Cache Token".to_string()),
+                symbol: Some("BCT".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500_00000000),
+                max_supply: None,
+                holders_count: 0,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    // Make warmup fail so token cache key is absent.
+    store
+        .put_token_daily_delta(
+            &type_hash,
+            20240115,
+            &TokenDailyDelta {
+                live_capacity_delta: 100,
+                live_occupied_capacity_delta: 120,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/{}", type_hash_hex))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("token asset cache unavailable; warmup in progress"));
+}
+
+#[tokio::test]
 async fn test_get_token_maximum_supply_status_without_cap() {
     let store = test_store();
 
@@ -3532,6 +3597,48 @@ async fn test_spore_cluster_activities_supports_action_filter() {
 
     // Write pre-computed collection activities (the index the handler now reads)
     let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_hash_map(&mint_tx, 100, 0);
+    batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    batch.put_tx_hash_map(&burn_tx, 300, 0);
+    batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
+    batch.put_tx_index(
+        200,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_200,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
+    batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_300,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
     batch.put_nft_collection_activity(
         &cluster_id,
         100,
@@ -4393,8 +4500,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"], "internal_error");
     let message = json["message"].as_str().unwrap();
-    assert!(message.contains("invalid token daily deltas"));
-    assert!(message.contains(&hex::encode(broken_token)));
+    assert!(message.contains("token asset cache unavailable; warmup in progress"));
 }
 
 #[tokio::test]
@@ -5040,7 +5146,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
 }
 
 #[tokio::test]
-async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index() {
+async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_with_live_cell() {
     let store = test_store();
     let collection_id = b"dotbit_collection_______________".to_vec();
     let dotbit_code_hash =
@@ -5067,7 +5173,7 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
             collection_id: None,
             token_id: Some(nft_id.to_vec()),
             owner_lock_hash: Some(vec![0x31; 32]),
-            name: Some("fallback.bit".to_string()),
+            name: Some("indexed.bit".to_string()),
             is_live: true,
             created_at_block: 100,
             extra: NftExtra::DotBit {
@@ -5097,7 +5203,7 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
         },
     );
     batch.put_cell_by_type(&nft_type_hash, 100, &tx_hash, output_index);
-    // Intentionally no put_dotbit_account_outpoint(...) to verify fallback path.
+    // Intentionally no put_dotbit_account_outpoint(...): live cell exists but index is required.
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -5108,18 +5214,14 @@ async fn test_assets_nft_collection_items_dotbit_outpoint_fallback_without_index
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    assert_eq!(json["data"].as_array().unwrap().len(), 1);
-    assert_eq!(json["data"][0]["name"], "fallback.bit");
-    assert_eq!(json["data"][0]["isLive"], true);
-    assert_eq!(
-        json["data"][0]["txHash"],
-        format!("0x{}", hex::encode(&tx_hash))
-    );
-    assert_eq!(json["data"][0]["outputIndex"], output_index);
+    assert_eq!(json["error"], "internal_error");
+    assert!(json["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("live dotbit account missing outpoint index"));
 }
 
 #[tokio::test]
@@ -6314,6 +6416,20 @@ async fn test_address_activities_reads_from_derived_store() {
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_activity(&lock_hash, 10, 0, &activity);
+    core_batch.put_tx_hash_map(&activity.tx_hash, 10, 0);
+    core_batch.put_tx_index(
+        10,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        },
+    );
     core_batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {
@@ -6804,6 +6920,20 @@ async fn test_address_transactions_reads_from_derived_store() {
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
     core_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
+    core_batch.put_tx_hash_map(&tx_hash, 10, 0);
+    core_batch.put_tx_index(
+        10,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 2,
+            fee: 1000,
+            tx_size: 120,
+            cycles: Some(10_000),
+        },
+    );
     core_batch.commit().unwrap();
     core_store
         .update_sync_status(|s| {

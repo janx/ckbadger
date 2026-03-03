@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
     std::mem::forget(dir);
     store
 }

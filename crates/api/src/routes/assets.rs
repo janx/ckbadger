@@ -13,7 +13,6 @@ use std::time::Duration;
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::address::compute_script_hash;
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready, parse_chart_date_range,
     resolve_nft_collection_name,
@@ -23,10 +22,7 @@ use crate::AppState;
 
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
-const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
-    "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
-type DotbitLiveOutpoint = Option<(String, i16)>;
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
 
@@ -369,7 +365,7 @@ async fn list_assets(
 }
 
 /// Read from in-memory cache, apply search filter + cursor-based pagination.
-/// Falls back to direct computation when cache is cold.
+/// Returns an explicit error when cache is unavailable.
 struct CachedAssetsRequest<'a> {
     standard: Option<&'a str>,
     storage_tier: Option<&'a str>,
@@ -540,12 +536,11 @@ fn normalize_assets_storage_tier(
 }
 
 /// Parse cursor string.
-/// New format: "asset_type:id"
-/// Legacy format: "transfers_24h:holders_count:id:asset_type"
+/// Current format: "asset_type:id"
 fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
     let normalize_type = |asset_type: &str| match asset_type {
         "token" => Some("token"),
-        "nft" | "dob" => Some("nft"),
+        "nft" => Some("nft"),
         _ => None,
     };
 
@@ -553,13 +548,6 @@ fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
     if parts.len() == 2 {
         if let Some(asset_type) = normalize_type(parts[0]) {
             return Some((asset_type.to_string(), parts[1].to_string()));
-        }
-    }
-
-    let legacy_parts: Vec<&str> = cursor.splitn(4, ':').collect();
-    if legacy_parts.len() == 4 {
-        if let Some(asset_type) = normalize_type(legacy_parts[3]) {
-            return Some((asset_type.to_string(), legacy_parts[2].to_string()));
         }
     }
 
@@ -993,45 +981,6 @@ fn nft_item_matches_search(
 
     let nft_id_hex = hex::encode(nft_id);
     nft_id_hex.contains(search) || format!("0x{nft_id_hex}").contains(search)
-}
-
-fn resolve_dotbit_live_outpoint_by_type_hash(
-    state: &Arc<AppState>,
-    nft_id: &[u8],
-) -> Result<DotbitLiveOutpoint, ApiRouteError> {
-    if nft_id.len() != 20 {
-        return Ok(None);
-    }
-
-    let dotbit_code_hash = hex::decode(
-        DOTBIT_ACCOUNT_CELL_TYPE_ID
-            .trim_start_matches("0x")
-            .as_bytes(),
-    )
-    .map_err(|e| {
-        ApiError::internal(format!(
-            "failed to decode DOTBIT_ACCOUNT_CELL_TYPE_ID: {}",
-            e
-        ))
-    })?;
-
-    let type_hash = compute_script_hash(&dotbit_code_hash, 1, nft_id);
-    let cells = state
-        .store
-        .list_cells_by_type(&type_hash, 2, None)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    if cells.len() > 1 {
-        return Err(ApiError::internal(format!(
-            "dotbit type hash maps to multiple live cells: nft_id=0x{}, type_hash=0x{}, count={}",
-            hex::encode(nft_id),
-            hex::encode(&type_hash),
-            cells.len()
-        )));
-    }
-
-    Ok(cells
-        .first()
-        .map(|(tx_hash, output_index, _)| (format!("0x{}", hex::encode(tx_hash)), *output_index)))
 }
 
 fn pad_collection_id_32(id: &[u8]) -> [u8; 32] {
@@ -2046,23 +1995,17 @@ async fn list_nft_collection_items(
         let (tx_hash, output_index) = match entry.standard {
             ckbadger_store::types::NftStandard::DotBit => {
                 if entry.is_live {
-                    if let Some((tx_hash, output_index)) = dotbit_live_outpoints.get(nft_id) {
-                        (
-                            Some(format!("0x{}", hex::encode(tx_hash))),
-                            Some(*output_index),
-                        )
-                    } else {
-                        // Fallback path for old DBs where dotbit outpoint index entries are missing.
-                        let fallback = resolve_dotbit_live_outpoint_by_type_hash(&state, nft_id)?;
-                        let Some((tx_hash, output_index)) = fallback else {
-                            return Err(ApiError::internal(format!(
-                                "live dotbit account missing outpoint index: collection_id=0x{}, nft_id=0x{}",
-                                hex::encode(&collection_id_bytes),
-                                hex::encode(nft_id)
-                            )));
-                        };
-                        (Some(tx_hash), Some(output_index))
-                    }
+                    let (tx_hash, output_index) = dotbit_live_outpoints.get(nft_id).ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "live dotbit account missing outpoint index: collection_id=0x{}, nft_id=0x{}",
+                            hex::encode(&collection_id_bytes),
+                            hex::encode(nft_id)
+                        ))
+                    })?;
+                    (
+                        Some(format!("0x{}", hex::encode(tx_hash))),
+                        Some(*output_index),
+                    )
                 } else {
                     (None, None)
                 }
@@ -2457,21 +2400,16 @@ async fn get_dotbit_item_detail(
             .store
             .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&nft_id_bytes))
             .map_err(|e| ApiError::internal(e.to_string()))?;
-        if let Some((tx_hash, output_index)) = outpoint_map.get(&nft_id_bytes) {
-            (
-                Some(format!("0x{}", hex::encode(tx_hash))),
-                Some(*output_index),
-            )
-        } else {
-            let fallback = resolve_dotbit_live_outpoint_by_type_hash(&state, &nft_id_bytes)?;
-            let Some((tx_hash, output_index)) = fallback else {
-                return Err(ApiError::internal(format!(
-                    "live dotbit account missing outpoint index: nft_id=0x{}",
-                    hex::encode(&nft_id_bytes)
-                )));
-            };
-            (Some(tx_hash), Some(output_index))
-        }
+        let (tx_hash, output_index) = outpoint_map.get(&nft_id_bytes).ok_or_else(|| {
+            ApiError::internal(format!(
+                "live dotbit account missing outpoint index: nft_id=0x{}",
+                hex::encode(&nft_id_bytes)
+            ))
+        })?;
+        (
+            Some(format!("0x{}", hex::encode(tx_hash))),
+            Some(*output_index),
+        )
     } else {
         (None, None)
     };
@@ -2614,6 +2552,20 @@ mod tests {
             timestamp_ms,
             actions: vec![action],
         }
+    }
+
+    #[test]
+    fn test_parse_asset_cursor_accepts_only_current_format() {
+        assert_eq!(
+            parse_asset_cursor("token:0xabc"),
+            Some(("token".to_string(), "0xabc".to_string()))
+        );
+        assert_eq!(
+            parse_asset_cursor("nft:0xdef"),
+            Some(("nft".to_string(), "0xdef".to_string()))
+        );
+        assert_eq!(parse_asset_cursor("dob:0xdef"), None);
+        assert_eq!(parse_asset_cursor("1:2:3:nft"), None);
     }
 
     #[test]

@@ -571,7 +571,7 @@ mod tests {
     #[test]
     fn test_update_token_daily_deltas_batch_accumulates_and_deletes_zero_net() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let type_hash = vec![0xAA; 32];
 
@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn test_update_token_daily_deltas_batch_fails_on_corrupted_existing_value() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let type_hash = vec![0xAC; 32];
         let date = 20240115u32;
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_falls_back_to_token_type_code_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAB; 32];
@@ -700,7 +700,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_does_not_use_consumed_cell_fallback() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xBA; 32];
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_ignores_typed_cells_without_token_metadata() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xEE; 32];
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_skips_xudt_cells_without_amount() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAC; 32];
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_errors_on_sudt_cells_without_amount() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAD; 32];
@@ -895,7 +895,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_initializes_missing_total_supply() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAA; 32];
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_persists_transfer_and_holder_updates_together() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAD; 32];
@@ -1013,7 +1013,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_buckets_hourly_transfers_by_each_block_timestamp() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xA1; 32];
@@ -1087,7 +1087,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_with_state_accumulates_hourly_in_same_uncommitted_batch() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xB1; 32];
@@ -1172,7 +1172,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_applies_max_supply_without_transfers() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAB; 32];
@@ -1219,7 +1219,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_errors_on_supply_underflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAC; 32];
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_errors_on_holders_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAD; 32];
@@ -1339,7 +1339,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_errors_on_missing_block_timestamp() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAE; 32];

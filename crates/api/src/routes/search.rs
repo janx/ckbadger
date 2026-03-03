@@ -502,7 +502,7 @@ async fn search(
             .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT);
         let cached_spores = state
             .mem_cache
-            .get::<Vec<(Vec<u8>, ckbadger_store::SporeEntry)>>(CACHE_KEY_SPORES_ALL);
+            .get::<Vec<(Vec<u8>, ckbadger_store::DobEntry)>>(CACHE_KEY_SPORES_ALL);
 
         if scope_allows(scope, &[SearchScope::Script]) {
             let cached = cached_scripts.as_ref().ok_or_else(|| {

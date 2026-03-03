@@ -28,10 +28,6 @@ pub const CLUSTER_CODE_HASH_TESTNET_V2: &str =
 pub const CLUSTER_CODE_HASH_TESTNET_V1: &str =
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080";
 
-// Legacy aliases for backward compatibility
-pub const SPORE_CODE_HASH: &str = SPORE_CODE_HASH_MAINNET_V2;
-pub const CLUSTER_CODE_HASH: &str = CLUSTER_CODE_HASH_MAINNET_V2;
-
 #[derive(Debug, Clone)]
 pub struct ParsedSporeCell {
     pub spore_id: Vec<u8>,
@@ -314,7 +310,7 @@ mod tests {
 
     fn create_spore_type_script(spore_id: &str) -> Script {
         Script {
-            code_hash: SPORE_CODE_HASH.to_string(),
+            code_hash: SPORE_CODE_HASH_MAINNET_V2.to_string(),
             hash_type: "data1".to_string(),
             args: spore_id.to_string(),
         }
@@ -330,7 +326,7 @@ mod tests {
 
     fn create_cluster_type_script(cluster_id: &str) -> Script {
         Script {
-            code_hash: CLUSTER_CODE_HASH.to_string(),
+            code_hash: CLUSTER_CODE_HASH_MAINNET_V2.to_string(),
             hash_type: "data1".to_string(),
             args: cluster_id.to_string(),
         }
@@ -388,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_is_spore_type_script() {
-        let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH);
+        let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
         assert!(SporeParser::is_spore_type_script(&spore_hash));
 
         let did_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID);
@@ -402,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_is_spore_nft_type_script_excludes_did() {
-        let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH);
+        let spore_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
         assert!(SporeParser::is_spore_nft_type_script(&spore_hash));
 
         let did_hash = parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID);
@@ -411,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_is_cluster_type_script() {
-        let cluster_hash = parse_hex_to_bytes(CLUSTER_CODE_HASH);
+        let cluster_hash = parse_hex_to_bytes(CLUSTER_CODE_HASH_MAINNET_V2);
         assert!(SporeParser::is_cluster_type_script(&cluster_hash));
 
         let other_hash = parse_hex_to_bytes(

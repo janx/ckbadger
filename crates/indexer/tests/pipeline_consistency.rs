@@ -32,7 +32,7 @@ fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
 
 fn setup_store() -> (Arc<CkbadgerStore>, BatchWriter) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
     let writer = BatchWriter::new(store.clone());
     // Leak the tempdir so it doesn't get cleaned up while store is open
     std::mem::forget(dir);

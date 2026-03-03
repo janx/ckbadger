@@ -3315,7 +3315,7 @@ mod tests {
     #[test]
     fn test_build_block_time_distribution_response_uses_recent_headers() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         for (number, ts_ms) in [(0i64, 0i64), (1, 1_000), (2, 3_000)] {
@@ -3358,7 +3358,7 @@ mod tests {
     #[test]
     fn test_build_block_time_distribution_response_excludes_overflow_from_50s_bucket() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         // 0->1 is 60s (overflow), 1->2 is 1s (in-range)

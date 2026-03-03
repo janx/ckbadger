@@ -257,7 +257,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_cycles_task_invalid_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let result = process_cycles_task(&store, "http://localhost:8114", "0xzz").await;
 
         assert_eq!(result.status, CyclesTaskStatus::Failed);
@@ -267,7 +267,7 @@ mod tests {
     #[tokio::test]
     async fn test_process_cycles_task_failure_marker_is_retryable() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let tx_hash = [0x11u8; 32];
         insert_tx_with_cycles(&store, &tx_hash, Some(-1));
         let tx_hash_hex = format!("0x{}", hex::encode(tx_hash));

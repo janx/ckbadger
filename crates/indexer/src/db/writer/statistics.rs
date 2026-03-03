@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn test_get_dao_deposits_at_block_tracks_lifecycle_exactly() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         // deposit A: active from block 10, withdrawn at block 20
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn test_get_last_epoch_start_returns_latest_start_before_block() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let mut batch = StoreBatch::new(&store);
@@ -802,7 +802,7 @@ mod tests {
     #[test]
     fn test_refresh_mnft_24h_transfers_cleans_only_mnft_collections() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let now_ms = chrono::Utc::now().timestamp_millis();
@@ -847,7 +847,7 @@ mod tests {
     #[test]
     fn test_update_hourly_statistics_errors_on_corrupt_existing_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let hour = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
@@ -871,7 +871,7 @@ mod tests {
     #[test]
     fn test_get_previous_block_timestamp_errors_on_invalid_millis() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let mut batch = StoreBatch::new(&store);
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn test_daily_stats_new_day_carries_forward_cumulative_totals() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -953,7 +953,7 @@ mod tests {
         // the second day must carry forward from the in-memory first day
         // (not the DB, which hasn't been committed yet).
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let day1 = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
@@ -1015,7 +1015,7 @@ mod tests {
     #[test]
     fn test_daily_stats_errors_when_previous_day_missing_but_earlier_exists() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();

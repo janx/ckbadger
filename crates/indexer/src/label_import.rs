@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn test_run_label_import_missing_path_returns_default() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let config = LabelImportConfig {
             token_labels_path: dir.path().join("not-found").to_string_lossy().to_string(),
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn test_upsert_token_label_preserves_existing_max_supply() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let type_hash =
             hex::decode("1111111111111111111111111111111111111111111111111111111111111111")
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_upsert_token_label_errors_on_invalid_type_script_code_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         let label = UdtLabelInfo {
             name: Some("Broken".to_string()),

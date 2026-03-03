@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn test_list_dao_deposits_fails_on_invalid_payload() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let outpoint = keys::encode_outpoint(&[0xAB; 32], 1);
         store
             .put_cf(store.cf_dao_deposits(), &outpoint, b"invalid-dao-deposit")
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn test_scan_dao_deposits_visits_rows() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let outpoint = keys::encode_outpoint(&[0xAB; 32], 1);
         let entry = DaoDepositCacheEntry {
             capacity: 42,
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn test_list_dao_deposits_by_status_paginated_descending() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         for (tx, status, block) in [
@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn test_scan_dao_deposits_by_lock_visits_only_target_lock() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_a = vec![0x11; 32];
         let lock_b = vec![0x22; 32];
 
@@ -726,7 +726,7 @@ mod tests {
     #[test]
     fn test_put_dao_deposit_direct_replaces_status_index() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let outpoint = keys::encode_outpoint(&[0xAB; 32], 1);
 
         let mut entry = DaoDepositCacheEntry {
@@ -766,7 +766,7 @@ mod tests {
     #[test]
     fn test_list_active_dao_deposits_uses_status_index() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_dao_deposit(
@@ -815,7 +815,7 @@ mod tests {
     #[test]
     fn test_list_dao_deposits_by_lock_paginated_descending() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let lock = vec![0x44; 32];
         let mut batch = StoreBatch::new(&store);
@@ -860,7 +860,7 @@ mod tests {
     #[test]
     fn test_scan_dao_deposits_by_lock_rejects_non_32_byte_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let err = store
             .scan_dao_deposits_by_lock(&[0x11; 33], |_, _| Ok(()))
             .unwrap_err();
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn test_list_dao_deposits_by_lock_paginated_rejects_non_32_byte_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let err = store
             .list_dao_deposits_by_lock_paginated(&[0x11; 33], 1, None)
             .unwrap_err();
@@ -888,7 +888,7 @@ mod tests {
     #[test]
     fn test_list_dao_deposits_paginated_cursor_handles_same_block_multiple_rows() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         for (tx, output_index, block) in [
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn test_list_dao_deposits_paginated_errors_on_stale_index() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let outpoint = keys::encode_outpoint(&[0xAA; 32], 0);
         let index_key = keys::encode_dao_by_block_key(100, &outpoint);

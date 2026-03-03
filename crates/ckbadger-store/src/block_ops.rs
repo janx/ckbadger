@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn test_find_first_block_header_gap_none_when_contiguous() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         for n in 0..=5 {
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn test_find_first_block_header_gap_detects_internal_gap() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(0, &make_header(0));
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn test_find_first_block_header_gap_detects_missing_genesis() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(5, &make_header(5));
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn test_find_day_start_block() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         // 2026-02-17 00:00:00 UTC in ms
         let day_start_ts = 1_771_286_400_000i64;
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn test_get_dao_fields_batch_fails_on_invalid_block_header_payload() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let key = keys::encode_block_num(42);
         store
             .put_cf(store.cf_block_headers(), &key, b"invalid-header-payload")
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_get_block_headers_batch_reads_multiple_headers() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let mut batch = StoreBatch::new(&store);
 
         let mut h10 = make_header(10);

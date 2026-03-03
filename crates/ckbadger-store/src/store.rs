@@ -240,9 +240,9 @@ pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreClass {
-    Unified,
     Domain,
     AppendOnly,
+    TestUnified,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,17 +404,17 @@ pub struct CkbadgerStore {
 impl CkbadgerStore {
     fn cfs_for_class(store_class: StoreClass) -> &'static [&'static str] {
         match store_class {
-            StoreClass::Unified => ALL_CFS,
             StoreClass::Domain => DOMAIN_CFS,
             StoreClass::AppendOnly => APPEND_CFS,
+            StoreClass::TestUnified => ALL_CFS,
         }
     }
 
     fn cf_allowed(store_class: StoreClass, name: &str) -> bool {
         match store_class {
-            StoreClass::Unified => true,
             StoreClass::Domain => DOMAIN_CFS.contains(&name),
             StoreClass::AppendOnly => APPEND_CFS.contains(&name),
+            StoreClass::TestUnified => true,
         }
     }
 
@@ -496,7 +496,7 @@ impl CkbadgerStore {
     fn open_with_class<P: AsRef<Path>>(path: P, store_class: StoreClass) -> anyhow::Result<Self> {
         let db_path = path.as_ref().to_path_buf();
         let (domain_path, append_path) = match store_class {
-            StoreClass::Domain | StoreClass::Unified => {
+            StoreClass::Domain => {
                 let domain = db_path.clone();
                 let append = append_path_from_domain(&domain);
                 (domain, append)
@@ -514,6 +514,11 @@ impl CkbadgerStore {
                             append.clone()
                         }
                     });
+                (domain, append)
+            }
+            StoreClass::TestUnified => {
+                let domain = db_path.clone();
+                let append = append_path_from_domain(&domain);
                 (domain, append)
             }
         };
@@ -549,7 +554,7 @@ impl CkbadgerStore {
                     match store_class {
                         StoreClass::Domain => "domain",
                         StoreClass::AppendOnly => "append-only",
-                        StoreClass::Unified => "unified",
+                        StoreClass::TestUnified => "test-unified",
                     },
                     db_path.display(),
                     allowed
@@ -589,7 +594,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Self> {
         let db_path = primary_path.as_ref().to_path_buf();
         let (domain_path, append_path) = match store_class {
-            StoreClass::Domain | StoreClass::Unified => {
+            StoreClass::Domain => {
                 let domain = db_path.clone();
                 let append = append_path_from_domain(&domain);
                 (domain, append)
@@ -607,6 +612,11 @@ impl CkbadgerStore {
                             append.clone()
                         }
                     });
+                (domain, append)
+            }
+            StoreClass::TestUnified => {
+                let domain = db_path.clone();
+                let append = append_path_from_domain(&domain);
                 (domain, append)
             }
         };
@@ -640,7 +650,7 @@ impl CkbadgerStore {
                     match store_class {
                         StoreClass::Domain => "domain",
                         StoreClass::AppendOnly => "append-only",
-                        StoreClass::Unified => "unified",
+                        StoreClass::TestUnified => "test-unified",
                     },
                     db_path.display(),
                     allowed
@@ -663,12 +673,6 @@ impl CkbadgerStore {
         })
     }
 
-    /// Legacy unified open (read-write). Opens all column families in one DB path.
-    /// Prefer `open_domain` / `open_append_only` for strict CF ownership.
-    pub fn open<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        Self::open_with_class(path, StoreClass::Unified)
-    }
-
     pub fn open_domain<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         Self::open_with_class(path, StoreClass::Domain)
     }
@@ -677,12 +681,8 @@ impl CkbadgerStore {
         Self::open_with_class(path, StoreClass::AppendOnly)
     }
 
-    /// Legacy unified secondary open (read-only). Follows primary writes via `refresh()`.
-    pub fn open_secondary<P: AsRef<Path>>(
-        primary_path: P,
-        secondary_path: P,
-    ) -> anyhow::Result<Self> {
-        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::Unified)
+    pub fn open_test_unified<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::TestUnified)
     }
 
     pub fn open_domain_secondary<P: AsRef<Path>>(
@@ -697,6 +697,13 @@ impl CkbadgerStore {
         secondary_path: P,
     ) -> anyhow::Result<Self> {
         Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::AppendOnly)
+    }
+
+    pub fn open_test_unified_secondary<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::TestUnified)
     }
 
     /// Catch up with primary instance writes (secondary only).
@@ -1661,7 +1668,7 @@ mod tests {
     #[test]
     fn test_open_and_close() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         assert!(!store.is_secondary());
         drop(store);
     }
@@ -1669,7 +1676,7 @@ mod tests {
     #[test]
     fn test_all_cfs_accessible() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         for cf_name in ALL_CFS {
             let _ = store.cf(cf_name);
         }
@@ -1788,7 +1795,7 @@ mod tests {
     #[test]
     fn test_put_get_delete() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let cf = store.cf_sync_meta();
         store.put_cf(cf, b"test_key", b"test_value").unwrap();
@@ -1804,7 +1811,7 @@ mod tests {
     #[test]
     fn test_stats_key_routing_writes_to_split_cfs() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let cases: Vec<(Vec<u8>, &[u8])> = vec![
             (
@@ -1880,7 +1887,7 @@ mod tests {
     #[test]
     fn test_stats_key_routing_rejects_unknown_prefix() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let err = store.put_stats_key(&[0xFE, 0x00], b"v").unwrap_err();
         assert!(err.to_string().contains("unsupported stats prefix"));
     }
@@ -1888,7 +1895,7 @@ mod tests {
     #[test]
     fn test_write_batch() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let cf = store.cf_sync_meta();
         let mut batch = WriteBatch::default();
@@ -1911,12 +1918,12 @@ mod tests {
         let primary_dir = TempDir::new().unwrap();
         let secondary_dir = TempDir::new().unwrap();
 
-        let primary = CkbadgerStore::open(primary_dir.path()).unwrap();
+        let primary = CkbadgerStore::open_domain(primary_dir.path()).unwrap();
         let cf = primary.cf_sync_meta();
         primary.put_cf(cf, b"key", b"value").unwrap();
 
         let secondary =
-            CkbadgerStore::open_secondary(primary_dir.path(), secondary_dir.path()).unwrap();
+            CkbadgerStore::open_domain_secondary(primary_dir.path(), secondary_dir.path()).unwrap();
         assert!(secondary.is_secondary());
         secondary.refresh().unwrap();
 
@@ -1928,7 +1935,7 @@ mod tests {
     #[test]
     fn test_bulk_sync_mode() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         assert!(!store.is_bulk_sync_mode());
         store.set_bulk_sync_mode(true);
         assert!(store.is_bulk_sync_mode());
@@ -1939,7 +1946,7 @@ mod tests {
     #[test]
     fn test_memory_stats() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         store
             .put_cf(store.cf_cells(), b"cell-k1", b"cell-v1")
             .unwrap();
@@ -1988,7 +1995,7 @@ mod tests {
     #[test]
     fn test_memory_stats_compaction_count_matches_global_property_when_available() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let stats = store.memory_stats();
         let global = store
@@ -2095,7 +2102,7 @@ mod tests {
     #[test]
     fn test_set_bulk_sync_compaction_options_does_not_panic() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         // Should not panic on a freshly opened store
         store.set_bulk_sync_compaction_options();
     }
@@ -2103,7 +2110,7 @@ mod tests {
     #[test]
     fn test_restore_normal_compaction_options_does_not_panic() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         // Should not panic on a freshly opened store
         store.restore_normal_compaction_options();
     }
@@ -2111,7 +2118,7 @@ mod tests {
     #[test]
     fn test_bulk_sync_then_restore_compaction_round_trip() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         // Set bulk sync options, then restore — should work without panics
         store.set_bulk_sync_compaction_options();
         store.restore_normal_compaction_options();
@@ -2125,7 +2132,7 @@ mod tests {
     #[test]
     fn test_set_bulk_compaction_is_idempotent() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         assert!(!store.is_bulk_sync_mode());
 
         // First call sets mode
@@ -2140,7 +2147,7 @@ mod tests {
     #[test]
     fn test_restore_normal_compaction_is_idempotent() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         // Restore on fresh store (already normal) is a no-op
         store.restore_normal_compaction_options();
@@ -2160,7 +2167,7 @@ mod tests {
     #[test]
     fn test_compaction_mode_tracks_bulk_sync_mode_flag() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         // Initial state
         assert!(!store.is_bulk_sync_mode());
@@ -2181,7 +2188,7 @@ mod tests {
     #[test]
     fn test_log_config_does_not_panic() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         store.log_config();
     }
 
@@ -2211,7 +2218,7 @@ mod tests {
     #[test]
     fn test_memory_profile_accessor() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let profile = store.memory_profile();
         assert!(!profile.is_secondary);
         assert!(profile.system_ram_bytes > 0);

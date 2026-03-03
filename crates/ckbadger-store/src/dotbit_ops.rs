@@ -185,7 +185,7 @@ mod tests {
 
     fn test_store() -> (TempDir, CkbadgerStore) {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         (dir, store)
     }
 

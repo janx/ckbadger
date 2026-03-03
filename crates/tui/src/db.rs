@@ -853,13 +853,13 @@ mod tests {
         let primary_dir = unique_temp_dir("ckbadger-tui-db-primary");
         let secondary_dir = unique_temp_dir("ckbadger-tui-db-secondary");
 
-        let primary = CkbadgerStore::open(&primary_dir).unwrap();
+        let primary = CkbadgerStore::open_domain(&primary_dir).unwrap();
         primary
             .put_cf(primary.cf_sync_meta(), b"sync-key", b"sync-value")
             .unwrap();
 
         let secondary =
-            Arc::new(CkbadgerStore::open_secondary(&primary_dir, &secondary_dir).unwrap());
+            Arc::new(CkbadgerStore::open_domain_secondary(&primary_dir, &secondary_dir).unwrap());
         let db =
             super::TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:3001/api/v1").await;
 

@@ -438,7 +438,7 @@ fn parse_hash_type_label_to_i16(hash_type: &str) -> Result<i16, RouteError> {
         "data1" => Ok(2),
         "data2" => Ok(4),
         other => Err(ApiError::internal(format!(
-            "unknown script hash_type label in CKB store fallback: '{}'",
+            "unknown script hash_type label in CKB store: '{}'",
             other
         ))),
     }
@@ -559,202 +559,6 @@ fn resolve_stored_input_type_hash_type(
     }
 }
 
-async fn fetch_tx_size_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<i32> {
-    #[derive(serde::Serialize)]
-    struct RpcRequest<'a> {
-        jsonrpc: &'static str,
-        method: &'static str,
-        params: (&'a str,),
-        id: u64,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct RpcResponse {
-        result: Option<TxResult>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TxResult {
-        transaction: Option<RpcTxSizeView>,
-    }
-
-    let client = reqwest::Client::new();
-    let request = RpcRequest {
-        jsonrpc: "2.0",
-        method: "get_transaction",
-        params: (tx_hash,),
-        id: 1,
-    };
-
-    let response = client.post(rpc_url).json(&request).send().await.ok()?;
-    let rpc_response: RpcResponse = response.json().await.ok()?;
-    let tx = rpc_response.result?.transaction?;
-
-    calculate_serialized_tx_size(&tx)
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RpcTxSizeView {
-    cell_deps: Vec<RpcTxSizeCellDep>,
-    header_deps: Vec<String>,
-    inputs: Vec<RpcTxSizeCellInput>,
-    outputs: Vec<RpcTxSizeCellOutput>,
-    outputs_data: Vec<String>,
-    witnesses: Vec<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
-struct RpcTxSizeCellDep {
-    out_point: RpcTxSizeOutPoint,
-    #[allow(dead_code)]
-    dep_type: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
-struct RpcTxSizeOutPoint {
-    tx_hash: String,
-    index: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
-struct RpcTxSizeCellInput {
-    previous_output: RpcTxSizeOutPoint,
-    since: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
-struct RpcTxSizeCellOutput {
-    capacity: String,
-    lock: RpcTxSizeScript,
-    #[serde(rename = "type")]
-    type_: Option<RpcTxSizeScript>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct RpcTxSizeScript {
-    #[allow(dead_code)]
-    code_hash: String,
-    #[allow(dead_code)]
-    hash_type: String,
-    args: String,
-}
-
-fn try_decode_hex_bytes(raw: &str) -> Option<Vec<u8>> {
-    let normalized = raw.strip_prefix("0x").unwrap_or(raw);
-    hex::decode(normalized).ok()
-}
-
-fn calculate_serialized_tx_size(tx: &RpcTxSizeView) -> Option<i32> {
-    const MOLECULE_NUMBER_SIZE: usize = 4;
-    const OUTPOINT_SIZE: usize = 36;
-    const CELLINPUT_SIZE: usize = 44;
-    const SCRIPT_TABLE_HEADER_SIZE: usize = MOLECULE_NUMBER_SIZE + MOLECULE_NUMBER_SIZE * 3;
-    const SCRIPT_FIXED_FIELDS_SIZE: usize = 32 + 1;
-
-    let mut size = MOLECULE_NUMBER_SIZE * 3;
-
-    let raw_tx_size = {
-        let mut raw_size = MOLECULE_NUMBER_SIZE * 7;
-
-        // version (Uint32)
-        raw_size += MOLECULE_NUMBER_SIZE;
-
-        raw_size += MOLECULE_NUMBER_SIZE;
-        raw_size += tx.cell_deps.len() * (OUTPOINT_SIZE + 1);
-
-        raw_size += MOLECULE_NUMBER_SIZE;
-        raw_size += tx.header_deps.len() * 32;
-
-        raw_size += MOLECULE_NUMBER_SIZE;
-        raw_size += tx.inputs.len() * CELLINPUT_SIZE;
-
-        raw_size += MOLECULE_NUMBER_SIZE;
-        for output in &tx.outputs {
-            let lock_args = try_decode_hex_bytes(&output.lock.args)?;
-            let lock_size = SCRIPT_TABLE_HEADER_SIZE
-                + SCRIPT_FIXED_FIELDS_SIZE
-                + MOLECULE_NUMBER_SIZE
-                + lock_args.len();
-
-            let type_size = output.type_.as_ref().map_or(Some(0), |type_script| {
-                let type_args = try_decode_hex_bytes(&type_script.args)?;
-                Some(
-                    SCRIPT_TABLE_HEADER_SIZE
-                        + SCRIPT_FIXED_FIELDS_SIZE
-                        + MOLECULE_NUMBER_SIZE
-                        + type_args.len(),
-                )
-            })?;
-
-            let output_size = MOLECULE_NUMBER_SIZE * 4 + 8 + lock_size + type_size;
-            raw_size += MOLECULE_NUMBER_SIZE + output_size;
-        }
-
-        raw_size += MOLECULE_NUMBER_SIZE;
-        raw_size += tx.outputs_data.len() * MOLECULE_NUMBER_SIZE;
-        for output_data in &tx.outputs_data {
-            let data = try_decode_hex_bytes(output_data)?;
-            raw_size += MOLECULE_NUMBER_SIZE + data.len();
-        }
-
-        raw_size
-    };
-
-    size += raw_tx_size;
-
-    size += MOLECULE_NUMBER_SIZE;
-    size += tx.witnesses.len() * MOLECULE_NUMBER_SIZE;
-    for witness in &tx.witnesses {
-        let witness_data = try_decode_hex_bytes(witness)?;
-        size += MOLECULE_NUMBER_SIZE + witness_data.len();
-    }
-
-    i32::try_from(size).ok()
-}
-
-async fn fetch_witnesses_from_rpc(rpc_url: &str, tx_hash: &str) -> Option<Vec<String>> {
-    #[derive(serde::Serialize)]
-    struct RpcRequest<'a> {
-        jsonrpc: &'static str,
-        method: &'static str,
-        params: (&'a str,),
-        id: u64,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct RpcResponse {
-        result: Option<TxResult>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TxResult {
-        transaction: Option<TxView>,
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TxView {
-        witnesses: Vec<String>,
-    }
-
-    let client = reqwest::Client::new();
-    let request = RpcRequest {
-        jsonrpc: "2.0",
-        method: "get_transaction",
-        params: (tx_hash,),
-        id: 1,
-    };
-
-    let response = client.post(rpc_url).json(&request).send().await.ok()?;
-    let rpc_response: RpcResponse = response.json().await.ok()?;
-    let tx = rpc_response.result?.transaction?;
-
-    Some(tx.witnesses)
-}
-
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
@@ -826,11 +630,7 @@ async fn get_transaction_detail(
 
     let confirmations = tip_block - block_number + 1;
 
-    // Get tx_size: use stored value or fallback to RPC
-    let final_tx_size = match tx_size {
-        s if s > 0 => Some(s),
-        _ => fetch_tx_size_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await,
-    };
+    let final_tx_size = if tx_size > 0 { Some(tx_size) } else { None };
 
     // Read full transaction from CKB node's RocksDB for inputs/outputs
     let (
@@ -882,15 +682,6 @@ async fn get_transaction_detail(
             "0".to_string()
         }
     });
-
-    let (witnesses, witnesses_available) = if witnesses_available {
-        (witnesses, true)
-    } else {
-        match fetch_witnesses_from_rpc(&state.ckb_rpc_url, &tx_hash_hex).await {
-            Some(fetched) => (fetched, true),
-            None => (witnesses, false),
-        }
-    };
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
@@ -1032,83 +823,7 @@ fn build_inputs_outputs_from_ckb(
 
                         (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
                     }
-                    None => {
-                        // Fallback: read from CKB node's RocksDB
-                        let mut prev_hash = [0u8; 32];
-                        prev_hash.copy_from_slice(&prev_tx_hash_bytes);
-                        if let Some(prev_tx) = ckb_store.get_transaction(&prev_hash) {
-                            let rpc_prev_tx = ckb_store_reader::convert_transaction_view(&prev_tx);
-                            if let Some(output) = rpc_prev_tx.outputs.get(prev_index as usize) {
-                                let output_context = format!(
-                                    "building input fallback for tx=0x{} prev_outpoint=0x{}:{}",
-                                    hex::encode(tx_view.hash().raw_data()),
-                                    hex::encode(prev_hash),
-                                    prev_index
-                                );
-                                let cap = parse_u64_hex_field_with_context(
-                                    &output.capacity,
-                                    "output.capacity",
-                                    &output_context,
-                                )?;
-                                inputs_capacity += cap as u128;
-
-                                let code_hash = decode_hex_bytes_with_context(
-                                    &output.lock.code_hash,
-                                    "output.lock.code_hash",
-                                    &output_context,
-                                    Some(32),
-                                )?;
-                                let ht = parse_hash_type_label_to_i16(&output.lock.hash_type)?;
-                                let args = decode_hex_bytes_with_context(
-                                    &output.lock.args,
-                                    "output.lock.args",
-                                    &output_context,
-                                    None,
-                                )?;
-
-                                let lock_resp = ScriptResponse {
-                                    code_hash: output.lock.code_hash.clone(),
-                                    hash_type: output.lock.hash_type.clone(),
-                                    args: output.lock.args.clone(),
-                                };
-                                let type_resp =
-                                    output.type_.as_ref().map(|type_script| ScriptResponse {
-                                        code_hash: type_script.code_hash.clone(),
-                                        hash_type: type_script.hash_type.clone(),
-                                        args: type_script.args.clone(),
-                                    });
-
-                                let addr = script_to_address(&code_hash, ht, &args, network).ok();
-
-                                let data_len = ckb_store
-                                    .get_cell_data(&prev_hash, prev_index)
-                                    .map(|d| d.len())
-                                    .unwrap_or(0);
-                                let type_args_len = output
-                                    .type_
-                                    .as_ref()
-                                    .map(|type_script| {
-                                        decode_hex_bytes_with_context(
-                                            &type_script.args,
-                                            "output.type.args",
-                                            &output_context,
-                                            None,
-                                        )
-                                        .map(|v| v.len())
-                                    })
-                                    .transpose()?;
-                                let occ =
-                                    occupied_capacity_bytes(args.len(), type_args_len, data_len);
-                                inputs_occupied_capacity += occ as u128;
-
-                                (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
-                            } else {
-                                (None, None, None, None)
-                            }
-                        } else {
-                            (None, None, None, None)
-                        }
-                    }
+                    None => (None, None, None, None),
                 }
             };
 
@@ -1789,8 +1504,6 @@ async fn get_transaction_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ckb_jsonrpc_types::TransactionView as CkbJsonRpcTransactionView;
-    use ckb_types::prelude::Entity;
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 
     #[test]
@@ -1813,107 +1526,6 @@ mod tests {
         assert_eq!(json["inputsCount"], 1);
         assert_eq!(json["outputsCount"], 2);
         assert_eq!(json["isCellbase"], false);
-    }
-
-    #[test]
-    fn test_calculate_serialized_tx_size_matches_canonical_molecule_encoding() {
-        let tx = RpcTxSizeView {
-            cell_deps: vec![RpcTxSizeCellDep {
-                out_point: RpcTxSizeOutPoint {
-                    tx_hash: "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c"
-                        .to_string(),
-                    index: "0x0".to_string(),
-                },
-                dep_type: "code".to_string(),
-            }],
-            header_deps: vec![
-                "0x0000000000000000000000000000000000000000000000000000000000000003".to_string(),
-            ],
-            inputs: vec![RpcTxSizeCellInput {
-                previous_output: RpcTxSizeOutPoint {
-                    tx_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-                        .to_string(),
-                    index: "0x0".to_string(),
-                },
-                since: "0x0".to_string(),
-            }],
-            outputs: vec![
-                RpcTxSizeCellOutput {
-                    capacity: "0x174876e800".to_string(),
-                    lock: RpcTxSizeScript {
-                        code_hash:
-                            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                                .to_string(),
-                        hash_type: "type".to_string(),
-                        args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-                    },
-                    type_: None,
-                },
-                RpcTxSizeCellOutput {
-                    capacity: "0x2540be400".to_string(),
-                    lock: RpcTxSizeScript {
-                        code_hash:
-                            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                                .to_string(),
-                        hash_type: "type".to_string(),
-                        args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-                    },
-                    type_: Some(RpcTxSizeScript {
-                        code_hash:
-                            "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
-                                .to_string(),
-                        hash_type: "type".to_string(),
-                        args: "0x".to_string(),
-                    }),
-                },
-            ],
-            outputs_data: vec!["0x".to_string(), "0xdeadbeef".to_string()],
-            witnesses: vec!["0x55000000".to_string(), "0x".to_string()],
-        };
-
-        let mut value = serde_json::to_value(&tx).expect("serialize tx");
-        let serde_json::Value::Object(ref mut object) = value else {
-            panic!("tx should serialize to object");
-        };
-        object.insert(
-            "hash".to_string(),
-            serde_json::Value::String(
-                "0x0000000000000000000000000000000000000000000000000000000000000002".to_string(),
-            ),
-        );
-        object.insert(
-            "version".to_string(),
-            serde_json::Value::String("0x0".to_string()),
-        );
-
-        let tx_view: CkbJsonRpcTransactionView =
-            serde_json::from_value(value).expect("deserialize canonical tx view");
-        let packed: ckb_types::packed::Transaction = tx_view.inner.into();
-        let expected = i32::try_from(packed.as_slice().len()).expect("packed tx fits in i32");
-
-        assert_eq!(calculate_serialized_tx_size(&tx), Some(expected));
-    }
-
-    #[test]
-    fn test_calculate_serialized_tx_size_returns_none_on_invalid_hex() {
-        let tx = RpcTxSizeView {
-            cell_deps: vec![],
-            header_deps: vec![],
-            inputs: vec![],
-            outputs: vec![RpcTxSizeCellOutput {
-                capacity: "0x174876e800".to_string(),
-                lock: RpcTxSizeScript {
-                    code_hash: "0x00".to_string(),
-                    hash_type: "type".to_string(),
-                    args: "0xzz".to_string(),
-                },
-                type_: None,
-            }],
-            outputs_data: vec!["0x".to_string()],
-            witnesses: vec![],
-        };
-
-        assert_eq!(calculate_serialized_tx_size(&tx), None);
     }
 
     #[test]
@@ -1957,7 +1569,7 @@ mod tests {
             .1
              .0
             .message
-            .contains("unknown script hash_type label in CKB store fallback"));
+            .contains("unknown script hash_type label in CKB store"));
     }
 
     #[test]

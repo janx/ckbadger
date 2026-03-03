@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_rebuild_addr_balances_from_live_cells() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_a = vec![0xAA; 32];
         let lock_b = vec![0xBB; 32];
 
@@ -341,7 +341,7 @@ mod tests {
     #[test]
     fn test_rebuild_addr_balances_restores_txs_count_from_addr_txs() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_a = vec![0xAA; 32];
         let lock_b = vec![0xBB; 32];
 
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn test_rebuild_addr_balances_errors_on_negative_aggregate() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_a = vec![0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_rebuild_addr_balances_fails_when_live_marker_missing_canonical_cell() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let outpoint = keys::encode_outpoint(&[0x11; 32], 0);
         store.put_cf(store.cf_live_cells(), &outpoint, b"").unwrap();
 
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn test_top_addresses_fails_on_invalid_payload() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_hash = [0xAA; 32];
         store
             .put_cf(
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_rejects_non_32_byte_lock_hash() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let err = store
             .list_addr_txs_recent(&[0xAA; 31], 10, None)
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_limit_zero_returns_empty() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);

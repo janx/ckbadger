@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn test_dotbit_outpoint_lookups_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let account = ParsedDotbitAccountOutput {
@@ -497,7 +497,7 @@ mod tests {
     #[test]
     fn test_consume_dotbit_account_errors_on_live_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let account = ParsedDotbitAccountOutput {
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn test_consume_dotbit_account_errors_on_double_consume() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let account = ParsedDotbitAccountOutput {
@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn test_reactivate_dotbit_account_increments_live_count() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let account = ParsedDotbitAccountOutput {
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn test_consume_dotbit_account_reads_uncommitted_insert_from_state() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let account = ParsedDotbitAccountOutput {
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn test_get_hourly_transfer_errors_on_invalid_existing_value_length() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
         let mut state = writer.new_dotbit_batch_state();
 

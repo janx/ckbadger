@@ -2,12 +2,12 @@
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{ClusterDailyDelta, SporeDailyDelta, SporeEntry, SporeTypeIndex};
+use crate::types::{ClusterDailyDelta, DobEntry, SporeDailyDelta, SporeTypeIndex};
 
 #[cfg(test)]
 use crate::batch::StoreBatch;
 
-pub(crate) type SporeBatchEntry = (Vec<u8>, Option<SporeEntry>);
+pub(crate) type SporeBatchEntry = (Vec<u8>, Option<DobEntry>);
 pub(crate) type SporeOutpointLookup = (Vec<u8>, i16, Vec<u8>);
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -21,7 +21,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 impl CkbadgerStore {
-    pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<SporeEntry>> {
+    pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<DobEntry>> {
         match self.get_cf(self.cf_spore_data(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
@@ -40,7 +40,7 @@ impl CkbadgerStore {
         let mut result = Vec::with_capacity(ids.len());
         for (id, value_result) in ids.iter().zip(values) {
             let entry = match value_result {
-                Ok(Some(value)) => Some(bincode::deserialize::<SporeEntry>(&value).map_err(
+                Ok(Some(value)) => Some(bincode::deserialize::<DobEntry>(&value).map_err(
                     |e| {
                         anyhow::anyhow!(
                             "failed to deserialize spore entry in get_spores_batch: spore_id=0x{}, error={}",
@@ -63,13 +63,13 @@ impl CkbadgerStore {
         Ok(result)
     }
 
-    pub fn put_spore_direct(&self, id: &[u8], entry: &SporeEntry) -> anyhow::Result<()> {
+    pub fn put_spore_direct(&self, id: &[u8], entry: &DobEntry) -> anyhow::Result<()> {
         let value = bincode::serialize(entry)?;
         self.put_cf(self.cf_spore_data(), id, &value)
     }
 
     /// List all spores.
-    pub fn list_spores(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, SporeEntry)>> {
+    pub fn list_spores(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, DobEntry)>> {
         let iter = self.iterator_cf(self.cf_spore_data(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
@@ -77,7 +77,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate spore_data in list_spores: {}", e)
             })?;
-            let entry: SporeEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: DobEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore entry in list_spores: spore_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -97,7 +97,7 @@ impl CkbadgerStore {
         &self,
         cluster_id: &[u8],
         limit: usize,
-    ) -> anyhow::Result<Vec<(Vec<u8>, SporeEntry)>> {
+    ) -> anyhow::Result<Vec<(Vec<u8>, DobEntry)>> {
         let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
         let mut results = Vec::new();
 
@@ -414,7 +414,7 @@ mod tests {
 
     fn test_store() -> (TempDir, CkbadgerStore) {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         (dir, store)
     }
 

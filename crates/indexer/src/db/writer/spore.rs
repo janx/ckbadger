@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn test_update_spore_daily_and_cluster_daily_deltas_batch_accumulates_and_deletes_zero_net() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let spore_id = vec![0x11; 32];
@@ -1015,7 +1015,7 @@ mod tests {
     #[test]
     fn test_update_spore_type_index_batch_writes_entries() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
 
         let type_script_hash = vec![0x33; 32];
@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_keeps_owner_counts_consistent_for_multi_transfer_in_one_batch() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let cluster_id = vec![0x11; 32];
@@ -1118,7 +1118,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_errors_on_owner_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let cluster_id = vec![0x33; 32];
@@ -1162,7 +1162,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_errors_on_live_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let old_cluster = vec![0x41; 32];
@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn test_consume_spore_errors_on_live_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let cluster_id = vec![0x51; 32];
@@ -1242,7 +1242,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_cluster_move_updates_old_and_new_cluster_counts() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let old_cluster = vec![0x51; 32];
@@ -1296,7 +1296,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_populates_outpoint_lookup_and_batch_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let cluster_id = vec![0x81; 32];
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn test_insert_did_ckb_cell_updates_nft_collection_aggregate_and_index() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let did_id = vec![0xD1; 32];
@@ -1397,7 +1397,7 @@ mod tests {
     #[test]
     fn test_get_spore_hourly_transfer_errors_on_invalid_existing_value_length() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let mut state = writer.new_spore_batch_state();
 
@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn test_get_did_hourly_transfer_errors_on_invalid_existing_value_length() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let mut state = writer.new_spore_batch_state();
 
@@ -1438,7 +1438,7 @@ mod tests {
     #[test]
     fn test_consume_did_ckb_cell_decrements_live_count() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let did_id = vec![0xF1; 32];
@@ -1479,7 +1479,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_errors_on_cluster_total_count_overflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let cluster_id = vec![0xB1; 32];
@@ -1522,7 +1522,7 @@ mod tests {
     #[test]
     fn test_insert_spore_cell_errors_on_spore_hourly_transfer_overflow() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let cluster_id = vec![0xC1; 32];

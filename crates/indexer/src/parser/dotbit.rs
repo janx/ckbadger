@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use tracing::warn;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
@@ -57,17 +56,15 @@ impl DotbitParser {
             return None;
         }
 
-        let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
         let account_id_from_args = parse_hex_to_bytes(&type_script.args);
 
-        // .bit account ID is encoded in type args. Keep compatibility with older data layouts.
-        let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
-            && !account_id_from_args.iter().all(|&b| b == 0)
+        // .bit account ID is encoded in type args; reject legacy/invalid payloads.
+        if account_id_from_args.len() != ACCOUNT_ID_LEN
+            || account_id_from_args.iter().all(|&b| b == 0)
         {
-            account_id_from_args
-        } else {
-            account_id_from_data
-        };
+            return None;
+        }
+        let account_id = account_id_from_args;
 
         if account_id.iter().all(|&b| b == 0) {
             return None;
@@ -184,13 +181,12 @@ impl DotbitParser {
         }
 
         if missing_name_count > 0 {
-            let samples = missing_name_samples.join(",");
-            warn!(
-                tx_hash = %tx.hash,
-                missing_account_name_count = missing_name_count,
-                missing_account_name_samples = %samples,
-                "dotbit account name missing in DAS witness, fallback to account_id"
-            );
+            return Err(anyhow!(
+                "dotbit account name missing in DAS witness: tx_hash={}, missing_account_name_count={}, missing_account_name_samples={}",
+                tx.hash,
+                missing_name_count,
+                missing_name_samples.join(",")
+            ));
         }
 
         Ok(accounts)
@@ -445,10 +441,6 @@ mod tests {
         }
     }
 
-    fn create_account_cell_type_script() -> Script {
-        create_account_cell_type_script_with_args(&[])
-    }
-
     fn create_account_cell_type_script_with_args(args: &[u8]) -> Script {
         Script {
             code_hash: DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
@@ -617,7 +609,7 @@ mod tests {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_account_cell_type_script()),
+            type_: Some(create_account_cell_type_script_with_args(account_id)),
         };
         let data_hex = format!(
             "0x{}",
@@ -668,7 +660,7 @@ mod tests {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_account_cell_type_script()),
+            type_: Some(create_account_cell_type_script_with_args(&account_id)),
         };
 
         let data = create_account_cell_data(&account_id, Some(&next_account_id), Some(expired_at));
@@ -692,7 +684,7 @@ mod tests {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_account_cell_type_script()),
+            type_: Some(create_account_cell_type_script_with_args(&account_id)),
         };
 
         let data = create_account_cell_data(&account_id, None, Some(expired_at));
@@ -731,6 +723,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_account_cell_rejects_missing_type_args_even_with_data_account_id() {
+        let account_id_from_data: [u8; 20] = [0x55; 20];
+
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_account_cell_type_script_with_args(&[])),
+        };
+
+        let data = create_account_cell_data(&account_id_from_data, None, None);
+        let data_hex = format!("0x{}", hex::encode(&data));
+
+        let result = DotbitParser::parse_account_cell(&output, &data_hex);
+        assert!(result.is_none());
+    }
+
+    #[test]
     fn test_parse_account_cell_no_type() {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
@@ -764,7 +773,7 @@ mod tests {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_account_cell_type_script()),
+            type_: Some(create_account_cell_type_script_with_args(&[0x11; 20])),
         };
 
         let short_data = vec![0u8; 40];
@@ -790,15 +799,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_accounts_allows_missing_witness_name_with_fallback() {
+    fn test_parse_accounts_fails_when_witness_name_missing() {
         let account_id = [0x22u8; 20];
         let tx = create_dotbit_tx(&account_id, false);
 
-        let parsed_accounts = DotbitParser::parse_accounts(&tx).expect("parse dotbit accounts");
-        assert_eq!(parsed_accounts.len(), 1);
-        assert_eq!(parsed_accounts[0].output_index, 0);
-        assert_eq!(parsed_accounts[0].account.account_id, account_id.to_vec());
-        assert!(parsed_accounts[0].account.account.is_none());
+        let err = DotbitParser::parse_accounts(&tx).expect_err("missing name must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("dotbit account name missing in DAS witness"));
+        assert!(msg.contains(&tx.hash));
+        assert!(msg.contains(&format!("0x{}", hex::encode(account_id))));
     }
 
     #[test]
@@ -1018,7 +1027,7 @@ mod tests {
         let output = CellOutput {
             capacity: "0x174876e800".to_string(),
             lock: create_lock_script(),
-            type_: Some(create_account_cell_type_script()),
+            type_: Some(create_account_cell_type_script_with_args(&account_id)),
         };
         let data_hex = format!(
             "0x{}",
@@ -1065,7 +1074,7 @@ mod tests {
             outputs: vec![CellOutput {
                 capacity: "0x174876e800".to_string(),
                 lock: create_lock_script(),
-                type_: Some(create_account_cell_type_script()),
+                type_: Some(create_account_cell_type_script_with_args(&[0x11; 20])),
             }],
             outputs_data: vec![],
             witnesses: vec![],

@@ -219,7 +219,7 @@ mod tests {
     async fn test_sync_status_fallback_uses_sync_totals() {
         let cache = CacheBackend::None;
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path().to_str().unwrap()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 
         store
             .set_sync_status(&ckbadger_store::types::SyncStatus {

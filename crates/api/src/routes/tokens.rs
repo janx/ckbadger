@@ -367,32 +367,18 @@ async fn get_token(
                 .as_ref()
                 .and_then(|entries| entries.iter().find(|e| e.id == hash_hex));
 
-            let (transfers_24h, live_capacity, live_occupied_capacity) =
-                if let Some(entry) = cache_hit {
-                    // Fast path: use pre-computed cache (O(1) in-memory lookup)
-                    let cap = entry
-                        .live_capacity
-                        .as_ref()
-                        .and_then(|s| s.parse::<i128>().ok());
-                    let occ = entry
-                        .live_occupied_capacity
-                        .as_ref()
-                        .and_then(|s| s.parse::<i128>().ok());
-                    (entry.transfers_24h, cap, occ)
-                } else {
-                    // Slow fallback (cache miss: first 30s after API start, or unlisted token)
-                    let now_ms = chrono::Utc::now().timestamp_millis();
-                    let t24h = state
-                        .store
-                        .get_token_24h_transfers(&hash, now_ms)
-                        .unwrap_or(0);
-                    let cell_stats = state.store.aggregate_token_cell_stats(&hash).ok();
-                    (
-                        t24h,
-                        cell_stats.as_ref().map(|s| s.total_capacity),
-                        cell_stats.as_ref().map(|s| s.total_occupied_capacity),
-                    )
-                };
+            let entry = cache_hit.ok_or_else(|| {
+                ApiError::internal("token asset cache unavailable; warmup in progress")
+            })?;
+            let transfers_24h = entry.transfers_24h;
+            let live_capacity = entry
+                .live_capacity
+                .as_ref()
+                .and_then(|s| s.parse::<i128>().ok());
+            let live_occupied_capacity = entry
+                .live_occupied_capacity
+                .as_ref()
+                .and_then(|s| s.parse::<i128>().ok());
 
             ok(token_info_to_response(
                 &hash,

@@ -588,8 +588,8 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Spore/NFT ----
 
-    pub fn put_spore(&mut self, id: &[u8], entry: &SporeEntry) {
-        let value = bincode::serialize(entry).expect("serialize SporeEntry");
+    pub fn put_spore(&mut self, id: &[u8], entry: &DobEntry) {
+        let value = bincode::serialize(entry).expect("serialize DobEntry");
         self.put_cf(self.store.cf_spore_data(), id, &value);
     }
 
@@ -715,7 +715,7 @@ mod tests {
     #[test]
     fn test_batch_commit() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let mut batch = StoreBatch::new(&store);
         let header = CachedBlockHeader {
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_batch_atomicity() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         // Write some data
         let mut batch = StoreBatch::new(&store);
@@ -761,7 +761,7 @@ mod tests {
     #[test]
     fn test_cell_write_and_delete() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let tx_hash = [42u8; 32];
         let info = LiveCellInfo {
@@ -796,7 +796,7 @@ mod tests {
     #[test]
     fn test_consumed_cell_writes_metadata() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let tx_hash = [0x33u8; 32];
         let info = LiveCellInfo {
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn test_reorg_undo_log_by_block_batch_write() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let entry = UndoLogEntry::KeyMutation {
             target_store: UndoLogStoreTarget::Domain,
             cf_name: crate::store::CF_SYNC_META.to_string(),
@@ -855,7 +855,7 @@ mod tests {
     #[test]
     fn test_token_transfers_count_batch_write() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let type_hash = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -870,7 +870,7 @@ mod tests {
     #[test]
     fn test_token_hourly_transfer_batch_write() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let type_hash = [0xBBu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn test_put_and_list_activities() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn test_list_activities_with_limit() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock = [0xBBu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn test_list_activities_cursor_pagination() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock = [0xCCu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn test_list_activities_different_locks_isolated() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_a = [0x01u8; 32];
         let lock_b = [0x02u8; 32];
 
@@ -1001,7 +1001,7 @@ mod tests {
     #[test]
     fn test_list_activities_empty() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock = [0xFFu8; 32];
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
@@ -1011,7 +1011,7 @@ mod tests {
     #[test]
     fn test_list_activities_rejects_non_32_byte_lock_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let err = store
             .list_activities(&[0xAA; 31], 10, None, None)
@@ -1024,7 +1024,7 @@ mod tests {
     #[test]
     fn test_list_activities_cursor_i32_max_does_not_overflow() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock = [0xABu8; 32];
 
         let mut batch = StoreBatch::new(&store);

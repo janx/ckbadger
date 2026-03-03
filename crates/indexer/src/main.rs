@@ -1254,7 +1254,7 @@ mod tests {
     #[test]
     fn test_reconcile_token_daily_deltas_on_startup_fails_on_invalid_rows() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let type_hash = vec![0xAB; 32];
         let day1_ts = 1_704_067_200_000i64; // 2024-01-01T00:00:00Z
         let day2_ts = 1_704_153_600_000i64; // 2024-01-02T00:00:00Z

@@ -331,9 +331,6 @@ pub struct DobEntry {
     pub extra: DobExtra,
 }
 
-/// Type alias for backward compatibility during migration.
-pub type SporeEntry = DobEntry;
-
 /// NFT standard identifier.
 ///
 /// NFT is an asset type on CKB, separate from DOB. Each variant represents

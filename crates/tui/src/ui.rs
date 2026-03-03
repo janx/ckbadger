@@ -4793,9 +4793,9 @@ mod tests {
         let primary_dir = unique_temp_dir("ckbadger-tui-ui-primary");
         let secondary_dir = unique_temp_dir("ckbadger-tui-ui-secondary");
 
-        let primary = CkbadgerStore::open(&primary_dir).unwrap();
+        let primary = CkbadgerStore::open_domain(&primary_dir).unwrap();
         let secondary =
-            Arc::new(CkbadgerStore::open_secondary(&primary_dir, &secondary_dir).unwrap());
+            Arc::new(CkbadgerStore::open_domain_secondary(&primary_dir, &secondary_dir).unwrap());
         let db = TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:9/api/v1").await;
 
         let mut app = App::new(db);
@@ -4815,9 +4815,9 @@ mod tests {
         let primary_dir = unique_temp_dir("ckbadger-tui-ui-primary-dedup");
         let secondary_dir = unique_temp_dir("ckbadger-tui-ui-secondary-dedup");
 
-        let primary = CkbadgerStore::open(&primary_dir).unwrap();
+        let primary = CkbadgerStore::open_domain(&primary_dir).unwrap();
         let secondary =
-            Arc::new(CkbadgerStore::open_secondary(&primary_dir, &secondary_dir).unwrap());
+            Arc::new(CkbadgerStore::open_domain_secondary(&primary_dir, &secondary_dir).unwrap());
         let db = TuiDb::new(Arc::clone(&secondary), None, "http://127.0.0.1:9/api/v1").await;
 
         let mut app = App::new(db);

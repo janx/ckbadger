@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_allows_xudt_cells_without_amount_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_code_hash =
@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_rejects_invalid_sudt_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store);
 
         let type_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
@@ -612,7 +612,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_errors_on_corrupt_cell_data() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xCC; 32];
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_errors_on_missing_live_cell_info() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xEE; 32];
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_preloaded_errors_on_missing_cell_info() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xFA; 32];

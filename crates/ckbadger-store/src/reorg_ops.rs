@@ -1641,7 +1641,7 @@ mod tests {
     #[test]
     fn test_rollback_rebuilds_addr_balance_from_live_cells() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_hash = vec![0xAA; 32];
 
         let header1 = CachedBlockHeader {
@@ -1723,7 +1723,7 @@ mod tests {
     #[test]
     fn test_rollback_rebuilds_script_info_from_cells() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_code_hash = vec![0x7A; 32];
 
         let header1 = CachedBlockHeader {
@@ -1810,7 +1810,7 @@ mod tests {
     #[test]
     fn test_rollback_restores_consumed_cells_after_fork_point() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let lock_hash = vec![0xAB; 32];
         let tx_hash = vec![0x42; 32];
 
@@ -1876,7 +1876,7 @@ mod tests {
     #[test]
     fn test_rollback_uses_tx_context_undo_entries_for_cell_rollback() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -1974,7 +1974,7 @@ mod tests {
     #[test]
     fn test_rollback_falls_back_to_full_scan_when_tx_contexts_are_partial() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2093,7 +2093,7 @@ mod tests {
     #[test]
     fn test_rollback_removes_tx_hash_map_entries_above_target() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2144,7 +2144,7 @@ mod tests {
     #[test]
     fn test_rollback_uses_tx_context_for_tx_hash_map_without_scanning() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2209,7 +2209,7 @@ mod tests {
     #[test]
     fn test_rollback_cleans_rolled_back_cells() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2303,7 +2303,7 @@ mod tests {
     #[test]
     fn test_rollback_repairs_dao_deposits_and_withdraw_index() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2476,7 +2476,7 @@ mod tests {
     #[test]
     fn test_rollback_does_not_reindex_deleted_dao_deposit() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2541,7 +2541,7 @@ mod tests {
     #[test]
     fn test_rollback_to_block_errors_when_target_below_minus_one() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let err = store.rollback_to_block(-2).unwrap_err();
         assert!(err.to_string().contains("expected >= -1"));
     }
@@ -2549,7 +2549,7 @@ mod tests {
     #[test]
     fn test_rollback_to_block_fails_on_invalid_block_header_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let key = keys::encode_block_num(1);
         store
@@ -2569,7 +2569,7 @@ mod tests {
     #[test]
     fn test_rollback_to_block_fails_when_target_header_missing_for_tip_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header2 = CachedBlockHeader {
             hash: vec![0x02; 32],
@@ -2595,7 +2595,7 @@ mod tests {
     #[test]
     fn test_rollback_rebuilds_token_state_from_transfers() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2739,7 +2739,7 @@ mod tests {
     #[test]
     fn test_rollback_keeps_token_daily_deltas_unchanged() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let day1_ts = 1_704_067_200_000i64; // 2024-01-01T00:00:00Z
         let day2_ts = 1_704_153_600_000i64; // 2024-01-02T00:00:00Z
@@ -2866,7 +2866,7 @@ mod tests {
     #[test]
     fn test_rollback_deletes_token_without_remaining_transfers() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -2959,7 +2959,7 @@ mod tests {
     #[test]
     fn test_rollback_repairs_spore_nft_domain_indexes_and_aggregates() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -3140,7 +3140,7 @@ mod tests {
     #[test]
     fn test_rollback_truncates_hodl_tracker_state_to_tip() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
