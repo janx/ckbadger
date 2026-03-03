@@ -15,7 +15,7 @@ fn setup_store() -> Arc<CkbadgerStore> {
 fn test_dao_deposit_creation() {
     let store = setup_store();
 
-    let outpoint_key = vec![0xaa; 36]; // tx_hash(32) + output_index(4)
+    let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xaa; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 100_000_000_000,
         deposit_block_number: 5000,
@@ -53,7 +53,7 @@ fn test_dao_deposit_creation() {
 fn test_dao_withdraw_request() {
     let store = setup_store();
 
-    let outpoint_key = vec![0xbb; 36];
+    let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xbb; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 200_000_000_000,
         deposit_block_number: 6000,
@@ -110,7 +110,7 @@ fn test_dao_withdraw_request() {
 fn test_dao_withdrawal_completion() {
     let store = setup_store();
 
-    let outpoint_key = vec![0xdd; 36];
+    let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xdd; 32], 0);
     let entry = DaoDepositCacheEntry {
         capacity: 300_000_000_000,
         deposit_block_number: 8000,
@@ -144,9 +144,21 @@ fn test_list_dao_deposits() {
     let store = setup_store();
 
     let entries = vec![
-        (vec![0x01; 36], 0i16, 100_000_000_000i64),
-        (vec![0x02; 36], 1, 200_000_000_000),
-        (vec![0x03; 36], 2, 300_000_000_000),
+        (
+            ckbadger_store::keys::encode_outpoint(&[0x01; 32], 0),
+            0i16,
+            100_000_000_000i64,
+        ),
+        (
+            ckbadger_store::keys::encode_outpoint(&[0x02; 32], 0),
+            1,
+            200_000_000_000,
+        ),
+        (
+            ckbadger_store::keys::encode_outpoint(&[0x03; 32], 0),
+            2,
+            300_000_000_000,
+        ),
     ];
 
     let mut batch = StoreBatch::new(&store);
@@ -238,9 +250,18 @@ fn test_list_active_dao_deposits() {
     };
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_dao_deposit(&[0x10; 36], &active_entry);
-    batch.put_dao_deposit(&[0x20; 36], &requested_entry);
-    batch.put_dao_deposit(&[0x30; 36], &withdrawn_entry);
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0x10; 32], 0),
+        &active_entry,
+    );
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0x20; 32], 0),
+        &requested_entry,
+    );
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0x30; 32], 0),
+        &withdrawn_entry,
+    );
     batch.commit().unwrap();
 
     // list_active_dao_deposits filters status == 0 only

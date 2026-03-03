@@ -9,10 +9,11 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DeepForkInfo, DobEntry, DobExtra, DobStandard, EpochStats,
-    HourlyStats, LiveCellInfo, MinerStats, NftCollectionActivityEntry, NftCollectionAggregate,
-    NftDailyDelta, NftEntry, NftExtra, NftStandard, ReorgEvent, ScriptDailyDelta, ScriptInfo,
-    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, DobEntry, DobExtra,
+    DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats, NftCollectionActivityEntry,
+    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ReorgEvent,
+    ScriptDailyDelta, ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
+    TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -6352,6 +6353,220 @@ async fn test_address_activities_reads_from_derived_store() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_address_activities_rejects_unknown_filter() {
+    let core_store = test_store();
+    let append_only_store = test_store();
+    core_store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+            s.derived_tip_block_number = 10;
+        })
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities?filter=tok",
+            "11".repeat(32)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "bad_request");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid activity filter"));
+}
+
+#[tokio::test]
+async fn test_dao_deposits_cursor_pagination_descending() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+
+    let entries = [
+        (vec![0xA1; 32], 0i16, 30i64),
+        (vec![0xA2; 32], 0i16, 20i64),
+        (vec![0xA3; 32], 0i16, 10i64),
+    ];
+    for (tx_hash, output_index, block_number) in entries {
+        batch.put_dao_deposit(
+            &ckbadger_store::keys::encode_outpoint(&tx_hash, output_index),
+            &DaoDepositCacheEntry {
+                capacity: 100_00000000,
+                deposit_block_number: block_number,
+                lock_script_hash: vec![0x22; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/dao/deposits?limit=2")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["depositBlockNumber"], 30);
+    assert_eq!(rows[1]["depositBlockNumber"], 20);
+    assert_eq!(json["nextCursor"], "20");
+    assert_eq!(json["hasMore"], true);
+
+    let request = Request::builder()
+        .uri("/api/v1/dao/deposits?limit=2&cursor=20")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["depositBlockNumber"], 10);
+    assert!(json["nextCursor"].is_null());
+    assert_eq!(json["hasMore"], false);
+}
+
+#[tokio::test]
+async fn test_dao_deposits_status_filter_uses_descending_order() {
+    let store = test_store();
+    let lock_a = vec![0x11; 32];
+    let lock_b = vec![0x22; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+
+    let entries = [
+        (vec![0xB1; 32], 30i64, 1i16, lock_a.clone()),
+        (vec![0xB2; 32], 20i64, 1i16, lock_b.clone()),
+        (vec![0xB3; 32], 10i64, 0i16, lock_a.clone()),
+    ];
+    for (tx_hash, block_number, status, lock_hash) in entries {
+        batch.put_dao_deposit(
+            &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
+            &DaoDepositCacheEntry {
+                capacity: 100_00000000,
+                deposit_block_number: block_number,
+                lock_script_hash: lock_hash,
+                deposit_ar: 1,
+                status,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/deposits?limit=10&status=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["depositBlockNumber"], 30);
+    assert_eq!(rows[1]["depositBlockNumber"], 20);
+}
+
+#[tokio::test]
+async fn test_dao_deposits_by_lock_hash_cursor_pagination() {
+    let store = test_store();
+    let lock_a = vec![0x33; 32];
+    let lock_b = vec![0x44; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+
+    let entries = [
+        (vec![0xC1; 32], 30i64, lock_a.clone()),
+        (vec![0xC2; 32], 20i64, lock_a.clone()),
+        (vec![0xC3; 32], 10i64, lock_b),
+    ];
+    for (tx_hash, block_number, lock_hash) in entries {
+        batch.put_dao_deposit(
+            &ckbadger_store::keys::encode_outpoint(&tx_hash, 0),
+            &DaoDepositCacheEntry {
+                capacity: 100_00000000,
+                deposit_block_number: block_number,
+                lock_script_hash: lock_hash,
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/dao/deposits/0x{}?limit=1",
+            hex::encode(&lock_a)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["depositBlockNumber"], 30);
+    assert_eq!(json["nextCursor"], "30");
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/dao/deposits/0x{}?limit=1&cursor=30",
+            hex::encode(&lock_a)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["depositBlockNumber"], 20);
+    assert!(json["nextCursor"].is_null());
 }
 
 #[tokio::test]

@@ -610,6 +610,129 @@ pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
     (lock_hash, block_num, tx_idx)
 }
 
+/// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
+pub const DAO_BY_BLOCK_KEY_SIZE: usize = 42;
+/// DAO-by-lock index key: lock_hash(32B) + deposit_block_desc(8B BE) + outpoint(34B) = 74 bytes
+pub const DAO_BY_LOCK_BLOCK_KEY_SIZE: usize = 74;
+/// DAO-by-status index key: status(2B BE) + deposit_block_desc(8B BE) + outpoint(34B) = 44 bytes
+pub const DAO_BY_STATUS_BLOCK_KEY_SIZE: usize = 44;
+
+pub fn encode_dao_by_block_key(
+    deposit_block: i64,
+    outpoint_key: &[u8],
+) -> [u8; DAO_BY_BLOCK_KEY_SIZE] {
+    assert!(
+        outpoint_key.len() == OUTPOINT_KEY_SIZE,
+        "encode_dao_by_block_key: expected outpoint {} bytes, got {}",
+        OUTPOINT_KEY_SIZE,
+        outpoint_key.len()
+    );
+    let mut key = [0u8; DAO_BY_BLOCK_KEY_SIZE];
+    let block_desc = (i64::MAX - deposit_block).to_be_bytes();
+    key[..8].copy_from_slice(&block_desc);
+    key[8..42].copy_from_slice(outpoint_key);
+    key
+}
+
+pub fn decode_dao_by_block_key(key: &[u8]) -> (i64, Vec<u8>, i16) {
+    assert!(
+        key.len() == DAO_BY_BLOCK_KEY_SIZE,
+        "decode_dao_by_block_key: expected {} bytes, got {}",
+        DAO_BY_BLOCK_KEY_SIZE,
+        key.len()
+    );
+    let block_desc = i64::from_be_bytes(key[..8].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let (tx_hash, output_index) = decode_outpoint(&key[8..42]);
+    (block_num, tx_hash, output_index)
+}
+
+pub fn encode_dao_by_lock_block_key(
+    lock_hash: &[u8],
+    deposit_block: i64,
+    outpoint_key: &[u8],
+) -> [u8; DAO_BY_LOCK_BLOCK_KEY_SIZE] {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_dao_by_lock_block_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    assert!(
+        outpoint_key.len() == OUTPOINT_KEY_SIZE,
+        "encode_dao_by_lock_block_key: expected outpoint {} bytes, got {}",
+        OUTPOINT_KEY_SIZE,
+        outpoint_key.len()
+    );
+    let mut key = [0u8; DAO_BY_LOCK_BLOCK_KEY_SIZE];
+    let block_desc = (i64::MAX - deposit_block).to_be_bytes();
+    key[..32].copy_from_slice(&lock_hash[..32]);
+    key[32..40].copy_from_slice(&block_desc);
+    key[40..74].copy_from_slice(outpoint_key);
+    key
+}
+
+pub fn decode_dao_by_lock_block_key(key: &[u8]) -> (Vec<u8>, i64, Vec<u8>, i16) {
+    assert!(
+        key.len() == DAO_BY_LOCK_BLOCK_KEY_SIZE,
+        "decode_dao_by_lock_block_key: expected {} bytes, got {}",
+        DAO_BY_LOCK_BLOCK_KEY_SIZE,
+        key.len()
+    );
+    let lock_hash = key[..32].to_vec();
+    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let (tx_hash, output_index) = decode_outpoint(&key[40..74]);
+    (lock_hash, block_num, tx_hash, output_index)
+}
+
+pub fn encode_dao_by_lock_prefix(lock_hash: &[u8]) -> [u8; 32] {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_dao_by_lock_prefix: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    let mut prefix = [0u8; 32];
+    prefix.copy_from_slice(&lock_hash[..32]);
+    prefix
+}
+
+pub fn encode_dao_by_status_block_key(
+    status: i16,
+    deposit_block: i64,
+    outpoint_key: &[u8],
+) -> [u8; DAO_BY_STATUS_BLOCK_KEY_SIZE] {
+    assert!(
+        outpoint_key.len() == OUTPOINT_KEY_SIZE,
+        "encode_dao_by_status_block_key: expected outpoint {} bytes, got {}",
+        OUTPOINT_KEY_SIZE,
+        outpoint_key.len()
+    );
+    let mut key = [0u8; DAO_BY_STATUS_BLOCK_KEY_SIZE];
+    let block_desc = (i64::MAX - deposit_block).to_be_bytes();
+    key[..2].copy_from_slice(&status.to_be_bytes());
+    key[2..10].copy_from_slice(&block_desc);
+    key[10..44].copy_from_slice(outpoint_key);
+    key
+}
+
+pub fn decode_dao_by_status_block_key(key: &[u8]) -> (i16, i64, Vec<u8>, i16) {
+    assert!(
+        key.len() == DAO_BY_STATUS_BLOCK_KEY_SIZE,
+        "decode_dao_by_status_block_key: expected {} bytes, got {}",
+        DAO_BY_STATUS_BLOCK_KEY_SIZE,
+        key.len()
+    );
+    let status = i16::from_be_bytes(key[..2].try_into().unwrap());
+    let block_desc = i64::from_be_bytes(key[2..10].try_into().unwrap());
+    let block_num = i64::MAX - block_desc;
+    let (tx_hash, output_index) = decode_outpoint(&key[10..44]);
+    (status, block_num, tx_hash, output_index)
+}
+
+pub fn encode_dao_by_status_prefix(status: i16) -> [u8; 2] {
+    status.to_be_bytes()
+}
+
 /// Address daily stats key: lock_hash(32B) + date(4B u32 YYYYMMDD BE) = 36 bytes
 pub const ADDR_DAILY_STATS_KEY_SIZE: usize = 36;
 
@@ -688,6 +811,47 @@ mod tests {
         let (decoded_hash, decoded_idx) = decode_outpoint(&key);
         assert_eq!(decoded_hash, tx_hash.to_vec());
         assert_eq!(decoded_idx, output_index);
+    }
+
+    #[test]
+    fn test_dao_by_block_key_roundtrip() {
+        let outpoint = encode_outpoint(&[0xAA; 32], 3);
+        let key = encode_dao_by_block_key(123, &outpoint);
+        assert_eq!(key.len(), DAO_BY_BLOCK_KEY_SIZE);
+        let (block, tx_hash, output_index) = decode_dao_by_block_key(&key);
+        assert_eq!(block, 123);
+        assert_eq!(tx_hash, vec![0xAA; 32]);
+        assert_eq!(output_index, 3);
+    }
+
+    #[test]
+    fn test_dao_by_lock_block_key_roundtrip() {
+        let outpoint = encode_outpoint(&[0xBB; 32], 5);
+        let key = encode_dao_by_lock_block_key(&[0x11; 32], 999, &outpoint);
+        assert_eq!(key.len(), DAO_BY_LOCK_BLOCK_KEY_SIZE);
+        let (lock_hash, block, tx_hash, output_index) = decode_dao_by_lock_block_key(&key);
+        assert_eq!(lock_hash, vec![0x11; 32]);
+        assert_eq!(block, 999);
+        assert_eq!(tx_hash, vec![0xBB; 32]);
+        assert_eq!(output_index, 5);
+    }
+
+    #[test]
+    fn test_dao_by_status_block_key_roundtrip() {
+        let outpoint = encode_outpoint(&[0xCC; 32], 1);
+        let key = encode_dao_by_status_block_key(2, 456, &outpoint);
+        assert_eq!(key.len(), DAO_BY_STATUS_BLOCK_KEY_SIZE);
+        let (status, block, tx_hash, output_index) = decode_dao_by_status_block_key(&key);
+        assert_eq!(status, 2);
+        assert_eq!(block, 456);
+        assert_eq!(tx_hash, vec![0xCC; 32]);
+        assert_eq!(output_index, 1);
+    }
+
+    #[test]
+    fn test_dao_index_prefix_helpers() {
+        assert_eq!(encode_dao_by_status_prefix(1), 1i16.to_be_bytes());
+        assert_eq!(encode_dao_by_lock_prefix(&[0x22; 32]), [0x22; 32]);
     }
 
     #[test]

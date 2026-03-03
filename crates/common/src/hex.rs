@@ -24,16 +24,18 @@ pub fn parse_hex_to_hash(hex: &str) -> [u8; 32] {
 
 /// Parses a hex string to u32.
 pub fn parse_hex_u32(hex: &str) -> u32 {
+    let raw = hex;
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    u32::from_str_radix(hex, 16).unwrap_or(0)
+    u32::from_str_radix(hex, 16).unwrap_or_else(|e| panic!("invalid hex u32 '{}': {}", raw, e))
 }
 
 /// Parses a hex capacity string to decimal string.
 pub fn parse_capacity(hex: &str) -> String {
+    let raw = hex;
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
     u64::from_str_radix(hex, 16)
         .map(|v| v.to_string())
-        .unwrap_or_else(|_| "0".to_string())
+        .unwrap_or_else(|e| panic!("invalid capacity hex '{}': {}", raw, e))
 }
 
 #[cfg(test)]
@@ -57,13 +59,23 @@ mod tests {
     fn test_parse_hex_u32() {
         assert_eq!(parse_hex_u32("0x10"), 16);
         assert_eq!(parse_hex_u32("ff"), 255);
-        assert_eq!(parse_hex_u32("invalid"), 0);
     }
 
     #[test]
     fn test_parse_capacity() {
         assert_eq!(parse_capacity("0x174876e800"), "100000000000");
-        assert_eq!(parse_capacity("invalid"), "0");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid hex u32")]
+    fn test_parse_hex_u32_invalid_panics() {
+        let _ = parse_hex_u32("invalid");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid capacity hex")]
+    fn test_parse_capacity_invalid_panics() {
+        let _ = parse_capacity("invalid");
     }
 
     #[test]

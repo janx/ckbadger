@@ -431,13 +431,16 @@ fn hash_type_byte_to_i16(byte: u8) -> i16 {
     }
 }
 
-fn parse_hash_type_label_to_i16(hash_type: &str) -> i16 {
+fn parse_hash_type_label_to_i16(hash_type: &str) -> Result<i16, RouteError> {
     match hash_type {
-        "data" => 0,
-        "type" => 1,
-        "data1" => 2,
-        "data2" => 4,
-        _ => 0,
+        "data" => Ok(0),
+        "type" => Ok(1),
+        "data1" => Ok(2),
+        "data2" => Ok(4),
+        other => Err(ApiError::internal(format!(
+            "unknown script hash_type label in CKB store fallback: '{}'",
+            other
+        ))),
     }
 }
 
@@ -1004,7 +1007,7 @@ fn build_inputs_outputs_from_ckb(
                                         .unwrap_or(&output.lock.code_hash),
                                 )
                                 .unwrap_or_default();
-                                let ht = parse_hash_type_label_to_i16(&output.lock.hash_type);
+                                let ht = parse_hash_type_label_to_i16(&output.lock.hash_type)?;
                                 let args = hex::decode(
                                     output
                                         .lock
@@ -1873,6 +1876,24 @@ mod tests {
         assert_eq!(hash_type_byte_to_i16(2), 2);
         assert_eq!(hash_type_byte_to_i16(4), 4);
         assert_eq!(hash_type_byte_to_i16(255), 0);
+    }
+
+    #[test]
+    fn test_parse_hash_type_label_to_i16() {
+        assert_eq!(parse_hash_type_label_to_i16("data").unwrap(), 0);
+        assert_eq!(parse_hash_type_label_to_i16("type").unwrap(), 1);
+        assert_eq!(parse_hash_type_label_to_i16("data1").unwrap(), 2);
+        assert_eq!(parse_hash_type_label_to_i16("data2").unwrap(), 4);
+    }
+
+    #[test]
+    fn test_parse_hash_type_label_to_i16_rejects_unknown() {
+        let err = parse_hash_type_label_to_i16("unknown").unwrap_err();
+        assert!(err
+            .1
+             .0
+            .message
+            .contains("unknown script hash_type label in CKB store fallback"));
     }
 
     #[test]

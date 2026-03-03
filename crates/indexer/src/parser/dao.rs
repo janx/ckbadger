@@ -90,7 +90,7 @@ impl DaoParser {
 
         Some(ParsedDaoCell {
             lock_script_hash,
-            capacity: Self::parse_capacity_i64(&output.capacity)?,
+            capacity: Self::parse_capacity_i64(&output.capacity),
             state,
             deposit_block_number,
         })
@@ -195,10 +195,12 @@ impl DaoParser {
         gross.checked_sub(free_capacity)
     }
 
-    fn parse_capacity_i64(capacity_hex: &str) -> Option<i64> {
+    fn parse_capacity_i64(capacity_hex: &str) -> i64 {
+        let raw = capacity_hex;
         let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        let cap = u64::from_str_radix(hex, 16).ok()?;
-        i64::try_from(cap).ok()
+        let cap = u64::from_str_radix(hex, 16)
+            .unwrap_or_else(|e| panic!("invalid DAO capacity hex '{}': {}", raw, e));
+        i64::try_from(cap).unwrap_or_else(|_| panic!("DAO capacity exceeds i64 '{}': {}", raw, cap))
     }
 }
 
@@ -315,21 +317,21 @@ mod tests {
 
     #[test]
     fn test_parse_capacity_i64() {
-        assert_eq!(
-            DaoParser::parse_capacity_i64("0x2540be400"),
-            Some(10_000_000_000)
-        );
-        assert_eq!(
-            DaoParser::parse_capacity_i64("2540be400"),
-            Some(10_000_000_000)
-        );
-        assert_eq!(DaoParser::parse_capacity_i64("0x0"), Some(0));
+        assert_eq!(DaoParser::parse_capacity_i64("0x2540be400"), 10_000_000_000);
+        assert_eq!(DaoParser::parse_capacity_i64("2540be400"), 10_000_000_000);
+        assert_eq!(DaoParser::parse_capacity_i64("0x0"), 0);
     }
 
     #[test]
-    fn test_parse_capacity_i64_invalid_returns_none() {
-        assert_eq!(DaoParser::parse_capacity_i64("0xzz"), None);
-        assert_eq!(DaoParser::parse_capacity_i64("not_hex"), None);
+    #[should_panic(expected = "invalid DAO capacity hex")]
+    fn test_parse_capacity_i64_invalid_panics() {
+        let _ = DaoParser::parse_capacity_i64("0xzz");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid DAO capacity hex")]
+    fn test_parse_capacity_i64_non_hex_panics() {
+        let _ = DaoParser::parse_capacity_i64("not_hex");
     }
 
     #[test]

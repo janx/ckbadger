@@ -35,9 +35,9 @@ impl UdtStandard {
     }
 
     pub fn parse(s: &str) -> Self {
-        match s {
-            "xudt" | "xudt_compatible" => UdtStandard::Xudt,
-            _ => UdtStandard::Sudt,
+        match Self::from_standard_hint(s) {
+            Some(standard) => standard,
+            None => panic!("unknown UDT standard '{}'", s),
         }
     }
 }
@@ -543,8 +543,18 @@ mod tests {
             UdtStandard::parse("xudt_compatible"),
             UdtStandard::Xudt
         ));
-        assert!(matches!(UdtStandard::parse("unknown"), UdtStandard::Sudt));
-        assert!(matches!(UdtStandard::parse(""), UdtStandard::Sudt));
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown UDT standard")]
+    fn test_udt_standard_parse_unknown_panics() {
+        let _ = UdtStandard::parse("unknown");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown UDT standard")]
+    fn test_udt_standard_parse_empty_panics() {
+        let _ = UdtStandard::parse("");
     }
 
     #[test]

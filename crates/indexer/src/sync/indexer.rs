@@ -1833,6 +1833,40 @@ fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32) -> Result<
     Ok(pre as i32)
 }
 
+fn occupied_capacity_shannons_i128(
+    lock_args_len: usize,
+    type_args_len: Option<usize>,
+    data_size: i32,
+) -> i128 {
+    if data_size < 0 {
+        panic!(
+            "negative cell data_size while computing occupied capacity: {}",
+            data_size
+        );
+    }
+    let lock_script_size = 33_i128 + lock_args_len as i128;
+    let type_script_size = type_args_len.map(|len| 33_i128 + len as i128).unwrap_or(0);
+    (8_i128 + lock_script_size + type_script_size + i128::from(data_size)) * 100_000_000_i128
+}
+
+fn occupied_capacity_shannons_i64(
+    lock_args_len: usize,
+    type_args_len: Option<usize>,
+    data_size: i32,
+) -> i64 {
+    i64::try_from(occupied_capacity_shannons_i128(
+        lock_args_len,
+        type_args_len,
+        data_size,
+    ))
+    .unwrap_or_else(|_| {
+        panic!(
+            "occupied capacity exceeds i64: lock_args_len={}, type_args_len={:?}, data_size={}",
+            lock_args_len, type_args_len, data_size
+        )
+    })
+}
+
 fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
     epoch.fetch_add(1, Ordering::SeqCst) + 1
 }
@@ -2209,6 +2243,32 @@ fn dao_csu_for_snapshot_date(stats: &BatchStats, date: NaiveDate) -> Result<(i12
             field.len()
         )
     })
+}
+
+fn derive_running_depositors(
+    total_deposit_count: i64,
+    total_withdrawal_count: i64,
+    date: NaiveDate,
+) -> Result<i64> {
+    let diff = total_deposit_count
+        .checked_sub(total_withdrawal_count)
+        .ok_or_else(|| {
+            anyhow!(
+                "dao snapshot depositor overflow: date={}, total_deposits={}, total_withdrawals={}",
+                date,
+                total_deposit_count,
+                total_withdrawal_count
+            )
+        })?;
+    if diff < 0 {
+        anyhow::bail!(
+            "dao snapshot depositor underflow: date={}, total_deposits={}, total_withdrawals={}",
+            date,
+            total_deposit_count,
+            total_withdrawal_count
+        );
+    }
+    Ok(diff)
 }
 
 type DaoConsumedRow = (i64, Vec<u8>, i16, String, i64, i16);
@@ -4750,15 +4810,11 @@ impl Indexer {
                                 return;
                             }
                         };
-                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-                        let type_script_size = cell
-                            .type_args
-                            .as_ref()
-                            .map(|args| 32 + 1 + args.len() as i64)
-                            .unwrap_or(0);
-                        let occupied_capacity =
-                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
-                                * 100_000_000;
+                        let occupied_capacity = occupied_capacity_shannons_i64(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        );
                         batch_cell_infos.insert(
                             (tx_data.hash.to_vec(), output_index as i16),
                             LiveCellInfo {
@@ -4932,15 +4988,11 @@ impl Indexer {
                                 return;
                             }
                         };
-                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-                        let type_script_size = cell
-                            .type_args
-                            .as_ref()
-                            .map(|a| 32 + 1 + a.len() as i64)
-                            .unwrap_or(0);
-                        let cell_occupied =
-                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
-                                * 100_000_000;
+                        let cell_occupied = occupied_capacity_shannons_i64(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        );
                         cell_cache_for_parser.insert(
                             (tx_data.hash, output_index as i32),
                             CachedCellInfo {
@@ -4963,15 +5015,11 @@ impl Indexer {
                     // script_usage_changes - outputs
                     for cell in &tx_data.cells {
                         let lock_key = (cell.lock_code_hash.clone(), false);
-                        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-                        let type_script_size = cell
-                            .type_args
-                            .as_ref()
-                            .map(|a| 32 + 1 + a.len() as i64)
-                            .unwrap_or(0);
-                        let cell_occupied =
-                            (8 + lock_script_size + type_script_size + cell.data_size as i64)
-                                * 100_000_000;
+                        let cell_occupied = occupied_capacity_shannons_i64(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        );
                         let entry = script_usage_changes
                             .entry(lock_key)
                             .or_insert((0, 0, 0, 0, 0, 0));
@@ -5249,15 +5297,11 @@ impl Indexer {
                         *tx_cells_created
                             .entry(cell.lock_script_hash.clone())
                             .or_default() += 1;
-                        let lock_script_size = 32i128 + 1 + cell.lock_args.len() as i128;
-                        let type_script_size = cell
-                            .type_args
-                            .as_ref()
-                            .map(|a| 32i128 + 1 + a.len() as i128)
-                            .unwrap_or(0);
-                        let cell_occupied =
-                            (8 + lock_script_size + type_script_size + cell.data_size as i128)
-                                * 100_000_000;
+                        let cell_occupied = occupied_capacity_shannons_i128(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        );
                         *tx_occupied_changes
                             .entry(cell.lock_script_hash.clone())
                             .or_default() += cell_occupied;
@@ -6774,14 +6818,11 @@ impl Indexer {
                     output_index_i16,
                     standard_hint.as_deref(),
                 )?;
-                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-                let type_script_size = cell
-                    .type_args
-                    .as_ref()
-                    .map(|args| 32 + 1 + args.len() as i64)
-                    .unwrap_or(0);
-                let occupied_capacity =
-                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+                let occupied_capacity = occupied_capacity_shannons_i64(
+                    cell.lock_args.len(),
+                    cell.type_args.as_ref().map(|args| args.len()),
+                    cell.data_size,
+                );
                 batch_cell_infos.insert(
                     (tx_data.hash.to_vec(), output_index_i16),
                     LiveCellInfo {
@@ -6921,14 +6962,11 @@ impl Indexer {
                     output_index_i16,
                     standard_hint.as_deref(),
                 )?;
-                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-                let type_script_size = cell
-                    .type_args
-                    .as_ref()
-                    .map(|a| 32 + 1 + a.len() as i64)
-                    .unwrap_or(0);
-                let cell_occupied =
-                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+                let cell_occupied = occupied_capacity_shannons_i64(
+                    cell.lock_args.len(),
+                    cell.type_args.as_ref().map(|args| args.len()),
+                    cell.data_size,
+                );
                 self.cell_cache.insert(
                     (tx_data.hash, output_index as i32),
                     CachedCellInfo {
@@ -7140,15 +7178,11 @@ impl Indexer {
                 *tx_cells_created
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += 1;
-                let lock_script_size = 32i128 + 1 + cell.lock_args.len() as i128;
-                let type_script_size = cell
-                    .type_args
-                    .as_ref()
-                    .map(|a| 32i128 + 1 + a.len() as i128)
-                    .unwrap_or(0);
-                let cell_occupied =
-                    (8 + lock_script_size + type_script_size + cell.data_size as i128)
-                        * 100_000_000;
+                let cell_occupied = occupied_capacity_shannons_i128(
+                    cell.lock_args.len(),
+                    cell.type_args.as_ref().map(|args| args.len()),
+                    cell.data_size,
+                );
                 *tx_occupied_changes
                     .entry(cell.lock_script_hash.clone())
                     .or_default() += cell_occupied;
@@ -7219,14 +7253,11 @@ impl Indexer {
                 ckbadger_store::keys::timestamp_ms_to_date(tx_data.timestamp.timestamp_millis());
             for cell in &tx_data.cells {
                 let lock_key = (cell.lock_code_hash.clone(), false);
-                let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-                let type_script_size = cell
-                    .type_args
-                    .as_ref()
-                    .map(|a| 32 + 1 + a.len() as i64)
-                    .unwrap_or(0);
-                let cell_occupied =
-                    (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
+                let cell_occupied = occupied_capacity_shannons_i64(
+                    cell.lock_args.len(),
+                    cell.type_args.as_ref().map(|args| args.len()),
+                    cell.data_size,
+                );
                 let entry = script_usage_changes
                     .entry(lock_key)
                     .or_insert((0, 0, 0, 0, 0, 0));
@@ -7656,14 +7687,11 @@ impl Indexer {
                 .iter()
                 .flat_map(|tx| tx.cells.iter())
                 .map(|cell| {
-                    let lock_script_size = 33_i128 + cell.lock_args.len() as i128;
-                    let type_script_size = cell
-                        .type_args
-                        .as_ref()
-                        .map(|args| 33_i128 + args.len() as i128)
-                        .unwrap_or(0);
-                    (8_i128 + lock_script_size + type_script_size + i128::from(cell.data_size))
-                        * 100_000_000_i128
+                    occupied_capacity_shannons_i128(
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(|args| args.len()),
+                        cell.data_size,
+                    )
                 })
                 .sum();
             let data_size_consumed: i64 = tx_slice
@@ -9980,17 +10008,11 @@ impl Indexer {
                             .iter()
                             .flat_map(|tx| tx.cells.iter())
                             .map(|cell| {
-                                let lock_script_size = 33_i128 + cell.lock_args.len() as i128;
-                                let type_script_size = cell
-                                    .type_args
-                                    .as_ref()
-                                    .map(|args| 33_i128 + args.len() as i128)
-                                    .unwrap_or(0);
-                                (8_i128
-                                    + lock_script_size
-                                    + type_script_size
-                                    + i128::from(cell.data_size))
-                                    * 100_000_000_i128
+                                occupied_capacity_shannons_i128(
+                                    cell.lock_args.len(),
+                                    cell.type_args.as_ref().map(|args| args.len()),
+                                    cell.data_size,
+                                )
                             })
                             .sum();
                         let data_size_consumed: i64 = tx_slice
@@ -11457,14 +11479,11 @@ impl Indexer {
                     .iter()
                     .flat_map(|tx| tx.cells.iter())
                     .map(|cell| {
-                        let lock_script_size = 33_i128 + cell.lock_args.len() as i128;
-                        let type_script_size = cell
-                            .type_args
-                            .as_ref()
-                            .map(|args| 33_i128 + args.len() as i128)
-                            .unwrap_or(0);
-                        (8_i128 + lock_script_size + type_script_size + i128::from(cell.data_size))
-                            * 100_000_000_i128
+                        occupied_capacity_shannons_i128(
+                            cell.lock_args.len(),
+                            cell.type_args.as_ref().map(|args| args.len()),
+                            cell.data_size,
+                        )
                     })
                     .sum();
                 let data_size_consumed: i64 = tx_slice
@@ -11923,20 +11942,12 @@ impl Indexer {
                     .as_ref()
                     .map(|s| s.total_deposited)
                     .unwrap_or(0);
-                let running_depositors = latest_snapshot
-                    .as_ref()
-                    .map(|s| s.depositors_count)
-                    .unwrap_or(0);
                 let mut running_total_deposit_count = latest_snapshot
                     .as_ref()
                     .map(|s| s.new_deposits)
                     .unwrap_or(0);
                 let mut running_total_withdrawal_count =
                     latest_snapshot.as_ref().map(|s| s.withdrawals).unwrap_or(0);
-                let running_total_compensation = latest_snapshot
-                    .as_ref()
-                    .map(|s| s.compensation)
-                    .unwrap_or(0);
                 let mut running_cumulative_deposit_amount = latest_snapshot
                     .as_ref()
                     .map(|s| s.cumulative_deposit_amount)
@@ -12001,6 +12012,13 @@ impl Indexer {
                     running_cum_dao += daily_dao_share;
                     running_cum_treasury += daily_treasury_share;
                     prev_secondary_pool = secondary_pool;
+
+                    let running_depositors = derive_running_depositors(
+                        running_total_deposit_count,
+                        running_total_withdrawal_count,
+                        *date,
+                    )?;
+                    let running_total_compensation = running_cum_dao;
 
                     let dao_snapshot = crate::db::writer::DaoSnapshotInput {
                         total_deposited: running_total_deposited,
@@ -15064,6 +15082,35 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid DAO field bytes while accumulating secondary issuance"));
+    }
+
+    #[test]
+    fn test_derive_running_depositors() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        assert_eq!(derive_running_depositors(10, 3, date).unwrap(), 7);
+    }
+
+    #[test]
+    fn test_derive_running_depositors_underflow_errors() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 2, 18).unwrap();
+        let err = derive_running_depositors(3, 10, date).unwrap_err();
+        assert!(err.to_string().contains("dao snapshot depositor underflow"));
+    }
+
+    #[test]
+    fn test_occupied_capacity_shannons_helpers() {
+        let expected = (8_i128 + 33 + 20 + 33 + 10 + 100) * 100_000_000_i128;
+        assert_eq!(occupied_capacity_shannons_i128(20, Some(10), 100), expected);
+        assert_eq!(
+            occupied_capacity_shannons_i64(20, Some(10), 100),
+            i64::try_from(expected).unwrap()
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "negative cell data_size while computing occupied capacity")]
+    fn test_occupied_capacity_shannons_negative_data_panics() {
+        let _ = occupied_capacity_shannons_i128(1, None, -1);
     }
 
     #[test]

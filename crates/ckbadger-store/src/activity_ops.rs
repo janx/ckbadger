@@ -132,7 +132,7 @@ impl CkbadgerStore {
                         | AssetChange::DaoWithdrawComplete { .. }
                 )
             }),
-            Some(_) => true,
+            Some(_) => false,
         }
     }
 }
@@ -168,6 +168,20 @@ mod tests {
         batch.commit().unwrap();
 
         let rows = store.list_activities(&lock, 0, None, None).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_list_activities_unknown_filter_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let lock = [0xAA; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock, 100, 0, &make_activity(100, 0));
+        batch.commit().unwrap();
+
+        let rows = store.list_activities(&lock, 10, None, Some("tok")).unwrap();
         assert!(rows.is_empty());
     }
 

@@ -199,51 +199,35 @@ async fn list_deposits(
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
-
-    let all_deposits = state
-        .store
-        .list_dao_deposits()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Filter by status if requested, sort by deposit_block_number DESC
-    let mut filtered: Vec<_> = all_deposits
-        .into_iter()
-        .filter(|(_, entry)| {
-            if let Some(status) = params.status {
-                entry.status == status
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    filtered.sort_by(|a, b| b.1.deposit_block_number.cmp(&a.1.deposit_block_number));
-
-    // Apply cursor: skip entries until we find the cursor block number
     let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
-
-    let start_idx = if let Some(cb) = cursor_block {
-        filtered
-            .iter()
-            .position(|(_, e)| e.deposit_block_number < cb)
-            .unwrap_or(filtered.len())
+    let page = if let Some(status) = params.status {
+        state
+            .store
+            .list_dao_deposits_by_status_paginated(status, limit + 1, cursor_block)
+            .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
-        0
+        state
+            .store
+            .list_dao_deposits_paginated(limit + 1, cursor_block)
+            .map_err(|e| ApiError::internal(e.to_string()))?
     };
 
-    let page: Vec<_> = filtered.iter().skip(start_idx).take(limit + 1).collect();
+    let mut page = page;
 
     let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    if has_more {
+        page.truncate(limit);
+    }
 
     let next_cursor = if has_more {
-        page.last().map(|(_, e)| e.deposit_block_number.to_string())
+        page.last()
+            .map(|(_, entry)| entry.deposit_block_number.to_string())
     } else {
         None
     };
 
     let deposits: Vec<DaoDepositResponse> = page
-        .into_iter()
+        .iter()
         .map(|(key, entry)| deposit_to_response(key, entry, &state))
         .collect();
 
@@ -261,46 +245,31 @@ async fn get_deposits_by_address(
 ) -> ApiResult<CursorPaginatedResponse<DaoDepositResponse>> {
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
+    if hash.len() != 32 {
+        return Err(ApiError::bad_request("Invalid lock script hash"));
+    }
 
     let limit = params.limit.clamp(1, 100) as usize;
-
-    let all_deposits = state
+    let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
+    let mut page = state
         .store
-        .list_dao_deposits()
+        .list_dao_deposits_by_lock_paginated(&hash, limit + 1, cursor_block)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Filter by lock_script_hash
-    let mut filtered: Vec<_> = all_deposits
-        .into_iter()
-        .filter(|(_, entry)| entry.lock_script_hash == hash)
-        .collect();
-
-    filtered.sort_by(|a, b| b.1.deposit_block_number.cmp(&a.1.deposit_block_number));
-
-    let cursor_block = params.cursor.as_ref().and_then(|c| c.parse::<i64>().ok());
-
-    let start_idx = if let Some(cb) = cursor_block {
-        filtered
-            .iter()
-            .position(|(_, e)| e.deposit_block_number < cb)
-            .unwrap_or(filtered.len())
-    } else {
-        0
-    };
-
-    let page: Vec<_> = filtered.iter().skip(start_idx).take(limit + 1).collect();
-
     let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    if has_more {
+        page.truncate(limit);
+    }
 
     let next_cursor = if has_more {
-        page.last().map(|(_, e)| e.deposit_block_number.to_string())
+        page.last()
+            .map(|(_, entry)| entry.deposit_block_number.to_string())
     } else {
         None
     };
 
     let deposits: Vec<DaoDepositResponse> = page
-        .into_iter()
+        .iter()
         .map(|(key, entry)| deposit_to_response(key, entry, &state))
         .collect();
 
@@ -370,20 +339,85 @@ async fn get_address_dao_summary(
 
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
+    if hash.len() != 32 {
+        return Err(ApiError::bad_request("Invalid lock script hash"));
+    }
 
-    let all_deposits = state
+    // Get latest block header for AR
+    let latest_block = state.store.get_sync_tip_block().ok().flatten();
+
+    let (latest_block_number, latest_ar) = match &latest_block {
+        Some((num, header)) => {
+            let ar = extract_ar(&header.dao).unwrap_or(1);
+            (*num, ar)
+        }
+        None => (0, 1),
+    };
+
+    let mut active_count = 0i32;
+    let mut pending_count = 0i32;
+    let mut completed_count = 0i32;
+    let mut total_locked: i128 = 0;
+    let mut total_comp_earned: i128 = 0;
+    let mut total_unclaimed: u128 = 0;
+    state
         .store
-        .list_dao_deposits()
+        .scan_dao_deposits_by_lock(&hash, |_, entry| {
+            match entry.status {
+                0 => active_count += 1,
+                1 => pending_count += 1,
+                2 => completed_count += 1,
+                _ => {}
+            }
+
+            if entry.status == 0 || entry.status == 1 {
+                total_locked += entry.capacity as i128;
+            }
+            if entry.status == 2 {
+                if let Some(comp) = entry.compensation {
+                    total_comp_earned += comp as i128;
+                }
+            }
+
+            if (entry.status == 0 || entry.status == 1)
+                && entry.deposit_block_number <= latest_block_number
+            {
+                if entry.capacity < 0 {
+                    anyhow::bail!(
+                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        entry.capacity
+                    );
+                }
+                let capacity = entry.capacity as u128;
+                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        capacity
+                    )
+                })?;
+                let ar_deposit = entry.deposit_ar as u64;
+                if ar_deposit > 0 && latest_ar > ar_deposit {
+                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash),
+                            free_capacity,
+                            ar_deposit,
+                            latest_ar
+                        )
+                    })?;
+                    total_unclaimed += compensation;
+                }
+            }
+            Ok(())
+        })
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let my_deposits: Vec<_> = all_deposits
-        .into_iter()
-        .filter(|(_, entry)| entry.lock_script_hash == hash)
-        .collect();
-
-    let active_count = my_deposits.iter().filter(|(_, e)| e.status == 0).count() as i32;
-    let pending_count = my_deposits.iter().filter(|(_, e)| e.status == 1).count() as i32;
-    let completed_count = my_deposits.iter().filter(|(_, e)| e.status == 2).count() as i32;
 
     if active_count == 0 && pending_count == 0 && completed_count == 0 {
         return ok(AddressDaoSummaryResponse {
@@ -399,70 +433,6 @@ async fn get_address_dao_summary(
             total_compensation_earned_ckb: "0".to_string(),
             estimated_apc: "".to_string(),
         });
-    }
-
-    // Total locked = sum of capacity for active (0) and pending (1) deposits
-    let total_locked: i128 = my_deposits
-        .iter()
-        .filter(|(_, e)| e.status == 0 || e.status == 1)
-        .map(|(_, e)| e.capacity as i128)
-        .sum();
-
-    // Total compensation earned = sum of compensation for completed (2) deposits
-    let total_comp_earned: i128 = my_deposits
-        .iter()
-        .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
-        .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
-        .sum();
-
-    // Get latest block header for AR
-    let latest_block = state.store.get_sync_tip_block().ok().flatten();
-
-    let (latest_block_number, latest_ar) = match &latest_block {
-        Some((num, header)) => {
-            let ar = extract_ar(&header.dao).unwrap_or(1);
-            (*num, ar)
-        }
-        None => (0, 1),
-    };
-
-    // Calculate unclaimed compensation for active/pending deposits
-    let mut total_unclaimed: u128 = 0;
-    for (_, entry) in my_deposits.iter().filter(|(_, e)| {
-        (e.status == 0 || e.status == 1) && e.deposit_block_number <= latest_block_number
-    }) {
-        if entry.capacity < 0 {
-            return Err(ApiError::internal(format!(
-                "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-                entry.capacity
-            )));
-        }
-        let capacity = entry.capacity as u128;
-        let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-            ApiError::internal(format!(
-                "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-                capacity
-            ))
-        })?;
-        let ar_deposit = entry.deposit_ar as u64;
-        if ar_deposit > 0 && latest_ar > ar_deposit {
-            let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-            let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                ApiError::internal(format!(
-                    "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
-                    entry.deposit_block_number,
-                    hex::encode(&entry.lock_script_hash),
-                    free_capacity,
-                    ar_deposit,
-                    latest_ar
-                ))
-            })?;
-            total_unclaimed += compensation;
-        }
     }
 
     let latest_snapshot = state
@@ -499,36 +469,6 @@ async fn get_address_dao_summary(
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
     ensure_derived_ready(state.as_ref())?;
 
-    let active_deposits = state
-        .store
-        .list_active_dao_deposits()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let all_deposits = state
-        .store
-        .list_dao_deposits()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    // Live stats from active deposits
-    let total_deposited: i128 = active_deposits
-        .iter()
-        .map(|(_, e)| e.capacity as i128)
-        .sum();
-
-    let unique_depositors: std::collections::HashSet<&[u8]> = active_deposits
-        .iter()
-        .map(|(_, e)| e.lock_script_hash.as_slice())
-        .collect();
-    let total_depositors = unique_depositors.len() as i32;
-    let active_count = active_deposits.len() as i32;
-
-    // Compensation paid = sum of compensation for completed deposits
-    let total_compensation_paid: i128 = all_deposits
-        .iter()
-        .filter(|(_, e)| e.status == 2 && e.compensation.is_some())
-        .map(|(_, e)| e.compensation.unwrap_or(0) as i128)
-        .sum();
-
     // Get latest block for AR
     let latest_block = state.store.get_sync_tip_block().ok().flatten();
 
@@ -540,61 +480,81 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         None => (0, 1),
     };
 
-    // Calculate average deposit time
-    let total_blocks_held: f64 = active_deposits
-        .iter()
-        .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
-        .map(|(_, e)| (latest_block_number - e.deposit_block_number) as f64)
-        .sum();
-    let active_filtered_count = active_deposits
-        .iter()
-        .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
-        .count();
+    let mut total_deposited: i128 = 0;
+    let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
+    let mut active_count = 0i32;
+    let mut total_compensation_paid: i128 = 0;
+    let mut total_blocks_held: f64 = 0.0;
+    let mut active_filtered_count = 0usize;
+
+    // Calculate unclaimed compensation
+    let mut total_unclaimed: u128 = 0;
+    state
+        .store
+        .scan_dao_deposits_by_status(0, |_, entry| {
+            total_deposited += entry.capacity as i128;
+            unique_depositors.insert(entry.lock_script_hash.clone());
+            active_count += 1;
+
+            if entry.deposit_block_number <= latest_block_number {
+                total_blocks_held += (latest_block_number - entry.deposit_block_number) as f64;
+                active_filtered_count += 1;
+
+                if entry.capacity < 0 {
+                    anyhow::bail!(
+                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        entry.capacity
+                    );
+                }
+                let capacity = entry.capacity as u128;
+                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        capacity
+                    )
+                })?;
+                let ar_deposit = entry.deposit_ar as u64;
+                if ar_deposit > 0 && latest_ar > ar_deposit {
+                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash),
+                            free_capacity,
+                            ar_deposit,
+                            latest_ar
+                        )
+                    })?;
+                    total_unclaimed += compensation;
+                }
+            }
+
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    state
+        .store
+        .scan_dao_deposits_by_status(2, |_, entry| {
+            if let Some(comp) = entry.compensation {
+                total_compensation_paid += comp as i128;
+            }
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let total_depositors = unique_depositors.len() as i32;
+
     let avg_epochs = if active_filtered_count > 0 {
         (total_blocks_held / active_filtered_count as f64) / 1800.0
     } else {
         0.0
     };
-
-    // Calculate unclaimed compensation
-    let mut total_unclaimed: u128 = 0;
-    for (_, entry) in active_deposits
-        .iter()
-        .filter(|(_, e)| e.deposit_block_number <= latest_block_number)
-    {
-        if entry.capacity < 0 {
-            return Err(ApiError::internal(format!(
-                "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-                entry.capacity
-            )));
-        }
-        let capacity = entry.capacity as u128;
-        let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-            ApiError::internal(format!(
-                "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                entry.deposit_block_number,
-                hex::encode(&entry.lock_script_hash),
-                capacity
-            ))
-        })?;
-        let ar_deposit = entry.deposit_ar as u64;
-        if ar_deposit > 0 && latest_ar > ar_deposit {
-            let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-            let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                ApiError::internal(format!(
-                    "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
-                    entry.deposit_block_number,
-                    hex::encode(&entry.lock_script_hash),
-                    free_capacity,
-                    ar_deposit,
-                    latest_ar
-                ))
-            })?;
-            total_unclaimed += compensation;
-        }
-    }
 
     let latest_snapshot = state
         .store
@@ -817,16 +777,16 @@ fn build_total_depositors_series(
         return Ok(HashMap::new());
     }
 
-    let dao_deposits = store
-        .list_dao_deposits()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut unique_block_numbers: HashSet<i64> = HashSet::new();
-    for (_, entry) in &dao_deposits {
-        unique_block_numbers.insert(entry.deposit_block_number);
-        if let Some(request_block) = entry.withdraw_request_block {
-            unique_block_numbers.insert(request_block);
-        }
-    }
+    store
+        .scan_dao_deposits(|_, entry| {
+            unique_block_numbers.insert(entry.deposit_block_number);
+            if let Some(request_block) = entry.withdraw_request_block {
+                unique_block_numbers.insert(request_block);
+            }
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let block_numbers: Vec<i64> = unique_block_numbers.into_iter().collect();
     let block_headers = store
@@ -856,34 +816,37 @@ fn build_total_depositors_series(
 
     let mut events_by_date: BTreeMap<String, Vec<(Vec<u8>, i32)>> = BTreeMap::new();
 
-    for (_, entry) in dao_deposits {
-        let deposit_date = date_cache
-            .get(&entry.deposit_block_number)
-            .cloned()
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing cached deposit block date while building dao depositor series: block_number={}",
-                    entry.deposit_block_number
-                ))
-            })?;
-        events_by_date
-            .entry(deposit_date)
-            .or_default()
-            .push((entry.lock_script_hash.clone(), 1));
-
-        if let Some(request_block) = entry.withdraw_request_block {
-            let request_date = date_cache.get(&request_block).cloned().ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing cached withdraw-request block date while building dao depositor series: block_number={}",
-                    request_block
-                ))
-            })?;
+    store
+        .scan_dao_deposits(|_, entry| {
+            let deposit_date = date_cache
+                .get(&entry.deposit_block_number)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing cached deposit block date while building dao depositor series: block_number={}",
+                        entry.deposit_block_number
+                    )
+                })?;
             events_by_date
-                .entry(request_date)
+                .entry(deposit_date)
                 .or_default()
-                .push((entry.lock_script_hash.clone(), -1));
-        }
-    }
+                .push((entry.lock_script_hash.clone(), 1));
+
+            if let Some(request_block) = entry.withdraw_request_block {
+                let request_date = date_cache.get(&request_block).cloned().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing cached withdraw-request block date while building dao depositor series: block_number={}",
+                        request_block
+                    )
+                })?;
+                events_by_date
+                    .entry(request_date)
+                    .or_default()
+                    .push((entry.lock_script_hash.clone(), -1));
+            }
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut ordered_dates = snapshot_dates.to_vec();
     ordered_dates.sort();

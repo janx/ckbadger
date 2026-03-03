@@ -14,6 +14,8 @@ use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{address::address_to_lock_script_hash, ensure_derived_ready};
 use crate::AppState;
 
+type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/addresses/{addr}/activities", get(get_address_activities))
 }
@@ -144,6 +146,18 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
 
 const ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 
+fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
+    if let Some(value) = filter {
+        if !matches!(value, "all" | "ckb" | "token" | "nft" | "dao") {
+            return Err(ApiError::bad_request(format!(
+                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao",
+                value
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn is_canonical_activity_entry(
     store: &CkbadgerStore,
     block_num: i64,
@@ -214,6 +228,7 @@ async fn get_address_activities(
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<ActivityResponse>> {
     ensure_derived_ready(&state)?;
+    validate_activity_filter(params.filter.as_deref())?;
     let lock_hash = if addr.starts_with("ckb1") || addr.starts_with("ckt1") {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid address: {}", e)))?
@@ -304,6 +319,13 @@ mod tests {
             asset_changes: vec![],
             peers: vec![],
         }
+    }
+
+    #[test]
+    fn test_validate_activity_filter_rejects_unknown() {
+        let err = validate_activity_filter(Some("tok")).unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
+        assert!(err.1 .0.message.contains("invalid activity filter"));
     }
 
     #[test]

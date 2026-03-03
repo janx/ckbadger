@@ -385,10 +385,72 @@ impl<'a> StoreBatch<'a> {
 
     // ---- DAO ----
 
+    fn delete_dao_secondary_indexes(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {
+        let by_block_key = keys::encode_dao_by_block_key(entry.deposit_block_number, outpoint_key);
+        let by_lock_key = keys::encode_dao_by_lock_block_key(
+            &entry.lock_script_hash,
+            entry.deposit_block_number,
+            outpoint_key,
+        );
+        let by_status_key = keys::encode_dao_by_status_block_key(
+            entry.status,
+            entry.deposit_block_number,
+            outpoint_key,
+        );
+
+        self.delete_cf(self.store.cf_dao_by_block(), by_block_key);
+        self.delete_cf(self.store.cf_dao_by_lock_block(), by_lock_key);
+        self.delete_cf(self.store.cf_dao_by_status_block(), by_status_key);
+    }
+
+    fn put_dao_secondary_indexes(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {
+        let by_block_key = keys::encode_dao_by_block_key(entry.deposit_block_number, outpoint_key);
+        let by_lock_key = keys::encode_dao_by_lock_block_key(
+            &entry.lock_script_hash,
+            entry.deposit_block_number,
+            outpoint_key,
+        );
+        let by_status_key = keys::encode_dao_by_status_block_key(
+            entry.status,
+            entry.deposit_block_number,
+            outpoint_key,
+        );
+
+        self.batch
+            .put_cf(self.store.cf_dao_by_block(), by_block_key, []);
+        self.batch
+            .put_cf(self.store.cf_dao_by_lock_block(), by_lock_key, []);
+        self.batch
+            .put_cf(self.store.cf_dao_by_status_block(), by_status_key, []);
+    }
+
     pub fn put_dao_deposit(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {
+        if let Some(existing) = self
+            .store
+            .get_cf(self.store.cf_dao_deposits(), outpoint_key)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to read existing dao_deposit before overwrite: outpoint=0x{}, error={}",
+                    bytes_to_hex(outpoint_key),
+                    e
+                )
+            })
+        {
+            let existing_entry: DaoDepositCacheEntry =
+                bincode::deserialize(&existing).unwrap_or_else(|e| {
+                    panic!(
+                        "failed to deserialize existing dao_deposit before overwrite: outpoint=0x{}, error={}",
+                        bytes_to_hex(outpoint_key),
+                        e
+                    )
+                });
+            self.delete_dao_secondary_indexes(outpoint_key, &existing_entry);
+        }
+
         let value = bincode::serialize(entry).expect("serialize DaoDepositCacheEntry");
         self.batch
             .put_cf(self.store.cf_dao_deposits(), outpoint_key, &value);
+        self.put_dao_secondary_indexes(outpoint_key, entry);
     }
 
     pub fn put_dao_by_withdraw_tx(
