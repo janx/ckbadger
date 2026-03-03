@@ -230,16 +230,17 @@ fn derive_sync_status_fields(
 }
 
 fn sync_modes_from_progress(
-    progress: &SyncProgressData,
+    _progress: &SyncProgressData,
     status_data: Option<&SyncStatusData>,
     blocks_behind: i64,
 ) -> (bool, bool) {
-    let is_syncing = progress.is_syncing.unwrap_or(blocks_behind > 0);
-    let is_bulk_sync = progress.is_bulk_sync.unwrap_or_else(|| {
-        status_data
+    let is_syncing = blocks_behind > 0
+        || status_data
             .map(|status| status.derived_sync_in_progress)
-            .unwrap_or(blocks_behind > LEGACY_BULK_SYNC_THRESHOLD_BLOCKS)
-    });
+            .unwrap_or(false);
+    let is_bulk_sync = status_data
+        .map(|status| status.derived_sync_in_progress)
+        .unwrap_or(blocks_behind > LEGACY_BULK_SYNC_THRESHOLD_BLOCKS);
     (is_syncing, is_bulk_sync)
 }
 
@@ -694,8 +695,6 @@ mod tests {
         SyncProgressData {
             current_block: 1000,
             target_block: 2000,
-            is_syncing: Some(true),
-            is_bulk_sync: Some(true),
             last_batch_blocks: Some(64),
             blocks_per_second: 100.0,
             ema_blocks_per_second: 95.0,
@@ -796,21 +795,16 @@ mod tests {
     }
 
     #[test]
-    fn sync_modes_from_progress_prefers_explicit_flags() {
-        let mut progress = sample_progress();
-        progress.is_syncing = Some(false);
-        progress.is_bulk_sync = Some(false);
-
+    fn sync_modes_from_progress_uses_lag_when_status_missing() {
+        let progress = sample_progress();
         let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, None, 10_000);
-        assert!(!is_syncing);
-        assert!(!is_bulk_sync);
+        assert!(is_syncing);
+        assert!(is_bulk_sync);
     }
 
     #[test]
     fn sync_modes_from_progress_falls_back_to_status_or_legacy_lag() {
-        let mut progress = sample_progress();
-        progress.is_syncing = None;
-        progress.is_bulk_sync = None;
+        let progress = sample_progress();
 
         let status_hint = SyncStatusData {
             derived_sync_in_progress: true,
