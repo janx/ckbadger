@@ -23,7 +23,7 @@ use ckbadger_store::keys;
 use ckbadger_store::types::{
     AddressBalance, DaoDailySnapshot, HodlTrackerState, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
 };
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, CF_ADDR_TXS};
 
 use crate::cache::CacheInvalidator;
 use crate::config::{Config, DEEP_FORK_DEPTH};
@@ -4058,6 +4058,19 @@ impl Indexer {
                 rollback_to = actual_start,
                 "Startup undo-log rollback phase completed"
             );
+            if !self.writer.store().has_cf(CF_ADDR_TXS) {
+                let rebuilt = self
+                    .writer
+                    .store()
+                    .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(
+                        self.append_only_store.as_ref(),
+                    ))?;
+                info!(
+                    run_id = %self.run_id,
+                    rebuilt,
+                    "Address balances rebuilt from append-only addr_txs after startup cleanup"
+                );
+            }
         }
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
 
@@ -7274,14 +7287,12 @@ impl Indexer {
             }
         }
 
-        // Write blocks, txs, cells via StoreBatch
+        // Write txs/cells first; block headers are committed in finalization as
+        // the per-batch progress marker.
         let t_headers = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
             let mut tx_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
-            if !block_refs.is_empty() {
-                self.writer.insert_blocks_batch(&block_refs, &mut batch)?;
-            }
             if !all_tx_data.is_empty() {
                 put_tx_context_undo_entries(&mut batch, &mut tx_undo_seq_by_block, &all_tx_data)?;
             }
@@ -8791,16 +8802,23 @@ impl Indexer {
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
 
+        // Finalization: persist block headers last as the durable sync marker,
+        // together with stats derived from this batch.
         {
-            let mut batch = StoreBatch::new(self.writer.store());
-            self.write_batch_stats_to_batch(&batch_stats, &mut batch)?;
+            let mut core_batch = StoreBatch::new(self.writer.store());
+            self.writer
+                .insert_blocks_batch(&block_refs, &mut core_batch)?;
+            let mut stats_batch = StoreBatch::new(self.writer.store());
+            self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
             if bulk_sync_mode {
                 let commit_started = Instant::now();
-                batch.commit_no_wal()?;
+                core_batch.commit_no_wal()?;
+                stats_batch.commit_no_wal()?;
                 commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
             } else {
                 let commit_started = Instant::now();
-                batch.commit()?;
+                core_batch.commit()?;
+                stats_batch.commit()?;
                 commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
             }
         }

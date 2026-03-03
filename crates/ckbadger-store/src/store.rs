@@ -418,6 +418,10 @@ impl CkbadgerStore {
         }
     }
 
+    pub fn has_cf(&self, name: &str) -> bool {
+        Self::cf_allowed(self.store_class, name)
+    }
+
     pub(crate) fn is_append_only_store(&self) -> bool {
         self.store_class == StoreClass::AppendOnly
     }

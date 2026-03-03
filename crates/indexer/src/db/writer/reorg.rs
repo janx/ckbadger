@@ -7,7 +7,7 @@ use tracing::info;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys::sync_meta_keys;
 use ckbadger_store::types::{DeepForkInfo, ReorgEvent};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{CkbadgerStore, CF_ADDR_TXS};
 
 use super::BatchWriter;
 
@@ -76,6 +76,17 @@ impl BatchWriter {
         self.store.rollback_to_block(fork_point)?;
         // Revert domain mutations from undo-log and prune append undo entries.
         self.store.rollback_via_undo_log(append_store, fork_point)?;
+        // Domain store cannot read append-only CFs directly. Rebuild txs_count
+        // from append-only addr_txs after rollback+undo so address aggregates stay exact.
+        if !self.store.has_cf(CF_ADDR_TXS) {
+            let rebuilt = self
+                .store
+                .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(append_store))?;
+            info!(
+                rebuilt,
+                "Address balances rebuilt from append-only addr_txs after reorg rollback"
+            );
+        }
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
         let event = ReorgEvent {
@@ -131,8 +142,10 @@ pub struct ReorgResult {
 mod tests {
     use std::sync::Arc;
 
+    use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::keys;
     use ckbadger_store::store::CkbadgerStore;
+    use ckbadger_store::types::{AddressBalance, CachedBlockHeader, LiveCellInfo};
 
     use crate::db::writer::BatchWriter;
 
@@ -203,5 +216,68 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert_eq!(reorg_event_count(store.as_ref()), 0);
+    }
+
+    #[tokio::test]
+    async fn test_execute_reorg_rebuilds_addr_balance_txs_count_from_append_store() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+        let writer = BatchWriter::new(domain.clone());
+        let lock_hash = vec![0xAA; 32];
+
+        let mut domain_batch = StoreBatch::new(domain.as_ref());
+        domain_batch.put_block_header(
+            0,
+            &CachedBlockHeader {
+                hash: vec![0x11; 32],
+                timestamp: 1_700_000_000_000,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 1,
+            },
+        );
+        domain_batch.put_cell(
+            &[0x22; 32],
+            0,
+            &LiveCellInfo {
+                capacity: 200,
+                created_at_block: 0,
+                lock_script_hash: lock_hash.clone(),
+                lock_code_hash: vec![0x33; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 120,
+                udt_amount: None,
+            },
+        );
+        domain_batch.put_addr_balance(
+            &lock_hash,
+            &AddressBalance {
+                txs_count: 0,
+                ..Default::default()
+            },
+        );
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(append.as_ref());
+        append_batch.put_addr_tx(&lock_hash, 0, 0, &[0x44; 32]);
+        append_batch.put_addr_tx(&lock_hash, 0, 1, &[0x55; 32]);
+        append_batch.commit().unwrap();
+
+        writer
+            .execute_reorg(append.as_ref(), 0, &[0xAA; 32], 1, &[], 1, &[])
+            .await
+            .unwrap();
+
+        let rebuilt = domain.get_addr_balance(&lock_hash).unwrap().unwrap();
+        assert_eq!(rebuilt.txs_count, 2);
     }
 }

@@ -3,7 +3,7 @@
 use rocksdb::IteratorMode;
 
 use crate::keys;
-use crate::store::CkbadgerStore;
+use crate::store::{CkbadgerStore, CF_ADDR_TXS};
 use crate::types::{AddressBalance, LiveCellInfo};
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -127,10 +127,22 @@ impl CkbadgerStore {
     /// - balance
     /// - occupied_capacity
     /// - live_cells_count
-    /// - txs_count (from addr_txs index)
+    /// - txs_count (from addr_txs index when available)
     ///
     /// Other fields are re-initialized conservatively.
     pub fn rebuild_addr_balances_from_live_cells(&self) -> anyhow::Result<usize> {
+        self.rebuild_addr_balances_from_live_cells_with_tx_index_store(None)
+    }
+
+    /// Rebuild addr_balance from live_cells and optionally source `txs_count`
+    /// from another store's `addr_txs` index.
+    ///
+    /// This is used by domain-store rollback paths, where `addr_txs` lives in
+    /// append-only storage.
+    pub fn rebuild_addr_balances_from_live_cells_with_tx_index_store(
+        &self,
+        tx_index_store: Option<&CkbadgerStore>,
+    ) -> anyhow::Result<usize> {
         use std::collections::HashMap;
 
         struct Agg {
@@ -202,20 +214,32 @@ impl CkbadgerStore {
 
         // Rebuild tx count from addr_txs index.
         // Count only addresses that still have live cells after rebuild.
-        let iter = self.iterator_cf(self.cf_addr_txs(), rocksdb::IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate addr_txs in rebuild_addr_balances_from_live_cells: {}",
-                    e
-                )
-            })?;
-            // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
-            if key.len() != 44 {
-                continue;
+        let tx_source = if self.has_cf(CF_ADDR_TXS) {
+            Some(self)
+        } else {
+            tx_index_store
+        };
+        if let Some(source) = tx_source {
+            if !source.has_cf(CF_ADDR_TXS) {
+                anyhow::bail!(
+                    "tx_index_store does not expose addr_txs CF while rebuilding addr balances"
+                );
             }
-            if let Some(entry) = agg_by_lock.get_mut(&key[..32]) {
-                entry.txs_count += 1;
+            let iter = source.iterator_cf(source.cf_addr_txs(), rocksdb::IteratorMode::Start);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate addr_txs in rebuild_addr_balances_from_live_cells: {}",
+                        e
+                    )
+                })?;
+                // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
+                if key.len() != 44 {
+                    continue;
+                }
+                if let Some(entry) = agg_by_lock.get_mut(&key[..32]) {
+                    entry.txs_count += 1;
+                }
             }
         }
 
@@ -365,6 +389,47 @@ mod tests {
         assert_eq!(b.txs_count, 1);
 
         assert!(store.get_addr_balance(&[0xCC; 32]).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_domain_store_skips_missing_addr_txs_cf() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock_a = vec![0xAA; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
+        batch.commit().unwrap();
+
+        let rebuilt = store.rebuild_addr_balances_from_live_cells().unwrap();
+        assert_eq!(rebuilt, 1);
+        let a = store.get_addr_balance(&lock_a).unwrap().unwrap();
+        assert_eq!(a.txs_count, 0);
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_domain_store_uses_append_tx_index_store_when_provided() {
+        let domain_dir = tempdir().unwrap();
+        let append_dir = tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let lock_a = vec![0xAA; 32];
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_addr_tx(&lock_a, 10, 0, &[0x11; 32]);
+        append_batch.put_addr_tx(&lock_a, 11, 1, &[0x22; 32]);
+        append_batch.commit().unwrap();
+
+        let rebuilt = domain
+            .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(&append))
+            .unwrap();
+        assert_eq!(rebuilt, 1);
+        let a = domain.get_addr_balance(&lock_a).unwrap().unwrap();
+        assert_eq!(a.txs_count, 2);
     }
 
     #[test]
