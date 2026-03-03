@@ -73,7 +73,7 @@ impl BatchWriter {
 
         // Domain rollback for canonical mutable state.
         self.store.rollback_to_block(fork_point)?;
-        // Revert append-only/domain mutations recorded by unified undo-log.
+        // Revert domain mutations from undo-log and prune append undo entries.
         self.store.rollback_via_undo_log(append_store, fork_point)?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.

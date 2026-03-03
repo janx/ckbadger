@@ -12736,7 +12736,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_via_undo_log_prunes_append_history_cfs() {
+    fn test_rollback_via_undo_log_preserves_append_history_cfs() {
         let domain_dir = tempfile::tempdir().unwrap();
         let append_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
@@ -12815,7 +12815,7 @@ mod tests {
         assert!(append_store
             .get_cf(append_store.cf_addr_txs(), &addr_drop)
             .unwrap()
-            .is_none());
+            .is_some());
         assert!(append_store
             .get_cf(append_store.cf_activities(), &act_keep)
             .unwrap()
@@ -12823,7 +12823,7 @@ mod tests {
         assert!(append_store
             .get_cf(append_store.cf_activities(), &act_drop)
             .unwrap()
-            .is_none());
+            .is_some());
         assert!(append_store
             .get_cf(append_store.cf_nft_collection_activities(), &nft_keep)
             .unwrap()
@@ -12831,7 +12831,7 @@ mod tests {
         assert!(append_store
             .get_cf(append_store.cf_nft_collection_activities(), &nft_drop)
             .unwrap()
-            .is_none());
+            .is_some());
     }
 
     #[test]

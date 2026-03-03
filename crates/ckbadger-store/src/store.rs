@@ -243,6 +243,14 @@ pub enum StoreClass {
     AppendOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoreWriteIntent {
+    /// Default writer path: must respect append-only invariants.
+    Normal,
+    /// StoreBatch already validated per-op append-only invariants.
+    AppendValidated,
+}
+
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
     CF_CELLS,
@@ -353,6 +361,20 @@ fn consumed_cf_storage_bytes(
     (usize::try_from(total).unwrap_or(usize::MAX), source)
 }
 
+fn short_hex(bytes: &[u8], max_len: usize) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let shown = bytes.len().min(max_len);
+    let mut out = String::with_capacity(shown * 2 + if shown < bytes.len() { 3 } else { 0 });
+    for b in &bytes[..shown] {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    if shown < bytes.len() {
+        out.push_str("...");
+    }
+    out
+}
+
 pub struct CkbadgerStore {
     db: DB,
     store_class: StoreClass,
@@ -386,6 +408,78 @@ impl CkbadgerStore {
             StoreClass::Domain => DOMAIN_CFS.contains(&name),
             StoreClass::AppendOnly => APPEND_CFS.contains(&name),
         }
+    }
+
+    pub(crate) fn is_append_only_store(&self) -> bool {
+        self.store_class == StoreClass::AppendOnly
+    }
+
+    pub(crate) fn append_cf_name_for_handle(
+        &self,
+        cf: &ColumnFamily,
+    ) -> anyhow::Result<&'static str> {
+        if !self.is_append_only_store() {
+            anyhow::bail!(
+                "append_cf_name_for_handle called on non-append store: {:?}",
+                self.store_class
+            );
+        }
+        if std::ptr::eq(cf, self.cf_addr_txs()) {
+            return Ok(CF_ADDR_TXS);
+        }
+        if std::ptr::eq(cf, self.cf_activities()) {
+            return Ok(CF_ACTIVITIES);
+        }
+        if std::ptr::eq(cf, self.cf_nft_collection_activities()) {
+            return Ok(CF_NFT_COLLECTION_ACTIVITIES);
+        }
+        anyhow::bail!(
+            "unknown append-only column family handle in {:?} store",
+            self.store_class
+        );
+    }
+
+    pub(crate) fn validate_append_put_by_cf_name(
+        &self,
+        cf_name: &str,
+        key: &[u8],
+        value: &[u8],
+        _intent: StoreWriteIntent,
+    ) -> anyhow::Result<()> {
+        if !self.is_append_only_store() {
+            return Ok(());
+        }
+        let cf = self
+            .db
+            .cf_handle(cf_name)
+            .ok_or_else(|| anyhow::anyhow!("CF '{}' not found", cf_name))?;
+        if let Some(existing) = self.db.get_cf(cf, key)? {
+            anyhow::bail!(
+                "append-only overwrite blocked: cf={}, key=0x{}, existing_len={}, new_len={}",
+                cf_name,
+                short_hex(key, 24),
+                existing.len(),
+                value.len()
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_append_delete_by_cf_name(
+        &self,
+        cf_name: &str,
+        key: &[u8],
+        intent: StoreWriteIntent,
+    ) -> anyhow::Result<()> {
+        if !self.is_append_only_store() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "append-only delete blocked: cf={}, key=0x{}, intent={:?}",
+            cf_name,
+            short_hex(key, 24),
+            intent
+        );
     }
 
     fn open_with_class<P: AsRef<Path>>(path: P, store_class: StoreClass) -> anyhow::Result<Self> {
@@ -925,10 +1019,18 @@ impl CkbadgerStore {
     }
 
     pub fn put_cf(&self, cf: &ColumnFamily, key: &[u8], value: &[u8]) -> anyhow::Result<()> {
+        if self.is_append_only_store() {
+            let cf_name = self.append_cf_name_for_handle(cf)?;
+            self.validate_append_put_by_cf_name(cf_name, key, value, StoreWriteIntent::Normal)?;
+        }
         Ok(self.db.put_cf(cf, key, value)?)
     }
 
     pub fn delete_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<()> {
+        if self.is_append_only_store() {
+            let cf_name = self.append_cf_name_for_handle(cf)?;
+            self.validate_append_delete_by_cf_name(cf_name, key, StoreWriteIntent::Normal)?;
+        }
         Ok(self.db.delete_cf(cf, key)?)
     }
 
@@ -939,16 +1041,54 @@ impl CkbadgerStore {
         self.db.multi_get_cf(keys)
     }
 
-    pub fn write_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+    fn write_batch_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
         Ok(self.db.write(batch)?)
+    }
+
+    pub(crate) fn write_batch_with_intent(
+        &self,
+        batch: WriteBatch,
+        intent: StoreWriteIntent,
+    ) -> anyhow::Result<()> {
+        if self.is_append_only_store() && !matches!(intent, StoreWriteIntent::AppendValidated) {
+            anyhow::bail!(
+                "append-only raw write_batch blocked for intent={:?}; \
+                 use StoreBatch commit path",
+                intent
+            );
+        }
+        self.write_batch_unchecked(batch)
+    }
+
+    pub fn write_batch(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.write_batch_with_intent(batch, StoreWriteIntent::Normal)
     }
 
     /// Write a batch with WAL disabled. Use during bulk sync where crash recovery
     /// re-syncs from the last committed block header.
-    pub fn write_batch_no_wal(&self, batch: WriteBatch) -> anyhow::Result<()> {
+    fn write_batch_no_wal_unchecked(&self, batch: WriteBatch) -> anyhow::Result<()> {
         let mut opts = rocksdb::WriteOptions::default();
         opts.disable_wal(true);
         Ok(self.db.write_opt(batch, &opts)?)
+    }
+
+    pub(crate) fn write_batch_no_wal_with_intent(
+        &self,
+        batch: WriteBatch,
+        intent: StoreWriteIntent,
+    ) -> anyhow::Result<()> {
+        if self.is_append_only_store() && !matches!(intent, StoreWriteIntent::AppendValidated) {
+            anyhow::bail!(
+                "append-only raw write_batch_no_wal blocked for intent={:?}; \
+                 use StoreBatch commit_no_wal path",
+                intent
+            );
+        }
+        self.write_batch_no_wal_unchecked(batch)
+    }
+
+    pub fn write_batch_no_wal(&self, batch: WriteBatch) -> anyhow::Result<()> {
+        self.write_batch_no_wal_with_intent(batch, StoreWriteIntent::Normal)
     }
 
     pub(crate) fn apply_batch_op_by_cf_name(
@@ -957,6 +1097,23 @@ impl CkbadgerStore {
         cf_name: &str,
         key: &[u8],
         value: Option<&[u8]>,
+    ) -> anyhow::Result<()> {
+        self.apply_batch_op_by_cf_name_with_intent(
+            batch,
+            cf_name,
+            key,
+            value,
+            StoreWriteIntent::Normal,
+        )
+    }
+
+    pub(crate) fn apply_batch_op_by_cf_name_with_intent(
+        &self,
+        batch: &mut WriteBatch,
+        cf_name: &str,
+        key: &[u8],
+        value: Option<&[u8]>,
+        intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
         if !Self::cf_allowed(self.store_class, cf_name) {
             anyhow::bail!(
@@ -971,8 +1128,10 @@ impl CkbadgerStore {
             .cf_handle(cf_name)
             .ok_or_else(|| anyhow::anyhow!("CF '{}' not found", cf_name))?;
         if let Some(v) = value {
+            self.validate_append_put_by_cf_name(cf_name, key, v, intent)?;
             batch.put_cf(cf, key, v);
         } else {
+            self.validate_append_delete_by_cf_name(cf_name, key, intent)?;
             batch.delete_cf(cf, key);
         }
         Ok(())
@@ -1528,6 +1687,72 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("not allowed there"));
+    }
+
+    #[test]
+    fn test_append_only_put_rejects_duplicate_same_value() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let cf = store.cf_addr_txs();
+
+        store.put_cf(cf, b"k1", b"v1").unwrap();
+        let err = store.put_cf(cf, b"k1", b"v1").unwrap_err();
+        assert!(err.to_string().contains("append-only overwrite blocked"));
+    }
+
+    #[test]
+    fn test_append_only_put_rejects_overwrite_with_different_value() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let cf = store.cf_addr_txs();
+
+        store.put_cf(cf, b"k1", b"v1").unwrap();
+        let err = store.put_cf(cf, b"k1", b"v2").unwrap_err();
+        assert!(err.to_string().contains("append-only overwrite blocked"));
+    }
+
+    #[test]
+    fn test_append_only_delete_rejected_in_normal_path() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let cf = store.cf_addr_txs();
+
+        store.put_cf(cf, b"k1", b"v1").unwrap();
+        let err = store.delete_cf(cf, b"k1").unwrap_err();
+        assert!(err.to_string().contains("append-only delete blocked"));
+    }
+
+    #[test]
+    fn test_append_only_raw_write_batch_rejected_in_normal_path() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+
+        let mut batch = WriteBatch::default();
+        batch.put_cf(store.cf_addr_txs(), b"k1", b"v1");
+        let err = store.write_batch(batch).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("append-only raw write_batch blocked"));
+    }
+
+    #[test]
+    fn test_append_only_delete_rejected_in_append_validated_intent() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let cf = store.cf_addr_txs();
+        store.put_cf(cf, b"k1", b"v1").unwrap();
+
+        let mut batch = WriteBatch::default();
+        let err = store
+            .apply_batch_op_by_cf_name_with_intent(
+                &mut batch,
+                CF_ADDR_TXS,
+                b"k1",
+                None,
+                StoreWriteIntent::AppendValidated,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("append-only delete blocked"));
     }
 
     #[test]

@@ -143,7 +143,13 @@ impl CkbadgerStore {
 
 ### Rollback
 
-During reorg, scan entire `CF_ACTIVITIES`, decode `block_num` from key bytes `[32..40]`, delete all entries where `block_num > rollback_to`. Follows the same pattern as other CF rollbacks in `reorg_ops.rs`.
+Rollback for activity history is driven by the unified undo-log:
+
+- Forward write records append-store undo entry (`target_store=AppendOnly`, `cf_name=activities`, `previous_value=None`).
+- Reorg replay prunes append-target undo entries from `reorg_undo_log_by_block`.
+- Append-store keys remain immutable across all paths; reorg does not issue append put/delete.
+
+See `docs/prompts/REORG_HANDLING.md` for the authoritative rollback and write-intent boundary.
 
 ## Activity Builder Algorithm
 

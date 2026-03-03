@@ -22,20 +22,13 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 pub struct UndoRollbackResult {
     pub undo_entries_applied: u64,
     pub domain_ops_applied: u64,
-    pub append_ops_applied: u64,
+    pub append_ops_skipped: u64,
 }
 
 fn flush_undo_batches(
     domain_store: &CkbadgerStore,
-    append_store: &CkbadgerStore,
     domain_batch: &mut WriteBatch,
-    append_batch: &mut WriteBatch,
 ) -> anyhow::Result<()> {
-    // Apply append-store restores first; undo entries are deleted only after
-    // domain batch commits so replay stays idempotent after crashes.
-    if !append_batch.is_empty() {
-        append_store.write_batch(std::mem::take(append_batch))?;
-    }
     if !domain_batch.is_empty() {
         domain_store.write_batch(std::mem::take(domain_batch))?;
     }
@@ -49,7 +42,7 @@ impl CkbadgerStore {
     /// the original write order is inverted correctly.
     pub fn rollback_via_undo_log(
         &self,
-        append_store: &CkbadgerStore,
+        _append_store: &CkbadgerStore,
         rollback_to: i64,
     ) -> anyhow::Result<UndoRollbackResult> {
         if rollback_to < -1 {
@@ -100,7 +93,6 @@ impl CkbadgerStore {
         }
 
         let mut domain_batch = WriteBatch::default();
-        let mut append_batch = WriteBatch::default();
         let mut result = UndoRollbackResult::default();
 
         for (undo_key, entry) in pending.into_iter().rev() {
@@ -121,13 +113,10 @@ impl CkbadgerStore {
                         result.domain_ops_applied += 1;
                     }
                     UndoLogStoreTarget::AppendOnly => {
-                        append_store.apply_batch_op_by_cf_name(
-                            &mut append_batch,
-                            &cf_name,
-                            &key,
-                            previous_value.as_deref(),
-                        )?;
-                        result.append_ops_applied += 1;
+                        let _ = (cf_name, key, previous_value);
+                        // Append-only store is immutable after write.
+                        // Reorg replay only prunes the undo-log entry.
+                        result.append_ops_skipped += 1;
                     }
                 },
                 UndoLogEntry::TxContext(_) => {
@@ -140,11 +129,11 @@ impl CkbadgerStore {
             result.undo_entries_applied += 1;
 
             if (result.undo_entries_applied as usize).is_multiple_of(UNDO_ROLLBACK_FLUSH_EVERY) {
-                flush_undo_batches(self, append_store, &mut domain_batch, &mut append_batch)?;
+                flush_undo_batches(self, &mut domain_batch)?;
             }
         }
 
-        flush_undo_batches(self, append_store, &mut domain_batch, &mut append_batch)?;
+        flush_undo_batches(self, &mut domain_batch)?;
         Ok(result)
     }
 }
@@ -165,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_via_undo_log_restores_domain_and_append_state() {
+    fn test_rollback_via_undo_log_restores_domain_and_preserves_append_state() {
         let (domain, append, _root) = open_dual_store();
 
         domain.put_cf(domain.cf_sync_meta(), b"k1", b"v1").unwrap();
@@ -176,7 +165,6 @@ mod tests {
         domain
             .put_cf(domain.cf_sync_meta(), b"new", b"created")
             .unwrap();
-        append.delete_cf(append.cf_addr_txs(), b"a1").unwrap();
 
         let mut batch = StoreBatch::new(&domain);
         batch.put_reorg_undo_log_by_block(
@@ -214,7 +202,7 @@ mod tests {
         let res = domain.rollback_via_undo_log(&append, 9).unwrap();
         assert_eq!(res.undo_entries_applied, 3);
         assert_eq!(res.domain_ops_applied, 2);
-        assert_eq!(res.append_ops_applied, 1);
+        assert_eq!(res.append_ops_skipped, 1);
 
         assert_eq!(
             domain
