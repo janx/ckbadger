@@ -440,6 +440,25 @@ fn put_activity_with_undo_log(
     );
 }
 
+fn rollback_undo_log_after_batch_cleanup(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    cleanup_tip: i64,
+    context: &str,
+) -> Result<()> {
+    let _ = store
+        .rollback_via_undo_log(append_only_store, cleanup_tip)
+        .map_err(|e| {
+            anyhow!(
+                "failed to rollback undo log after batch cleanup: cleanup_tip={}, context={}, error={:#}",
+                cleanup_tip,
+                context,
+                e
+            )
+        })?;
+    Ok(())
+}
+
 fn format_outpoint_sample(outpoints: &[(Vec<u8>, i16)], max_items: usize) -> String {
     if outpoints.is_empty() {
         return "none".to_string();
@@ -5846,16 +5865,15 @@ impl Indexer {
                                         start_block
                                     )
                                 })? - 1;
-                                if let Err(undo_err) = self.writer.store().rollback_via_undo_log(
+                                rollback_undo_log_after_batch_cleanup(
+                                    self.writer.store().as_ref(),
                                     self.append_only_store.as_ref(),
                                     cleanup_tip,
-                                ) {
-                                    error!(
-                                        cleanup_tip,
-                                        "Failed to rollback undo log after batch cleanup: {:?}",
-                                        undo_err
-                                    );
-                                }
+                                    &format!(
+                                        "pipeline range {}-{} (chain_tip={})",
+                                        start_block, end_block, chain_tip
+                                    ),
+                                )?;
                                 if let Err(consistency_err) =
                                     self.reconcile_hodl_tracker_with_tip(cleanup_tip)
                                 {
@@ -6329,16 +6347,15 @@ impl Indexer {
                             start_block
                         )
                     })? - 1;
-                    if let Err(undo_err) = self
-                        .writer
-                        .store()
-                        .rollback_via_undo_log(self.append_only_store.as_ref(), cleanup_tip)
-                    {
-                        error!(
-                            cleanup_tip,
-                            "Failed to rollback undo log after batch cleanup: {:?}", undo_err
-                        );
-                    }
+                    rollback_undo_log_after_batch_cleanup(
+                        self.writer.store().as_ref(),
+                        self.append_only_store.as_ref(),
+                        cleanup_tip,
+                        &format!(
+                            "sequential range {}-{} (chain_tip={})",
+                            start_block, end_block, chain_tip
+                        ),
+                    )?;
                     if let Err(consistency_err) = self.reconcile_hodl_tracker_with_tip(cleanup_tip)
                     {
                         error!(
@@ -12832,6 +12849,63 @@ mod tests {
             .get_cf(append_store.cf_nft_collection_activities(), &nft_drop)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn test_rollback_undo_log_after_batch_cleanup_prunes_valid_entries() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&domain_store);
+        batch.put_reorg_undo_log_by_block(
+            6,
+            0,
+            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
+                tx_hash: vec![0x88; 32],
+                outputs_count: 0,
+                inputs: vec![],
+            }),
+        );
+        batch.commit().unwrap();
+
+        rollback_undo_log_after_batch_cleanup(&domain_store, &append_store, 5, "unit-test")
+            .unwrap();
+
+        let undo_key = keys::encode_reorg_undo_log_key(6, 0);
+        assert!(domain_store
+            .get_cf(domain_store.cf_reorg_undo_log_by_block(), &undo_key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_rollback_undo_log_after_batch_cleanup_fails_on_malformed_undo_key() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+
+        domain_store
+            .put_cf(
+                domain_store.cf_reorg_undo_log_by_block(),
+                b"bad-key",
+                b"bad-value",
+            )
+            .unwrap();
+
+        let err = rollback_undo_log_after_batch_cleanup(
+            &domain_store,
+            &append_store,
+            -1,
+            "unit-test malformed key",
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("failed to rollback undo log after batch cleanup"));
     }
 
     #[test]

@@ -250,7 +250,7 @@ fn test_deep_fork_flag() {
 }
 
 #[test]
-fn test_rollback_removes_activities() {
+fn test_rollback_preserves_activities_history() {
     let store = setup_store();
     let lock_hash = vec![0xAA; 32];
 
@@ -288,7 +288,7 @@ fn test_rollback_removes_activities() {
     let before = store.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(before.len(), 5);
 
-    // Rollback to block 300: blocks 400, 500 should be removed
+    // Rollback to block 300: append-only activities history is preserved.
     // Need to also insert block headers so rollback_to_block works
     let mut batch = StoreBatch::new(&store);
     for i in 1..=5 {
@@ -301,9 +301,11 @@ fn test_rollback_removes_activities() {
     store.rollback_via_undo_log(&store, 300).unwrap();
 
     let after = store.list_activities(&lock_hash, 100, None, None).unwrap();
-    assert_eq!(after.len(), 3, "should have 3 activities after rollback");
-    // Remaining are blocks 300, 200, 100 (descending)
-    assert_eq!(after[0].0, 300);
-    assert_eq!(after[1].0, 200);
-    assert_eq!(after[2].0, 100);
+    assert_eq!(after.len(), 5, "append-only history should be preserved");
+    // Activities remain in descending block order.
+    assert_eq!(after[0].0, 500);
+    assert_eq!(after[1].0, 400);
+    assert_eq!(after[2].0, 300);
+    assert_eq!(after[3].0, 200);
+    assert_eq!(after[4].0, 100);
 }

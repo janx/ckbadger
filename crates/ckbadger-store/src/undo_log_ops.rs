@@ -36,6 +36,44 @@ fn flush_undo_batches(
 }
 
 impl CkbadgerStore {
+    /// Returns true if reorg undo-log contains entries with `entry_block > block_num`.
+    pub fn has_undo_log_entries_after(&self, block_num: i64) -> anyhow::Result<bool> {
+        if block_num < -1 {
+            anyhow::bail!(
+                "invalid undo-log probe target: block_num={} (expected >= -1)",
+                block_num
+            );
+        }
+
+        let start_key = keys::encode_block_num(block_num + 1);
+        let iter = self.iterator_cf(
+            self.cf_reorg_undo_log_by_block(),
+            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate reorg_undo_log_by_block while probing from block {}: {}",
+                    block_num,
+                    e
+                )
+            })?;
+            if key.len() != keys::REORG_UNDO_LOG_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid reorg_undo_log_by_block key length while probing: expected={}, got={}",
+                    keys::REORG_UNDO_LOG_KEY_SIZE,
+                    key.len()
+                );
+            }
+            let (entry_block, _) = keys::decode_reorg_undo_log_key(&key);
+            if entry_block > block_num {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Roll back mutations using reorg undo-log entries with `block_num > rollback_to`.
     ///
     /// Entries are replayed in reverse sequence order (LIFO) per block range so
@@ -277,5 +315,47 @@ mod tests {
             .get_cf(domain.cf_reorg_undo_log_by_block(), &key)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn test_has_undo_log_entries_after_detects_pending_entries() {
+        let (domain, _append, _root) = open_dual_store();
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_reorg_undo_log_by_block(
+            5,
+            0,
+            &UndoLogEntry::TxContext(crate::types::UndoTxContext {
+                tx_hash: vec![0x11; 32],
+                outputs_count: 0,
+                inputs: vec![],
+            }),
+        );
+        batch.put_reorg_undo_log_by_block(
+            8,
+            0,
+            &UndoLogEntry::TxContext(crate::types::UndoTxContext {
+                tx_hash: vec![0x22; 32],
+                outputs_count: 0,
+                inputs: vec![],
+            }),
+        );
+        batch.commit().unwrap();
+
+        assert!(domain.has_undo_log_entries_after(4).unwrap());
+        assert!(domain.has_undo_log_entries_after(7).unwrap());
+        assert!(!domain.has_undo_log_entries_after(8).unwrap());
+    }
+
+    #[test]
+    fn test_has_undo_log_entries_after_fails_on_malformed_key() {
+        let (domain, _append, _root) = open_dual_store();
+        domain
+            .put_cf(domain.cf_reorg_undo_log_by_block(), b"malformed", b"value")
+            .unwrap();
+
+        let err = domain.has_undo_log_entries_after(-1).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid reorg_undo_log_by_block key length"));
     }
 }

@@ -323,6 +323,10 @@ impl BatchWriter {
             return Ok(true);
         }
 
+        if self.store.has_undo_log_entries_after(start_block)? {
+            return Ok(true);
+        }
+
         Ok(false)
     }
 
@@ -434,6 +438,27 @@ mod tests {
         batch.commit().unwrap();
 
         assert!(writer.needs_startup_cleanup(0).unwrap());
+    }
+
+    #[test]
+    fn test_needs_startup_cleanup_reports_pending_undo_log_entries() {
+        let (_dir, store, writer) = setup();
+        assert!(!writer.needs_startup_cleanup(0).unwrap());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
+                tx_hash: vec![0xAA; 32],
+                outputs_count: 0,
+                inputs: vec![],
+            }),
+        );
+        batch.commit().unwrap();
+
+        assert!(writer.needs_startup_cleanup(0).unwrap());
+        assert!(!writer.needs_startup_cleanup(2).unwrap());
     }
 
     #[test]
