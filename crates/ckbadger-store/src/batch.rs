@@ -1,15 +1,23 @@
 //! WriteBatch builder for atomic multi-CF writes.
 
-use rocksdb::WriteBatch;
+use rocksdb::{ColumnFamily, WriteBatch};
 
 use crate::keys;
-use crate::store::CkbadgerStore;
+use crate::store::{CkbadgerStore, StoreWriteIntent};
 use crate::types::*;
+
+#[derive(Debug)]
+struct AppendBatchOp {
+    cf_name: &'static str,
+    key: Vec<u8>,
+    value: Option<Vec<u8>>,
+}
 
 /// Accumulates writes across all CFs and commits atomically.
 pub struct StoreBatch<'a> {
     store: &'a CkbadgerStore,
     batch: WriteBatch,
+    append_ops: Vec<AppendBatchOp>,
 }
 
 impl<'a> StoreBatch<'a> {
@@ -17,18 +25,19 @@ impl<'a> StoreBatch<'a> {
         Self {
             store,
             batch: WriteBatch::default(),
+            append_ops: Vec::new(),
         }
     }
 
     /// Commit all accumulated writes atomically.
     pub fn commit(self) -> anyhow::Result<()> {
-        self.store.write_batch(self.batch)
+        self.commit_inner(false)
     }
 
     /// Commit with WAL disabled. Use during bulk sync where crash recovery
     /// re-syncs from the last committed block header.
     pub fn commit_no_wal(self) -> anyhow::Result<()> {
-        self.store.write_batch_no_wal(self.batch)
+        self.commit_inner(true)
     }
 
     /// Get the number of operations in the batch.
@@ -45,19 +54,94 @@ impl<'a> StoreBatch<'a> {
         self.batch.size_in_bytes()
     }
 
+    fn commit_inner(self, no_wal: bool) -> anyhow::Result<()> {
+        if self.store.is_append_only_store() {
+            for op in &self.append_ops {
+                if let Some(value) = op.value.as_deref() {
+                    self.store.validate_append_put_by_cf_name(
+                        op.cf_name,
+                        &op.key,
+                        value,
+                        StoreWriteIntent::Normal,
+                    )?;
+                } else {
+                    self.store.validate_append_delete_by_cf_name(
+                        op.cf_name,
+                        &op.key,
+                        StoreWriteIntent::Normal,
+                    )?;
+                }
+            }
+            if no_wal {
+                self.store
+                    .write_batch_no_wal_with_intent(self.batch, StoreWriteIntent::AppendValidated)
+            } else {
+                self.store
+                    .write_batch_with_intent(self.batch, StoreWriteIntent::AppendValidated)
+            }
+        } else if no_wal {
+            self.store.write_batch_no_wal(self.batch)
+        } else {
+            self.store.write_batch(self.batch)
+        }
+    }
+
+    fn put_cf<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K, value: V) {
+        let key_ref = key.as_ref();
+        let value_ref = value.as_ref();
+        if self.store.is_append_only_store() {
+            let cf_name = self
+                .store
+                .append_cf_name_for_handle(cf)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to resolve append-only CF in StoreBatch::put_cf: {}",
+                        e
+                    )
+                });
+            self.append_ops.push(AppendBatchOp {
+                cf_name,
+                key: key_ref.to_vec(),
+                value: Some(value_ref.to_vec()),
+            });
+        }
+        self.batch.put_cf(cf, key_ref, value_ref);
+    }
+
+    fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K) {
+        let key_ref = key.as_ref();
+        if self.store.is_append_only_store() {
+            let cf_name = self
+                .store
+                .append_cf_name_for_handle(cf)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to resolve append-only CF in StoreBatch::delete_cf: {}",
+                        e
+                    )
+                });
+            self.append_ops.push(AppendBatchOp {
+                cf_name,
+                key: key_ref.to_vec(),
+                value: None,
+            });
+        }
+        self.batch.delete_cf(cf, key_ref);
+    }
+
     // ---- Live cells ----
 
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
-        self.batch.put_cf(self.store.cf_cells(), key, &value);
-        self.batch.put_cf(self.store.cf_live_cells(), key, []);
+        self.put_cf(self.store.cf_cells(), key, &value);
+        self.put_cf(self.store.cf_live_cells(), key, []);
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_live_cells(), key);
+        self.delete_cf(self.store.cf_live_cells(), key);
     }
 
     pub fn put_consumed_cell(
@@ -81,7 +165,7 @@ impl<'a> StoreBatch<'a> {
         let key = keys::encode_outpoint(tx_hash, output_index);
         // Ensure canonical payload exists even when callers only write consumed entries.
         let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.batch.put_cf(self.store.cf_cells(), key, &cell_value);
+        self.put_cf(self.store.cf_cells(), key, &cell_value);
         let consumed = ConsumedCellMeta {
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
@@ -101,7 +185,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(lock_hash, block_num, tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_cell_by_lock(), key, []);
+        self.put_cf(self.store.cf_cell_by_lock(), key, []);
     }
 
     pub fn delete_cell_by_lock(
@@ -112,7 +196,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(lock_hash, block_num, tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_cell_by_lock(), &key);
+        self.delete_cf(self.store.cf_cell_by_lock(), &key);
     }
 
     pub fn put_cell_by_type(
@@ -123,7 +207,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(type_hash, block_num, tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_cell_by_type(), key, []);
+        self.put_cf(self.store.cf_cell_by_type(), key, []);
     }
 
     pub fn delete_cell_by_type(
@@ -134,7 +218,7 @@ impl<'a> StoreBatch<'a> {
         output_index: i16,
     ) {
         let key = keys::encode_cell_index_key(type_hash, block_num, tx_hash, output_index);
-        self.batch.delete_cf(self.store.cf_cell_by_type(), &key);
+        self.delete_cf(self.store.cf_cell_by_type(), &key);
     }
 
     pub fn put_cell_by_lock_code(
@@ -188,19 +272,19 @@ impl<'a> StoreBatch<'a> {
     // ---- Cell index (raw pre-computed key) ----
 
     pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {
-        self.batch.put_cf(self.store.cf_cell_by_lock(), key, []);
+        self.put_cf(self.store.cf_cell_by_lock(), key, []);
     }
 
     pub fn delete_cell_by_lock_raw(&mut self, key: &[u8]) {
-        self.batch.delete_cf(self.store.cf_cell_by_lock(), key);
+        self.delete_cf(self.store.cf_cell_by_lock(), key);
     }
 
     pub fn put_cell_by_type_raw(&mut self, key: &[u8]) {
-        self.batch.put_cf(self.store.cf_cell_by_type(), key, []);
+        self.put_cf(self.store.cf_cell_by_type(), key, []);
     }
 
     pub fn delete_cell_by_type_raw(&mut self, key: &[u8]) {
-        self.batch.delete_cf(self.store.cf_cell_by_type(), key);
+        self.delete_cf(self.store.cf_cell_by_type(), key);
     }
 
     pub fn put_cell_by_lock_code_raw(&mut self, key: &[u8]) {
@@ -209,7 +293,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn delete_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.batch.delete_cf(self.store.cf_cell_by_lock_code(), key);
+        self.delete_cf(self.store.cf_cell_by_lock_code(), key);
     }
 
     pub fn put_cell_by_type_code_raw(&mut self, key: &[u8]) {
@@ -218,7 +302,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn delete_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.batch.delete_cf(self.store.cf_cell_by_type_code(), key);
+        self.delete_cf(self.store.cf_cell_by_type_code(), key);
     }
 
     // ---- Block headers ----
@@ -230,7 +314,7 @@ impl<'a> StoreBatch<'a> {
             .put_cf(self.store.cf_block_headers(), key, &value);
 
         // Also update hash -> number index
-        self.batch.put_cf(
+        self.put_cf(
             self.store.cf_block_hash_index(),
             &header.hash,
             block_number.to_le_bytes(),
@@ -245,7 +329,7 @@ impl<'a> StoreBatch<'a> {
             &keys::encode_tx_idx(tx_idx),
         ]);
         let value = bincode::serialize(entry).expect("serialize TxIndexEntry");
-        self.batch.put_cf(self.store.cf_tx_index(), &key, &value);
+        self.put_cf(self.store.cf_tx_index(), &key, &value);
     }
 
     pub fn put_tx_hash_map(&mut self, tx_hash: &[u8], block_num: i64, tx_idx: i32) {
@@ -267,7 +351,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
-        self.batch.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
+        self.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
     }
 
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
@@ -292,7 +376,7 @@ impl<'a> StoreBatch<'a> {
         deposit_outpoint_key: &[u8],
     ) {
         let key = keys::encode_outpoint(withdraw_tx_hash, withdraw_output_index);
-        self.batch.put_cf(
+        self.put_cf(
             self.store.cf_dao_by_withdraw_tx(),
             key,
             deposit_outpoint_key,
@@ -310,7 +394,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_token(&mut self, type_hash: &[u8], info: &TokenInfo) {
         let value = bincode::serialize(info).expect("serialize TokenInfo");
-        self.batch.put_cf(self.store.cf_tokens(), type_hash, &value);
+        self.put_cf(self.store.cf_tokens(), type_hash, &value);
     }
 
     pub fn put_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8], balance: i128) {
@@ -351,13 +435,13 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize NftDailyDelta");
-        self.batch.put_cf(self.store.cf_stats_nft(), key, &value);
+        self.put_cf(self.store.cf_stats_nft(), key, &value);
     }
 
     pub fn put_nft_type_index(&mut self, type_script_hash: &[u8], index: &NftTypeIndex) {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         let value = bincode::serialize(index).expect("serialize NftTypeIndex");
-        self.batch.put_cf(self.store.cf_stats_nft(), key, &value);
+        self.put_cf(self.store.cf_stats_nft(), key, &value);
     }
 
     pub fn put_cluster_daily_delta(
@@ -368,7 +452,7 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_cluster_daily_key(cluster_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize ClusterDailyDelta");
-        self.batch.put_cf(self.store.cf_stats_spore(), key, &value);
+        self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_daily_delta(
@@ -379,13 +463,13 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_spore_daily_key(spore_id, date_yyyymmdd);
         let value = bincode::serialize(delta).expect("serialize SporeDailyDelta");
-        self.batch.put_cf(self.store.cf_stats_spore(), key, &value);
+        self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_type_index(&mut self, type_script_hash: &[u8], index: &SporeTypeIndex) {
         let key = keys::encode_spore_type_index_key(type_script_hash);
         let value = bincode::serialize(index).expect("serialize SporeTypeIndex");
-        self.batch.put_cf(self.store.cf_stats_spore(), key, &value);
+        self.put_cf(self.store.cf_stats_spore(), key, &value);
     }
 
     pub fn put_spore_outpoint(&mut self, tx_hash: &[u8], output_index: i16, spore_id: &[u8]) {
@@ -400,12 +484,12 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_stats_nft(), key, class_id);
+        self.put_cf(self.store.cf_stats_nft(), key, class_id);
     }
 
     pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        self.batch.put_cf(self.store.cf_stats_nft(), key, token_id);
+        self.put_cf(self.store.cf_stats_nft(), key, token_id);
     }
 
     pub fn put_dotbit_account_outpoint(
@@ -421,7 +505,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
-        self.batch.delete_cf(self.store.cf_token_holders(), key);
+        self.delete_cf(self.store.cf_token_holders(), key);
     }
 
     pub fn put_token_transfer(
@@ -441,22 +525,22 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_spore(&mut self, id: &[u8], entry: &SporeEntry) {
         let value = bincode::serialize(entry).expect("serialize SporeEntry");
-        self.batch.put_cf(self.store.cf_spore_data(), id, &value);
+        self.put_cf(self.store.cf_spore_data(), id, &value);
     }
 
     pub fn put_spore_by_cluster(&mut self, cluster_id: &[u8], spore_id: &[u8]) {
         let key = keys::encode_spore_by_cluster_key(cluster_id, spore_id);
-        self.batch.put_cf(self.store.cf_spore_by_cluster(), key, []);
+        self.put_cf(self.store.cf_spore_by_cluster(), key, []);
     }
 
     pub fn delete_spore_by_cluster(&mut self, cluster_id: &[u8], spore_id: &[u8]) {
         let key = keys::encode_spore_by_cluster_key(cluster_id, spore_id);
-        self.batch.delete_cf(self.store.cf_spore_by_cluster(), key);
+        self.delete_cf(self.store.cf_spore_by_cluster(), key);
     }
 
     pub fn put_nft(&mut self, id: &[u8], entry: &NftEntry) {
         let value = bincode::serialize(entry).expect("serialize NftEntry");
-        self.batch.put_cf(self.store.cf_nft_data(), id, &value);
+        self.put_cf(self.store.cf_nft_data(), id, &value);
     }
 
     pub fn put_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
@@ -481,7 +565,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn delete_cluster_owner(&mut self, cluster_id: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
-        self.batch.delete_cf(self.store.cf_stats_spore(), key);
+        self.delete_cf(self.store.cf_stats_spore(), key);
     }
 
     // ---- NFT collection aggregates ----
@@ -507,7 +591,7 @@ impl<'a> StoreBatch<'a> {
     ) {
         let key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
         let value = bincode::serialize(entry).expect("serialize ActivityEntry");
-        self.batch.put_cf(self.store.cf_activities(), key, &value);
+        self.put_cf(self.store.cf_activities(), key, &value);
     }
 
     // ---- NFT collection activities ----
@@ -536,7 +620,7 @@ impl<'a> StoreBatch<'a> {
                 e
             )
         });
-        self.batch.put_cf(cf, key, value);
+        self.put_cf(cf, key, value);
     }
 
     pub fn delete_stats(&mut self, key: &[u8]) {
@@ -548,7 +632,7 @@ impl<'a> StoreBatch<'a> {
                 e
             )
         });
-        self.batch.delete_cf(cf, key);
+        self.delete_cf(cf, key);
     }
 
     pub fn put_script_info(&mut self, code_hash: &[u8], info: &ScriptInfo) {
@@ -560,7 +644,7 @@ impl<'a> StoreBatch<'a> {
     // ---- Sync meta ----
 
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {
-        self.batch.put_cf(self.store.cf_sync_meta(), key, value);
+        self.put_cf(self.store.cf_sync_meta(), key, value);
     }
 }
 

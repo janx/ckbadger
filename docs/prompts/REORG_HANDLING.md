@@ -10,12 +10,9 @@ A chain reorganization occurs when the CKB node switches to a different fork wit
 2. Roll back data from orphaned blocks
 3. Re-sync from the fork point on the new canonical chain
 
-## Configuration
+CKBadger only needs to handle shallow fork, which means the reorg's impact has an explicit small upper bound (36 blocks). The reorg handling should use simple mechanisms and CF design, because the computation burden is very small.
 
-| Parameter             | Value                       | Description                                                              |
-| --------------------- | --------------------------- | ------------------------------------------------------------------------ |
-| `DEEP_FORK_DEPTH`     | `36` blocks                 | Maximum depth for automatic rollback handling                            |
-| `bulk_sync_threshold` | `1000` blocks (CLI default) | When farther behind than this, reorg checks are skipped during bulk sync |
+Deep forks should cause failure and alert, and the way to fix a deep reorg is simply rebuild the whole db. Luckily db rebuild is very fast.
 
 ## Reorg Detection
 
@@ -65,31 +62,6 @@ For reorgs deeper than 36 blocks:
 3. Pauses sync in a wait loop
 4. Broadcasts deep-fork status via WebSocket
 5. Requires operator intervention and full DB rebuild before resuming normal correctness guarantees
-
-## RocksDB State
-
-### `sync_status`
-
-Deep fork state is persisted in `SyncStatus`:
-
-- `deep_fork_detected: bool`
-- `deep_fork_info: Option<DeepForkInfo>`
-
-`DeepForkInfo` fields:
-
-- `db_tip`
-- `db_tip_hash`
-- `chain_tip`
-- `chain_tip_hash`
-- `depth`
-- `fork_point`
-
-### `sync_meta`
-
-Reorg events are serialized and stored as key-value entries:
-
-- key: `reorg:<timestamp_ms>`
-- value: `ReorgEvent { detected_at, rollback_from, rollback_to, depth }`
 
 ## API Endpoints
 
@@ -149,16 +121,6 @@ And resolution event:
 }
 ```
 
-## Resolving Deep Forks
-
-When a deep fork is detected:
-
-1. Investigate node/network state
-2. Verify canonical chain
-3. Stop indexer, delete RocksDB data, and re-sync from genesis
-
-After rebuild + re-sync, indexer resumes normal bounded reorg handling (`depth <= DEEP_FORK_DEPTH`).
-
 ## Why 36 Blocks?
 
 The 36-block limit balances:
@@ -169,30 +131,17 @@ The 36-block limit balances:
 
 With ~10s block time, 36 blocks is about 6 minutes.
 
-## Unified Undo-Log Direction
+## Unified Undo-Log
 
-ckbadger moves toward a unified rollback mechanism:
+CKBadger should use a unified rollback mechanism:
 
 - Write path records undo entries into `reorg_undo_log_by_block`
 - Key: `block_number + seq`
 - Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
 - Rollback replays entries for `block > rollback_to` in reverse order
 
-Design notes:
+Key Insights:
 
-1. `previous_value = None` means key did not exist before forward write, so rollback must `delete`.
-2. `previous_value = Some(bytes)` means rollback must `put` original bytes back.
-3. Undo entries are deleted only after replay apply, so crash recovery remains idempotent.
-4. Append-history rollback no longer uses dedicated history CF; replay is driven by undo-log only.
-
-## Monitoring
-
-Recommended checks:
-
-1. Logs for `Deep fork detected` / `Deep fork unresolved`
-2. `GET /api/v1/forks/recent`
-3. `GET /api/v1/statistics/network` (`deepForkStatus` fields)
-
----
-
-_Last updated: 2026-03-03_
+1. CF ownership isolation alone is not enough; write semantics must also be isolated.
+2. In normal sync, append-store keys are expected to be first-write-only; if a key already exists, that is an upstream bug signal.
+3. If `block_number` and `block_hash` are identical, it is the same canonical block and should not trigger duplicate append writes. Duplicate append key writes are therefore treated as correctness violations and should fail immediately.
