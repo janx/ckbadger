@@ -502,7 +502,34 @@ impl CkbadgerStore {
         }
         stage.finish(txs_removed);
 
-        // 3-4. Roll back cell/live/consumed/index state.
+        // 3. Delete tx_hash_map entries whose mapped block is > rollback_to.
+        let mut tx_hash_map_removed = 0u64;
+        let mut stage = RollbackStageProgress::new("delete_tx_hash_map");
+        let iter = self.iterator_cf(self.cf_tx_hash_map(), IteratorMode::Start);
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate tx_hash_map in rollback_to_block cleanup: {}",
+                    e
+                )
+            })?;
+            if value.len() != 12 {
+                anyhow::bail!(
+                    "invalid tx_hash_map value length during rollback cleanup: key=0x{}, value_len={}, expected=12",
+                    bytes_to_hex(&key),
+                    value.len()
+                );
+            }
+            let mapped_block = keys::decode_block_num(&value[..8]);
+            if mapped_block > rollback_to {
+                batch.delete_cf(self.cf_tx_hash_map(), &key);
+                tx_hash_map_removed += 1;
+            }
+            stage.tick(tx_hash_map_removed);
+        }
+        stage.finish(tx_hash_map_removed);
+
+        // 4-5. Roll back cell/live/consumed/index state.
         // Prefer tx-context entries from reorg_undo_log_by_block to derive touched outpoints.
         // Fallback to full scans for legacy data where tx contexts are absent.
         let tx_contexts = load_tx_contexts_from_undo_log(self, rollback_to)?;
@@ -1441,6 +1468,57 @@ mod tests {
         assert!(store.get_cell(&input_tx, 0).unwrap().is_some());
         assert!(store.get_cell(&consuming_tx, 0).unwrap().is_none());
         assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_rollback_removes_tx_hash_map_entries_above_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let keep_tx = vec![0x11; 32];
+        let drop_tx = vec![0x22; 32];
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header2.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_hash_map(&keep_tx, 1, 0);
+        batch.put_tx_hash_map(&drop_tx, 2, 0);
+        batch.put_tx_index(2, 0, &tx_index);
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
+        assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
+        assert!(store.get_tx_index(2, 0).unwrap().is_none());
     }
 
     #[test]

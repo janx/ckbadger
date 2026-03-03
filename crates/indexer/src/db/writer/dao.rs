@@ -141,6 +141,21 @@ fn infer_withdraw_to_output_index_from_outputs(
     None
 }
 
+fn select_phase1_output_by_capacity<'a>(
+    new_dao_outputs: &'a [(Vec<u8>, i16, Vec<u8>, i64, u64)],
+    consumed_output_indices: &HashSet<usize>,
+    capacity: i64,
+) -> Option<(usize, &'a (Vec<u8>, i16, Vec<u8>, i64, u64))> {
+    new_dao_outputs
+        .iter()
+        .enumerate()
+        .filter(|(pos, (_, _, _, cap, _))| {
+            *cap == capacity && !consumed_output_indices.contains(pos)
+        })
+        // Use output index as a deterministic tie-breaker when capacities repeat.
+        .min_by_key(|(pos, (_, output_index, _, _, _))| (*output_index, *pos))
+}
+
 fn infer_request_output_index_from_inputs(
     tx_inputs: &[(Vec<u8>, i16)],
     request_tx_hash: &[u8],
@@ -273,48 +288,21 @@ impl BatchWriter {
 
             if *status == 0 {
                 // Phase 1: deposit -> withdraw_request
-                let mut matching_outputs =
-                    new_dao_outputs
-                        .iter()
-                        .enumerate()
-                        .filter(|(pos, (_, _, _, cap, _))| {
-                            *cap == capacity && !consumed_output_indices.contains(pos)
-                        });
-                let first_match = matching_outputs.next();
-                let second_match = matching_outputs.next();
-                let (pos, (new_tx_hash, new_output_index, _, _, _)) = match (
-                    first_match,
-                    second_match,
-                ) {
-                    (Some(first), None) => first,
-                    (
-                        Some((first_pos, (first_tx_hash, first_output_index, _, _, _))),
-                        Some((second_pos, (second_tx_hash, second_output_index, _, _, _))),
-                    ) => {
-                        bail!(
-                            "ambiguous DAO phase-1 output match by capacity: consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}, first_match=0x{}:{}, second_match=0x{}:{}, first_pos={}, second_pos={}",
-                            hex::encode(consuming_tx_hash),
-                            hex::encode(original_tx_hash),
-                            original_output_index,
-                            capacity,
-                            hex::encode(first_tx_hash),
-                            first_output_index,
-                            hex::encode(second_tx_hash),
-                            second_output_index,
-                            first_pos,
-                            second_pos
-                        );
-                    }
-                    (None, _) => {
-                        bail!(
+                let (pos, (new_tx_hash, new_output_index, _, _, _)) =
+                    select_phase1_output_by_capacity(
+                        new_dao_outputs,
+                        &consumed_output_indices,
+                        capacity,
+                    )
+                    .ok_or_else(|| {
+                        anyhow!(
                             "DAO phase-1 output not found for consumed deposit: consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}",
                             hex::encode(consuming_tx_hash),
                             hex::encode(original_tx_hash),
                             original_output_index,
                             capacity
-                        );
-                    }
-                };
+                        )
+                    })?;
                 consumed_output_indices.insert(pos);
 
                 let Some(value) = self
@@ -624,46 +612,21 @@ impl BatchWriter {
                 let outpoint_key = keys::encode_outpoint(original_tx_hash, *original_output_index);
 
                 if *status == 0 {
-                    let mut matching_outputs = ctx.new_dao_outputs().iter().enumerate().filter(
-                        |(pos, (_, _, _, cap, _))| {
-                            *cap == capacity && !consumed_output_indices.contains(pos)
-                        },
-                    );
-                    let first_match = matching_outputs.next();
-                    let second_match = matching_outputs.next();
-                    let (pos, (new_tx_hash, new_output_index, _, _, _)) = match (
-                        first_match,
-                        second_match,
-                    ) {
-                        (Some(first), None) => first,
-                        (
-                            Some((first_pos, (first_tx_hash, first_output_index, _, _, _))),
-                            Some((second_pos, (second_tx_hash, second_output_index, _, _, _))),
-                        ) => {
-                            bail!(
-                                    "ambiguous DAO phase-1 output match by capacity (batch): consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}, first_match=0x{}:{}, second_match=0x{}:{}, first_pos={}, second_pos={}",
-                                    hex::encode(ctx.consuming_tx_hash()),
-                                    hex::encode(original_tx_hash),
-                                    original_output_index,
-                                    capacity,
-                                    hex::encode(first_tx_hash),
-                                    first_output_index,
-                                    hex::encode(second_tx_hash),
-                                    second_output_index,
-                                    first_pos,
-                                    second_pos
-                                );
-                        }
-                        (None, _) => {
-                            bail!(
-                                    "DAO phase-1 output not found for consumed deposit (batch): consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}",
-                                    hex::encode(ctx.consuming_tx_hash()),
-                                    hex::encode(original_tx_hash),
-                                    original_output_index,
-                                    capacity
-                                );
-                        }
-                    };
+                    let (pos, (new_tx_hash, new_output_index, _, _, _)) =
+                        select_phase1_output_by_capacity(
+                            ctx.new_dao_outputs(),
+                            &consumed_output_indices,
+                            capacity,
+                        )
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "DAO phase-1 output not found for consumed deposit (batch): consuming_tx=0x{}, deposit_outpoint=0x{}:{}, capacity={}",
+                                hex::encode(ctx.consuming_tx_hash()),
+                                hex::encode(original_tx_hash),
+                                original_output_index,
+                                capacity
+                            )
+                        })?;
                     consumed_output_indices.insert(pos);
                     let maybe_entry: Option<DaoDepositCacheEntry> = if let Some(value) = self
                         .store
@@ -1506,8 +1469,8 @@ mod tests {
     }
 
     #[test]
-    fn test_process_dao_withdrawals_errors_on_ambiguous_phase1_capacity_match() {
-        // Two same-capacity outputs for one consumed deposit are ambiguous and must fail fast.
+    fn test_process_dao_withdrawals_phase1_matches_same_capacity_outputs_deterministically() {
+        // Two same-capacity outputs are legal; map deterministically by output index order.
         use ckbadger_store::batch::StoreBatch;
         use ckbadger_store::CkbadgerStore;
         use std::sync::Arc;
@@ -1559,7 +1522,7 @@ mod tests {
         )];
 
         let mut batch = StoreBatch::new(&store);
-        let err = writer
+        writer
             .process_dao_withdrawals(
                 &consumed,
                 &new_dao_outputs,
@@ -1570,20 +1533,21 @@ mod tests {
                 chrono::Utc::now(),
                 &mut batch,
             )
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("ambiguous DAO phase-1 output match by capacity"),
-            "expected ambiguity error, got: {}",
-            err
-        );
+            .unwrap();
+        batch.commit().unwrap();
         let stored_a = store
             .get_cf(store.cf_dao_deposits(), &outpoint_a)
             .unwrap()
             .unwrap();
         let entry_a: DaoDepositCacheEntry = bincode::deserialize(&stored_a).unwrap();
-        assert_eq!(entry_a.status, 0);
-        assert!(entry_a.withdraw_request_tx.is_none());
+        assert_eq!(entry_a.status, 1);
+        assert_eq!(entry_a.withdraw_request_output_index, Some(0));
+        assert_eq!(entry_a.withdraw_request_tx, Some(output_tx_1.clone()));
+
+        let reverse_lookup = store
+            .get_dao_deposit_by_withdraw_tx(&output_tx_1, 0)
+            .unwrap();
+        assert_eq!(reverse_lookup, Some(outpoint_a.to_vec()));
     }
 
     #[test]
@@ -1652,7 +1616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_dao_withdrawals_batch_errors_on_ambiguous_phase1_capacity_match() {
+    fn test_process_dao_withdrawals_batch_matches_same_capacity_outputs_deterministically() {
         use ckbadger_store::batch::StoreBatch;
         use ckbadger_store::CkbadgerStore;
         use std::sync::Arc;
@@ -1704,15 +1668,23 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        let err = writer
+        writer
             .process_dao_withdrawals_batch(&[ctx], &mut batch, &pending_deposits)
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("ambiguous DAO phase-1 output match by capacity (batch)"),
-            "expected ambiguity error, got: {}",
-            err
-        );
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored = store
+            .get_cf(store.cf_dao_deposits(), &outpoint_key)
+            .unwrap()
+            .unwrap();
+        let entry: DaoDepositCacheEntry = bincode::deserialize(&stored).unwrap();
+        assert_eq!(entry.status, 1);
+        assert_eq!(entry.withdraw_request_output_index, Some(0));
+
+        let reverse_lookup = store
+            .get_dao_deposit_by_withdraw_tx(&[0xC1; 32], 0)
+            .unwrap();
+        assert_eq!(reverse_lookup, Some(outpoint_key.to_vec()));
     }
 
     #[test]

@@ -58,7 +58,7 @@ on localhost deployments:
 | Correctness guardrail               | `0` verification failures after speed optimizations           | Run `cargo run -p ckbadger-indexer -- verify --depth fast` (and `--depth sampling` for aggregate/DAO/supply changes) |
 
 - Performance-affecting PRs should include before/after numbers.
-- Keep benchmark snapshots up to date in `docs/PERFORMANCE_RESULTS.md`.
+- Benchmark snapshots are generated on demand; no committed `docs/PERFORMANCE_RESULTS.md` baseline is required.
 - For module ownership and entry points, see `docs/ARCHITECTURE_MAP.md`.
 
 ## Features
@@ -645,7 +645,6 @@ ckbadger/
 │   ├── ARCHITECTURE_MAP.md # Module ownership and entry points
 │   ├── DAO_CALCULATIONS.md # DAO formula documentation
 │   ├── INDEXER_PIPELINE.md # Pipeline architecture documentation
-│   ├── PERFORMANCE_RESULTS.md # Benchmark snapshots
 │   ├── POSTMORTEM.md       # Historical bugs & lessons learned
 │   ├── REORG_HANDLING.md   # Chain reorganization handling
 │   └── WORLD_VIEW.md       # CKB worldview and design philosophy

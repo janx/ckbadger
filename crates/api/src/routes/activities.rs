@@ -3,7 +3,10 @@ use axum::{
     routing::get,
     Router,
 };
-use ckbadger_store::types::{AssetAction, AssetChange};
+use ckbadger_store::{
+    types::{ActivityEntry, AssetAction, AssetChange},
+    CkbadgerStore,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -139,6 +142,72 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
     }
 }
 
+const ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
+
+fn is_canonical_activity_entry(
+    store: &CkbadgerStore,
+    block_num: i64,
+    tx_idx: i32,
+    entry: &ActivityEntry,
+) -> anyhow::Result<bool> {
+    if entry.block_number != block_num || entry.tx_index != tx_idx {
+        return Ok(false);
+    }
+    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(&entry.tx_hash)? else {
+        return Ok(false);
+    };
+    if canonical_block != block_num || canonical_tx_idx != tx_idx {
+        return Ok(false);
+    }
+    Ok(store
+        .get_tx_index(canonical_block, canonical_tx_idx)?
+        .is_some())
+}
+
+fn list_canonical_activities_page(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    lock_hash: &[u8],
+    limit: usize,
+    cursor: Option<(i64, i32)>,
+    filter: Option<&str>,
+) -> anyhow::Result<Vec<(i64, i32, ActivityEntry)>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let scan_limit = ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
+    let mut out = Vec::with_capacity(limit);
+    let mut scan_cursor = cursor;
+
+    loop {
+        let rows = append_only_store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
+        if rows.is_empty() {
+            break;
+        }
+        let rows_len = rows.len();
+        let mut last_seen = None;
+        for (block_num, tx_idx, entry) in rows {
+            last_seen = Some((block_num, tx_idx));
+            if is_canonical_activity_entry(store, block_num, tx_idx, &entry)? {
+                out.push((block_num, tx_idx, entry));
+                if out.len() >= limit {
+                    return Ok(out);
+                }
+            }
+        }
+        if rows_len < scan_limit {
+            break;
+        }
+        let Some(last_seen_cursor) = last_seen else {
+            break;
+        };
+        scan_cursor = Some(last_seen_cursor);
+    }
+
+    Ok(out)
+}
+
 async fn get_address_activities(
     State(state): State<Arc<AppState>>,
     Path(addr): Path<String>,
@@ -167,10 +236,15 @@ async fn get_address_activities(
         }
     });
 
-    let results = state
-        .append_only_store
-        .list_activities(&lock_hash, limit + 1, cursor, params.filter.as_deref())
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let results = list_canonical_activities_page(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &lock_hash,
+        limit + 1,
+        cursor,
+        params.filter.as_deref(),
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() > limit;
     let page: Vec<_> = results.into_iter().take(limit).collect();
@@ -210,4 +284,72 @@ async fn get_address_activities(
         limit as i64,
         next_cursor,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::TxIndexEntry;
+
+    fn make_activity(tx_hash: &[u8], block_number: i64, tx_index: i32) -> ActivityEntry {
+        ActivityEntry {
+            tx_hash: tx_hash.to_vec(),
+            block_number,
+            tx_index,
+            timestamp: 1_700_000_000 + block_number,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        }
+    }
+
+    #[test]
+    fn test_list_canonical_activities_page_filters_orphaned_entries() {
+        let root = tempfile::tempdir().unwrap();
+        let domain_path = root.path().join("domain");
+        let append_path = root.path().join("append");
+        let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append = CkbadgerStore::open_append_only(&append_path).unwrap();
+
+        let lock_hash = [0xAA; 32];
+        let stale_tx = vec![0x30; 32];
+        let canonical_tx_new = vec![0x20; 32];
+        let canonical_tx_old = vec![0x10; 32];
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
+        append_batch.put_activity(&lock_hash, 20, 0, &make_activity(&canonical_tx_new, 20, 0));
+        append_batch.put_activity(&lock_hash, 10, 0, &make_activity(&canonical_tx_old, 10, 0));
+        append_batch.commit().unwrap();
+
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        // Simulate stale/orphan-like mapping without canonical tx_index entry.
+        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
+        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
+        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
+        domain_batch.put_tx_index(20, 0, &tx_index);
+        domain_batch.put_tx_index(10, 0, &tx_index);
+        domain_batch.commit().unwrap();
+
+        let rows =
+            list_canonical_activities_page(&domain, &append, &lock_hash, 3, None, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, 20);
+        assert_eq!(rows[1].0, 10);
+        assert_eq!(rows[0].2.tx_hash, canonical_tx_new);
+        assert_eq!(rows[1].2.tx_hash, canonical_tx_old);
+    }
 }

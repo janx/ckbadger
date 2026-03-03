@@ -477,6 +477,15 @@ fn compute_tx_fee_from_io(
     )))
 }
 
+fn occupied_capacity_bytes(
+    lock_args_len: usize,
+    type_args_len: Option<usize>,
+    data_size: usize,
+) -> usize {
+    let type_size = type_args_len.map_or(0, |len| 32 + 1 + len);
+    8 + 32 + 1 + lock_args_len + type_size + data_size
+}
+
 fn resolve_stored_input_type_hash_type(
     core_store: &ckbadger_store::CkbadgerStore,
     store: &ckbadger_store::CkbadgerStore,
@@ -926,9 +935,14 @@ fn build_inputs_outputs_from_ckb(
                         let cap = info.capacity as u128;
                         inputs_capacity += cap;
 
-                        let lock_args_len = info.lock_args.len();
-                        let lock_size = 8 + 32 + 1 + lock_args_len + info.data_size as usize;
-                        inputs_occupied_capacity += lock_size as u128;
+                        let occ = occupied_capacity_bytes(
+                            info.lock_args.len(),
+                            info.type_code_hash
+                                .as_ref()
+                                .map(|_| info.type_args.as_deref().unwrap_or(&[]).len()),
+                            info.data_size as usize,
+                        );
+                        inputs_occupied_capacity += occ as u128;
 
                         let lock_resp = ScriptResponse {
                             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
@@ -1018,7 +1032,20 @@ fn build_inputs_outputs_from_ckb(
                                     .get_cell_data(&prev_hash, prev_index)
                                     .map(|d| d.len())
                                     .unwrap_or(0);
-                                let occ = 8 + 32 + 1 + args.len() + data_len;
+                                let occ = occupied_capacity_bytes(
+                                    args.len(),
+                                    output.type_.as_ref().map(|type_script| {
+                                        hex::decode(
+                                            type_script
+                                                .args
+                                                .strip_prefix("0x")
+                                                .unwrap_or(&type_script.args),
+                                        )
+                                        .unwrap_or_default()
+                                        .len()
+                                    }),
+                                    data_len,
+                                );
                                 inputs_occupied_capacity += occ as u128;
 
                                 (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
@@ -1096,11 +1123,10 @@ fn build_inputs_outputs_from_ckb(
                 args: t.args.clone(),
             });
 
-            // Calculate occupied capacity
-            let type_size = output.type_.as_ref().map_or(0, |t| {
-                let type_args =
-                    hex::decode(t.args.strip_prefix("0x").unwrap_or(&t.args)).unwrap_or_default();
-                32 + 1 + type_args.len()
+            let type_args_len = output.type_.as_ref().map(|t| {
+                hex::decode(t.args.strip_prefix("0x").unwrap_or(&t.args))
+                    .unwrap_or_default()
+                    .len()
             });
 
             // Get data size from CKB store
@@ -1116,7 +1142,7 @@ fn build_inputs_outputs_from_ckb(
                 0
             };
 
-            let occ = 8 + 32 + 1 + args_bytes.len() + type_size + data_size;
+            let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
             outputs_occupied_capacity += occ as u128;
 
             let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
@@ -2011,6 +2037,18 @@ mod tests {
         assert!(!is_dao_type_code_hash_hex(
             "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
         ));
+    }
+
+    #[test]
+    fn test_occupied_capacity_bytes_without_type_script() {
+        let occ = occupied_capacity_bytes(20, None, 64);
+        assert_eq!(occ, 8 + 32 + 1 + 20 + 64);
+    }
+
+    #[test]
+    fn test_occupied_capacity_bytes_includes_type_script_size() {
+        let occ = occupied_capacity_bytes(20, Some(16), 64);
+        assert_eq!(occ, 8 + 32 + 1 + 20 + (32 + 1 + 16) + 64);
     }
 
     #[test]

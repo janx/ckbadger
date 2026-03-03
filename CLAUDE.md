@@ -124,6 +124,11 @@ make verify                              # Run verify --depth fast
 
 `up` default mode from `.env`: `COMPOSE_PROFILES=internal` => internal CKB node, unset => external CKB.
 
+## Performance Notes
+
+- Performance-affecting PRs should include before/after numbers.
+- Benchmark snapshots are generated on demand; no committed `docs/PERFORMANCE_RESULTS.md` baseline is required.
+
 ## AI-Friendly Page Output
 
 Frontend pages support `md` (markdown) and `raw` (structured JSON) formats. Format negotiation: `query.format` > URL suffix (`.md`/`.raw`) > `Accept` header. When adding/changing routes or formats, see `docs/AI_FORMATS.md` for the full checklist (MANDATORY).

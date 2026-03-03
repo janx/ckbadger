@@ -688,6 +688,7 @@ async fn calculate_compensation(
         .unwrap_or(0);
 
     let withdraw_block = params.withdraw_block.unwrap_or(latest_block);
+    ensure_withdraw_block_not_before_deposit(params.deposit_block, withdraw_block)?;
 
     let deposit_dao = state
         .store
@@ -741,11 +742,6 @@ async fn calculate_compensation(
 
     let total = capacity + compensation;
 
-    if withdraw_block < params.deposit_block {
-        return Err(ApiError::bad_request(
-            "withdraw_block must be greater than or equal to deposit_block",
-        ));
-    }
     let blocks_held = (withdraw_block - params.deposit_block) as f64;
     let years = blocks_held / (365.25 * 24.0 * 60.0 * 60.0 / 8.0);
     let apc = if years > 0.0 && free > 0 {
@@ -765,6 +761,18 @@ async fn calculate_compensation(
         total_withdrawable_ckb: shannon_to_ckb(&total.to_string()),
         apc: format!("{:.2}%", apc),
     })
+}
+
+fn ensure_withdraw_block_not_before_deposit(
+    deposit_block: i64,
+    withdraw_block: i64,
+) -> Result<(), (axum::http::StatusCode, axum::Json<ApiError>)> {
+    if withdraw_block < deposit_block {
+        return Err(ApiError::bad_request(
+            "withdraw_block must be greater than or equal to deposit_block",
+        ));
+    }
+    Ok(())
 }
 
 fn status_to_string(status: i16) -> String {
@@ -1208,5 +1216,15 @@ mod tests {
         assert_eq!(series.get("2026-02-17"), Some(&1));
         assert_eq!(series.get("2026-02-18"), Some(&2));
         assert_eq!(series.get("2026-02-19"), Some(&1));
+    }
+
+    #[test]
+    fn test_ensure_withdraw_block_not_before_deposit_validates_order() {
+        let err = ensure_withdraw_block_not_before_deposit(100, 99).unwrap_err();
+        assert_eq!(
+            err.1 .0.message,
+            "withdraw_block must be greater than or equal to deposit_block"
+        );
+        assert!(ensure_withdraw_block_not_before_deposit(100, 100).is_ok());
     }
 }
