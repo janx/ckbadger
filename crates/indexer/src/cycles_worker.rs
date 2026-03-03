@@ -195,14 +195,6 @@ async fn process_cycles_task(
                 updated_at,
             };
         }
-        if existing == -1 {
-            return CyclesTaskResult {
-                status: CyclesTaskStatus::Failed,
-                cycles: None,
-                error: Some("calculation previously failed".to_string()),
-                updated_at,
-            };
-        }
     }
 
     match ckbadger_common::cycles::calculate_cycles(ckb_rpc_url, tx_hash).await {
@@ -224,7 +216,7 @@ async fn process_cycles_task(
         }
         Err(e) => {
             let marker_err = store
-                .update_tx_cycles(block_num, tx_idx, -1)
+                .update_tx_cycles(block_num, tx_idx, 0)
                 .err()
                 .map(|write_err| format!(" (failed to persist failure marker: {})", write_err))
                 .unwrap_or_default();
@@ -241,6 +233,26 @@ async fn process_cycles_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::{StoreBatch, TxIndexEntry};
+
+    fn insert_tx_with_cycles(store: &CkbadgerStore, tx_hash: &[u8; 32], cycles: Option<i64>) {
+        let mut batch = StoreBatch::new(store);
+        batch.put_tx_hash_map(tx_hash, 123, 0);
+        batch.put_tx_index(
+            123,
+            0,
+            &TxIndexEntry {
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 1_000,
+                tx_size: 200,
+                cycles,
+            },
+        );
+        batch.commit().unwrap();
+    }
 
     #[tokio::test]
     async fn test_process_cycles_task_invalid_hash() {
@@ -250,5 +262,25 @@ mod tests {
 
         assert_eq!(result.status, CyclesTaskStatus::Failed);
         assert!(result.error.unwrap_or_default().contains("invalid tx hash"));
+    }
+
+    #[tokio::test]
+    async fn test_process_cycles_task_failure_marker_is_retryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open(dir.path()).unwrap();
+        let tx_hash = [0x11u8; 32];
+        insert_tx_with_cycles(&store, &tx_hash, Some(-1));
+        let tx_hash_hex = format!("0x{}", hex::encode(tx_hash));
+
+        let result = process_cycles_task(&store, "http://127.0.0.1:1", &tx_hash_hex).await;
+
+        assert_eq!(result.status, CyclesTaskStatus::Failed);
+        assert!(!result
+            .error
+            .unwrap_or_default()
+            .contains("calculation previously failed"));
+
+        let (_, _, updated) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
+        assert_eq!(updated.cycles, Some(0));
     }
 }

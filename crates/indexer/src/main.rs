@@ -12,7 +12,7 @@ use ckbadger_indexer::{
     runtime_diag::generate_run_id, runtime_diag::read_cgroup_memory_snapshot, sync::Indexer,
     verify, Config,
 };
-use ckbadger_store::{CkbadgerStore, RuntimeStatus};
+use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-indexer")]
@@ -194,6 +194,37 @@ fn should_warn_progress_stall(
 ) -> bool {
     current_block < target_block
         && now.duration_since(last_progress_advanced_at) >= min_stall_duration
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncStatusRepairReason {
+    TipNumberDrift,
+    TipHashDrift,
+    GenesisHashResidue,
+}
+
+fn sync_status_repair_reason(
+    sync_status: &SyncStatus,
+    db_tip: i64,
+    db_tip_hash: Option<&[u8]>,
+) -> Option<SyncStatusRepairReason> {
+    if sync_status.tip_block_number != db_tip {
+        return Some(SyncStatusRepairReason::TipNumberDrift);
+    }
+
+    if db_tip == 0 && db_tip_hash.is_none() && !sync_status.tip_block_hash.is_empty() {
+        return Some(SyncStatusRepairReason::GenesisHashResidue);
+    }
+
+    if db_tip > 0 {
+        if let Some(hash) = db_tip_hash {
+            if sync_status.tip_block_hash != hash {
+                return Some(SyncStatusRepairReason::TipHashDrift);
+            }
+        }
+    }
+
+    None
 }
 
 fn is_clean_shutdown_reason(reason: &str) -> bool {
@@ -428,10 +459,21 @@ async fn run_sync(args: Cli) -> Result<()> {
 
     let repo = Repository::new(store.clone());
     let (db_tip, db_tip_hash) = repo.get_sync_tip().await?;
-    if sync_status.tip_block_number != db_tip {
+    if let Some(reason) = sync_status_repair_reason(&sync_status, db_tip, db_tip_hash.as_deref()) {
         info!(
-            "sync_status tip ({}) differs from block_headers tip ({}), using block_headers tip",
-            sync_status.tip_block_number, db_tip
+            repair_reason = ?reason,
+            sync_status_tip_block_number = sync_status.tip_block_number,
+            sync_status_tip_block_hash = if sync_status.tip_block_hash.is_empty() {
+                "none".to_string()
+            } else {
+                format!("0x{}", hex::encode(&sync_status.tip_block_hash))
+            },
+            db_tip_block_number = db_tip,
+            db_tip_block_hash = db_tip_hash
+                .as_ref()
+                .map(|hash| format!("0x{}", hex::encode(hash)))
+                .unwrap_or_else(|| "none".to_string()),
+            "sync_status tip metadata differs from authoritative block_headers tip, repairing sync_status"
         );
         let repaired_tip_hash = db_tip_hash.clone();
         store.update_sync_status(|status| {
@@ -920,9 +962,10 @@ mod tests {
         reconcile_token_daily_deltas_on_startup, resolve_append_only_data_path_from_sources,
         resolve_domain_data_path_from_sources, should_emit_rate_limited,
         should_force_startup_cleanup, should_warn_progress_stall, startup_cleanup_decision,
+        sync_status_repair_reason, SyncStatusRepairReason,
     };
     use ckbadger_store::{
-        types::{CachedBlockHeader, LiveCellInfo, TokenDailyDelta},
+        types::{CachedBlockHeader, LiveCellInfo, SyncStatus, TokenDailyDelta},
         CkbadgerStore, RuntimeStatus, StoreBatch,
     };
     use std::time::{Duration, Instant};
@@ -984,6 +1027,47 @@ mod tests {
         assert_eq!(monotonic_counter_delta(Some(7), Some(10)), None);
         assert_eq!(monotonic_counter_delta(Some(7), None), None);
         assert_eq!(monotonic_counter_delta(None, Some(7)), None);
+    }
+
+    #[test]
+    fn test_sync_status_repair_reason_for_tip_hash_mismatch_same_height() {
+        let sync_status = SyncStatus {
+            tip_block_number: 128,
+            tip_block_hash: vec![0x11; 32],
+            ..Default::default()
+        };
+        let db_hash = vec![0x22; 32];
+        assert_eq!(
+            sync_status_repair_reason(&sync_status, 128, Some(&db_hash)),
+            Some(SyncStatusRepairReason::TipHashDrift)
+        );
+    }
+
+    #[test]
+    fn test_sync_status_repair_reason_for_genesis_hash_mismatch() {
+        let sync_status = SyncStatus {
+            tip_block_number: 0,
+            tip_block_hash: vec![0x33; 32],
+            ..Default::default()
+        };
+        assert_eq!(
+            sync_status_repair_reason(&sync_status, 0, None),
+            Some(SyncStatusRepairReason::GenesisHashResidue)
+        );
+    }
+
+    #[test]
+    fn test_sync_status_repair_reason_none_when_tip_and_hash_match() {
+        let db_hash = vec![0x44; 32];
+        let sync_status = SyncStatus {
+            tip_block_number: 42,
+            tip_block_hash: db_hash.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            sync_status_repair_reason(&sync_status, 42, Some(&db_hash)),
+            None
+        );
     }
 
     #[test]

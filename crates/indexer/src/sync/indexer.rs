@@ -6350,15 +6350,56 @@ impl Indexer {
                                     )
                                 })
                                 .collect();
-                            let spawned_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                            tokio::spawn(Self::run_secondary_issuance_batch(
-                                self.rpc.clone(),
-                                self.writer.clone(),
-                                Arc::clone(&self.secondary_issuance_semaphore),
-                                issuance_blocks,
-                                Arc::clone(&self.pipeline_reset_epoch),
-                                spawned_epoch,
-                            ));
+                            if let Err(e) = self
+                                .run_secondary_issuance_batch_with_cleanup_on_failure(
+                                    issuance_blocks,
+                                    start_block,
+                                    end_block,
+                                    chain_tip,
+                                    "pipeline",
+                                )
+                                .await
+                            {
+                                let incident_id = self.report_incident(
+                                    "pipeline_secondary_issuance_failed",
+                                    format!(
+                                        "start_block={} end_block={} chain_tip={} error={:?}",
+                                        start_block, end_block, chain_tip, e
+                                    ),
+                                );
+                                error!(
+                                    run_id = %self.run_id,
+                                    incident_id = %incident_id,
+                                    start_block,
+                                    end_block,
+                                    chain_tip,
+                                    error = ?e,
+                                    "Secondary issuance update failed for parsed batch"
+                                );
+                                if is_bulk_sync_batch(
+                                    chain_tip,
+                                    end_block,
+                                    self.config.bulk_sync_threshold,
+                                ) {
+                                    return Err(e);
+                                }
+                                self.request_pipeline_reset(
+                                    "secondary issuance write failed",
+                                    None,
+                                    None,
+                                    None,
+                                );
+                                let drained = Self::drain_channel(&mut parse_rx).await;
+                                parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                                info!(
+                                    run_id = %self.run_id,
+                                    pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                                    drained,
+                                    "Secondary issuance failure drain completed"
+                                );
+                                sleep(Duration::from_secs(5)).await;
+                                continue;
+                            }
                         }
 
                         self.maybe_invalidate_chart_caches(end_block).await;
@@ -6627,46 +6668,7 @@ impl Indexer {
                         )
                     });
                 }
-                if let Err(cleanup_err) = self.writer.cleanup_batch_range(
-                    i64::try_from(start_block).map_err(|_| {
-                        anyhow!("batch cleanup start_block exceeds i64: {}", start_block)
-                    })?,
-                    i64::try_from(end_block).map_err(|_| {
-                        anyhow!("batch cleanup end_block exceeds i64: {}", end_block)
-                    })?,
-                ) {
-                    error!("Failed to cleanup partial batch: {:?}", cleanup_err);
-                } else {
-                    let cleanup_tip = i64::try_from(start_block).map_err(|_| {
-                        anyhow!(
-                            "batch cleanup start_block exceeds i64 for hodl consistency check: {}",
-                            start_block
-                        )
-                    })? - 1;
-                    rollback_undo_log_after_batch_cleanup(
-                        self.writer.store().as_ref(),
-                        self.append_only_store.as_ref(),
-                        cleanup_tip,
-                        &format!(
-                            "sequential range {}-{} (chain_tip={})",
-                            start_block, end_block, chain_tip
-                        ),
-                    )?;
-                    if let Err(consistency_err) = self.reconcile_hodl_tracker_with_tip(cleanup_tip)
-                    {
-                        error!(
-                            cleanup_tip,
-                            "HODL tracker consistency check failed after batch cleanup: {:?}",
-                            consistency_err
-                        );
-                        return Err(consistency_err).with_context(|| {
-                            format!(
-                                "HODL tracker inconsistent after batch cleanup to tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
-                                cleanup_tip
-                            )
-                        });
-                    }
-                }
+                self.cleanup_failed_batch_range(start_block, end_block, chain_tip, "sequential")?;
                 return Err(e).with_context(|| {
                     format!(
                         "sync_blocks_batch failed for range {}-{} (chain_tip={})",
@@ -6752,15 +6754,14 @@ impl Indexer {
                         block_timestamp,
                     ));
                 }
-                let spawned_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
-                tokio::spawn(Self::run_secondary_issuance_batch(
-                    self.rpc.clone(),
-                    self.writer.clone(),
-                    Arc::clone(&self.secondary_issuance_semaphore),
+                self.run_secondary_issuance_batch_with_cleanup_on_failure(
                     issuance_blocks,
-                    Arc::clone(&self.pipeline_reset_epoch),
-                    spawned_epoch,
-                ));
+                    start_block,
+                    end_block,
+                    chain_tip,
+                    "sequential",
+                )
+                .await?;
             }
 
             self.maybe_invalidate_chart_caches(end_block).await;
@@ -6829,6 +6830,95 @@ impl Indexer {
             .store(currently_bulk, Ordering::SeqCst);
         self.was_secondary_issuance_bulk_active
             .store(currently_secondary_bulk, Ordering::SeqCst);
+    }
+
+    fn cleanup_failed_batch_range(
+        &self,
+        start_block: u64,
+        end_block: u64,
+        chain_tip: u64,
+        mode: &str,
+    ) -> Result<()> {
+        if let Err(cleanup_err) = self.writer.cleanup_batch_range(
+            i64::try_from(start_block)
+                .map_err(|_| anyhow!("batch cleanup start_block exceeds i64: {}", start_block))?,
+            i64::try_from(end_block)
+                .map_err(|_| anyhow!("batch cleanup end_block exceeds i64: {}", end_block))?,
+        ) {
+            error!("Failed to cleanup partial batch: {:?}", cleanup_err);
+            return Ok(());
+        }
+
+        let cleanup_tip = i64::try_from(start_block).map_err(|_| {
+            anyhow!(
+                "batch cleanup start_block exceeds i64 for hodl consistency check: {}",
+                start_block
+            )
+        })? - 1;
+        rollback_undo_log_after_batch_cleanup(
+            self.writer.store().as_ref(),
+            self.append_only_store.as_ref(),
+            cleanup_tip,
+            &format!(
+                "{} range {}-{} (chain_tip={})",
+                mode, start_block, end_block, chain_tip
+            ),
+        )?;
+        if let Err(consistency_err) = self.reconcile_hodl_tracker_with_tip(cleanup_tip) {
+            error!(
+                cleanup_tip,
+                "HODL tracker consistency check failed after batch cleanup: {:?}", consistency_err
+            );
+            return Err(consistency_err).with_context(|| {
+                format!(
+                    "HODL tracker inconsistent after batch cleanup to tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                    cleanup_tip
+                )
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn run_secondary_issuance_batch_with_cleanup_on_failure(
+        &self,
+        issuance_blocks: Vec<(String, String, i64, DateTime<Utc>)>,
+        start_block: u64,
+        end_block: u64,
+        chain_tip: u64,
+        mode: &str,
+    ) -> Result<()> {
+        let spawned_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
+        if let Err(e) = Self::run_secondary_issuance_batch(
+            self.rpc.clone(),
+            self.writer.clone(),
+            Arc::clone(&self.secondary_issuance_semaphore),
+            issuance_blocks,
+            Arc::clone(&self.pipeline_reset_epoch),
+            spawned_epoch,
+        )
+        .await
+        {
+            let bulk_sync_mode =
+                is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+            if bulk_sync_mode {
+                return Err(e).with_context(|| {
+                    format!(
+                        "bulk sync fail-fast for range {}-{} (chain_tip={}): secondary issuance write failed; no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
+                        start_block, end_block, chain_tip
+                    )
+                });
+            }
+            self.cleanup_failed_batch_range(start_block, end_block, chain_tip, mode)?;
+            return Err(e).with_context(|| {
+                format!(
+                    "secondary issuance update failed for range {}-{} (chain_tip={})",
+                    start_block, end_block, chain_tip
+                )
+            });
+        }
+
+        Ok(())
     }
 
     fn maybe_start_label_import(&self) {
@@ -12660,7 +12750,7 @@ impl Indexer {
     }
 
     /// Run secondary issuance updates for a batch of blocks, gated by the semaphore.
-    /// Called from a spawned task — does not require &self.
+    /// Returns error on first failed update so caller can fail fast and cleanup batch.
     /// The `pipeline_epoch` / `spawned_epoch` pair aborts stale tasks after reorg.
     async fn run_secondary_issuance_batch(
         rpc: CkbRpcClient,
@@ -12669,37 +12759,38 @@ impl Indexer {
         blocks: Vec<(String, String, i64, DateTime<Utc>)>,
         pipeline_epoch: Arc<AtomicU64>,
         spawned_epoch: u64,
-    ) {
+    ) -> Result<()> {
         let _permit = match tokio::time::timeout(Duration::from_secs(5), sem.acquire()).await {
             Ok(Ok(permit)) => permit,
-            Ok(Err(_closed)) => return,
+            Ok(Err(_closed)) => bail!("secondary issuance semaphore closed"),
             Err(_timeout) => {
                 warn!("Secondary issuance permit acquisition took >5s, issuance backlog");
                 match sem.acquire().await {
                     Ok(permit) => permit,
-                    Err(_) => return,
+                    Err(_) => bail!("secondary issuance semaphore closed after timeout"),
                 }
             }
         };
         for (hash, dao, number, timestamp) in blocks {
             if pipeline_epoch.load(Ordering::SeqCst) != spawned_epoch {
-                info!(
-                    "Aborting stale secondary issuance task (epoch changed: spawned={}, current={}), remaining blocks starting at {}",
+                let current_epoch = pipeline_epoch.load(Ordering::SeqCst);
+                return Err(anyhow!(
+                    "stale secondary issuance batch epoch (spawned={}, current={}, first_remaining_block={})",
                     spawned_epoch,
-                    pipeline_epoch.load(Ordering::SeqCst),
+                    current_epoch,
                     number
-                );
-                return;
+                ));
             }
             if let Err(e) =
                 Self::update_secondary_issuance(&rpc, &writer, &hash, &dao, number, timestamp).await
             {
-                warn!(
-                    "Failed to update secondary issuance for block {}: {}",
-                    number, e
-                );
+                return Err(e).with_context(|| {
+                    format!("failed to update secondary issuance for block {}", number)
+                });
             }
         }
+
+        Ok(())
     }
 
     // === run_proposal_cache_batch ===
@@ -15045,6 +15136,31 @@ mod tests {
         assert!(1000 <= threshold);
         assert!(999 <= threshold);
         assert!(1 <= threshold);
+    }
+
+    #[tokio::test]
+    async fn test_run_secondary_issuance_batch_propagates_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open(dir.path()).unwrap());
+        let writer = BatchWriter::new(Arc::clone(&store));
+        let rpc = CkbRpcClient::new("http://127.0.0.1:1");
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        let pipeline_epoch = Arc::new(AtomicU64::new(0));
+
+        let err = Indexer::run_secondary_issuance_batch(
+            rpc,
+            writer,
+            sem,
+            vec![("0x1234".to_string(), "0x00".to_string(), 1, Utc::now())],
+            pipeline_epoch,
+            0,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("failed to update secondary issuance for block 1"));
     }
 
     fn build_dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {

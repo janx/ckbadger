@@ -217,10 +217,20 @@ impl BatchWriter {
             );
 
             // Use the store's rollback mechanism to clean up everything
-            self.store.rollback_to_block(start_block)?;
+            let rollback_target =
+                if start_block >= 0 && self.store.get_block_header(start_block)?.is_none() {
+                    warn!(
+                        start_block,
+                        "Startup cleanup tip header missing; rolling back to -1 for full cleanup"
+                    );
+                    -1
+                } else {
+                    start_block
+                };
+            self.store.rollback_to_block(rollback_target)?;
             info!(
                 start_block,
-                next_block, cleanup_reason, "Startup cleanup complete"
+                rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
             );
         } else {
             info!(
@@ -230,11 +240,10 @@ impl BatchWriter {
         }
 
         // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
-        let tip_number = if start_block < 0 { 0 } else { start_block };
-        let tip_hash = if start_block >= 0 {
-            self.store.get_block_header(start_block)?.map(|h| h.hash)
+        let (tip_number, tip_hash) = if let Some((num, header)) = self.store.get_sync_tip_block()? {
+            (num, Some(header.hash))
         } else {
-            None
+            (0, None)
         };
         self.store.update_sync_status(|status| {
             status.tip_block_number = tip_number;
