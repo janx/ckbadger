@@ -825,18 +825,24 @@ fn build_total_depositors_series(
         return Ok(HashMap::new());
     }
 
-    let mut unique_block_numbers: HashSet<i64> = HashSet::new();
+    let mut events_by_block: BTreeMap<i64, Vec<(Vec<u8>, i32)>> = BTreeMap::new();
     store
         .scan_dao_deposits(|_, entry| {
-            unique_block_numbers.insert(entry.deposit_block_number);
+            events_by_block
+                .entry(entry.deposit_block_number)
+                .or_default()
+                .push((entry.lock_script_hash.clone(), 1));
             if let Some(request_block) = entry.withdraw_request_block {
-                unique_block_numbers.insert(request_block);
+                events_by_block
+                    .entry(request_block)
+                    .or_default()
+                    .push((entry.lock_script_hash.clone(), -1));
             }
             Ok(())
         })
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let block_numbers: Vec<i64> = unique_block_numbers.into_iter().collect();
+    let block_numbers: Vec<i64> = events_by_block.keys().copied().collect();
     let block_headers = store
         .get_block_headers_batch(&block_numbers)
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -863,38 +869,15 @@ fn build_total_depositors_series(
     }
 
     let mut events_by_date: BTreeMap<String, Vec<(Vec<u8>, i32)>> = BTreeMap::new();
-
-    store
-        .scan_dao_deposits(|_, entry| {
-            let deposit_date = date_cache
-                .get(&entry.deposit_block_number)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing cached deposit block date while building dao depositor series: block_number={}",
-                        entry.deposit_block_number
-                    )
-                })?;
-            events_by_date
-                .entry(deposit_date)
-                .or_default()
-                .push((entry.lock_script_hash.clone(), 1));
-
-            if let Some(request_block) = entry.withdraw_request_block {
-                let request_date = date_cache.get(&request_block).cloned().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing cached withdraw-request block date while building dao depositor series: block_number={}",
-                        request_block
-                    )
-                })?;
-                events_by_date
-                    .entry(request_date)
-                    .or_default()
-                    .push((entry.lock_script_hash.clone(), -1));
-            }
-            Ok(())
-        })
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    for (block_number, events) in events_by_block {
+        let event_date = date_cache.get(&block_number).cloned().ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing cached block date while building dao depositor series: block_number={}",
+                block_number
+            ))
+        })?;
+        events_by_date.entry(event_date).or_default().extend(events);
+    }
 
     let mut ordered_dates = snapshot_dates.to_vec();
     ordered_dates.sort();
