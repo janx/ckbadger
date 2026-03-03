@@ -49,6 +49,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 ## Coding Principles (MANDATORY)
 
 - **Fail Fast, Fail Early** - Never hide invariant violations with silent fallbacks, lower-bound clamps, or default-zero repairs; fail immediately with actionable context
+- **Refactor First When It Helps** - Before implementing new code, evaluate whether a focused refactor will reduce complexity or risk; if yes, refactor first and then implement.
 - Do not add silent guards to mask bad states on correctness-critical paths (for example `max(0)`, `saturating_sub`, `unwrap_or(0)`).
 - If an invariant is violated, return/raise an error with enough context (block/tx/key/date) to locate the upstream bug quickly.
 
