@@ -494,6 +494,26 @@ fn put_tx_context_undo_entries(
     for tx in txs {
         let mut inputs = Vec::with_capacity(tx.inputs.len());
         for input in &tx.inputs {
+            let is_cellbase_sentinel =
+                input.previous_output_index == -1 && input.previous_tx_hash == [0u8; 32];
+            if is_cellbase_sentinel {
+                if !tx.is_cellbase {
+                    bail!(
+                        "non-cellbase tx contains cellbase sentinel input in rollback tx-context: tx_hash=0x{}, block={}",
+                        hex::encode(tx.hash),
+                        tx.block_number
+                    );
+                }
+                continue;
+            }
+            if input.previous_output_index < 0 {
+                bail!(
+                    "negative rollback tx-context input index: tx_hash=0x{}, block={}, previous_output_index={}",
+                    hex::encode(tx.hash),
+                    tx.block_number,
+                    input.previous_output_index
+                );
+            }
             let output_index = i16::try_from(input.previous_output_index).map_err(|_| {
                 anyhow!(
                     "rollback tx-context input index exceeds i16 range: tx_hash=0x{}, block={}, previous_output_index={}",
@@ -1099,6 +1119,19 @@ fn should_abort_pipeline_on_idle_timeout(parser_finished: bool, fetcher_finished
 
 fn should_invalidate_chart_caches_for_lag(blocks_remaining: u64) -> bool {
     blocks_remaining <= CHART_INVALIDATION_MAX_LIVE_LAG
+}
+
+fn startup_header_gap_fail_fast_message(
+    first_header_gap: i64,
+    start_block: i64,
+    header_tip: Option<i64>,
+    tx_tip: Option<i64>,
+) -> String {
+    format!(
+        "startup fail-fast: detected internal block header gap at block {} (sync_tip={}, header_tip={:?}, tx_tip={:?}). \
+         automatic gap replay is disabled because it is equivalent to deep reorg handling; delete RocksDB and re-sync from genesis",
+        first_header_gap, start_block, header_tip, tx_tip
+    )
 }
 
 fn enqueue_issuance_blocks_in_order(
@@ -2735,10 +2768,6 @@ const ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS: u64 = 1_000_000;
 const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS: u64 = 40_000;
 const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT: u64 = 6;
 
-fn recovery_start_from_header_gap(first_header_gap: Option<i64>) -> Option<i64> {
-    first_header_gap.map(|gap| gap.saturating_sub(1))
-}
-
 #[derive(Debug, Clone, Copy)]
 struct AdaptiveBatchSnapshot {
     target_batch_txs: u64,
@@ -3973,7 +4002,7 @@ impl Indexer {
 
         let (start_block, _) = self.repo.get_sync_tip().await?;
         let consistent_block = self.writer.find_last_consistent_block()?;
-        let mut actual_start = match consistent_block {
+        let actual_start = match consistent_block {
             Some(cb) if cb < start_block => {
                 warn!(
                     "Rolling back from block {} to {} due to data inconsistency",
@@ -4017,19 +4046,16 @@ impl Indexer {
             );
         }
 
-        if let Some(recovery_start) =
-            recovery_start_from_header_gap(continuity_probe.first_header_gap)
-        {
-            if recovery_start < actual_start {
-                warn!(
-                    run_id = %self.run_id,
-                    first_header_gap = continuity_probe.first_header_gap,
-                    previous_start = actual_start,
-                    recovery_start,
-                    "Detected block header gap; rolling back startup point to replay missing range"
-                );
-                actual_start = recovery_start;
-            }
+        if let Some(first_header_gap) = continuity_probe.first_header_gap {
+            bail!(
+                "{}",
+                startup_header_gap_fail_fast_message(
+                    first_header_gap,
+                    start_block,
+                    continuity_probe.header_tip,
+                    continuity_probe.tx_tip
+                )
+            );
         }
 
         if bulk_sync_mode && actual_start < start_block {
@@ -13052,13 +13078,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_recovery_start_from_header_gap() {
-        assert_eq!(recovery_start_from_header_gap(None), None);
-        assert_eq!(recovery_start_from_header_gap(Some(10)), Some(9));
-        assert_eq!(recovery_start_from_header_gap(Some(0)), Some(-1));
-    }
-
     fn molecule_u32(value: usize) -> [u8; 4] {
         (value as u32).to_le_bytes()
     }
@@ -14008,6 +14027,14 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_startup_header_gap_fail_fast_message_requires_rebuild() {
+        let msg = startup_header_gap_fail_fast_message(123, 500, Some(600), Some(590));
+        assert!(msg.contains("gap at block 123"));
+        assert!(msg.contains("delete RocksDB and re-sync from genesis"));
+        assert!(msg.contains("automatic gap replay is disabled"));
+    }
+
     fn issuance_block_meta(number: i64) -> IssuanceBlockMeta {
         (
             format!("0xblock-{number}"),
@@ -14043,6 +14070,69 @@ mod tests {
 
         let non_deferred = anyhow::anyhow!("rpc timeout while loading economic state");
         assert!(!Indexer::should_defer_secondary_issuance(&non_deferred));
+    }
+
+    #[test]
+    fn test_put_tx_context_undo_entries_skips_cellbase_sentinel_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let cellbase_tx = dummy_tx_data(
+            [0xAA; 32],
+            true,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: [0u8; 32],
+                previous_output_index: -1,
+                since: 0,
+            }],
+            vec![dummy_dao_cell(100_00000000, true)],
+            vec![],
+            vec![],
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let mut undo_seq_by_block = HashMap::new();
+        put_tx_context_undo_entries(&mut batch, &mut undo_seq_by_block, &[cellbase_tx]).unwrap();
+        batch.commit().unwrap();
+
+        let mut iter = store.iterator_cf(
+            store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::Start,
+        );
+        let (_key, value) = iter.next().unwrap().unwrap();
+        let entry: ckbadger_store::types::UndoLogEntry = bincode::deserialize(&value).unwrap();
+        let ckbadger_store::types::UndoLogEntry::TxContext(ctx) = entry else {
+            panic!("undo entry should be tx context");
+        };
+        assert!(ctx.inputs.is_empty());
+        assert_eq!(ctx.outputs_count, 1);
+    }
+
+    #[test]
+    fn test_put_tx_context_undo_entries_rejects_cellbase_sentinel_in_non_cellbase_tx() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let invalid_tx = dummy_tx_data(
+            [0xBB; 32],
+            false,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: [0u8; 32],
+                previous_output_index: -1,
+                since: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let mut undo_seq_by_block = HashMap::new();
+        let err = put_tx_context_undo_entries(&mut batch, &mut undo_seq_by_block, &[invalid_tx])
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("non-cellbase tx contains cellbase sentinel input"));
     }
 
     #[test]

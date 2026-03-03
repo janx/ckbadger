@@ -762,6 +762,20 @@ impl CkbadgerStore {
                             bytes_to_hex(&ctx.tx_hash)
                         );
                     }
+                    if input.output_index < 0 {
+                        let is_cellbase_sentinel =
+                            input.output_index == -1 && input.tx_hash.iter().all(|b| *b == 0);
+                        if is_cellbase_sentinel {
+                            // Cellbase sentinel has no referenced previous cell.
+                            continue;
+                        }
+                        anyhow::bail!(
+                            "invalid negative tx-context input output_index during rollback: consuming_tx=0x{}, outpoint=0x{}:{}",
+                            bytes_to_hex(&ctx.tx_hash),
+                            bytes_to_hex(&input.tx_hash),
+                            input.output_index
+                        );
+                    }
                     let outpoint_key = keys::encode_outpoint(&input.tx_hash, input.output_index);
                     match self.get_consumed_cell_info(&input.tx_hash, input.output_index)? {
                         Some(consumed) => {
@@ -2204,6 +2218,82 @@ mod tests {
 
         assert_eq!(store.get_tx_location(&keep_tx).unwrap(), Some((1, 0)));
         assert_eq!(store.get_tx_location(&drop_tx).unwrap(), None);
+    }
+
+    #[test]
+    fn test_rollback_tx_context_ignores_cellbase_sentinel_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let cellbase_tx = vec![0x22; 32];
+        let tx_index = TxIndexEntry {
+            is_cellbase: true,
+            timestamp: header2.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+        let cell = LiveCellInfo {
+            capacity: 100,
+            created_at_block: 2,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 100,
+            udt_amount: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_hash_map(&cellbase_tx, 2, 0);
+        batch.put_tx_index(2, 0, &tx_index);
+        batch.put_cell(&cellbase_tx, 0, &cell);
+        batch.put_reorg_undo_log_by_block(
+            2,
+            0,
+            &UndoLogEntry::TxContext(UndoTxContext {
+                tx_hash: cellbase_tx.clone(),
+                outputs_count: 1,
+                inputs: vec![UndoInputOutPoint {
+                    tx_hash: vec![0u8; 32],
+                    output_index: -1,
+                }],
+            }),
+        );
+        batch.commit().unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        assert!(store.get_cell(&cellbase_tx, 0).unwrap().is_none());
+        assert!(store.get_tx_index(2, 0).unwrap().is_none());
+        assert_eq!(store.get_tx_location(&cellbase_tx).unwrap(), None);
     }
 
     #[test]
