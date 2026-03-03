@@ -29,6 +29,7 @@ pub struct StoreBatch<'a> {
     store: &'a CkbadgerStore,
     batch: WriteBatch,
     append_ops: Vec<AppendBatchOp>,
+    pending_dao_deposits: HashMap<Vec<u8>, DaoDepositCacheEntry>,
 }
 
 impl<'a> StoreBatch<'a> {
@@ -37,6 +38,7 @@ impl<'a> StoreBatch<'a> {
             store,
             batch: WriteBatch::default(),
             append_ops: Vec::new(),
+            pending_dao_deposits: HashMap::new(),
         }
     }
 
@@ -425,25 +427,30 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_dao_deposit(&mut self, outpoint_key: &[u8], entry: &DaoDepositCacheEntry) {
-        if let Some(existing) = self
-            .store
-            .get_cf(self.store.cf_dao_deposits(), outpoint_key)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "failed to read existing dao_deposit before overwrite: outpoint=0x{}, error={}",
-                    bytes_to_hex(outpoint_key),
-                    e
-                )
-            })
-        {
-            let existing_entry: DaoDepositCacheEntry =
-                bincode::deserialize(&existing).unwrap_or_else(|e| {
+        let existing_entry = if let Some(entry) = self.pending_dao_deposits.get(outpoint_key) {
+            Some(entry.clone())
+        } else {
+            self.store
+                .get_cf(self.store.cf_dao_deposits(), outpoint_key)
+                .unwrap_or_else(|e| {
                     panic!(
-                        "failed to deserialize existing dao_deposit before overwrite: outpoint=0x{}, error={}",
+                        "failed to read existing dao_deposit before overwrite: outpoint=0x{}, error={}",
                         bytes_to_hex(outpoint_key),
                         e
                     )
-                });
+                })
+                .map(|existing| {
+                    bincode::deserialize(&existing).unwrap_or_else(|e| {
+                        panic!(
+                            "failed to deserialize existing dao_deposit before overwrite: outpoint=0x{}, error={}",
+                            bytes_to_hex(outpoint_key),
+                            e
+                        )
+                    })
+                })
+        };
+
+        if let Some(existing_entry) = existing_entry {
             self.delete_dao_secondary_indexes(outpoint_key, &existing_entry);
         }
 
@@ -451,6 +458,8 @@ impl<'a> StoreBatch<'a> {
         self.batch
             .put_cf(self.store.cf_dao_deposits(), outpoint_key, &value);
         self.put_dao_secondary_indexes(outpoint_key, entry);
+        self.pending_dao_deposits
+            .insert(outpoint_key.to_vec(), entry.clone());
     }
 
     pub fn put_dao_by_withdraw_tx(

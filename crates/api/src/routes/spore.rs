@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use super::assets::{
-    count_canonical_nft_collection_activities, list_canonical_nft_collection_activities_page,
+    count_nft_collection_activities_cached, list_canonical_nft_collection_activities_page,
 };
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
@@ -1487,9 +1487,9 @@ async fn get_cluster(
         .as_ref()
         .map(|agg| agg.owner_count)
         .unwrap_or(0);
-    let activities_count = count_canonical_nft_collection_activities(
-        state.store.as_ref(),
+    let activities_count = count_nft_collection_activities_cached(
         state.append_only_store.as_ref(),
+        &state.mem_cache,
         &id,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;

@@ -105,6 +105,74 @@ fn test_dao_withdraw_request() {
     assert!(retrieved.compensation.is_none());
 }
 
+#[test]
+fn test_dao_put_twice_in_same_batch_keeps_secondary_indexes_consistent() {
+    let store = setup_store();
+
+    let outpoint_key = ckbadger_store::keys::encode_outpoint(&[0xbc; 32], 0);
+    let first_entry = DaoDepositCacheEntry {
+        capacity: 210_000_000_000,
+        deposit_block_number: 6000,
+        lock_script_hash: vec![0x31; 32],
+        deposit_ar: 10_000_000_000,
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_output_index: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+    };
+    let second_entry = DaoDepositCacheEntry {
+        capacity: 210_000_000_000,
+        deposit_block_number: 6001,
+        lock_script_hash: vec![0x32; 32],
+        deposit_ar: 10_000_000_000,
+        status: 1,
+        withdraw_request_tx: Some(vec![0xcd; 32]),
+        withdraw_request_output_index: Some(0),
+        withdraw_request_block: Some(7001),
+        withdraw_request_ar: Some(10_200_000_000),
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+    };
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_dao_deposit(&outpoint_key, &first_entry);
+    batch.put_dao_deposit(&outpoint_key, &second_entry);
+    batch.commit().unwrap();
+
+    let retrieved = store.get_dao_deposit(&outpoint_key).unwrap().unwrap();
+    assert_eq!(retrieved.status, 1);
+    assert_eq!(retrieved.lock_script_hash, vec![0x32; 32]);
+    assert_eq!(retrieved.deposit_block_number, 6001);
+
+    let status_zero = store
+        .list_dao_deposits_by_status_paginated(0, 10, None)
+        .unwrap();
+    assert!(status_zero.is_empty());
+
+    let status_one = store
+        .list_dao_deposits_by_status_paginated(1, 10, None)
+        .unwrap();
+    assert_eq!(status_one.len(), 1);
+    assert_eq!(status_one[0].0, outpoint_key);
+
+    let by_old_lock = store
+        .list_dao_deposits_by_lock_paginated(&[0x31; 32], 10, None)
+        .unwrap();
+    assert!(by_old_lock.is_empty());
+    let by_new_lock = store
+        .list_dao_deposits_by_lock_paginated(&[0x32; 32], 10, None)
+        .unwrap();
+    assert_eq!(by_new_lock.len(), 1);
+    assert_eq!(by_new_lock[0].0, outpoint_key);
+}
+
 /// Phase 3: complete withdrawal (status=2) with compensation.
 #[test]
 fn test_dao_withdrawal_completion() {

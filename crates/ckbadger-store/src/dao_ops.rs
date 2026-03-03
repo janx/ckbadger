@@ -294,7 +294,6 @@ impl CkbadgerStore {
         cursor_key_exclusive: Option<&[u8]>,
     ) -> anyhow::Result<Vec<(Vec<u8>, DaoDepositCacheEntry)>> {
         let mut rows = Vec::with_capacity(limit);
-        let iter = self.iterator_cf(self.cf_dao_by_block(), IteratorMode::Start);
         if let Some(cursor_key) = cursor_key_exclusive {
             anyhow::ensure!(
                 cursor_key.len() == keys::DAO_BY_BLOCK_KEY_SIZE,
@@ -303,6 +302,12 @@ impl CkbadgerStore {
                 cursor_key.len()
             );
         }
+        let iter_mode = if let Some(cursor_key) = cursor_key_exclusive {
+            IteratorMode::From(cursor_key, rocksdb::Direction::Forward)
+        } else {
+            IteratorMode::Start
+        };
+        let iter = self.iterator_cf(self.cf_dao_by_block(), iter_mode);
 
         for item in iter {
             let (key, _) = item.map_err(|e| {
@@ -315,7 +320,7 @@ impl CkbadgerStore {
                 key.len()
             );
             if let Some(cursor_key) = cursor_key_exclusive {
-                if key.as_ref() <= cursor_key {
+                if key.as_ref() == cursor_key {
                     continue;
                 }
             }
@@ -368,7 +373,11 @@ impl CkbadgerStore {
                 status
             );
         }
-        let iter = self.prefix_iterator_cf(self.cf_dao_by_status_block(), &prefix);
+        let start_key = cursor_key_exclusive.unwrap_or(prefix.as_slice());
+        let iter = self.iterator_cf(
+            self.cf_dao_by_status_block(),
+            IteratorMode::From(start_key, rocksdb::Direction::Forward),
+        );
 
         for item in iter {
             let (key, _) = item.map_err(|e| {
@@ -388,7 +397,7 @@ impl CkbadgerStore {
                 key.len()
             );
             if let Some(cursor_key) = cursor_key_exclusive {
-                if key.as_ref() <= cursor_key {
+                if key.as_ref() == cursor_key {
                     continue;
                 }
             }
@@ -466,7 +475,11 @@ impl CkbadgerStore {
                 bytes_to_hex(&prefix)
             );
         }
-        let iter = self.prefix_iterator_cf(self.cf_dao_by_lock_block(), &prefix);
+        let start_key = cursor_key_exclusive.unwrap_or(prefix.as_slice());
+        let iter = self.iterator_cf(
+            self.cf_dao_by_lock_block(),
+            IteratorMode::From(start_key, rocksdb::Direction::Forward),
+        );
 
         for item in iter {
             let (key, _) = item.map_err(|e| {
@@ -486,7 +499,7 @@ impl CkbadgerStore {
                 key.len()
             );
             if let Some(cursor_key) = cursor_key_exclusive {
-                if key.as_ref() <= cursor_key {
+                if key.as_ref() == cursor_key {
                     continue;
                 }
             }

@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::address::compute_script_hash;
 use crate::utils::{
@@ -27,6 +29,7 @@ const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 type DotbitLiveOutpoint = Option<(String, i16)>;
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
+const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -881,6 +884,7 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     Ok(out)
 }
 
+#[cfg(test)]
 pub(crate) fn count_canonical_nft_collection_activities(
     store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
@@ -921,6 +925,24 @@ pub(crate) fn count_canonical_nft_collection_activities(
         cursor = Some(last_seen_cursor);
     }
 
+    Ok(total)
+}
+
+pub(crate) fn count_nft_collection_activities_cached(
+    append_only_store: &CkbadgerStore,
+    mem_cache: &InMemoryCache,
+    collection_id: &[u8],
+) -> anyhow::Result<i64> {
+    let cache_key = format!(
+        "assets:nft_collection_activities_count:0x{}",
+        hex::encode(collection_id)
+    );
+    if let Some(cached) = mem_cache.get::<i64>(&cache_key) {
+        return Ok(cached);
+    }
+
+    let total = append_only_store.count_nft_collection_activities(collection_id)?;
+    mem_cache.set(&cache_key, &total, NFT_ACTIVITY_COUNT_CACHE_TTL);
     Ok(total)
 }
 
@@ -1680,9 +1702,9 @@ async fn get_nft_collection(
     };
 
     let holders_count = count_nft_collection_holders(&state, &collection_id_bytes, &agg)?;
-    let activities_count = count_canonical_nft_collection_activities(
-        state.store.as_ref(),
+    let activities_count = count_nft_collection_activities_cached(
         state.append_only_store.as_ref(),
+        &state.mem_cache,
         &collection_id_bytes,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -2883,5 +2905,22 @@ mod tests {
         let count =
             count_canonical_nft_collection_activities(&domain, &append, &collection_id).unwrap();
         assert_eq!(count, 2);
+
+        let mem_cache = InMemoryCache::new();
+        let fast_count =
+            count_nft_collection_activities_cached(&append, &mem_cache, &collection_id).unwrap();
+        assert_eq!(fast_count, 3);
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_nft_collection_activity(
+            &collection_id,
+            40,
+            0,
+            &make_collection_activity(&[0x40; 32], 1_700_000_040_000, AssetAction::Mint),
+        );
+        append_batch.commit().unwrap();
+        let cached_count =
+            count_nft_collection_activities_cached(&append, &mem_cache, &collection_id).unwrap();
+        assert_eq!(cached_count, 3);
     }
 }

@@ -574,6 +574,10 @@ fn checked_usize_to_i16(value: usize, label: &str) -> Result<i16> {
     i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
 }
 
+fn checked_i32_to_i16(value: i32, label: &str) -> Result<i16> {
+    i16::try_from(value).map_err(|_| anyhow!("{} exceeds i16 range: {}", label, value))
+}
+
 fn tx_hash_key32(tx_hash: &[u8], context: &str) -> Result<[u8; 32]> {
     tx_hash.try_into().map_err(|_| {
         anyhow!(
@@ -2294,12 +2298,17 @@ fn accumulate_dao_snapshot_deltas_for_txs(
             if let Some(ref type_code_hash) = cell.type_code_hash {
                 if type_code_hash == dao_code_hash && cell.data_size == 8 {
                     if cell.data.len() == 8 && cell.data.iter().all(|&b| b == 0) {
+                        let output_index_i16 = checked_usize_to_i16(
+                            output_index,
+                            "DAO output index while accumulating daily snapshot deltas",
+                        )
+                        .map_err(|e| anyhow!("{}: tx_hash=0x{}", e, hex::encode(tx_data.hash)))?;
                         *daily_active_delta.entry(block_date).or_default() += cell.capacity as i128;
                         *daily_gross_deposit_delta.entry(block_date).or_default() +=
                             cell.capacity as i128;
                         *daily_new_deposits_delta.entry(block_date).or_default() += 1;
                         same_batch_dao_map
-                            .insert((tx_data.hash.to_vec(), output_index as i16), cell.capacity);
+                            .insert((tx_data.hash.to_vec(), output_index_i16), cell.capacity);
                     } else if let Some(data) = tx_data.outputs_data.get(output_index) {
                         let data_bytes = crate::rpc::parse_hex_to_bytes(data);
                         if DaoParser::parse_deposit_block_number(&data_bytes).is_some() {
@@ -4745,6 +4754,32 @@ impl Indexer {
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let output_index_i16 = match checked_usize_to_i16(
+                            output_index,
+                            "pipeline parser batch cell output index",
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!(
+                                    block_number = tx_data.block_number,
+                                    tx_hash = %hex::encode(tx_data.hash),
+                                    output_index,
+                                    "Parser: {}",
+                                    e
+                                );
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "invalid output index while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash),
+                                        output_index,
+                                        e
+                                    ),
+                                );
+                                return;
+                            }
+                        };
                         let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref()
                         {
                             if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
@@ -4785,7 +4820,7 @@ impl Indexer {
                         let udt_amount = match parse_parsed_cell_udt_amount(
                             cell,
                             &tx_data.hash,
-                            output_index as i16,
+                            output_index_i16,
                             standard_hint.as_deref(),
                         ) {
                             Ok(v) => v,
@@ -4816,7 +4851,7 @@ impl Indexer {
                             cell.data_size,
                         );
                         batch_cell_infos.insert(
-                            (tx_data.hash.to_vec(), output_index as i16),
+                            (tx_data.hash.to_vec(), output_index_i16),
                             LiveCellInfo {
                                 capacity: cell.capacity,
                                 created_at_block: tx_data.block_number,
@@ -4923,6 +4958,32 @@ impl Indexer {
                     );
                     // cell_cache update
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                        let output_index_i16 = match checked_usize_to_i16(
+                            output_index,
+                            "pipeline parser cache update output index",
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!(
+                                    block_number = tx_data.block_number,
+                                    tx_hash = %hex::encode(tx_data.hash),
+                                    output_index,
+                                    "Parser: {}",
+                                    e
+                                );
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "invalid output index while updating parser cache: block={}, tx=0x{}, output_index={}, error={}",
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash),
+                                        output_index,
+                                        e
+                                    ),
+                                );
+                                return;
+                            }
+                        };
                         let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref()
                         {
                             if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
@@ -4963,7 +5024,7 @@ impl Indexer {
                         let udt_amount = match parse_parsed_cell_udt_amount(
                             cell,
                             &tx_data.hash,
-                            output_index as i16,
+                            output_index_i16,
                             standard_hint.as_deref(),
                         ) {
                             Ok(v) => v,
@@ -7027,9 +7088,19 @@ impl Indexer {
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         for tx_data in &all_tx_data {
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let output_index_i16 =
+                    checked_usize_to_i16(output_index, "sync batch output index for all_cells")
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: tx_hash=0x{}, block={}",
+                                e,
+                                hex::encode(tx_data.hash),
+                                tx_data.block_number
+                            )
+                        })?;
                 all_cells.push((
                     tx_data.hash.as_slice(),
-                    output_index as i16,
+                    output_index_i16,
                     cell,
                     tx_data.block_number,
                 ));
@@ -7066,7 +7137,23 @@ impl Indexer {
         for parsed_block in &all_parsed_blocks {
             if !parsed_block.proposals.is_empty() && !self.is_bulk_sync_active() {
                 for (idx, proposal_id) in parsed_block.proposals.iter().enumerate() {
-                    batch_proposals.push((proposal_id.clone(), parsed_block.number, idx as i16));
+                    let proposal_index = checked_usize_to_i16(
+                        idx,
+                        "proposal index while populating proposal cache batch",
+                    )
+                    .map_err(|e| {
+                        anyhow!(
+                            "{}: block_number={}, proposal_count={}",
+                            e,
+                            parsed_block.number,
+                            parsed_block.proposals.len()
+                        )
+                    })?;
+                    batch_proposals.push((
+                        proposal_id.clone(),
+                        parsed_block.number,
+                        proposal_index,
+                    ));
                 }
             }
         }
@@ -7086,6 +7173,16 @@ impl Indexer {
         for tx_data in &all_tx_data {
             if !tx_data.is_cellbase {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
+                    let input_index_i16 =
+                        checked_usize_to_i16(input_index, "sync batch input index for consume")
+                            .map_err(|e| {
+                                anyhow!(
+                                    "{}: tx_hash=0x{}, block={}",
+                                    e,
+                                    hex::encode(tx_data.hash),
+                                    tx_data.block_number
+                                )
+                            })?;
                     let key = (
                         input.previous_tx_hash.to_vec(),
                         parsed_input_outpoint_index_i16(
@@ -7103,7 +7200,7 @@ impl Indexer {
                             info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
-                            input_index as i16,
+                            input_index_i16,
                         ));
                     } else if let Some(info) = batch_cell_infos.get(&key) {
                         all_consumptions.push((
@@ -7115,7 +7212,7 @@ impl Indexer {
                             info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
-                            input_index as i16,
+                            input_index_i16,
                         ));
                     }
                 }
@@ -7943,6 +8040,18 @@ impl Indexer {
                 let mut new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)> = Vec::new();
                 let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> = Vec::new();
                 for (idx, cell) in tx_data.cells.iter().enumerate() {
+                    let output_index = checked_usize_to_i16(
+                        idx,
+                        "DAO processing output index in same-batch withdrawal context",
+                    )
+                    .map_err(|e| {
+                        anyhow!(
+                            "{}: tx_hash=0x{}, block={}",
+                            e,
+                            hex::encode(tx_data.hash),
+                            tx_data.block_number
+                        )
+                    })?;
                     if let Some(ref type_code_hash) = cell.type_code_hash {
                         if type_code_hash == &dao_code_hash && cell.data_size == 8 {
                             if let Some(data) = tx_data.outputs_data.get(idx) {
@@ -7952,7 +8061,7 @@ impl Indexer {
                                 {
                                     new_dao_outputs.push((
                                         tx_data.hash.to_vec(),
-                                        idx as i16,
+                                        output_index,
                                         cell.lock_script_hash.clone(),
                                         cell.capacity,
                                         deposit_block,
@@ -7961,11 +8070,11 @@ impl Indexer {
                             }
                         } else {
                             candidate_withdraw_to_outputs
-                                .push((idx as i16, cell.lock_script_hash.clone()));
+                                .push((output_index, cell.lock_script_hash.clone()));
                         }
                     } else {
                         candidate_withdraw_to_outputs
-                            .push((idx as i16, cell.lock_script_hash.clone()));
+                            .push((output_index, cell.lock_script_hash.clone()));
                     }
                 }
 
@@ -8214,11 +8323,23 @@ impl Indexer {
                         for (output_index, spore) in
                             SporeParser::parse_spores(tx).iter().enumerate()
                         {
+                            let output_index_i16 = checked_usize_to_i16(
+                                output_index,
+                                "spore output index while indexing parsed block",
+                            )
+                            .map_err(|e| {
+                                anyhow!(
+                                    "{}: block={}, tx_hash=0x{}",
+                                    e,
+                                    parsed.number,
+                                    hex::encode(tx_data.hash)
+                                )
+                            })?;
                             batch_spore_ids.insert(spore.spore_id.clone());
                             self.writer.insert_spore_cell(
                                 spore,
                                 &tx_data.hash,
-                                output_index as i16,
+                                output_index_i16,
                                 parsed.number,
                                 parsed.timestamp.timestamp_millis(),
                                 &mut nft_batch,
@@ -8654,9 +8775,19 @@ impl Indexer {
             ));
 
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                let output_index_i16 =
+                    checked_usize_to_i16(output_index, "pipeline sync output index for all_cells")
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: tx_hash=0x{}, block={}",
+                                e,
+                                hex::encode(tx_data.hash),
+                                tx_data.block_number
+                            )
+                        })?;
                 all_cells.push((
                     tx_data.hash.as_slice(),
-                    output_index as i16,
+                    output_index_i16,
                     cell,
                     tx_data.block_number,
                 ));
@@ -8664,6 +8795,18 @@ impl Indexer {
 
             if !tx_data.is_cellbase {
                 for (input_index, input) in tx_data.inputs.iter().enumerate() {
+                    let input_index_i16 = checked_usize_to_i16(
+                        input_index,
+                        "pipeline sync input index for consumptions",
+                    )
+                    .map_err(|e| {
+                        anyhow!(
+                            "{}: tx_hash=0x{}, block={}",
+                            e,
+                            hex::encode(tx_data.hash),
+                            tx_data.block_number
+                        )
+                    })?;
                     let key = (
                         input.previous_tx_hash.to_vec(),
                         parsed_input_outpoint_index_i16(
@@ -8684,7 +8827,7 @@ impl Indexer {
                             info.created_at_block,
                             tx_data.hash.as_slice(),
                             tx_data.block_number,
-                            input_index as i16,
+                            input_index_i16,
                         ));
                     }
                 }
@@ -8828,10 +8971,22 @@ impl Indexer {
             if !parsed_block.proposals.is_empty() {
                 for (proposal_index, proposal_id) in parsed_block.proposals.iter().enumerate() {
                     if !is_bulk {
+                        let proposal_index_i16 = checked_usize_to_i16(
+                            proposal_index,
+                            "pipeline proposal index while populating proposal cache batch",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: block_number={}, proposal_count={}",
+                                e,
+                                parsed_block.number,
+                                parsed_block.proposals.len()
+                            )
+                        })?;
                         batch_proposals.push((
                             proposal_id.clone(),
                             parsed_block.number,
-                            proposal_index as i16,
+                            proposal_index_i16,
                         ));
                     }
                 }
@@ -9352,12 +9507,24 @@ impl Indexer {
                         ckbadger_store::types::DaoDepositCacheEntry,
                     > = HashMap::new();
                     for (deposit, block_number, _ts, ar) in &all_dao_deposits {
+                        let deposit_output_index = checked_i32_to_i16(
+                            deposit.output_index,
+                            "DAO deposit output index while building same-batch map",
+                        )
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: deposit_tx_hash=0x{}, block={}",
+                                e,
+                                hex::encode(&deposit.tx_hash),
+                                block_number
+                            )
+                        })?;
                         same_batch_dao_deposits.insert(
-                            (deposit.tx_hash.clone(), deposit.output_index as i16),
+                            (deposit.tx_hash.clone(), deposit_output_index),
                             (
                                 0,
                                 deposit.tx_hash.clone(),
-                                deposit.output_index as i16,
+                                deposit_output_index,
                                 deposit.capacity.to_string(),
                                 *block_number,
                                 0i16, // status = 0 (active)
@@ -9365,7 +9532,7 @@ impl Indexer {
                         );
                         let outpoint_key = ckbadger_store::keys::encode_outpoint(
                             &deposit.tx_hash,
-                            deposit.output_index as i16,
+                            deposit_output_index,
                         );
                         pending_dao_entries.insert(
                             outpoint_key,
@@ -9510,6 +9677,18 @@ impl Indexer {
                                 let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> =
                                     Vec::new();
                                 for (idx, cell) in tx_data.cells.iter().enumerate() {
+                                    let output_index = checked_usize_to_i16(
+                                        idx,
+                                        "DAO output index while building withdrawal contexts",
+                                    )
+                                    .map_err(|e| {
+                                        anyhow!(
+                                            "{}: tx_hash=0x{}, block={}",
+                                            e,
+                                            hex::encode(tx_data.hash),
+                                            parsed.number
+                                        )
+                                    })?;
                                     if let Some(ref type_code_hash) = cell.type_code_hash {
                                         if type_code_hash == &dao_code_hash && cell.data_size == 8 {
                                             if let Some(data) = tx_data.outputs_data.get(idx) {
@@ -9522,7 +9701,7 @@ impl Indexer {
                                                 {
                                                     new_dao_outputs.push((
                                                         tx_data.hash.to_vec(),
-                                                        idx as i16,
+                                                        output_index,
                                                         cell.lock_script_hash.clone(),
                                                         cell.capacity,
                                                         deposit_block,
@@ -9531,11 +9710,11 @@ impl Indexer {
                                             }
                                         } else {
                                             candidate_withdraw_to_outputs
-                                                .push((idx as i16, cell.lock_script_hash.clone()));
+                                                .push((output_index, cell.lock_script_hash.clone()));
                                         }
                                     } else {
                                         candidate_withdraw_to_outputs
-                                            .push((idx as i16, cell.lock_script_hash.clone()));
+                                            .push((output_index, cell.lock_script_hash.clone()));
                                     }
                                 }
                                 withdrawal_contexts.push(DaoWithdrawalContext {
@@ -9671,10 +9850,22 @@ impl Indexer {
                                     )?;
                                 }
                                 for (output_index, spore) in pre_spores.iter().enumerate() {
+                                    let output_index_i16 = checked_usize_to_i16(
+                                        output_index,
+                                        "spore output index while flushing pre-parsed spores",
+                                    )
+                                    .map_err(|e| {
+                                        anyhow!(
+                                            "{}: block={}, tx_hash=0x{}",
+                                            e,
+                                            parsed.number,
+                                            hex::encode(tx_data.hash)
+                                        )
+                                    })?;
                                     writer.insert_spore_cell(
                                         spore,
                                         &tx_data.hash,
-                                        output_index as i16,
+                                        output_index_i16,
                                         parsed.number,
                                         ts_ms,
                                         &mut batch,
@@ -10519,12 +10710,24 @@ impl Indexer {
                     ckbadger_store::types::DaoDepositCacheEntry,
                 > = HashMap::new();
                 for (deposit, block_number, _ts, ar) in &all_dao_deposits {
+                    let deposit_output_index = checked_i32_to_i16(
+                        deposit.output_index,
+                        "DAO deposit output index while building same-batch map",
+                    )
+                    .map_err(|e| {
+                        anyhow!(
+                            "{}: deposit_tx_hash=0x{}, block={}",
+                            e,
+                            hex::encode(&deposit.tx_hash),
+                            block_number
+                        )
+                    })?;
                     same_batch_dao_deposits.insert(
-                        (deposit.tx_hash.clone(), deposit.output_index as i16),
+                        (deposit.tx_hash.clone(), deposit_output_index),
                         (
                             0,
                             deposit.tx_hash.clone(),
-                            deposit.output_index as i16,
+                            deposit_output_index,
                             deposit.capacity.to_string(),
                             *block_number,
                             0i16, // status = 0 (active)
@@ -10532,7 +10735,7 @@ impl Indexer {
                     );
                     let outpoint_key = ckbadger_store::keys::encode_outpoint(
                         &deposit.tx_hash,
-                        deposit.output_index as i16,
+                        deposit_output_index,
                     );
                     pending_dao_entries.insert(
                         outpoint_key,
@@ -10671,6 +10874,18 @@ impl Indexer {
                                 Vec::new();
                             let mut candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)> = Vec::new();
                             for (idx, cell) in tx_data.cells.iter().enumerate() {
+                                let output_index = checked_usize_to_i16(
+                                    idx,
+                                    "DAO output index while processing grouped withdrawals",
+                                )
+                                .map_err(|e| {
+                                    anyhow!(
+                                        "{}: tx_hash=0x{}, block={}",
+                                        e,
+                                        hex::encode(tx_data.hash),
+                                        parsed.number
+                                    )
+                                })?;
                                 if let Some(ref type_code_hash) = cell.type_code_hash {
                                     if type_code_hash == &dao_code_hash && cell.data_size == 8 {
                                         if let Some(data) = tx_data.outputs_data.get(idx) {
@@ -10680,7 +10895,7 @@ impl Indexer {
                                             {
                                                 new_dao_outputs.push((
                                                     tx_data.hash.to_vec(),
-                                                    idx as i16,
+                                                    output_index,
                                                     cell.lock_script_hash.clone(),
                                                     cell.capacity,
                                                     deposit_block,
@@ -10689,11 +10904,11 @@ impl Indexer {
                                         }
                                     } else {
                                         candidate_withdraw_to_outputs
-                                            .push((idx as i16, cell.lock_script_hash.clone()));
+                                            .push((output_index, cell.lock_script_hash.clone()));
                                     }
                                 } else {
                                     candidate_withdraw_to_outputs
-                                        .push((idx as i16, cell.lock_script_hash.clone()));
+                                        .push((output_index, cell.lock_script_hash.clone()));
                                 }
                             }
                             withdrawal_contexts.push(DaoWithdrawalContext {
@@ -10918,11 +11133,23 @@ impl Indexer {
                             for (output_index, spore) in
                                 SporeParser::parse_spores(tx).iter().enumerate()
                             {
+                                let output_index_i16 = checked_usize_to_i16(
+                                    output_index,
+                                    "spore output index while processing grouped blocks",
+                                )
+                                .map_err(|e| {
+                                    anyhow!(
+                                        "{}: block={}, tx_hash=0x{}",
+                                        e,
+                                        parsed.number,
+                                        hex::encode(tx_data.hash)
+                                    )
+                                })?;
                                 batch_spore_ids.insert(spore.spore_id.clone());
                                 self.writer.insert_spore_cell(
                                     spore,
                                     &tx_data.hash,
-                                    output_index as i16,
+                                    output_index_i16,
                                     parsed.number,
                                     ts_ms,
                                     &mut data_batch,
@@ -14863,15 +15090,21 @@ mod tests {
         witnesses: Vec<String>,
         outputs_data: Vec<String>,
     ) -> TxData {
+        let inputs_count =
+            i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
+        let outputs_count =
+            i16::try_from(cells.len()).expect("test helper outputs_count exceeds i16 range");
+        let witnesses_count =
+            i16::try_from(witnesses.len()).expect("test helper witnesses_count exceeds i16 range");
         TxData {
             hash,
             block_number: 0,
             block_hash: vec![],
             tx_index: 0,
             version: 0,
-            inputs_count: inputs.len() as i16,
-            outputs_count: cells.len() as i16,
-            witnesses_count: witnesses.len() as i16,
+            inputs_count,
+            outputs_count,
+            witnesses_count,
             cell_deps_count: 0,
             header_deps_count: 0,
             is_cellbase,
