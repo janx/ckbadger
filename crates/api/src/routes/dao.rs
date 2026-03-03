@@ -65,6 +65,15 @@ fn parse_dao_cursor_key(
     Ok(Some(decoded))
 }
 
+fn map_dao_pagination_error(err: anyhow::Error, label: &str) -> ApiRouteError {
+    let msg = err.to_string();
+    if msg.contains("cursor") {
+        ApiError::bad_request(format!("Invalid {} cursor", label))
+    } else {
+        ApiError::internal(msg)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoDepositResponse {
@@ -234,12 +243,12 @@ async fn list_deposits(
         state
             .store
             .list_dao_deposits_by_status_paginated(status, limit + 1, cursor_key.as_deref())
-            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| map_dao_pagination_error(e, "dao deposits"))?
     } else {
         state
             .store
             .list_dao_deposits_paginated(limit + 1, cursor_key.as_deref())
-            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| map_dao_pagination_error(e, "dao deposits"))?
     };
 
     let mut page = page;
@@ -299,7 +308,7 @@ async fn get_deposits_by_address(
     let mut page = state
         .store
         .list_dao_deposits_by_lock_paginated(&hash, limit + 1, cursor_key.as_deref())
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| map_dao_pagination_error(e, "dao deposits by address"))?;
 
     let has_more = page.len() > limit;
     if has_more {

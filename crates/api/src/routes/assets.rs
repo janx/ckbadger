@@ -2415,94 +2415,6 @@ async fn list_nft_collection_activities(
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{AssetAction, TxIndexEntry};
-
-    fn make_collection_activity(
-        tx_hash: &[u8],
-        timestamp_ms: i64,
-        action: AssetAction,
-    ) -> NftCollectionActivityEntry {
-        NftCollectionActivityEntry {
-            tx_hash: tx_hash.to_vec(),
-            timestamp_ms,
-            actions: vec![action],
-        }
-    }
-
-    #[test]
-    fn test_collection_activity_helpers_filter_orphaned_append_history() {
-        let root = tempfile::tempdir().unwrap();
-        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
-        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
-        let collection_id = [0xAB; 32];
-
-        let stale_tx = vec![0x30; 32];
-        let canonical_tx_new = vec![0x20; 32];
-        let canonical_tx_old = vec![0x10; 32];
-
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_nft_collection_activity(
-            &collection_id,
-            30,
-            0,
-            &make_collection_activity(&stale_tx, 1_700_000_030_000, AssetAction::Transfer),
-        );
-        append_batch.put_nft_collection_activity(
-            &collection_id,
-            20,
-            0,
-            &make_collection_activity(&canonical_tx_new, 1_700_000_020_000, AssetAction::Transfer),
-        );
-        append_batch.put_nft_collection_activity(
-            &collection_id,
-            10,
-            0,
-            &make_collection_activity(&canonical_tx_old, 1_700_000_010_000, AssetAction::Mint),
-        );
-        append_batch.commit().unwrap();
-
-        let tx_index = TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_000_000,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 0,
-            tx_size: 1,
-            cycles: None,
-        };
-        let mut domain_batch = StoreBatch::new(&domain);
-        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
-        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
-        domain_batch.put_tx_index(20, 0, &tx_index);
-        domain_batch.put_tx_index(10, 0, &tx_index);
-        domain_batch.commit().unwrap();
-
-        let listed = list_canonical_nft_collection_activities_page(
-            &domain,
-            &append,
-            &collection_id,
-            3,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(listed.len(), 2);
-        assert_eq!(listed[0].0, 20);
-        assert_eq!(listed[1].0, 10);
-        assert_eq!(listed[0].2.tx_hash, canonical_tx_new);
-        assert_eq!(listed[1].2.tx_hash, canonical_tx_old);
-
-        let count =
-            count_canonical_nft_collection_activities(&domain, &append, &collection_id).unwrap();
-        assert_eq!(count, 2);
-    }
-}
-
 async fn get_dotbit_item_detail(
     State(state): State<Arc<AppState>>,
     Path(nft_id): Path<String>,
@@ -2884,4 +2796,92 @@ fn compute_nft_assets(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ckbadger_store::batch::StoreBatch;
+    use ckbadger_store::types::{AssetAction, TxIndexEntry};
+
+    fn make_collection_activity(
+        tx_hash: &[u8],
+        timestamp_ms: i64,
+        action: AssetAction,
+    ) -> NftCollectionActivityEntry {
+        NftCollectionActivityEntry {
+            tx_hash: tx_hash.to_vec(),
+            timestamp_ms,
+            actions: vec![action],
+        }
+    }
+
+    #[test]
+    fn test_collection_activity_helpers_filter_orphaned_append_history() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let collection_id = [0xAB; 32];
+
+        let stale_tx = vec![0x30; 32];
+        let canonical_tx_new = vec![0x20; 32];
+        let canonical_tx_old = vec![0x10; 32];
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_nft_collection_activity(
+            &collection_id,
+            30,
+            0,
+            &make_collection_activity(&stale_tx, 1_700_000_030_000, AssetAction::Transfer),
+        );
+        append_batch.put_nft_collection_activity(
+            &collection_id,
+            20,
+            0,
+            &make_collection_activity(&canonical_tx_new, 1_700_000_020_000, AssetAction::Transfer),
+        );
+        append_batch.put_nft_collection_activity(
+            &collection_id,
+            10,
+            0,
+            &make_collection_activity(&canonical_tx_old, 1_700_000_010_000, AssetAction::Mint),
+        );
+        append_batch.commit().unwrap();
+
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
+        domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
+        domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
+        domain_batch.put_tx_index(20, 0, &tx_index);
+        domain_batch.put_tx_index(10, 0, &tx_index);
+        domain_batch.commit().unwrap();
+
+        let listed = list_canonical_nft_collection_activities_page(
+            &domain,
+            &append,
+            &collection_id,
+            3,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].0, 20);
+        assert_eq!(listed[1].0, 10);
+        assert_eq!(listed[0].2.tx_hash, canonical_tx_new);
+        assert_eq!(listed[1].2.tx_hash, canonical_tx_old);
+
+        let count =
+            count_canonical_nft_collection_activities(&domain, &append, &collection_id).unwrap();
+        assert_eq!(count, 2);
+    }
 }

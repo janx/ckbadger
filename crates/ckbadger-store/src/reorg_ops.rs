@@ -741,14 +741,36 @@ impl CkbadgerStore {
             stage.finish(cells_removed + cells_restored);
         }
 
-        // 5. Repair DAO deposits across the rollback boundary.
+        // 5. Clear DAO secondary indexes before rebuilding from repaired deposits.
+        let mut dao_indexes_deleted = 0u64;
+        let mut stage = RollbackStageProgress::new("rebuild_dao_indexes_clear");
+        let dao_index_cfs = [
+            self.cf_dao_by_withdraw_tx(),
+            self.cf_dao_by_block(),
+            self.cf_dao_by_lock_block(),
+            self.cf_dao_by_status_block(),
+        ];
+        for cf in dao_index_cfs {
+            let iter = self.iterator_cf(cf, IteratorMode::Start);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate DAO index in rollback_to_block clear stage: {}",
+                        e
+                    )
+                })?;
+                batch.delete_cf(cf, &key);
+                dao_indexes_deleted += 1;
+                stage.tick(dao_indexes_deleted);
+            }
+        }
+        stage.finish(dao_indexes_deleted);
+
+        // 6. Repair DAO deposits and stream rebuilt secondary indexes into the same batch.
         let mut dao_deposits_deleted = 0u64;
         let mut dao_deposits_repaired = 0u64;
-        let mut dao_by_block_index_keys: Vec<Vec<u8>> = Vec::new();
-        let mut dao_by_lock_block_index_keys: Vec<Vec<u8>> = Vec::new();
-        let mut dao_by_status_block_index_keys: Vec<Vec<u8>> = Vec::new();
-        let mut dao_withdraw_mappings: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-        let mut stage = RollbackStageProgress::new("repair_dao_deposits");
+        let mut dao_indexes_rebuilt = 0u64;
+        let mut stage = RollbackStageProgress::new("repair_and_rebuild_dao_indexes");
         let iter = self.iterator_cf(self.cf_dao_deposits(), IteratorMode::Start);
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -768,7 +790,7 @@ impl CkbadgerStore {
             if entry.deposit_block_number > rollback_to {
                 batch.delete_cf(self.cf_dao_deposits(), &key);
                 dao_deposits_deleted += 1;
-                stage.tick(dao_deposits_deleted + dao_deposits_repaired);
+                stage.tick(dao_deposits_deleted + dao_deposits_repaired + dao_indexes_rebuilt);
                 continue;
             }
 
@@ -803,9 +825,10 @@ impl CkbadgerStore {
                 entry.deposit_block_number,
                 &key,
             );
-            dao_by_block_index_keys.push(by_block_key.to_vec());
-            dao_by_lock_block_index_keys.push(by_lock_key.to_vec());
-            dao_by_status_block_index_keys.push(by_status_key.to_vec());
+            batch.put_cf(self.cf_dao_by_block(), by_block_key, []);
+            batch.put_cf(self.cf_dao_by_lock_block(), by_lock_key, []);
+            batch.put_cf(self.cf_dao_by_status_block(), by_status_key, []);
+            dao_indexes_rebuilt += 3;
 
             if entry.status >= 1 {
                 let request_block = entry.withdraw_request_block.ok_or_else(|| {
@@ -829,65 +852,13 @@ impl CkbadgerStore {
                 if request_block <= rollback_to {
                     let withdraw_outpoint_key =
                         keys::encode_outpoint(&request_tx, request_output_index);
-                    dao_withdraw_mappings.push((withdraw_outpoint_key.to_vec(), key.to_vec()));
+                    batch.put_cf(self.cf_dao_by_withdraw_tx(), withdraw_outpoint_key, &key);
+                    dao_indexes_rebuilt += 1;
                 }
             }
-            stage.tick(dao_deposits_deleted + dao_deposits_repaired);
+            stage.tick(dao_deposits_deleted + dao_deposits_repaired + dao_indexes_rebuilt);
         }
-        stage.finish(dao_deposits_deleted + dao_deposits_repaired);
-
-        // 6. Rebuild DAO secondary indexes from in-memory repaired dao_deposits.
-        let mut dao_indexes_deleted = 0u64;
-        let mut stage = RollbackStageProgress::new("rebuild_dao_indexes_clear");
-        let dao_index_cfs = [
-            self.cf_dao_by_withdraw_tx(),
-            self.cf_dao_by_block(),
-            self.cf_dao_by_lock_block(),
-            self.cf_dao_by_status_block(),
-        ];
-        for cf in dao_index_cfs {
-            let iter = self.iterator_cf(cf, IteratorMode::Start);
-            for item in iter {
-                let (key, _) = item.map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to iterate DAO index in rollback_to_block clear stage: {}",
-                        e
-                    )
-                })?;
-                batch.delete_cf(cf, &key);
-                dao_indexes_deleted += 1;
-                stage.tick(dao_indexes_deleted);
-            }
-        }
-        stage.finish(dao_indexes_deleted);
-
-        let mut dao_indexes_rebuilt = 0u64;
-        let mut stage = RollbackStageProgress::new("rebuild_dao_indexes_fill");
-        for index_key in dao_by_block_index_keys {
-            batch.put_cf(self.cf_dao_by_block(), index_key, []);
-            dao_indexes_rebuilt += 1;
-            stage.tick(dao_indexes_rebuilt);
-        }
-        for index_key in dao_by_lock_block_index_keys {
-            batch.put_cf(self.cf_dao_by_lock_block(), index_key, []);
-            dao_indexes_rebuilt += 1;
-            stage.tick(dao_indexes_rebuilt);
-        }
-        for index_key in dao_by_status_block_index_keys {
-            batch.put_cf(self.cf_dao_by_status_block(), index_key, []);
-            dao_indexes_rebuilt += 1;
-            stage.tick(dao_indexes_rebuilt);
-        }
-        for (withdraw_outpoint_key, deposit_outpoint_key) in dao_withdraw_mappings {
-            batch.put_cf(
-                self.cf_dao_by_withdraw_tx(),
-                withdraw_outpoint_key,
-                deposit_outpoint_key,
-            );
-            dao_indexes_rebuilt += 1;
-            stage.tick(dao_indexes_rebuilt);
-        }
-        stage.finish(dao_indexes_rebuilt);
+        stage.finish(dao_deposits_deleted + dao_deposits_repaired + dao_indexes_rebuilt);
 
         // 7. Delete date-scoped stats entries from replay cutoff date onward.
         // These are additive snapshots and would be double-counted after replay.
