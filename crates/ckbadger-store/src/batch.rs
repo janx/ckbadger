@@ -478,12 +478,6 @@ impl<'a> StoreBatch<'a> {
         );
     }
 
-    pub fn put_block_issuance(&mut self, block_num: i64, issuance: &SecondaryIssuance) {
-        let key = keys::encode_block_num(block_num);
-        let value = bincode::serialize(issuance).expect("serialize SecondaryIssuance");
-        self.put_cf(self.store.cf_block_issuance(), key, &value);
-    }
-
     // ---- Tokens ----
 
     pub fn put_token(&mut self, type_hash: &[u8], info: &TokenInfo) {

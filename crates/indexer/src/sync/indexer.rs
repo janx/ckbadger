@@ -30,9 +30,7 @@ use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
-use crate::db::{
-    BatchWriter, DaoWithdrawalContext, ReorgResult, Repository, SecondaryIssuanceBreakdown,
-};
+use crate::db::{BatchWriter, DaoWithdrawalContext, ReorgResult, Repository};
 use crate::parser::{
     analyze_spore_media_profile, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser,
     ParsedClusterCell, ParsedDotbitAccountOutput, ParsedMnftClass, ParsedMnftIssuer,
@@ -40,7 +38,7 @@ use crate::parser::{
 };
 use ckb_store_reader::CkbChainReader;
 
-use crate::rpc::{BlockResponseWithCycles, CkbRpcClient, DaoField};
+use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
 use crate::runtime_diag::{
     generate_incident_id, read_cgroup_memory_snapshot, CgroupMemorySnapshot, FlightEvent,
     FlightRecorder,
@@ -1158,16 +1156,6 @@ fn startup_header_gap_fail_fast_message(
     )
 }
 
-fn secondary_issuance_bootstrap_window_start(sync_tip: i64) -> Result<i64> {
-    if sync_tip < 0 {
-        bail!(
-            "negative sync tip while computing secondary issuance bootstrap window: sync_tip={}",
-            sync_tip
-        );
-    }
-    Ok(SECONDARY_ISSUANCE_MIN_BLOCK_NUMBER)
-}
-
 fn mempool_short_tx_id(tx_hash: &str) -> Result<&str> {
     let raw_hash = tx_hash.strip_prefix("0x").ok_or_else(|| {
         anyhow!(
@@ -2194,14 +2182,6 @@ fn resolve_non_miner_secondary_delta_for_snapshot(
     Ok(delta)
 }
 
-fn parse_prefixed_hex_u128(field: &str, label: &str) -> Result<u128> {
-    let Some(hex) = field.strip_prefix("0x") else {
-        bail!("{} missing 0x prefix: {}", label, field);
-    };
-    u128::from_str_radix(hex, 16)
-        .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
-}
-
 fn parse_prefixed_hex_u32(field: &str, label: &str) -> Result<u32> {
     let Some(hex) = field.strip_prefix("0x") else {
         bail!("{} missing 0x prefix: {}", label, field);
@@ -2216,21 +2196,6 @@ fn parse_prefixed_hex_u64(field: &str, label: &str) -> Result<u64> {
     };
     u64::from_str_radix(hex, 16)
         .map_err(|e| anyhow::anyhow!("invalid {} hex '{}': {}", label, field, e))
-}
-
-fn parse_dao_field_for_secondary_issuance(
-    dao_hex: &str,
-    block_number: i64,
-    block_hash: &str,
-) -> Result<DaoField> {
-    DaoField::from_hex(dao_hex).ok_or_else(|| {
-        anyhow!(
-            "invalid DAO field hex while updating secondary issuance: block_number={}, block_hash={}, dao_hex={}",
-            block_number,
-            block_hash,
-            dao_hex
-        )
-    })
 }
 
 fn parse_outpoint_index_i16(field: &str, label: &str) -> Result<i16> {
@@ -2282,15 +2247,6 @@ fn resolve_dotbit_account_id_for_outpoint(
             .get(&(prev_tx_hash.to_vec(), prev_index))
             .cloned()
     })
-}
-
-fn checked_sub_u128(lhs: u128, rhs: u128, label: &str) -> Result<u128> {
-    lhs.checked_sub(rhs)
-        .ok_or_else(|| anyhow::anyhow!("{} underflow: lhs={}, rhs={}", label, lhs, rhs))
-}
-
-fn checked_u128_to_i64(value: u128, label: &str) -> Result<i64> {
-    i64::try_from(value).map_err(|_| anyhow::anyhow!("{} exceeds i64: {}", label, value))
 }
 
 fn checked_tx_fee(
@@ -3477,8 +3433,6 @@ fn parse_blocks_parallel(
 
 const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
 const CHART_INVALIDATION_MAX_LIVE_LAG: u64 = 100;
-const SECONDARY_ISSUANCE_MIN_BLOCK_NUMBER: i64 = 1;
-
 pub struct Indexer {
     run_id: String,
     config: Config,
@@ -6420,49 +6374,6 @@ impl Indexer {
                             mode
                         );
 
-                        if let Err(e) = self.project_secondary_issuance_from_cursor(chain_tip).await
-                        {
-                            let incident_id = self.report_incident(
-                                "pipeline_secondary_issuance_failed",
-                                format!(
-                                    "start_block={} end_block={} chain_tip={} error={:?}",
-                                    start_block, end_block, chain_tip, e
-                                ),
-                            );
-                            error!(
-                                run_id = %self.run_id,
-                                incident_id = %incident_id,
-                                start_block,
-                                end_block,
-                                chain_tip,
-                                error = ?e,
-                                "Secondary issuance update failed for parsed batch"
-                            );
-                            if is_bulk_sync_batch(
-                                chain_tip,
-                                end_block,
-                                self.config.bulk_sync_threshold,
-                            ) {
-                                return Err(e);
-                            }
-                            self.request_pipeline_reset(
-                                "secondary issuance write failed",
-                                None,
-                                None,
-                                None,
-                            );
-                            let drained = Self::drain_channel(&mut parse_rx).await;
-                            parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
-                            info!(
-                                run_id = %self.run_id,
-                                pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
-                                drained,
-                                "Secondary issuance failure drain completed"
-                            );
-                            sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
-
                         self.maybe_invalidate_chart_caches(end_block).await;
                         self.check_bulk_sync_completion().await;
                         self.ensure_compaction_mode(blocks_remaining);
@@ -6794,26 +6705,6 @@ impl Indexer {
         self.perf.report_and_reset();
 
         if !blocks.is_empty() {
-            if let Err(e) = self.project_secondary_issuance_from_cursor(chain_tip).await {
-                let bulk_sync_mode =
-                    is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
-                if bulk_sync_mode {
-                    return Err(e).with_context(|| {
-                        format!(
-                            "bulk sync fail-fast for range {}-{} (chain_tip={}): secondary issuance write failed; no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
-                            start_block, end_block, chain_tip
-                        )
-                    });
-                }
-                self.cleanup_failed_batch_range(start_block, end_block, chain_tip, "sequential")?;
-                return Err(e).with_context(|| {
-                    format!(
-                        "secondary issuance update failed for range {}-{} (chain_tip={})",
-                        start_block, end_block, chain_tip
-                    )
-                });
-            }
-
             self.maybe_invalidate_chart_caches(end_block).await;
         }
 
@@ -6915,160 +6806,6 @@ impl Indexer {
                     cleanup_tip
                 )
             });
-        }
-
-        Ok(())
-    }
-
-    fn should_defer_secondary_issuance(error: &anyhow::Error) -> bool {
-        error.chain().any(|cause| {
-            cause
-                .to_string()
-                .contains("missing economic state for block")
-        })
-    }
-
-    fn resolve_or_bootstrap_secondary_issuance_next_block(&self, sync_tip: i64) -> Result<i64> {
-        if sync_tip < 0 {
-            bail!(
-                "invalid sync tip while resolving secondary issuance cursor: sync_tip={}",
-                sync_tip
-            );
-        }
-
-        let cursor = match self.writer.store().get_secondary_issuance_next_block()? {
-            Some(next_block) => next_block,
-            None => {
-                let window_start = secondary_issuance_bootstrap_window_start(sync_tip)?;
-                let mut next_block = sync_tip.checked_add(1).ok_or_else(|| {
-                    anyhow!(
-                        "sync tip overflow while bootstrapping secondary issuance cursor: sync_tip={}",
-                        sync_tip
-                    )
-                })?;
-                if window_start <= sync_tip {
-                    for block_number in window_start..=sync_tip {
-                        if self
-                            .writer
-                            .store()
-                            .get_block_issuance(block_number)?
-                            .is_none()
-                        {
-                            next_block = block_number;
-                            break;
-                        }
-                    }
-                }
-                self.writer
-                    .store()
-                    .set_secondary_issuance_next_block(next_block)?;
-                info!(
-                    run_id = %self.run_id,
-                    sync_tip,
-                    window_start,
-                    next_block,
-                    "Bootstrapped secondary issuance cursor"
-                );
-                next_block
-            }
-        };
-
-        let max_cursor = sync_tip.checked_add(1).ok_or_else(|| {
-            anyhow!(
-                "sync tip overflow while validating secondary issuance cursor: sync_tip={}",
-                sync_tip
-            )
-        })?;
-        if cursor > max_cursor {
-            bail!(
-                "secondary issuance cursor ahead of sync tip: cursor={}, sync_tip={}",
-                cursor,
-                sync_tip
-            );
-        }
-
-        Ok(cursor)
-    }
-
-    async fn project_secondary_issuance_from_cursor(&self, chain_tip: u64) -> Result<()> {
-        let (sync_tip, _) = self.repo.get_sync_tip().await?;
-        if sync_tip < 0 {
-            bail!(
-                "invalid sync tip while projecting secondary issuance: sync_tip={}",
-                sync_tip
-            );
-        }
-
-        let mut next_block = self.resolve_or_bootstrap_secondary_issuance_next_block(sync_tip)?;
-
-        while next_block <= sync_tip {
-            let header = self
-                .writer
-                .store()
-                .get_block_header(next_block)?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing block header while projecting secondary issuance: block_number={}, sync_tip={}",
-                        next_block,
-                        sync_tip
-                    )
-                })?;
-            let block_hash = format!("0x{}", hex::encode(&header.hash));
-            let dao_hex = format!("0x{}", hex::encode(&header.dao));
-            let block_timestamp = DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
-                anyhow!(
-                    "invalid block timestamp while projecting secondary issuance: block_number={}, timestamp_ms={}",
-                    next_block,
-                    header.timestamp
-                )
-            })?;
-
-            match Self::update_secondary_issuance(
-                &self.rpc,
-                &self.writer,
-                &block_hash,
-                &dao_hex,
-                next_block,
-                block_timestamp,
-            )
-            .await
-            {
-                Ok(()) => {
-                    next_block = next_block.checked_add(1).ok_or_else(|| {
-                        anyhow!(
-                            "secondary issuance cursor overflow while projecting: sync_tip={}",
-                            sync_tip
-                        )
-                    })?;
-                    self.writer
-                        .store()
-                        .set_secondary_issuance_next_block(next_block)?;
-                }
-                Err(e) => {
-                    if Self::should_defer_secondary_issuance(&e) {
-                        let block_number_u64 = require_non_negative_block_number(
-                            next_block,
-                            "secondary issuance deferred block number",
-                        )?;
-                        let lag_blocks = chain_tip.saturating_sub(block_number_u64);
-                        info!(
-                            run_id = %self.run_id,
-                            chain_tip,
-                            sync_tip,
-                            block_number = next_block,
-                            lag_blocks,
-                            "Secondary issuance not settled yet; deferring projection"
-                        );
-                        break;
-                    }
-                    return Err(e).with_context(|| {
-                        format!(
-                            "failed to update secondary issuance for block {}",
-                            next_block
-                        )
-                    });
-                }
-            }
         }
 
         Ok(())
@@ -12810,139 +12547,6 @@ impl Indexer {
         }
     }
 
-    // === update_secondary_issuance ===
-
-    /// Update secondary issuance for a block. Static method that can be called from spawned tasks.
-    async fn update_secondary_issuance(
-        rpc: &CkbRpcClient,
-        writer: &BatchWriter,
-        block_hash: &str,
-        dao_hex: &str,
-        block_number: i64,
-        block_timestamp: DateTime<Utc>,
-    ) -> Result<()> {
-        // Check if we already have issuance data for this block
-        if writer.store().get_block_issuance(block_number)?.is_some() {
-            return Ok(());
-        }
-
-        let economic_state = match rpc.get_block_economic_state(block_hash).await? {
-            Some(state) => state,
-            None => {
-                bail!(
-                    "missing economic state for block: block_number={}, block_hash={}",
-                    block_number,
-                    block_hash
-                );
-            }
-        };
-
-        let dao_field = parse_dao_field_for_secondary_issuance(dao_hex, block_number, block_hash)?;
-
-        let secondary_issuance: u128 =
-            parse_prefixed_hex_u128(&economic_state.issuance.secondary, "secondary issuance")?;
-
-        let miner_secondary: u128 =
-            parse_prefixed_hex_u128(&economic_state.miner_reward.secondary, "miner secondary")?;
-
-        let non_miner_secondary = checked_sub_u128(
-            secondary_issuance,
-            miner_secondary,
-            "secondary_issuance - miner_secondary",
-        )?;
-
-        // Calculate dao_compensation and burnt using RFC-0015 formula
-        // dao_compensation = non_miner * deposit / (C - U)
-        // burnt = non_miner * liquid / (C - U) where liquid = C - U - deposit
-        let total_issuance = dao_field.total_issuance as u128;
-        let occupied = dao_field.occupied_capacity as u128;
-        let denominator = checked_sub_u128(
-            total_issuance,
-            occupied,
-            "total_issuance - occupied_capacity",
-        )?;
-
-        let (dao_compensation, burnt) = if denominator > 0 {
-            let total_dao_deposits: u128 = writer.get_dao_deposits_at_block(block_number)?;
-
-            let dao_share = non_miner_secondary
-                .checked_mul(total_dao_deposits)
-                .ok_or_else(|| anyhow::anyhow!("dao_share multiply overflow"))?
-                / denominator;
-            let burnt_share = checked_sub_u128(
-                non_miner_secondary,
-                dao_share,
-                "non_miner_secondary - dao_share",
-            )?;
-            (dao_share, burnt_share)
-        } else {
-            (0, non_miner_secondary)
-        };
-
-        let breakdown = SecondaryIssuanceBreakdown {
-            secondary_issuance: checked_u128_to_i64(secondary_issuance, "secondary_issuance")?,
-            miner_secondary: checked_u128_to_i64(miner_secondary, "miner_secondary")?,
-            dao_compensation: checked_u128_to_i64(dao_compensation, "dao_compensation")?,
-            burnt: checked_u128_to_i64(burnt, "burnt")?,
-        };
-
-        let mut batch = StoreBatch::new(writer.store());
-        writer.accumulate_secondary_issuance(
-            &breakdown,
-            block_number,
-            block_timestamp,
-            &mut batch,
-        )?;
-        batch.commit()?;
-
-        Ok(())
-    }
-
-    /// Run secondary issuance updates for a batch of blocks, gated by the semaphore.
-    /// Returns error on first failed update so caller can fail fast and cleanup batch.
-    /// The `pipeline_epoch` / `spawned_epoch` pair aborts stale tasks after reorg.
-    #[cfg(test)]
-    async fn run_secondary_issuance_batch(
-        rpc: CkbRpcClient,
-        writer: BatchWriter,
-        sem: Arc<tokio::sync::Semaphore>,
-        blocks: Vec<(String, String, i64, DateTime<Utc>)>,
-        pipeline_epoch: Arc<AtomicU64>,
-        spawned_epoch: u64,
-    ) -> Result<()> {
-        let _permit = match tokio::time::timeout(Duration::from_secs(5), sem.acquire()).await {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_closed)) => bail!("secondary issuance semaphore closed"),
-            Err(_timeout) => {
-                warn!("Secondary issuance permit acquisition took >5s, issuance backlog");
-                match sem.acquire().await {
-                    Ok(permit) => permit,
-                    Err(_) => bail!("secondary issuance semaphore closed after timeout"),
-                }
-            }
-        };
-        for (hash, dao, number, timestamp) in blocks {
-            if pipeline_epoch.load(Ordering::SeqCst) != spawned_epoch {
-                let current_epoch = pipeline_epoch.load(Ordering::SeqCst);
-                return Err(anyhow!(
-                    "stale secondary issuance batch epoch (spawned={}, current={}, first_remaining_block={})",
-                    spawned_epoch,
-                    current_epoch,
-                    number
-                ));
-            }
-            if let Err(e) =
-                Self::update_secondary_issuance(&rpc, &writer, &hash, &dao, number, timestamp).await
-            {
-                return Err(e).with_context(|| {
-                    format!("failed to update secondary issuance for block {}", number)
-                });
-            }
-        }
-
-        Ok(())
-    }
-
     // === run_proposal_cache_batch ===
 
     /// Enrich and cache block proposals against a single mempool snapshot.
@@ -13039,9 +12643,6 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use wiremock::matchers::{body_partial_json, method};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
@@ -14069,28 +13670,6 @@ mod tests {
         assert!(msg.contains("gap at block 123"));
         assert!(msg.contains("delete RocksDB and re-sync from genesis"));
         assert!(msg.contains("automatic gap replay is disabled"));
-    }
-
-    #[test]
-    fn test_secondary_issuance_bootstrap_window_start_clamps_to_one() {
-        assert_eq!(secondary_issuance_bootstrap_window_start(0).unwrap(), 1);
-        assert_eq!(secondary_issuance_bootstrap_window_start(999).unwrap(), 1);
-    }
-
-    #[test]
-    fn test_secondary_issuance_bootstrap_window_start_uses_backfill_window() {
-        assert_eq!(secondary_issuance_bootstrap_window_start(1000).unwrap(), 1);
-        assert_eq!(secondary_issuance_bootstrap_window_start(1500).unwrap(), 1);
-    }
-
-    #[test]
-    fn test_should_defer_secondary_issuance_only_for_missing_economic_state() {
-        let deferred =
-            anyhow::anyhow!("rpc returned null").context("missing economic state for block 123456");
-        assert!(Indexer::should_defer_secondary_issuance(&deferred));
-
-        let non_deferred = anyhow::anyhow!("rpc timeout while loading economic state");
-        assert!(!Indexer::should_defer_secondary_issuance(&non_deferred));
     }
 
     #[test]
@@ -15248,15 +14827,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_prefixed_hex_u128_errors_on_invalid_input() {
-        let err = parse_prefixed_hex_u128("1234", "test field").unwrap_err();
-        assert!(err.to_string().contains("missing 0x prefix"));
-
-        let err = parse_prefixed_hex_u128("0xzz", "test field").unwrap_err();
-        assert!(err.to_string().contains("invalid test field hex"));
-    }
-
-    #[test]
     fn test_parse_prefixed_hex_u32_errors_on_invalid_input() {
         let err = parse_prefixed_hex_u32("1234", "test field").unwrap_err();
         assert!(err.to_string().contains("missing 0x prefix"));
@@ -15286,14 +14856,6 @@ mod tests {
         assert!(err
             .to_string()
             .contains("cache lookup tx hash must be 32 bytes"));
-    }
-
-    #[test]
-    fn test_parse_dao_field_for_secondary_issuance_errors_on_invalid_hex() {
-        let err = parse_dao_field_for_secondary_issuance("0x1234", 42, "0xabcd").unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("invalid DAO field hex while updating secondary issuance"));
     }
 
     #[test]
@@ -15345,18 +14907,6 @@ mod tests {
     }
 
     #[test]
-    fn test_checked_sub_u128_errors_on_underflow() {
-        let err = checked_sub_u128(1, 2, "a - b").unwrap_err();
-        assert!(err.to_string().contains("underflow"));
-    }
-
-    #[test]
-    fn test_checked_u128_to_i64_errors_on_overflow() {
-        let err = checked_u128_to_i64((i64::MAX as u128) + 1, "x").unwrap_err();
-        assert!(err.to_string().contains("exceeds i64"));
-    }
-
-    #[test]
     fn test_checked_tx_fee_returns_difference() {
         let fee = checked_tx_fee(1000, 900, false, &[0u8; 32], 42).unwrap();
         assert_eq!(fee, 100);
@@ -15387,203 +14937,6 @@ mod tests {
         dao[8..16].copy_from_slice(&ar.to_le_bytes());
         let parsed = extract_ar_i64_from_dao(&dao, 42).unwrap();
         assert_eq!(parsed, ar as i64);
-    }
-
-    #[tokio::test]
-    async fn test_run_secondary_issuance_batch_propagates_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(Arc::clone(&store));
-        let rpc = CkbRpcClient::new("http://127.0.0.1:1");
-        let sem = Arc::new(tokio::sync::Semaphore::new(1));
-        let pipeline_epoch = Arc::new(AtomicU64::new(0));
-
-        let err = Indexer::run_secondary_issuance_batch(
-            rpc,
-            writer,
-            sem,
-            vec![("0x1234".to_string(), "0x00".to_string(), 1, Utc::now())],
-            pipeline_epoch,
-            0,
-        )
-        .await
-        .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("failed to update secondary issuance for block 1"));
-    }
-
-    #[tokio::test]
-    async fn test_secondary_issuance_reorg_rollback_then_reproject_without_duplicates() {
-        fn header(hash_byte: u8, number: i64, dao: Vec<u8>) -> ckbadger_store::CachedBlockHeader {
-            ckbadger_store::CachedBlockHeader {
-                hash: vec![hash_byte; 32],
-                timestamp: 1_700_000_000_000 + number * 1_000,
-                epoch_number: 0,
-                epoch_index: 0,
-                epoch_length: 1,
-                dao,
-                transactions_count: 1,
-            }
-        }
-
-        let rpc_server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(body_partial_json(json!({"method":"get_tip_block_number"})))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "jsonrpc":"2.0",
-                "id":1,
-                "result":"0x3"
-            })))
-            .expect(1)
-            .mount(&rpc_server)
-            .await;
-
-        let new_hash_2 = format!("0x{}", "22".repeat(32));
-        let new_hash_3 = format!("0x{}", "33".repeat(32));
-        Mock::given(method("POST"))
-            .and(body_partial_json(json!({
-                "method":"get_block_economic_state",
-                "params":[new_hash_2]
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "jsonrpc":"2.0",
-                "id":2,
-                "result":{
-                    "issuance":{"primary":"0x0","secondary":"0x64"},
-                    "miner_reward":{"primary":"0x0","secondary":"0x28","committed":"0x0","proposal":"0x0"},
-                    "txs_fee":"0x0",
-                    "finalized_at":"0x0"
-                }
-            })))
-            .expect(1)
-            .mount(&rpc_server)
-            .await;
-        Mock::given(method("POST"))
-            .and(body_partial_json(json!({
-                "method":"get_block_economic_state",
-                "params":[new_hash_3]
-            })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "jsonrpc":"2.0",
-                "id":3,
-                "result":{
-                    "issuance":{"primary":"0x0","secondary":"0xc8"},
-                    "miner_reward":{"primary":"0x0","secondary":"0x32","committed":"0x0","proposal":"0x0"},
-                    "txs_fee":"0x0",
-                    "finalized_at":"0x0"
-                }
-            })))
-            .expect(1)
-            .mount(&rpc_server)
-            .await;
-
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain_store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-        let append_store = Arc::new(CkbadgerStore::open_domain(append_dir.path()).unwrap());
-
-        // Seed old canonical chain 1-3 with issuance data fully computed.
-        let mut seed = StoreBatch::new(domain_store.as_ref());
-        seed.put_block_header(1, &header(0x11, 1, build_dao_field(1_000, 100, 100)));
-        seed.put_block_header(2, &header(0x12, 2, build_dao_field(1_100, 110, 110)));
-        seed.put_block_header(3, &header(0x13, 3, build_dao_field(1_200, 120, 120)));
-        seed.put_block_issuance(
-            2,
-            &ckbadger_store::types::SecondaryIssuance {
-                miner_reward: 1,
-                dao_reward: 2,
-                treasury: 3,
-            },
-        );
-        seed.put_block_issuance(
-            3,
-            &ckbadger_store::types::SecondaryIssuance {
-                miner_reward: 4,
-                dao_reward: 5,
-                treasury: 6,
-            },
-        );
-        seed.commit().unwrap();
-        domain_store.set_secondary_issuance_next_block(4).unwrap();
-
-        // Simulate reorg to fork_point=1: old chain blocks 2-3 should be removed and cursor clamped.
-        domain_store.rollback_to_block(1).unwrap();
-        assert!(domain_store.get_block_issuance(2).unwrap().is_none());
-        assert!(domain_store.get_block_issuance(3).unwrap().is_none());
-        assert_eq!(
-            domain_store.get_secondary_issuance_next_block().unwrap(),
-            Some(2)
-        );
-
-        // Seed new canonical headers for 2-3.
-        let mut reorg_seed = StoreBatch::new(domain_store.as_ref());
-        reorg_seed.put_block_header(2, &header(0x22, 2, build_dao_field(2_000, 200, 100)));
-        reorg_seed.put_block_header(3, &header(0x33, 3, build_dao_field(2_100, 250, 100)));
-        reorg_seed.commit().unwrap();
-
-        let config = Config {
-            domain_data_path: domain_dir.path().to_string_lossy().into_owned(),
-            append_only_data_path: append_dir.path().to_string_lossy().into_owned(),
-            ckb_rpc_url: rpc_server.uri(),
-            batch_size: 16,
-            poll_interval_ms: 1000,
-            start_block: None,
-            parallel_fetch_size: 4,
-            pipeline_enabled: false,
-            pipeline_buffer: 4,
-            redis_url: None,
-            bulk_sync_threshold: 72,
-            fast_sync_mode: true,
-            ckb_data_path: None,
-            token_labels_path: "docs/token-labels".to_string(),
-            force_startup_cleanup: false,
-        };
-        let indexer = Indexer::new(
-            "test-secondary-reorg".to_string(),
-            config,
-            Arc::clone(&domain_store),
-            Arc::clone(&append_store),
-        )
-        .await
-        .unwrap();
-
-        // Project once: should compute block 2 and 3 on new chain and advance cursor.
-        indexer
-            .project_secondary_issuance_from_cursor(3)
-            .await
-            .unwrap();
-        let issuance_2 = domain_store.get_block_issuance(2).unwrap().unwrap();
-        let issuance_3 = domain_store.get_block_issuance(3).unwrap().unwrap();
-        assert_eq!(issuance_2.miner_reward, 40);
-        assert_eq!(issuance_2.dao_reward, 0);
-        assert_eq!(issuance_2.treasury, 60);
-        assert_eq!(issuance_3.miner_reward, 50);
-        assert_eq!(issuance_3.dao_reward, 0);
-        assert_eq!(issuance_3.treasury, 150);
-        assert_eq!(
-            domain_store.get_secondary_issuance_next_block().unwrap(),
-            Some(4)
-        );
-
-        // Project again: cursor already at tip+1, should not duplicate writes or RPC calls.
-        indexer
-            .project_secondary_issuance_from_cursor(3)
-            .await
-            .unwrap();
-        let issuance_2_after = domain_store.get_block_issuance(2).unwrap().unwrap();
-        let issuance_3_after = domain_store.get_block_issuance(3).unwrap().unwrap();
-        assert_eq!(issuance_2_after.miner_reward, issuance_2.miner_reward);
-        assert_eq!(issuance_2_after.dao_reward, issuance_2.dao_reward);
-        assert_eq!(issuance_2_after.treasury, issuance_2.treasury);
-        assert_eq!(issuance_3_after.miner_reward, issuance_3.miner_reward);
-        assert_eq!(issuance_3_after.dao_reward, issuance_3.dao_reward);
-        assert_eq!(issuance_3_after.treasury, issuance_3.treasury);
-        assert_eq!(
-            domain_store.get_secondary_issuance_next_block().unwrap(),
-            Some(4)
-        );
     }
 
     fn build_dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {

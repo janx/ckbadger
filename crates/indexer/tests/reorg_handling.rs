@@ -4,8 +4,8 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{ActivityEntry, UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
-    keys, CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, SecondaryIssuance,
-    TxIndexEntry, CF_ACTIVITIES,
+    keys, CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, TxIndexEntry,
+    CF_ACTIVITIES,
 };
 use std::sync::Arc;
 
@@ -75,12 +75,6 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
 
     let cell = make_cell(block_num, lock_hash);
 
-    let issuance = SecondaryIssuance {
-        miner_reward: 100_000,
-        dao_reward: 50_000,
-        treasury: 30_000,
-    };
-
     let mut batch = StoreBatch::new(store);
     batch.put_block_header(block_num, &header);
     batch.put_tx_index(block_num, 0, &cellbase);
@@ -89,7 +83,6 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
     batch.put_tx_hash_map(&tx_hash, block_num, 1);
     batch.put_cell(&tx_hash, 0, &cell);
     batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
-    batch.put_block_issuance(block_num, &issuance);
     batch.commit().unwrap();
 }
 

@@ -226,7 +226,6 @@ DAO-related state is split across several CFs:
 | `dao_by_block`                | `block_desc (8B BE) + outpoint (34B)`                   | empty                  | Newest-first global DAO deposit index                                                                                                            |
 | `dao_by_lock_block`           | `lock_hash (32B) + block_desc (8B BE) + outpoint (34B)` | empty                  | Newest-first DAO deposit index scoped by lock hash                                                                                               |
 | `dao_by_status_block`         | `status (2B BE) + block_desc (8B BE) + outpoint (34B)`  | empty                  | Newest-first DAO deposit index scoped by status                                                                                                  |
-| `block_issuance`              | block number                                            | `SecondaryIssuance`    | Per-block secondary issuance split (miner / dao / treasury)                                                                                      |
 | `stats` (DAO snapshot prefix) | date                                                    | `DaoDailySnapshot`     | Daily cumulative series (`total_issuance`, `secondary_pool`, `occupied_capacity`, `cum_miner_secondary`, `cum_dao_compensation`, `cum_treasury`) |
 
 ## 5. Update Triggers

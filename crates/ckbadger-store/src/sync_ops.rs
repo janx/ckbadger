@@ -194,45 +194,6 @@ impl CkbadgerStore {
         }
     }
 
-    pub fn get_secondary_issuance_next_block(&self) -> anyhow::Result<Option<i64>> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            sync_meta_keys::SECONDARY_ISSUANCE_NEXT_BLOCK,
-        )? {
-            Some(value) => {
-                if value.len() != 8 {
-                    return Err(anyhow!(
-                        "invalid secondary issuance next block bytes length: expected=8 got={}",
-                        value.len()
-                    ));
-                }
-                let next_block = i64::from_be_bytes(value[..8].try_into().expect("length checked"));
-                if next_block < 1 {
-                    return Err(anyhow!(
-                        "invalid secondary issuance next block value: expected >= 1 got={}",
-                        next_block
-                    ));
-                }
-                Ok(Some(next_block))
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub fn set_secondary_issuance_next_block(&self, next_block: i64) -> anyhow::Result<()> {
-        if next_block < 1 {
-            return Err(anyhow!(
-                "invalid secondary issuance next block value: expected >= 1 got={}",
-                next_block
-            ));
-        }
-        self.put_cf(
-            self.cf_sync_meta(),
-            sync_meta_keys::SECONDARY_ISSUANCE_NEXT_BLOCK,
-            &next_block.to_be_bytes(),
-        )
-    }
-
     /// Get sync tip (block number and hash) from the sync_status.
     pub fn get_sync_tip(&self) -> anyhow::Result<(i64, Option<Vec<u8>>)> {
         let status = self.get_sync_status()?;
@@ -506,53 +467,6 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("failed to deserialize latest reorg event marker"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_secondary_issuance_next_block_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        assert!(store.get_secondary_issuance_next_block().unwrap().is_none());
-
-        store.set_secondary_issuance_next_block(1234).unwrap();
-        assert_eq!(
-            store.get_secondary_issuance_next_block().unwrap(),
-            Some(1234)
-        );
-    }
-
-    #[test]
-    fn test_secondary_issuance_next_block_rejects_invalid_value() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let err = store.set_secondary_issuance_next_block(0).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("invalid secondary issuance next block value"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_secondary_issuance_next_block_fails_on_invalid_payload() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        store
-            .put_cf(
-                store.cf_sync_meta(),
-                sync_meta_keys::SECONDARY_ISSUANCE_NEXT_BLOCK,
-                b"bad",
-            )
-            .unwrap();
-
-        let err = store.get_secondary_issuance_next_block().unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("invalid secondary issuance next block bytes length"),
             "unexpected error: {err}"
         );
     }

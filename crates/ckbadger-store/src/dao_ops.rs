@@ -4,7 +4,7 @@ use rocksdb::IteratorMode;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{DaoDepositCacheEntry, SecondaryIssuance};
+use crate::types::DaoDepositCacheEntry;
 
 const DAO_BY_BLOCK_OUTPOINT_OFFSET: usize = 8;
 const DAO_BY_STATUS_OUTPOINT_OFFSET: usize = 10;
@@ -127,14 +127,6 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_outpoint(withdraw_tx_hash, withdraw_output_index);
         self.get_cf(self.cf_dao_by_withdraw_tx(), &key)
-    }
-
-    pub fn get_block_issuance(&self, block_num: i64) -> anyhow::Result<Option<SecondaryIssuance>> {
-        let key = keys::encode_block_num(block_num);
-        match self.get_cf(self.cf_block_issuance(), &key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
     }
 
     /// Scan all DAO deposits (prefix scan) without materializing the full table in memory.

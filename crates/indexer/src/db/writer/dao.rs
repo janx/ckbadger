@@ -106,14 +106,6 @@ impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SecondaryIssuanceBreakdown {
-    pub secondary_issuance: i64,
-    pub miner_secondary: i64,
-    pub dao_compensation: i64,
-    pub burnt: i64,
-}
-
 fn extract_ar_from_dao(dao: &[u8]) -> Option<u64> {
     if dao.len() < 16 {
         return None;
@@ -872,22 +864,6 @@ impl BatchWriter {
             }
         }
 
-        Ok(())
-    }
-
-    pub fn accumulate_secondary_issuance(
-        &self,
-        breakdown: &SecondaryIssuanceBreakdown,
-        block_number: i64,
-        _block_timestamp: DateTime<Utc>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let issuance = ckbadger_store::types::SecondaryIssuance {
-            miner_reward: breakdown.miner_secondary,
-            dao_reward: breakdown.dao_compensation,
-            treasury: breakdown.burnt,
-        };
-        batch.put_block_issuance(block_number, &issuance);
         Ok(())
     }
 }

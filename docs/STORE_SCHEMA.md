@@ -30,7 +30,6 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `dao_by_block`              | block_desc (8B BE) + outpoint (34B)                   | empty                   | DAO index ordered by deposit block DESC      |
 | `dao_by_lock_block`         | lock_hash (32B) + block_desc (8B BE) + outpoint (34B) | empty                   | DAO index by lock + deposit block DESC       |
 | `dao_by_status_block`       | status (2B BE) + block_desc (8B BE) + outpoint (34B)  | empty                   | DAO index by status + deposit block DESC     |
-| `block_issuance`            | block_number (8B)                                     | BlockIssuance           | Per-block issuance data                      |
 | `tokens`                    | type_script_hash (32B)                                | TokenInfo               | UDT token metadata                           |
 | `token_holders`             | type_hash + lock_hash                                 | balance                 | Token holder balances                        |
 | `token_transfers`           | type_hash + block + tx_index                          | TransferInfo            | Token transfer records                       |

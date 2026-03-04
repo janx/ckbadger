@@ -134,10 +134,6 @@ Key: withdraw `tx_hash`
 Value: deposit `outpoint`
 Purpose: Fast lookup withdraw -> deposit
 
-CF 21: `block_issuance`
-Key: `block_number`
-Value: Secondary issuance data
-
 ## Layer 2: Aggregates (Threshold-based)
 
 CF 22: `addr_stats`

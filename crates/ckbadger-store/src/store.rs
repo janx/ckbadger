@@ -214,7 +214,6 @@ pub const CF_DAO_BY_WITHDRAW_TX: &str = "dao_by_withdraw_tx";
 pub const CF_DAO_BY_BLOCK: &str = "dao_by_block";
 pub const CF_DAO_BY_LOCK_BLOCK: &str = "dao_by_lock_block";
 pub const CF_DAO_BY_STATUS_BLOCK: &str = "dao_by_status_block";
-pub const CF_BLOCK_ISSUANCE: &str = "block_issuance";
 pub const CF_TOKENS: &str = "tokens";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_SPORE_DATA: &str = "spore_data";
@@ -276,7 +275,6 @@ pub const ALL_CFS: &[&str] = &[
     CF_DAO_BY_BLOCK,
     CF_DAO_BY_LOCK_BLOCK,
     CF_DAO_BY_STATUS_BLOCK,
-    CF_BLOCK_ISSUANCE,
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
     CF_SPORE_DATA,
@@ -319,7 +317,6 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_DAO_BY_BLOCK,
     CF_DAO_BY_LOCK_BLOCK,
     CF_DAO_BY_STATUS_BLOCK,
-    CF_BLOCK_ISSUANCE,
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
     CF_SPORE_DATA,
@@ -969,9 +966,6 @@ impl CkbadgerStore {
     }
     pub fn cf_dao_by_status_block(&self) -> &ColumnFamily {
         self.cf(CF_DAO_BY_STATUS_BLOCK)
-    }
-    pub fn cf_block_issuance(&self) -> &ColumnFamily {
-        self.cf(CF_BLOCK_ISSUANCE)
     }
     pub fn cf_tokens(&self) -> &ColumnFamily {
         self.cf(CF_TOKENS)

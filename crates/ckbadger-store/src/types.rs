@@ -168,13 +168,6 @@ pub struct DaoDailySnapshot {
     pub cum_treasury: i128,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SecondaryIssuance {
-    pub miner_reward: i64,
-    pub dao_reward: i64,
-    pub treasury: i64,
-}
-
 // ============================================
 // Group F: Tokens & NFTs
 // ============================================

@@ -324,14 +324,6 @@ impl BatchWriter {
             }
         }
 
-        let issuance_iter = self.store.iterator_cf(
-            self.store.cf_block_issuance(),
-            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
-        if issuance_iter.flatten().next().is_some() {
-            return Ok(true);
-        }
-
         if self.store.has_undo_log_entries_after(start_block)? {
             return Ok(true);
         }

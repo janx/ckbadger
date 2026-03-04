@@ -43,7 +43,7 @@
 - `tokens`, `token_holders`, `token_transfers`
 - `spore_data`, `spore_by_cluster`
 - `nft_data`, `nft_by_collection`, `cluster_agg`, `nft_collection_agg`
-- `dao_deposits`, `dao_by_withdraw_tx`, `block_issuance`
+- `dao_deposits`, `dao_by_withdraw_tx`
 - `script_info`
 
 ### Layer 2: Time-Series / Activity / Aggregates

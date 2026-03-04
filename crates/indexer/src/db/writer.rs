@@ -20,6 +20,6 @@ mod transactions;
 mod udt;
 
 pub use core::BatchWriter;
-pub use dao::{DaoWithdrawalContext, DaoWithdrawalContextTrait, SecondaryIssuanceBreakdown};
+pub use dao::{DaoWithdrawalContext, DaoWithdrawalContextTrait};
 pub use reorg::ReorgResult;
 pub use statistics::DaoSnapshotInput;
