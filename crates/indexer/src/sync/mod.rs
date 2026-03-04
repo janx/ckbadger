@@ -1,3 +1,4 @@
+mod adaptive;
 mod dao_helpers;
 mod diagnostics;
 mod helpers;

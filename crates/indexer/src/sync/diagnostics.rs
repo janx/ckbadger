@@ -353,7 +353,7 @@ pub(crate) fn parse_queue_capacity_txs(
 ) -> u64 {
     let queue_capacity_batches =
         u64::try_from(queue_capacity_batches).expect("parse queue capacity exceeds u64");
-    let per_batch_tx_cap = u64::try_from(super::indexer::adaptive_sub_batch_tx_cap(
+    let per_batch_tx_cap = u64::try_from(super::adaptive::adaptive_sub_batch_tx_cap(
         target_batch_txs,
         min_target_batch_txs,
     ))
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_parse_queue_capacity_txs_uses_sub_batch_cap() {
-        use super::super::indexer::ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS;
+        use super::super::adaptive::ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS;
         assert_eq!(
             parse_queue_capacity_txs(8, 40_000, ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS),
             640_000
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "parse queue tx capacity overflow")]
     fn test_parse_queue_capacity_txs_panics_on_overflow() {
-        use super::super::indexer::ADAPTIVE_BATCH_MAX_TXS;
+        use super::super::adaptive::ADAPTIVE_BATCH_MAX_TXS;
         let _ = parse_queue_capacity_txs(usize::MAX, ADAPTIVE_BATCH_MAX_TXS, 10_000);
     }
 
