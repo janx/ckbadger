@@ -44,6 +44,7 @@ impl BatchWriter {
         cells_consumed: i64,
         new_addresses: i64,
         ema_rate: Option<f64>,
+        refresh_dao_statistics: bool,
     ) -> Result<()> {
         // Persist sync status in RocksDB so restart/fallback paths do not rely on Redis.
         self.store.update_sync_status(|status| {
@@ -58,6 +59,10 @@ impl BatchWriter {
             status.derived_last_synced_at = now;
             status.derived_sync_in_progress = false;
         })?;
+
+        if refresh_dao_statistics {
+            self.refresh_latest_dao_statistics()?;
+        }
 
         if let Some(cache) = &self.cache_invalidator {
             let hash_hex = format!("0x{}", hex::encode(block_hash));
@@ -537,11 +542,11 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
             writer
-                .update_sync_status(42, &first_hash, 10, 20, 4, 1, Some(123.0))
+                .update_sync_status(42, &first_hash, 10, 20, 4, 1, Some(123.0), false)
                 .await
                 .unwrap();
             writer
-                .update_sync_status(43, &second_hash, 3, 8, 2, 1, None)
+                .update_sync_status(43, &second_hash, 3, 8, 2, 1, None, false)
                 .await
                 .unwrap();
         });

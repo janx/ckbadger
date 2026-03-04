@@ -324,6 +324,14 @@ impl CkbadgerStore {
         }
     }
 
+    pub fn get_latest_dao_statistics(&self) -> anyhow::Result<Option<DaoLatestStatistics>> {
+        let key = keys::encode_stats_key(stats_prefix::DAO_LATEST_STATS, b"latest");
+        match self.get_cf(self.cf_stats_dao(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
     // ---- HODL wave snapshots ----
 
     pub fn put_hodl_wave(&self, date: &str, wave: &DailyHodlWave) -> anyhow::Result<()> {

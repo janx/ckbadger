@@ -15,6 +15,7 @@ use crate::utils::{ensure_derived_ready, shannon_to_ckb};
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
+const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -172,7 +173,7 @@ pub struct AddressDaoSummaryResponse {
     pub estimated_apc: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaoStatisticsResponse {
     pub total_deposited: String,
@@ -447,6 +448,34 @@ fn snapshot_circulating_supply(
     Ok(Some(circulating))
 }
 
+fn dao_latest_to_response(latest: &ckbadger_store::DaoLatestStatistics) -> DaoStatisticsResponse {
+    let total_deposited = latest.total_deposited.to_string();
+    let total_compensation_paid = latest.total_compensation_paid.to_string();
+    let unclaimed_compensation = latest.unclaimed_compensation.to_string();
+    let mining_reward = latest.mining_reward.to_string();
+    let deposit_compensation = latest.deposit_compensation.to_string();
+    let burnt = latest.burnt.to_string();
+
+    DaoStatisticsResponse {
+        total_deposited: total_deposited.clone(),
+        total_deposited_ckb: shannon_to_ckb(&total_deposited),
+        total_depositors: latest.total_depositors,
+        active_deposits: latest.active_deposits,
+        total_compensation_paid: total_compensation_paid.clone(),
+        total_compensation_paid_ckb: shannon_to_ckb(&total_compensation_paid),
+        unclaimed_compensation: unclaimed_compensation.clone(),
+        unclaimed_compensation_ckb: shannon_to_ckb(&unclaimed_compensation),
+        average_deposit_days: latest.average_deposit_days.clone(),
+        estimated_apc: latest.estimated_apc.clone(),
+        mining_reward: mining_reward.clone(),
+        mining_reward_ckb: shannon_to_ckb(&mining_reward),
+        deposit_compensation: deposit_compensation.clone(),
+        deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
+        burnt: burnt.clone(),
+        burnt_ckb: shannon_to_ckb(&burnt),
+    }
+}
+
 async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
@@ -577,6 +606,20 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     ensure_derived_ready(state.as_ref())?;
 
     let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "statistics")?;
+    if let Some(latest) = state
+        .store
+        .get_latest_dao_statistics()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    {
+        if latest.tip_block_number == latest_block_number {
+            return ok(dao_latest_to_response(&latest));
+        }
+    }
+
+    let cache_key = format!("dao:statistics:tip:{}", latest_block_number);
+    if let Some(cached) = state.mem_cache.get::<DaoStatisticsResponse>(&cache_key) {
+        return ok(cached);
+    }
 
     let mut total_deposited: i128 = 0;
     let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
@@ -697,7 +740,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         ("0".to_string(), "0".to_string(), "0".to_string())
     };
 
-    ok(DaoStatisticsResponse {
+    let response = DaoStatisticsResponse {
         total_deposited: total_deposited_str.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited_str),
         total_depositors,
@@ -714,7 +757,12 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
-    })
+    };
+
+    state
+        .mem_cache
+        .set(&cache_key, &response, DAO_STATS_CACHE_TTL);
+    ok(response)
 }
 
 fn epochs_to_days(epochs: f64) -> String {

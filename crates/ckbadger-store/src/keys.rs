@@ -176,6 +176,7 @@ pub mod stats_prefix {
     pub const MNFT_TOKEN_OUTPOINT: u8 = 0x18;
     pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
     pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
+    pub const DAO_LATEST_STATS: u8 = 0x1B;
 }
 
 // Flat re-exports for convenience
@@ -205,6 +206,7 @@ pub const STATS_PREFIX_MNFT_CLASS_OUTPOINT: u8 = stats_prefix::MNFT_CLASS_OUTPOI
 pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOINT;
 pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
 pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
+pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {

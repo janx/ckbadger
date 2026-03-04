@@ -1360,6 +1360,216 @@ async fn test_dao_stats_returns_503_when_derived_store_lags() {
 }
 
 #[tokio::test]
+async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
+    let store = test_store();
+
+    let mut dao = vec![0u8; 32];
+    dao[8..16].copy_from_slice(&1u64.to_le_bytes());
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xAA; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+            s.derived_tip_block_number = 10;
+        })
+        .unwrap();
+
+    let latest = ckbadger_store::DaoLatestStatistics {
+        tip_block_number: 10,
+        total_deposited: 123_00000000,
+        total_depositors: 7,
+        active_deposits: 9,
+        total_compensation_paid: 11_00000000,
+        unclaimed_compensation: 13_00000000,
+        average_deposit_days: "950 days".to_string(),
+        estimated_apc: "2.74".to_string(),
+        mining_reward: 17_00000000,
+        deposit_compensation: 19_00000000,
+        burnt: 23_00000000,
+    };
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+        b"latest",
+    );
+    let value = bincode::serialize(&latest).unwrap();
+    store.put_stats_key(&key, &value).unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/statistics")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["totalDeposited"], "12300000000");
+    assert_eq!(json["totalDepositors"], 7);
+    assert_eq!(json["activeDeposits"], 9);
+    assert_eq!(json["estimatedApc"], "2.74");
+}
+
+#[tokio::test]
+async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
+    let store = test_store();
+
+    let mut dao = vec![0u8; 32];
+    dao[8..16].copy_from_slice(&1u64.to_le_bytes());
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xBB; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = 10;
+            s.derived_tip_block_number = 10;
+        })
+        .unwrap();
+
+    let stale = ckbadger_store::DaoLatestStatistics {
+        tip_block_number: 9,
+        total_deposited: 999_00000000,
+        total_depositors: 999,
+        active_deposits: 999,
+        total_compensation_paid: 0,
+        unclaimed_compensation: 0,
+        average_deposit_days: "999 days".to_string(),
+        estimated_apc: "9.99".to_string(),
+        mining_reward: 0,
+        deposit_compensation: 0,
+        burnt: 0,
+    };
+    let key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_LATEST_STATS,
+        b"latest",
+    );
+    let value = bincode::serialize(&stale).unwrap();
+    store.put_stats_key(&key, &value).unwrap();
+
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/statistics")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // No DAO deposits in DB, so fallback computation should be zero rather than stale 999.
+    assert_eq!(json["totalDeposited"], "0");
+    assert_eq!(json["totalDepositors"], 0);
+}
+
+#[tokio::test]
+async fn test_dao_stats_cached_response_is_stable_within_ttl() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+
+    let mut dao = vec![0u8; 32];
+    dao[8..16].copy_from_slice(&1u64.to_le_bytes());
+    batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: vec![0xAA; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao,
+            transactions_count: 1,
+        },
+    );
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0x11; 32], 0),
+        &DaoDepositCacheEntry {
+            capacity: 200_00000000,
+            deposit_block_number: 10,
+            lock_script_hash: vec![0x01; 32],
+            deposit_ar: 1,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let app = create_router(test_config(store.clone())).await;
+    let request = Request::builder()
+        .uri("/api/v1/dao/statistics")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(first_json["totalDeposited"], "20000000000");
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(&[0x22; 32], 0),
+        &DaoDepositCacheEntry {
+            capacity: 300_00000000,
+            deposit_block_number: 10,
+            lock_script_hash: vec![0x02; 32],
+            deposit_ar: 1,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let request = Request::builder()
+        .uri("/api/v1/dao/statistics")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Expect cached response within TTL; without cache this would become 50000000000.
+    assert_eq!(second_json["totalDeposited"], "20000000000");
+}
+
+#[tokio::test]
 async fn test_dao_total_deposit_chart_returns_503_when_derived_store_lags() {
     let core_store = test_store();
     let append_only_store = test_store();

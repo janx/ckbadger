@@ -168,6 +168,21 @@ pub struct DaoDailySnapshot {
     pub cum_treasury: i128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaoLatestStatistics {
+    pub tip_block_number: i64,
+    pub total_deposited: i128,
+    pub total_depositors: i32,
+    pub active_deposits: i32,
+    pub total_compensation_paid: i128,
+    pub unclaimed_compensation: u128,
+    pub average_deposit_days: String,
+    pub estimated_apc: String,
+    pub mining_reward: i128,
+    pub deposit_compensation: i128,
+    pub burnt: i128,
+}
+
 // ============================================
 // Group F: Tokens & NFTs
 // ============================================

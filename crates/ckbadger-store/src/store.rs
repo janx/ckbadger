@@ -1177,7 +1177,9 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_BLOCK_TIME_DIST
             | keys::STATS_PREFIX_EPOCH_TIME_DIST
             | keys::STATS_PREFIX_DAILY_BLOCK => Ok(self.cf_stats_chain()),
-            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT => Ok(self.cf_stats_dao()),
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT | keys::STATS_PREFIX_DAO_LATEST_STATS => {
+                Ok(self.cf_stats_dao())
+            }
             keys::STATS_PREFIX_HODL_WAVE => Ok(self.cf_stats_hodl()),
             keys::STATS_PREFIX_SCRIPT_DAILY => Ok(self.cf_stats_script()),
             keys::STATS_PREFIX_TOKEN_TRANSFERS
@@ -1833,6 +1835,13 @@ mod tests {
                 b"dao",
             ),
             (
+                crate::keys::encode_stats_key(
+                    crate::keys::STATS_PREFIX_DAO_LATEST_STATS,
+                    b"latest",
+                ),
+                b"dao_latest",
+            ),
+            (
                 crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HODL_WAVE, b"20240201"),
                 b"hodl",
             ),
@@ -1870,23 +1879,27 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(store
-            .get_cf(store.cf_stats_hodl(), &cases[2].0)
+            .get_cf(store.cf_stats_dao(), &cases[2].0)
             .unwrap()
             .is_some());
         assert!(store
-            .get_cf(store.cf_stats_script(), &cases[3].0)
+            .get_cf(store.cf_stats_hodl(), &cases[3].0)
             .unwrap()
             .is_some());
         assert!(store
-            .get_cf(store.cf_stats_token(), &cases[4].0)
+            .get_cf(store.cf_stats_script(), &cases[4].0)
             .unwrap()
             .is_some());
         assert!(store
-            .get_cf(store.cf_stats_spore(), &cases[5].0)
+            .get_cf(store.cf_stats_token(), &cases[5].0)
             .unwrap()
             .is_some());
         assert!(store
-            .get_cf(store.cf_stats_nft(), &cases[6].0)
+            .get_cf(store.cf_stats_spore(), &cases[6].0)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_stats_nft(), &cases[7].0)
             .unwrap()
             .is_some());
     }
