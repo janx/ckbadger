@@ -36,9 +36,48 @@ pub(crate) fn put_append_delete_undo_entry(
     cf_name: &str,
     key: &[u8],
 ) {
+    put_delete_undo_entry(
+        domain_batch,
+        undo_seq_by_block,
+        ckbadger_store::types::UndoLogStoreTarget::AppendOnly,
+        scope,
+        block_num,
+        cf_name,
+        key,
+    );
+}
+
+pub(crate) fn put_domain_delete_undo_entry(
+    domain_batch: &mut StoreBatch<'_>,
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    scope: UndoSeqScope,
+    block_num: i64,
+    cf_name: &str,
+    key: &[u8],
+) {
+    put_delete_undo_entry(
+        domain_batch,
+        undo_seq_by_block,
+        ckbadger_store::types::UndoLogStoreTarget::Domain,
+        scope,
+        block_num,
+        cf_name,
+        key,
+    );
+}
+
+fn put_delete_undo_entry(
+    domain_batch: &mut StoreBatch<'_>,
+    undo_seq_by_block: &mut HashMap<i64, u64>,
+    target_store: ckbadger_store::types::UndoLogStoreTarget,
+    scope: UndoSeqScope,
+    block_num: i64,
+    cf_name: &str,
+    key: &[u8],
+) {
     let seq = next_undo_seq(undo_seq_by_block, block_num, scope);
     let undo = ckbadger_store::types::UndoLogEntry::KeyMutation {
-        target_store: ckbadger_store::types::UndoLogStoreTarget::AppendOnly,
+        target_store,
         cf_name: cf_name.to_string(),
         key: key.to_vec(),
         previous_value: None,
@@ -126,22 +165,22 @@ pub(crate) fn put_addr_tx_with_undo_log(
 
 pub(crate) fn put_activity_with_undo_log(
     domain_batch: &mut StoreBatch<'_>,
-    append_batch: &mut StoreBatch<'_>,
+    activity_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
     lock_hash: &[u8],
     block_num: i64,
     tx_idx: i32,
     entry: &ckbadger_store::types::ActivityEntry,
 ) {
-    let append_key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
-    append_batch.put_activity(lock_hash, block_num, tx_idx, entry);
-    put_append_delete_undo_entry(
+    let domain_key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
+    activity_batch.put_activity(lock_hash, block_num, tx_idx, entry);
+    put_domain_delete_undo_entry(
         domain_batch,
         undo_seq_by_block,
         UndoSeqScope::AppendActivity,
         block_num,
         ckbadger_store::CF_ACTIVITIES,
-        &append_key,
+        &domain_key,
     );
 }
 
@@ -267,11 +306,11 @@ mod tests {
 
         let act_keep = keys::encode_activity_key(&lock_hash, 11, 0);
         let act_drop = keys::encode_activity_key(&lock_hash, 21, 0);
-        append_store
-            .put_cf(append_store.cf_activities(), &act_keep, &[0x03])
+        domain_store
+            .put_cf(domain_store.cf_activities(), &act_keep, &[0x03])
             .unwrap();
-        append_store
-            .put_cf(append_store.cf_activities(), &act_drop, &[0x04])
+        domain_store
+            .put_cf(domain_store.cf_activities(), &act_drop, &[0x04])
             .unwrap();
 
         let nft_keep = keys::encode_nft_collection_activity_key(&collection_id, 12, 0);
@@ -301,7 +340,7 @@ mod tests {
             ckbadger_store::CF_ADDR_TXS,
             &addr_drop,
         );
-        put_append_delete_undo_entry(
+        put_domain_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
             UndoSeqScope::AppendActivity,
@@ -331,14 +370,14 @@ mod tests {
             .get_cf(append_store.cf_addr_txs(), &addr_drop)
             .unwrap()
             .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_activities(), &act_keep)
+        assert!(domain_store
+            .get_cf(domain_store.cf_activities(), &act_keep)
             .unwrap()
             .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_activities(), &act_drop)
+        assert!(domain_store
+            .get_cf(domain_store.cf_activities(), &act_drop)
             .unwrap()
-            .is_some());
+            .is_none());
         assert!(append_store
             .get_cf(append_store.cf_nft_collection_activities(), &nft_keep)
             .unwrap()
@@ -347,6 +386,65 @@ mod tests {
             .get_cf(append_store.cf_nft_collection_activities(), &nft_drop)
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn test_put_activity_with_undo_log_records_domain_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock_hash = [0x44; 32];
+        let entry = ckbadger_store::types::ActivityEntry {
+            tx_hash: vec![0xAB; 32],
+            block_number: 42,
+            tx_index: 3,
+            timestamp: 1_700_000_000,
+            ckb_delta: 0,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain_store);
+        let mut activity_batch = StoreBatch::new(&domain_store);
+        let mut undo_seq_by_block = HashMap::new();
+        put_activity_with_undo_log(
+            &mut domain_batch,
+            &mut activity_batch,
+            &mut undo_seq_by_block,
+            &lock_hash,
+            42,
+            3,
+            &entry,
+        );
+        domain_batch.commit().unwrap();
+        activity_batch.commit().unwrap();
+
+        let iter = domain_store.iterator_cf(
+            domain_store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::Start,
+        );
+        let mut found = false;
+        for item in iter {
+            let (_key, value) = item.unwrap();
+            let decoded: ckbadger_store::types::UndoLogEntry =
+                bincode::deserialize(&value).unwrap();
+            if let ckbadger_store::types::UndoLogEntry::KeyMutation {
+                target_store,
+                cf_name,
+                ..
+            } = decoded
+            {
+                if cf_name == ckbadger_store::CF_ACTIVITIES {
+                    assert_eq!(
+                        target_store,
+                        ckbadger_store::types::UndoLogStoreTarget::Domain
+                    );
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "expected activities key mutation undo entry");
     }
 
     #[test]

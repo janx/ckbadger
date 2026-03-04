@@ -2798,6 +2798,7 @@ impl Indexer {
                     batch_stats.sync_totals.2,
                     batch_new_addresses,
                     ema_rate_opt,
+                    !bulk_sync_mode,
                 )
                 .await?;
         }
@@ -4443,7 +4444,7 @@ impl Indexer {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                             let t = Instant::now();
                             let mut domain_batch = StoreBatch::new(store);
-                            let mut append_batch = StoreBatch::new(append_only_store);
+                            let mut activity_batch = StoreBatch::new(store);
                             let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                             let token_info_cache = load_activity_token_info_cache(
                                 store,
@@ -4493,7 +4494,7 @@ impl Indexer {
                                 for (lock_hash, entry) in activities {
                                     put_activity_with_undo_log(
                                         &mut domain_batch,
-                                        &mut append_batch,
+                                        &mut activity_batch,
                                         &mut append_undo_seq_by_block,
                                         &lock_hash,
                                         entry.block_number,
@@ -4511,12 +4512,12 @@ impl Indexer {
                                     domain_batch,
                                 )?;
                             }
-                            if !append_batch.is_empty() {
+                            if !activity_batch.is_empty() {
                                 commit_ms += commit_phase_no_wal(
                                     "T_ACT_activities",
                                     first_block,
                                     last_block,
-                                    append_batch,
+                                    activity_batch,
                                 )?;
                             }
                             Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
@@ -5531,7 +5532,7 @@ impl Indexer {
             }
 
             // Activity writes (live sync)
-            let mut activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut activity_batch = StoreBatch::new(self.writer.store());
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),
@@ -5994,6 +5995,7 @@ impl Indexer {
                     batch_stats.sync_totals.2,
                     batch_new_addresses,
                     ema_rate_opt,
+                    !bulk_sync_mode,
                 )
                 .await?;
         }

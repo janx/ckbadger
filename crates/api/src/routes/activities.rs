@@ -189,7 +189,6 @@ fn is_canonical_activity_entry(
 
 fn list_canonical_activities_page(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
     lock_hash: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
@@ -204,7 +203,7 @@ fn list_canonical_activities_page(
     let mut scan_cursor = cursor;
 
     loop {
-        let rows = append_only_store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
+        let rows = store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
         if rows.is_empty() {
             break;
         }
@@ -255,7 +254,6 @@ async fn get_address_activities(
 
     let results = list_canonical_activities_page(
         state.store.as_ref(),
-        state.append_only_store.as_ref(),
         &lock_hash,
         limit + 1,
         cursor,
@@ -341,20 +339,28 @@ mod tests {
     fn test_list_canonical_activities_page_filters_orphaned_entries() {
         let root = tempfile::tempdir().unwrap();
         let domain_path = root.path().join("domain");
-        let append_path = root.path().join("append");
         let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
-        let append = CkbadgerStore::open_append_only(&append_path).unwrap();
 
         let lock_hash = [0xAA; 32];
         let stale_tx = vec![0x30; 32];
         let canonical_tx_new = vec![0x20; 32];
         let canonical_tx_old = vec![0x10; 32];
 
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
-        append_batch.put_activity(&lock_hash, 20, 0, &make_activity(&canonical_tx_new, 20, 0));
-        append_batch.put_activity(&lock_hash, 10, 0, &make_activity(&canonical_tx_old, 10, 0));
-        append_batch.commit().unwrap();
+        let mut domain_activity_batch = StoreBatch::new(&domain);
+        domain_activity_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
+        domain_activity_batch.put_activity(
+            &lock_hash,
+            20,
+            0,
+            &make_activity(&canonical_tx_new, 20, 0),
+        );
+        domain_activity_batch.put_activity(
+            &lock_hash,
+            10,
+            0,
+            &make_activity(&canonical_tx_old, 10, 0),
+        );
+        domain_activity_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -375,8 +381,7 @@ mod tests {
         domain_batch.put_tx_index(10, 0, &tx_index);
         domain_batch.commit().unwrap();
 
-        let rows =
-            list_canonical_activities_page(&domain, &append, &lock_hash, 3, None, None).unwrap();
+        let rows = list_canonical_activities_page(&domain, &lock_hash, 3, None, None).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, 20);
         assert_eq!(rows[1].0, 10);
