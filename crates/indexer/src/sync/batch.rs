@@ -585,9 +585,7 @@ pub(super) fn parse_blocks_parallel(
                         Ok(TxData {
                             hash: parsed_tx.hash,
                             block_number: parsed.number,
-                            block_hash: parsed.hash.clone(),
                             tx_index: tx_index as i32,
-                            version: parsed_tx.version,
                             inputs_count: i16::try_from(parsed_tx.inputs_count).map_err(|_| {
                                 anyhow!(
                                     "tx inputs count exceeds i16 range: tx_hash=0x{}, block={}, inputs_count={}",
@@ -604,35 +602,6 @@ pub(super) fn parse_blocks_parallel(
                                     parsed_tx.outputs_count
                                 )
                             })?,
-                            witnesses_count: i16::try_from(parsed_tx.witnesses_count).map_err(
-                                |_| {
-                                    anyhow!(
-                                        "tx witnesses count exceeds i16 range: tx_hash=0x{}, block={}, witnesses_count={}",
-                                        hex::encode(parsed_tx.hash),
-                                        parsed.number,
-                                        parsed_tx.witnesses_count
-                                    )
-                                },
-                            )?,
-                            cell_deps_count: i16::try_from(parsed_tx.cell_deps_count).map_err(
-                                |_| {
-                                    anyhow!(
-                                        "tx cell_deps count exceeds i16 range: tx_hash=0x{}, block={}, cell_deps_count={}",
-                                        hex::encode(parsed_tx.hash),
-                                        parsed.number,
-                                        parsed_tx.cell_deps_count
-                                    )
-                                },
-                            )?,
-                            header_deps_count: i16::try_from(parsed_tx.header_deps_count)
-                                .map_err(|_| {
-                                    anyhow!(
-                                        "tx header_deps count exceeds i16 range: tx_hash=0x{}, block={}, header_deps_count={}",
-                                        hex::encode(parsed_tx.hash),
-                                        parsed.number,
-                                        parsed_tx.header_deps_count
-                                    )
-                                })?,
                             is_cellbase: parsed_tx.is_cellbase,
                             inputs,
                             cells,
@@ -1248,30 +1217,7 @@ impl Indexer {
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
 
-        let txs_for_batch: Vec<_> = all_tx_data
-            .iter()
-            .map(|tx_data| {
-                (
-                    tx_data.hash.as_slice(),
-                    tx_data.block_number,
-                    tx_data.block_hash.as_slice(),
-                    tx_data.tx_index,
-                    tx_data.version,
-                    tx_data.inputs_count,
-                    tx_data.outputs_count,
-                    tx_data.witnesses_count,
-                    tx_data.cell_deps_count,
-                    tx_data.header_deps_count,
-                    tx_data.total_input_capacity,
-                    tx_data.total_output_capacity,
-                    tx_data.fee,
-                    Some(tx_data.tx_size),
-                    tx_data.cycles,
-                    tx_data.is_cellbase,
-                    tx_data.timestamp,
-                )
-            })
-            .collect();
+        let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();
 
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         for tx_data in &all_tx_data {
@@ -2943,29 +2889,9 @@ impl Indexer {
         // Build reference vectors from pre-computed data (Passes 1-3 done in parser)
         let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
         let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
-        let mut txs_for_batch: Vec<_> = Vec::with_capacity(all_tx_data.len());
+        let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();
 
         for tx_data in &all_tx_data {
-            txs_for_batch.push((
-                tx_data.hash.as_slice(),
-                tx_data.block_number,
-                tx_data.block_hash.as_slice(),
-                tx_data.tx_index,
-                tx_data.version,
-                tx_data.inputs_count,
-                tx_data.outputs_count,
-                tx_data.witnesses_count,
-                tx_data.cell_deps_count,
-                tx_data.header_deps_count,
-                tx_data.total_input_capacity,
-                tx_data.total_output_capacity,
-                tx_data.fee,
-                Some(tx_data.tx_size),
-                tx_data.cycles,
-                tx_data.is_cellbase,
-                tx_data.timestamp,
-            ));
-
             for (output_index, cell) in tx_data.cells.iter().enumerate() {
                 let output_index_i16 =
                     checked_usize_to_i16(output_index, "pipeline sync output index for all_cells")
@@ -6792,19 +6718,12 @@ mod tests {
             i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
         let outputs_count =
             i16::try_from(cells.len()).expect("test helper outputs_count exceeds i16 range");
-        let witnesses_count =
-            i16::try_from(witnesses.len()).expect("test helper witnesses_count exceeds i16 range");
         TxData {
             hash,
             block_number: 0,
-            block_hash: vec![],
             tx_index: 0,
-            version: 0,
             inputs_count,
             outputs_count,
-            witnesses_count,
-            cell_deps_count: 0,
-            header_deps_count: 0,
             is_cellbase,
             inputs,
             cells,

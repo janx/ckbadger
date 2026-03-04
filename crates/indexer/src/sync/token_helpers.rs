@@ -783,19 +783,12 @@ mod tests {
             i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
         let outputs_count =
             i16::try_from(cells.len()).expect("test helper outputs_count exceeds i16 range");
-        let witnesses_count =
-            i16::try_from(witnesses.len()).expect("test helper witnesses_count exceeds i16 range");
         TxData {
             hash,
             block_number: 0,
-            block_hash: vec![],
             tx_index: 0,
-            version: 0,
             inputs_count,
             outputs_count,
-            witnesses_count,
-            cell_deps_count: 0,
-            header_deps_count: 0,
             is_cellbase,
             inputs,
             cells,
