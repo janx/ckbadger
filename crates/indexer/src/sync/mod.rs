@@ -1,3 +1,4 @@
+mod dao_helpers;
 mod helpers;
 mod indexer;
 mod progress;
