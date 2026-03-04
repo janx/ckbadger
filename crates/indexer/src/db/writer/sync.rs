@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use tracing::{info, warn};
 
-use ckbadger_store::keys;
+use ckbadger_store::{keys, CkbadgerStore};
 
 use super::BatchWriter;
 
@@ -180,12 +180,18 @@ impl BatchWriter {
         })
     }
 
-    pub fn init_sync_start(&self, start_block: i64, is_bulk_sync: bool) -> Result<()> {
-        self.init_sync_start_with_options(start_block, is_bulk_sync, false)
+    pub fn init_sync_start(
+        &self,
+        append_store: &CkbadgerStore,
+        start_block: i64,
+        is_bulk_sync: bool,
+    ) -> Result<()> {
+        self.init_sync_start_with_options(append_store, start_block, is_bulk_sync, false)
     }
 
     pub fn init_sync_start_with_options(
         &self,
+        append_store: &CkbadgerStore,
         start_block: i64,
         is_bulk_sync: bool,
         force_cleanup: bool,
@@ -232,7 +238,8 @@ impl BatchWriter {
                 } else {
                     start_block
                 };
-            self.store.rollback_to_block(rollback_target)?;
+            self.store
+                .rollback_to_block_with_tx_index_store(rollback_target, Some(append_store))?;
             info!(
                 start_block,
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
@@ -290,7 +297,12 @@ impl BatchWriter {
         self.has_partial_data_after_block(start_block)
     }
 
-    pub fn cleanup_batch_range(&self, start_block: i64, end_block: i64) -> Result<()> {
+    pub fn cleanup_batch_range(
+        &self,
+        append_store: &CkbadgerStore,
+        start_block: i64,
+        end_block: i64,
+    ) -> Result<()> {
         info!(
             "Cleaning up partial batch data for blocks {} to {}",
             start_block, end_block
@@ -298,7 +310,8 @@ impl BatchWriter {
 
         // For range cleanup, we rollback to the block before the range
         // then the caller will re-sync from start_block
-        self.store.rollback_to_block(start_block - 1)?;
+        self.store
+            .rollback_to_block_with_tx_index_store(start_block - 1, Some(append_store))?;
 
         info!(
             "Batch cleanup complete for blocks {} to {}",
@@ -353,17 +366,19 @@ mod tests {
     use std::sync::Arc;
 
     use ckbadger_store::{
-        AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch, TxIndexEntry,
+        AddressBalance, CachedBlockHeader, CkbadgerStore, LiveCellInfo, StoreBatch, TxIndexEntry,
     };
     use tempfile::TempDir;
 
     use super::BatchWriter;
 
-    fn setup() -> (TempDir, Arc<CkbadgerStore>, BatchWriter) {
+    fn setup() -> (TempDir, Arc<CkbadgerStore>, Arc<CkbadgerStore>, BatchWriter) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append_store =
+            Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone());
-        (dir, store, writer)
+        (dir, store, append_store, writer)
     }
 
     fn make_header(hash_byte: u8, ts_ms: i64) -> CachedBlockHeader {
@@ -392,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_skips_cleanup_when_no_partial_data() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, append_store, writer) = setup();
         let lock_hash = vec![0xAA; 32];
         store
             .put_addr_balance_direct(
@@ -404,14 +419,16 @@ mod tests {
             )
             .unwrap();
 
-        writer.init_sync_start(0, false).unwrap();
+        writer
+            .init_sync_start(append_store.as_ref(), 0, false)
+            .unwrap();
 
         assert!(store.get_addr_balance(&lock_hash).unwrap().is_some());
     }
 
     #[test]
     fn test_init_sync_start_cleans_when_partial_data_exists() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, append_store, writer) = setup();
         let lock_hash = vec![0xBB; 32];
         store
             .put_addr_balance_direct(
@@ -428,15 +445,73 @@ mod tests {
         batch.put_block_header(1, &make_header(0x11, 1_700_000_010_000));
         batch.commit().unwrap();
 
-        writer.init_sync_start(0, false).unwrap();
+        writer
+            .init_sync_start(append_store.as_ref(), 0, false)
+            .unwrap();
 
         assert!(store.get_block_header(1).unwrap().is_none());
         assert!(store.get_addr_balance(&lock_hash).unwrap().is_none());
     }
 
     #[test]
+    fn test_init_sync_start_rebuilds_txs_count_from_append_store() {
+        let (_dir, store, append_store, writer) = setup();
+        let lock_hash = vec![0xDD; 32];
+        let tx_hash = vec![0xAB; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &make_header(0x30, 1_700_000_000_000));
+        batch.put_block_header(1, &make_header(0x31, 1_700_000_010_000));
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100,
+                occupied_capacity: 100,
+                created_at_block: 0,
+                lock_script_hash: lock_hash.clone(),
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_args: None,
+                data_size: 0,
+                udt_amount: None,
+            },
+        );
+        batch.put_addr_balance(
+            &lock_hash,
+            &AddressBalance {
+                balance: 100,
+                occupied_capacity: 100,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count: 0,
+                first_seen_block: 0,
+                first_seen_tx: tx_hash.clone(),
+                last_activity_block: 0,
+                last_activity_tx: tx_hash.clone(),
+            },
+        );
+        batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append_store);
+        append_batch.put_addr_tx(&lock_hash, 0, 0, &tx_hash);
+        append_batch.put_addr_tx(&lock_hash, 0, 1, &[0xCD; 32]);
+        append_batch.commit().unwrap();
+
+        writer
+            .init_sync_start(append_store.as_ref(), 0, false)
+            .unwrap();
+
+        let rebuilt = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+        assert_eq!(rebuilt.txs_count, 2);
+    }
+
+    #[test]
     fn test_needs_startup_cleanup_reports_partial_data() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
         assert!(!writer.needs_startup_cleanup(0).unwrap());
 
         let mut batch = StoreBatch::new(&store);
@@ -448,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_needs_startup_cleanup_reports_pending_undo_log_entries() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
         assert!(!writer.needs_startup_cleanup(0).unwrap());
 
         let mut batch = StoreBatch::new(&store);
@@ -469,7 +544,7 @@ mod tests {
 
     #[test]
     fn test_probe_startup_continuity_reports_clean_state() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
 
         let mut batch = StoreBatch::new(&store);
         for block in 0..=2 {
@@ -490,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_probe_startup_continuity_detects_missing_header_and_tx() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(0, &make_header(0x50, 1_700_000_000_000));
@@ -510,13 +585,13 @@ mod tests {
 
     #[test]
     fn test_needs_startup_cleanup_with_force_reports_true_without_partial_data() {
-        let (_dir, _store, writer) = setup();
+        let (_dir, _store, _append_store, writer) = setup();
         assert!(writer.needs_startup_cleanup_with_force(0, true).unwrap());
     }
 
     #[test]
     fn test_init_sync_start_forces_cleanup_without_partial_data() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, append_store, writer) = setup();
         let lock_hash = vec![0xCC; 32];
         store
             .put_addr_balance_direct(
@@ -528,14 +603,16 @@ mod tests {
             )
             .unwrap();
 
-        writer.init_sync_start_with_options(0, false, true).unwrap();
+        writer
+            .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
+            .unwrap();
 
         assert!(store.get_addr_balance(&lock_hash).unwrap().is_none());
     }
 
     #[test]
     fn test_update_sync_status_persists_sync_meta_in_store() {
-        let (_dir, store, writer) = setup();
+        let (_dir, store, _append_store, writer) = setup();
         let first_hash = vec![0xAB; 32];
         let second_hash = vec![0xCD; 32];
 
@@ -562,8 +639,10 @@ mod tests {
 
     #[test]
     fn test_init_sync_start_errors_when_start_block_below_minus_one() {
-        let (_dir, _store, writer) = setup();
-        let err = writer.init_sync_start(-2, false).unwrap_err();
+        let (_dir, _store, append_store, writer) = setup();
+        let err = writer
+            .init_sync_start(append_store.as_ref(), -2, false)
+            .unwrap_err();
         assert!(err.to_string().contains("expected >= -1"));
     }
 }

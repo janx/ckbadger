@@ -472,6 +472,14 @@ impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
     pub fn rollback_to_block(&self, rollback_to: i64) -> anyhow::Result<RollbackResult> {
+        self.rollback_to_block_with_tx_index_store(rollback_to, None)
+    }
+
+    pub fn rollback_to_block_with_tx_index_store(
+        &self,
+        rollback_to: i64,
+        tx_index_store: Option<&CkbadgerStore>,
+    ) -> anyhow::Result<RollbackResult> {
         if rollback_to < -1 {
             anyhow::bail!(
                 "invalid rollback target: rollback_to={} (expected >= -1)",
@@ -1430,7 +1438,8 @@ impl CkbadgerStore {
         // created cells in rolled-back blocks, and historical drift can leave
         // addr_balance inconsistent with live_cells otherwise.
         info!("Rollback cleanup rebuilding addr_balance from live_cells");
-        let rebuilt_balances = self.rebuild_addr_balances_from_live_cells()?;
+        let rebuilt_balances =
+            self.rebuild_addr_balances_from_live_cells_with_tx_index_store(tx_index_store)?;
         info!(
             rebuilt_balances,
             elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),

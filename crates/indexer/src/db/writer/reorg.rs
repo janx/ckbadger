@@ -7,7 +7,7 @@ use tracing::info;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys::sync_meta_keys;
 use ckbadger_store::types::{DeepForkInfo, ReorgEvent};
-use ckbadger_store::{CkbadgerStore, CF_ADDR_TXS};
+use ckbadger_store::CkbadgerStore;
 
 use super::BatchWriter;
 
@@ -73,20 +73,10 @@ impl BatchWriter {
         let depth = (old_tip - fork_point) as i32;
 
         // Domain rollback for canonical mutable state.
-        self.store.rollback_to_block(fork_point)?;
+        self.store
+            .rollback_to_block_with_tx_index_store(fork_point, Some(append_store))?;
         // Revert domain mutations from undo-log and prune append undo entries.
         self.store.rollback_via_undo_log(append_store, fork_point)?;
-        // Domain store cannot read append-only CFs directly. Rebuild txs_count
-        // from append-only addr_txs after rollback+undo so address aggregates stay exact.
-        if !self.store.has_cf(CF_ADDR_TXS) {
-            let rebuilt = self
-                .store
-                .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(append_store))?;
-            info!(
-                rebuilt,
-                "Address balances rebuilt from append-only addr_txs after reorg rollback"
-            );
-        }
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.
         let event = ReorgEvent {

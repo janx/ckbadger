@@ -813,6 +813,7 @@ impl Indexer {
         }
 
         let init_result = self.writer.init_sync_start_with_options(
+            self.append_only_store.as_ref(),
             actual_start,
             bulk_sync_mode,
             self.config.force_startup_cleanup,
