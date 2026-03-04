@@ -4,7 +4,7 @@ Instructions for AI agents working on ckbadger - a CKB blockchain explorer.
 
 ## Project Principles
 
-- **CKB Native** - Make CKB concepts tangible instead of just-another-explorer
+- **CKB Native** - Make CKB concepts tangible instead of just-another-explorer. CKB chain data is the only source of truth, all other data are derived from it.
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
 
@@ -79,9 +79,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 **Sync Bug Policy (MANDATORY):** No rebuild task/workflow as primary fix for sync bugs. Fix indexer logic first, then delete RocksDB and re-sync from genesis. Prefer dropping and rebuilding DB over complex compatibility/backfill paths.
 
-**Bulk Sync Failure Policy (MANDATORY):** Bulk sync is single-shot: finish successfully or fail fast. No auto-cleanup partial state. No defer + refill/rebuild patterns; write derived data inline. If it fails: fix bug, delete RocksDB, restart from genesis.
-
-**Bulk Sync Write Policy:** Required user-facing derived data must be written inline with block processing. Any correctness bug should be fixed in the write/read logic with a full DB rebuild + re-sync from genesis.
+**Bulk Sync Policy (MANDATORY):** Follow `docs/prompts/BULK_SYNC.md` as the single source of truth for bulk sync behavior, constraints, and failure handling.
 
 ```bash
 # Typical workflow after storage changes:
@@ -246,15 +244,16 @@ cargo run -p ckbadger-indexer -- verify --list-checks      # List all checks
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic            | Document                          | Must Read Before                     |
-| ---------------- | --------------------------------- | ------------------------------------ |
-| **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**     |
-| Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes        |
-| Activity system  | `docs/prompts/ACTIVITY_SYSTEM.md` | Activity feed or activity CF changes |
-| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals          |
-| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations             |
-| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes   |
-| Architecture     | `docs/ARCHITECTURE_MAP.md`        | Module ownership questions           |
+| Topic            | Document                          | Must Read Before                              |
+| ---------------- | --------------------------------- | --------------------------------------------- |
+| **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**              |
+| Bulk sync rules  | `docs/prompts/BULK_SYNC.md`       | Bulk sync logic or sync-mode boundary changes |
+| Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes                 |
+| Activity system  | `docs/prompts/ACTIVITY_SYSTEM.md` | Activity feed or activity CF changes          |
+| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals                   |
+| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations                      |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes            |
+| Architecture     | `docs/ARCHITECTURE_MAP.md`        | Module ownership questions                    |
 
 ### Common Knowledge (CKB Core Concept)
 

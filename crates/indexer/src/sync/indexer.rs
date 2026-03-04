@@ -1046,6 +1046,30 @@ fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_threshold: u64) 
     blocks_behind > bulk_sync_threshold
 }
 
+fn should_run_reorg_handling(blocks_behind: u64, bulk_sync_threshold: u64) -> bool {
+    blocks_behind <= bulk_sync_threshold
+}
+
+fn ensure_bulk_sync_fresh_start(
+    bulk_sync_mode: bool,
+    sync_tip_block: i64,
+    sync_tip_hash: &Option<Vec<u8>>,
+) -> Result<()> {
+    if !bulk_sync_mode {
+        return Ok(());
+    }
+    if sync_tip_block == 0 && sync_tip_hash.is_none() {
+        return Ok(());
+    }
+    bail!(
+        "bulk sync fail-fast: bulk sync only supports fresh-db rebuilds from genesis; \
+         detected existing sync tip state (tip_block={}, tip_hash_present={}). \
+         delete RocksDB and restart from genesis",
+        sync_tip_block,
+        sync_tip_hash.is_some()
+    );
+}
+
 fn require_non_negative_block_number(value: i64, context: &str) -> Result<u64> {
     u64::try_from(value).map_err(|_| anyhow!("negative block number in {}: {}", context, value))
 }
@@ -3977,7 +4001,8 @@ impl Indexer {
             self.append_only_store.set_bulk_sync_compaction_options();
         }
 
-        let (start_block, _) = self.repo.get_sync_tip().await?;
+        let (start_block, start_block_hash) = self.repo.get_sync_tip().await?;
+        ensure_bulk_sync_fresh_start(bulk_sync_mode, start_block, &start_block_hash)?;
         let consistent_block = self.writer.find_last_consistent_block()?;
         let actual_start = match consistent_block {
             Some(cb) if cb < start_block => {
@@ -4162,7 +4187,12 @@ impl Indexer {
                 continue;
             }
 
-            if self.repo.has_unresolved_deep_fork()? {
+            // Bulk sync is an optimistic rebuild path and must not run reorg/deep-fork handling.
+            let should_handle_reorg = should_run_reorg_handling(
+                self.progress.blocks_remaining(),
+                self.config.bulk_sync_threshold,
+            );
+            if should_handle_reorg && self.repo.has_unresolved_deep_fork()? {
                 if let Some(repeat) = self.repeated_warning_snapshot(
                     "sequential_deep_fork_unresolved",
                     Duration::from_secs(120),
@@ -5935,7 +5965,12 @@ impl Indexer {
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
         loop {
-            if self.repo.has_unresolved_deep_fork()? {
+            // Bulk sync is an optimistic rebuild path and must not run reorg/deep-fork handling.
+            let should_handle_reorg = should_run_reorg_handling(
+                self.progress.blocks_remaining(),
+                self.config.bulk_sync_threshold,
+            );
+            if should_handle_reorg && self.repo.has_unresolved_deep_fork()? {
                 let drained = Self::drain_channel(&mut parse_rx).await;
                 parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
                 if let Some(repeat) = self.repeated_warning_snapshot(
@@ -6059,7 +6094,7 @@ impl Indexer {
 
                     let blocks_behind =
                         blocks_behind_tip(chain_tip, db_tip, "pipeline writer reorg check")?;
-                    if blocks_behind <= self.config.bulk_sync_threshold {
+                    if should_run_reorg_handling(blocks_behind, self.config.bulk_sync_threshold) {
                         if let Some(ref stored_hash) = db_tip_hash {
                             if db_tip > 0 {
                                 let db_tip_u64 = require_non_negative_block_number(
@@ -6632,7 +6667,7 @@ impl Indexer {
         }
 
         let blocks_behind = chain_tip.saturating_sub(start_block);
-        if blocks_behind <= self.config.bulk_sync_threshold {
+        if should_run_reorg_handling(blocks_behind, self.config.bulk_sync_threshold) {
             if let Some(ref stored_hash) = db_tip_hash {
                 if db_tip > 0 {
                     let db_tip_u64 =
@@ -13592,9 +13627,34 @@ mod tests {
     }
 
     #[test]
+    fn test_should_run_reorg_handling_only_in_live_sync_window() {
+        assert!(should_run_reorg_handling(0, 1000));
+        assert!(should_run_reorg_handling(1000, 1000));
+        assert!(!should_run_reorg_handling(1001, 1000));
+    }
+
+    #[test]
     #[should_panic(expected = "invalid bulk-sync batch range")]
     fn test_is_bulk_sync_batch_panics_when_batch_end_exceeds_tip() {
         let _ = is_bulk_sync_batch(100, 150, 1000);
+    }
+
+    #[test]
+    fn test_ensure_bulk_sync_fresh_start_allows_empty_tip_state() {
+        ensure_bulk_sync_fresh_start(true, 0, &None).unwrap();
+    }
+
+    #[test]
+    fn test_ensure_bulk_sync_fresh_start_rejects_existing_tip_in_bulk_mode() {
+        let err = ensure_bulk_sync_fresh_start(true, 0, &Some(vec![0x11; 32])).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("bulk sync only supports fresh-db rebuilds from genesis"));
+    }
+
+    #[test]
+    fn test_ensure_bulk_sync_fresh_start_skips_check_when_not_bulk() {
+        ensure_bulk_sync_fresh_start(false, 123, &Some(vec![0x22; 32])).unwrap();
     }
 
     #[test]

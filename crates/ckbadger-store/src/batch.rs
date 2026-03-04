@@ -74,6 +74,9 @@ impl<'a> StoreBatch<'a> {
             } else {
                 StoreWriteIntent::AppendValidated
             };
+            // Bulk sync is constrained to fresh-db rebuilds; skip per-key existence
+            // probes to avoid read-before-write overhead on the hot append path.
+            let skip_existing_probe = matches!(intent, StoreWriteIntent::BulkSyncAppendValidated);
             let mut seen_ops: HashMap<(&'static str, Vec<u8>), usize> = HashMap::new();
             let mut filtered_batch = WriteBatch::default();
             for (idx, op) in self.append_ops.iter().enumerate() {
@@ -89,18 +92,20 @@ impl<'a> StoreBatch<'a> {
                 }
                 let cf = self.store.cf(op.cf_name);
                 if let Some(value) = op.value.as_deref() {
-                    if let Some(existing) = self.store.get_cf(cf, &op.key)? {
-                        if existing.as_slice() == value {
-                            // Replay-safe idempotency: same key+value in append-only is already committed.
-                            continue;
+                    if !skip_existing_probe {
+                        if let Some(existing) = self.store.get_cf(cf, &op.key)? {
+                            if existing.as_slice() == value {
+                                // Replay-safe idempotency: same key+value in append-only is already committed.
+                                continue;
+                            }
+                            anyhow::bail!(
+                                "append-only overwrite blocked: cf={}, key=0x{}, existing_len={}, new_len={}",
+                                op.cf_name,
+                                bytes_to_hex(&op.key),
+                                existing.len(),
+                                value.len()
+                            );
                         }
-                        anyhow::bail!(
-                            "append-only overwrite blocked: cf={}, key=0x{}, existing_len={}, new_len={}",
-                            op.cf_name,
-                            bytes_to_hex(&op.key),
-                            existing.len(),
-                            value.len()
-                        );
                     }
                     filtered_batch.put_cf(cf, &op.key, value);
                 } else {
@@ -1115,7 +1120,7 @@ mod tests {
     }
 
     #[test]
-    fn test_append_only_bulk_sync_rejects_conflicting_overwrite() {
+    fn test_append_only_bulk_sync_skips_existing_probe_on_conflicting_key() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xA1u8; 32];
@@ -1129,12 +1134,11 @@ mod tests {
         store.set_bulk_sync_compaction_options();
         let mut overwrite_batch = StoreBatch::new(&store);
         overwrite_batch.put_addr_tx(&lock, 100, 0, &tx_hash_new);
-        let err = overwrite_batch.commit().unwrap_err();
-        assert!(err.to_string().contains("append-only overwrite blocked"));
+        overwrite_batch.commit().unwrap();
         store.restore_normal_compaction_options();
 
         let rows = store.list_addr_txs_recent(&lock, 1, None).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2, tx_hash_old);
+        assert_eq!(rows[0].2, tx_hash_new);
     }
 }

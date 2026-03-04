@@ -25,9 +25,12 @@ Chain Block N hash: 0xdef...  <- mismatch => reorg
 
 On mismatch, it walks backward to find the fork point.
 
-### Bulk Sync Optimization
+### Sync Phase Boundary (MANDATORY)
 
-During bulk sync (when `blocks_remaining > bulk_sync_threshold`), reorg checks are skipped because historical blocks are already finalized in practice. Reorg detection resumes automatically near tip.
+- Reorg handling runs only in **live sync** (near tip).
+- During **bulk sync**, reorg handling is disabled by design: no reorg detection, no fork-point search, no rollback path execution.
+- Bulk-sync behavior and failure policy are defined in `docs/prompts/BULK_SYNC.md`.
+- When transitioning from bulk to live sync, reorg detection resumes automatically.
 
 ## Handling Strategies
 

@@ -9,7 +9,7 @@
 
 **ckbadger** is a next-generation CKB blockchain explorer designed with four core principles:
 
-- **CKB Native** - Make CKB concepts tangible instead of just-another-explorer
+- **CKB Native** - Make CKB concepts tangible instead of just-another-explorer. CKB chain data is the only source of truth, all other data are derived from it.
 - **Local First** - Optimized for decentralized deployment on localhosts
 - **Agent Friendly** - Prefer clear, automation-friendly structure and workflows
 
@@ -31,14 +31,6 @@
 Correctness issues must be fixed at the source path. Do not add silent guards (for example
 `max(0)`, `saturating_sub`, or `unwrap_or(0)` on invariant-critical paths) to mask inconsistent
 state transitions.
-
-## Bulk Sync Model
-
-- Bulk sync is a single-shot rebuild path: it should either complete end-to-end or fail fast.
-- During bulk sync, correctness/write errors are treated as fatal. The indexer should not auto-cleanup partial state and continue.
-- During bulk sync, do not use defer + refill/rebuild patterns for derived data. Required data must be written inline on the canonical path.
-- Recovery workflow is: fix the bug, delete RocksDB data, and re-run sync from genesis.
-- This keeps bulk sync logic simple and predictable, and avoids complex mid-run recovery branches.
 
 ## Responsibility Boundary
 
