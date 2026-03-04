@@ -8,8 +8,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use ckbadger_common::PipelineProgressData;
 use dashmap::DashMap;
-use tokio::time::sleep;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use ckbadger_store::types::HodlTrackerState;
 use ckbadger_store::{CkbadgerStore, CF_ADDR_TXS};
@@ -27,7 +26,7 @@ use super::adaptive::*;
 use super::diagnostics::*;
 use super::helpers::*;
 use super::sync_mode::*;
-use super::types::{CachedCellInfo, CachedUdtCellInfo, SyncAction};
+use super::types::{CachedCellInfo, CachedUdtCellInfo};
 use super::SyncProgress;
 
 fn ensure_hodl_tracker_state_consistent(
@@ -143,10 +142,6 @@ pub(super) fn mempool_short_tx_id(tx_hash: &str) -> Result<&str> {
         );
     }
     Ok(&raw_hash[..20])
-}
-
-fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
-    epoch.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 const STARTUP_CONTINUITY_WINDOW_BLOCKS: i64 = 512;
@@ -835,72 +830,6 @@ impl Indexer {
             self.run_pipeline().await
         } else {
             self.run_sequential().await
-        }
-    }
-
-    async fn run_sequential(&self) -> Result<()> {
-        loop {
-            if self.rebuild_pause_flag.load(Ordering::SeqCst) {
-                debug!("Sync paused for index rebuild");
-                sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-
-            // Bulk sync is an optimistic rebuild path and must not run reorg/deep-fork handling.
-            let should_handle_reorg = should_run_reorg_handling(
-                self.progress.blocks_remaining(),
-                self.config.bulk_sync_threshold,
-            );
-            if should_handle_reorg && self.repo.has_unresolved_deep_fork()? {
-                if let Some(repeat) = self.repeated_warning_snapshot(
-                    "sequential_deep_fork_unresolved",
-                    Duration::from_secs(120),
-                ) {
-                    warn!(
-                        run_id = %self.run_id,
-                        repeat_count = repeat.total_count,
-                        suppressed_since_last = repeat.suppressed_since_last_emit,
-                        first_seen_secs_ago = repeat.first_seen_secs_ago,
-                        "Deep fork unresolved, sync paused. Waiting for manual intervention..."
-                    );
-                }
-                sleep(Duration::from_secs(30)).await;
-                continue;
-            }
-
-            match self.sync_batch().await {
-                Ok(SyncAction::CaughtUp) => {
-                    sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
-                }
-                Ok(SyncAction::Continue) => {}
-                Ok(SyncAction::ReorgHandled) => {
-                    self.cell_cache.clear();
-                    self.udt_cell_cache.clear();
-                    let (reorg_tip, _) = self.repo.get_sync_tip().await?;
-                    self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
-                    let new_epoch = bump_pipeline_reset_epoch(&self.pipeline_reset_epoch);
-                    info!(
-                        epoch = new_epoch,
-                        reorg_tip,
-                        "Reorg handled, caches cleared, HODL tracker reconciled, epoch bumped, continuing sync from fork point"
-                    );
-                }
-                Ok(SyncAction::DeepForkPaused) => {
-                    warn!("Deep fork detected, sync paused");
-                    sleep(Duration::from_secs(30)).await;
-                }
-                Err(e) => {
-                    let incident_id =
-                        self.report_incident("sync_batch_failed", format!("error={:?}", e));
-                    error!(
-                        run_id = %self.run_id,
-                        incident_id = %incident_id,
-                        error = ?e,
-                        "Sync error"
-                    );
-                    sleep(Duration::from_secs(5)).await;
-                }
-            }
         }
     }
 }

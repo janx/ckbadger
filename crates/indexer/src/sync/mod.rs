@@ -8,6 +8,7 @@ mod nft_helpers;
 mod pipeline;
 mod progress;
 mod reorg;
+mod sequential;
 mod sync_mode;
 mod token_helpers;
 mod types;

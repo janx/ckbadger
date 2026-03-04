@@ -550,6 +550,10 @@ pub(crate) fn adaptive_sub_batch_tx_cap(target_batch_txs: u64, min_target_batch_
         .clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS) as usize
 }
 
+pub(super) fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
+    epoch.fetch_add(1, Ordering::SeqCst) + 1
+}
+
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
