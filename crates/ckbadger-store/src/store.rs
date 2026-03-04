@@ -251,7 +251,7 @@ pub(crate) enum StoreWriteIntent {
     Normal,
     /// StoreBatch already validated per-op append-only invariants.
     AppendValidated,
-    /// Bulk sync mode for append-only StoreBatch commits: skip per-key DB existence reads.
+    /// Bulk sync mode for append-only StoreBatch commits.
     BulkSyncAppendValidated,
 }
 
@@ -456,12 +456,9 @@ impl CkbadgerStore {
         cf_name: &str,
         key: &[u8],
         value: &[u8],
-        intent: StoreWriteIntent,
+        _intent: StoreWriteIntent,
     ) -> anyhow::Result<()> {
         if !self.is_append_only_store() {
-            return Ok(());
-        }
-        if matches!(intent, StoreWriteIntent::BulkSyncAppendValidated) {
             return Ok(());
         }
         let cf = self
