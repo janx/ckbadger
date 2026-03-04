@@ -57,18 +57,19 @@ impl DotbitParser {
         }
 
         let account_id_from_args = parse_hex_to_bytes(&type_script.args);
+        let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
 
-        // .bit account ID is encoded in type args; reject legacy/invalid payloads.
-        if account_id_from_args.len() != ACCOUNT_ID_LEN
-            || account_id_from_args.iter().all(|&b| b == 0)
+        // Prefer type args when available (newer layout), but keep data fallback
+        // for historical/live cells where args may be empty.
+        let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
+            && !account_id_from_args.iter().all(|&b| b == 0)
         {
+            account_id_from_args
+        } else if !account_id_from_data.iter().all(|&b| b == 0) {
+            account_id_from_data
+        } else {
             return None;
-        }
-        let account_id = account_id_from_args;
-
-        if account_id.iter().all(|&b| b == 0) {
-            return None;
-        }
+        };
 
         let next_account_id = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 {
             let next_id =
@@ -723,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_account_cell_rejects_missing_type_args_even_with_data_account_id() {
+    fn test_parse_account_cell_falls_back_to_data_account_id_when_type_args_missing() {
         let account_id_from_data: [u8; 20] = [0x55; 20];
 
         let output = CellOutput {
@@ -736,7 +737,9 @@ mod tests {
         let data_hex = format!("0x{}", hex::encode(&data));
 
         let result = DotbitParser::parse_account_cell(&output, &data_hex);
-        assert!(result.is_none());
+        assert!(result.is_some());
+        let parsed = result.unwrap();
+        assert_eq!(parsed.account_id, account_id_from_data.to_vec());
     }
 
     #[test]
