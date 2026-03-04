@@ -51,8 +51,15 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 - **Fail Fast, Fail Early** - Never hide invariant violations with silent fallbacks, lower-bound clamps, or default-zero repairs; fail immediately with actionable context
 - **Refactor First When It Helps** - Before implementing new code, evaluate whether a focused refactor will reduce complexity or risk; if yes, refactor first and then implement.
+- **Single Calculation Path for Read Data** - For any data that must be read/derived, keep exactly one computation path and make that single path correct.
+- **No Fallback Calculation Chains** - Reject defensive multi-path computation such as "if path A is wrong, fallback to B, then fallback to C"; do not add path B/C, fix path A.
 - Do not add silent guards to mask bad states on correctness-critical paths (for example `max(0)`, `saturating_sub`, `unwrap_or(0)`).
 - If an invariant is violated, return/raise an error with enough context (block/tx/key/date) to locate the upstream bug quickly.
+
+## Debug & Fix Principles (MANDATORY)
+
+- **Trace Root Cause** - Do not stop at shallow/near-surface symptoms; track the true upstream root cause.
+- **Fix Root Cause, Not With Fallbacks** - If you find some data incorrect, don't be satisfy, don't use recalculation code to correct it, instead you should check why it's incorrect in the first place, fix the bug there. Do not patch incorrect pre-computation with extra fallback paths; fix the original computation logic that produced the wrong state.
 
 ## DB Responsibility Boundary (MANDATORY)
 
