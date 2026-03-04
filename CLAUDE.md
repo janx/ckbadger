@@ -38,6 +38,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 ## Validation
 
 - Commands run: / Tests added/updated: / Verify checks:
+- Store boundary checks: / Domain vs append-only target confirmed: yes/no / Append-only update/delete path check: pass/fail
 
 ## Result
 
@@ -58,6 +59,17 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Indexer owns all RocksDB writes**: any operation that creates/updates/deletes persistent DB state must be executed by `ckbadger-indexer`.
 - **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
 - If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
+- **Domain store responsibility**: domain store (`CKBADGER_DOMAIN_DATA_PATH`) is the mutable canonical/query state and may perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
+- **Append-only store responsibility**: append-only store (`CKBADGER_APPEND_ONLY_DATA_PATH`) is immutable history/log storage. It may only append new records. Update/delete/overwrite of existing append-only records is forbidden.
+- **Append-only correction policy**: if append-only data is wrong, fix indexer logic and rebuild from genesis; do not patch history with in-place update/delete.
+
+## Store Boundary Check Rules (MANDATORY)
+
+- Every storage PR must explicitly state which logical store each new/changed write path targets (`domain` or `append-only`).
+- Any write path to append-only store must be reviewed as append-only semantics: new-key append only, no update, no delete, no overwrite.
+- Do not add helper APIs that allow generic mutation on append-only store (for example update-by-key or delete-by-key operations).
+- If a feature requires mutable behavior, it belongs in domain store, not append-only store.
+- Validation for storage changes must include at least one check/test proving append-only invariants are enforced on touched paths.
 
 ## Development Status & Sync Policies (IMPORTANT)
 
