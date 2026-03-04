@@ -1134,4 +1134,12 @@ mod tests {
     fn test_plan_fetch_sub_batches_panics_on_zero_limit() {
         let _ = plan_fetch_sub_batches(&[1], 0);
     }
+
+    #[test]
+    fn test_bump_pipeline_reset_epoch_is_monotonic() {
+        let epoch = AtomicU64::new(0);
+        assert_eq!(bump_pipeline_reset_epoch(&epoch), 1);
+        assert_eq!(bump_pipeline_reset_epoch(&epoch), 2);
+        assert_eq!(epoch.load(Ordering::SeqCst), 2);
+    }
 }

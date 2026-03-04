@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -836,9 +834,6 @@ impl Indexer {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use super::super::batch::*;
     use super::*;
 
     #[test]
@@ -847,40 +842,6 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Failed to get chain tip from CKB RocksDB"));
-    }
-
-    #[test]
-    fn test_load_optional_index_from_store_propagates_error() {
-        let mut cache: HashMap<Vec<u8>, Option<i32>> = HashMap::new();
-        let err = load_optional_index_from_store(&mut cache, &[0xAA; 32], "test_index", || {
-            Err(anyhow!("synthetic index read failure"))
-        })
-        .unwrap_err();
-        assert!(err.to_string().contains("failed to load test_index index"));
-        assert!(err
-            .chain()
-            .any(|cause| cause.to_string().contains("synthetic index read failure")));
-    }
-
-    #[test]
-    fn test_load_optional_index_from_store_caches_loaded_value() {
-        let mut cache: HashMap<Vec<u8>, Option<i32>> = HashMap::new();
-        let mut load_calls = 0usize;
-
-        let first = load_optional_index_from_store(&mut cache, &[0xAB; 32], "test_index", || {
-            load_calls += 1;
-            Ok(Some(7))
-        })
-        .unwrap();
-        let second = load_optional_index_from_store(&mut cache, &[0xAB; 32], "test_index", || {
-            load_calls += 1;
-            Ok(Some(9))
-        })
-        .unwrap();
-
-        assert_eq!(first, Some(7));
-        assert_eq!(second, Some(7));
-        assert_eq!(load_calls, 1);
     }
 
     #[test]
@@ -911,14 +872,6 @@ mod tests {
         assert!(msg.contains("gap at block 123"));
         assert!(msg.contains("delete RocksDB and re-sync from genesis"));
         assert!(msg.contains("automatic gap replay is disabled"));
-    }
-
-    #[test]
-    fn test_bump_pipeline_reset_epoch_is_monotonic() {
-        let epoch = AtomicU64::new(0);
-        assert_eq!(bump_pipeline_reset_epoch(&epoch), 1);
-        assert_eq!(bump_pipeline_reset_epoch(&epoch), 2);
-        assert_eq!(epoch.load(Ordering::SeqCst), 2);
     }
 
     #[test]

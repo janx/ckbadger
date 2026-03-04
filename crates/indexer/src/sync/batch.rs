@@ -6831,4 +6831,38 @@ mod tests {
             .to_string()
             .contains("failed to list dao daily snapshots while building cumulative snapshot"));
     }
+
+    #[test]
+    fn test_load_optional_index_from_store_propagates_error() {
+        let mut cache: HashMap<Vec<u8>, Option<i32>> = HashMap::new();
+        let err = load_optional_index_from_store(&mut cache, &[0xAA; 32], "test_index", || {
+            Err(anyhow!("synthetic index read failure"))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("failed to load test_index index"));
+        assert!(err
+            .chain()
+            .any(|cause| cause.to_string().contains("synthetic index read failure")));
+    }
+
+    #[test]
+    fn test_load_optional_index_from_store_caches_loaded_value() {
+        let mut cache: HashMap<Vec<u8>, Option<i32>> = HashMap::new();
+        let mut load_calls = 0usize;
+
+        let first = load_optional_index_from_store(&mut cache, &[0xAB; 32], "test_index", || {
+            load_calls += 1;
+            Ok(Some(7))
+        })
+        .unwrap();
+        let second = load_optional_index_from_store(&mut cache, &[0xAB; 32], "test_index", || {
+            load_calls += 1;
+            Ok(Some(9))
+        })
+        .unwrap();
+
+        assert_eq!(first, Some(7));
+        assert_eq!(second, Some(7));
+        assert_eq!(load_calls, 1);
+    }
 }
