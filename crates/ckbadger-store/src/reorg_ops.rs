@@ -1723,6 +1723,61 @@ mod tests {
     }
 
     #[test]
+    fn test_rollback_rebuilds_addr_balance_for_history_only_addresses() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let lock_hash = vec![0xAB; 32];
+
+        let header0 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header1 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_block_header(0, &header0);
+        domain_batch.put_block_header(1, &header1);
+        domain_batch.put_addr_balance(
+            &lock_hash,
+            &AddressBalance {
+                txs_count: 0,
+                ..Default::default()
+            },
+        );
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_addr_tx(&lock_hash, 0, 0, &[0x31; 32]);
+        append_batch.put_addr_tx(&lock_hash, 0, 1, &[0x32; 32]);
+        append_batch.commit().unwrap();
+
+        domain
+            .rollback_to_block_with_tx_index_store(0, Some(&append))
+            .unwrap();
+
+        let rebuilt = domain.get_addr_balance(&lock_hash).unwrap().unwrap();
+        assert_eq!(rebuilt.balance, 0);
+        assert_eq!(rebuilt.occupied_capacity, 0);
+        assert_eq!(rebuilt.live_cells_count, 0);
+        assert_eq!(rebuilt.txs_count, 2);
+    }
+
+    #[test]
     fn test_rollback_rebuilds_script_info_from_cells() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();

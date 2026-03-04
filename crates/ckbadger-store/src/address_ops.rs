@@ -152,8 +152,10 @@ impl CkbadgerStore {
             txs_count: i64,
             first_seen_block: i64,
             first_seen_tx: Vec<u8>,
+            first_seen_tx_idx: i32,
             last_activity_block: i64,
             last_activity_tx: Vec<u8>,
+            last_activity_tx_idx: i32,
         }
 
         let mut agg_by_lock: HashMap<Vec<u8>, Agg> = HashMap::new();
@@ -194,8 +196,12 @@ impl CkbadgerStore {
                     txs_count: 0,
                     first_seen_block: info.created_at_block,
                     first_seen_tx: tx_hash.clone(),
+                    // Live-cell index does not carry tx_idx. Use sentinels and let
+                    // addr_txs refinement fill precise ordering when available.
+                    first_seen_tx_idx: i32::MAX,
                     last_activity_block: info.created_at_block,
                     last_activity_tx: tx_hash.clone(),
+                    last_activity_tx_idx: i32::MIN,
                 });
 
             entry.balance += info.capacity as i128;
@@ -213,7 +219,8 @@ impl CkbadgerStore {
         }
 
         // Rebuild tx count from addr_txs index.
-        // Count only addresses that still have live cells after rebuild.
+        // Materialize addresses that have historical txs but currently no live cells,
+        // so address summaries remain consistent with tx/activity indexes after rollback.
         let tx_source = if self.has_cf(CF_ADDR_TXS) {
             Some(self)
         } else {
@@ -227,7 +234,7 @@ impl CkbadgerStore {
             }
             let iter = source.iterator_cf(source.cf_addr_txs(), rocksdb::IteratorMode::Start);
             for item in iter {
-                let (key, _) = item.map_err(|e| {
+                let (key, tx_hash_bytes) = item.map_err(|e| {
                     anyhow::anyhow!(
                         "failed to iterate addr_txs in rebuild_addr_balances_from_live_cells: {}",
                         e
@@ -237,8 +244,58 @@ impl CkbadgerStore {
                 if key.len() != 44 {
                     continue;
                 }
+                if tx_hash_bytes.len() != 32 {
+                    anyhow::bail!(
+                        "invalid addr_txs value length during addr balance rebuild: key=0x{}, value_len={}, expected=32",
+                        bytes_to_hex(&key),
+                        tx_hash_bytes.len()
+                    );
+                }
+
+                let block_num = crate::keys::decode_block_num(&key[32..40]);
+                let tx_idx = crate::keys::decode_tx_idx(&key[40..44]);
+                let tx_hash = tx_hash_bytes.to_vec();
+
                 if let Some(entry) = agg_by_lock.get_mut(&key[..32]) {
-                    entry.txs_count += 1;
+                    entry.txs_count = entry.txs_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "addr_balance txs_count overflow during rebuild: lock_hash=0x{}, block_num={}, tx_idx={}",
+                            bytes_to_hex(&key[..32]),
+                            block_num,
+                            tx_idx
+                        )
+                    })?;
+                    if block_num < entry.first_seen_block
+                        || (block_num == entry.first_seen_block && tx_idx < entry.first_seen_tx_idx)
+                    {
+                        entry.first_seen_block = block_num;
+                        entry.first_seen_tx = tx_hash.clone();
+                        entry.first_seen_tx_idx = tx_idx;
+                    }
+                    if block_num > entry.last_activity_block
+                        || (block_num == entry.last_activity_block
+                            && tx_idx > entry.last_activity_tx_idx)
+                    {
+                        entry.last_activity_block = block_num;
+                        entry.last_activity_tx = tx_hash;
+                        entry.last_activity_tx_idx = tx_idx;
+                    }
+                } else {
+                    agg_by_lock.insert(
+                        key[..32].to_vec(),
+                        Agg {
+                            balance: 0,
+                            occupied_capacity: 0,
+                            live_cells_count: 0,
+                            txs_count: 1,
+                            first_seen_block: block_num,
+                            first_seen_tx: tx_hash.clone(),
+                            first_seen_tx_idx: tx_idx,
+                            last_activity_block: block_num,
+                            last_activity_tx: tx_hash,
+                            last_activity_tx_idx: tx_idx,
+                        },
+                    );
                 }
             }
         }
@@ -376,7 +433,8 @@ mod tests {
         batch.put_addr_tx(&lock_a, 10, 0, &[0x11; 32]);
         batch.put_addr_tx(&lock_a, 11, 1, &[0x22; 32]);
         batch.put_addr_tx(&lock_b, 12, 0, &[0x33; 32]);
-        // This address has no live cells; rebuild should not materialize addr_balance for it.
+        // This address has no live cells; rebuild should still materialize it
+        // from addr_txs to keep tx/activity counters consistent.
         batch.put_addr_tx(&[0xCC; 32], 9, 0, &[0x44; 32]);
         batch.commit().unwrap();
 
@@ -388,7 +446,11 @@ mod tests {
         let b = store.get_addr_balance(&lock_b).unwrap().unwrap();
         assert_eq!(b.txs_count, 1);
 
-        assert!(store.get_addr_balance(&[0xCC; 32]).unwrap().is_none());
+        let c = store.get_addr_balance(&[0xCC; 32]).unwrap().unwrap();
+        assert_eq!(c.balance, 0);
+        assert_eq!(c.occupied_capacity, 0);
+        assert_eq!(c.live_cells_count, 0);
+        assert_eq!(c.txs_count, 1);
     }
 
     #[test]
