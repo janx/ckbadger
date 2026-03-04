@@ -5,6 +5,7 @@ mod diagnostics;
 mod helpers;
 mod indexer;
 mod nft_helpers;
+mod pipeline;
 mod progress;
 mod reorg;
 mod sync_mode;
