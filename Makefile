@@ -23,11 +23,16 @@ TUI_ARGS ?=
 CONFIRM ?= 0
 SERVICE ?=
 SERVICES ?= $(strip $(SERVICE))
+PERF_AUTO_BASELINE ?= 1
+PERF_OUTPUT_DIR ?= artifacts/perf/bulk-sync
+PERF_MONITOR_CONTAINER ?= ckbadger-indexer
+PERF_MONITOR_MAX_SECONDS ?= 172800
+PERF_MONITOR_POLL_SECONDS ?= 20
 REBUILD_SERVICES_ALLOWED := redis ckb-node indexer api frontend
 REBUILD_ALL_SERVICES_EXTERNAL := redis indexer api frontend
 REBUILD_ALL_SERVICES_INTERNAL := redis ckb-node indexer api frontend
 
-.PHONY: help up down reset verify rebuild rebuild-all tui
+.PHONY: help up down reset verify rebuild rebuild-all tui perf-latest test-perf-scripts
 
 help:
 	@echo "Available targets:"
@@ -35,7 +40,9 @@ help:
 	@echo "  make down                              Stop local stack"
 	@echo "  make rebuild SERVICES=\"api frontend\"   Rebuild + restart one/more services"
 	@echo "  make rebuild-all                       Rebuild all services for current node mode"
+	@echo "  make perf-latest                       Show latest bulk-sync perf summary and deltas"
 	@echo "  make tui                               Run monitoring TUI"
+	@echo "  make test-perf-scripts                 Run perf script regression checks"
 	@echo "  make reset CONFIRM=1                   Delete local RocksDB + redis volumes/data"
 	@echo "  make verify                            Run verify --depth fast"
 	@echo "  make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114"
@@ -92,14 +99,54 @@ rebuild:
 	echo "Rebuilt and restarted services: $(SERVICES)"
 
 rebuild-all:
-ifeq ($(CKB_NODE_MODE),internal)
-	$(MAKE) rebuild SERVICES="$(REBUILD_ALL_SERVICES_INTERNAL)"
-else
-	$(MAKE) rebuild SERVICES="$(REBUILD_ALL_SERVICES_EXTERNAL)"
-endif
+	@set -euo pipefail; \
+	services="$(REBUILD_ALL_SERVICES_EXTERNAL)"; \
+	if [ "$(CKB_NODE_MODE)" = "internal" ]; then \
+		services="$(REBUILD_ALL_SERVICES_INTERNAL)"; \
+	fi; \
+	fresh_db=0; \
+	if [ "$(PERF_AUTO_BASELINE)" = "1" ]; then \
+		if scripts/perf/detect_fresh_db_rebuild.sh --compose-project "$(COMPOSE_PROJECT)" >/dev/null 2>&1; then \
+			fresh_db=1; \
+			echo "Perf auto baseline: fresh DB detected, will start monitor after rebuild-all."; \
+		else \
+			detect_rc=$$?; \
+			if [ "$$detect_rc" -eq 1 ]; then \
+				echo "Perf auto baseline: existing DB detected, skip auto baseline monitor."; \
+			else \
+				echo "Perf auto baseline: fresh DB detection unavailable (rc=$$detect_rc), skip auto baseline monitor."; \
+			fi; \
+		fi; \
+	fi; \
+	$(MAKE) rebuild SERVICES="$$services"; \
+	if [ "$(PERF_AUTO_BASELINE)" = "1" ] && [ "$$fresh_db" = "1" ]; then \
+		run_id=$$(date -u +%Y%m%dT%H%M%SZ); \
+		run_dir="$(PERF_OUTPUT_DIR)/$$run_id"; \
+		mkdir -p "$$run_dir"; \
+		nohup scripts/perf/bulk_sync_monitor.sh \
+			--output-root "$(PERF_OUTPUT_DIR)" \
+			--run-id "$$run_id" \
+			--container "$(PERF_MONITOR_CONTAINER)" \
+			--max-seconds "$(PERF_MONITOR_MAX_SECONDS)" \
+			--poll-seconds "$(PERF_MONITOR_POLL_SECONDS)" \
+			--compose-project "$(COMPOSE_PROJECT)" \
+			> "$$run_dir/monitor.nohup.log" 2>&1 < /dev/null & \
+		monitor_pid=$$!; \
+		echo "$$monitor_pid" > "$$run_dir/monitor.pid"; \
+		echo "Perf auto baseline monitor started: pid=$$monitor_pid run_id=$$run_id"; \
+		echo "Perf artifacts directory: $$run_dir"; \
+		echo "Follow logs: tail -f $$run_dir/monitor.nohup.log"; \
+	fi
 
 tui:
 	cargo run -p ckbadger-tui -- $(TUI_ARGS)
+
+perf-latest:
+	bash scripts/perf/perf_latest.sh --output-root "$(PERF_OUTPUT_DIR)"
+
+test-perf-scripts:
+	bash scripts/perf/tests/test_bulk_sync_report.sh
+	bash scripts/perf/tests/test_perf_latest.sh
 
 reset:
 	@if [ "$(CONFIRM)" != "1" ]; then \
