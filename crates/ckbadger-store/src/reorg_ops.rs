@@ -1435,6 +1435,53 @@ impl CkbadgerStore {
         stage.tick(hodl_tracker_repaired);
         stage.finish(hodl_tracker_repaired);
 
+        // 12. Clamp secondary issuance replay cursor so replay resumes from
+        // canonical rollback target + 1 and never points into orphaned range.
+        let mut stage = RollbackStageProgress::new("clamp_secondary_issuance_cursor");
+        let mut secondary_issuance_cursor_repaired = 0u64;
+        let rollback_next_block = if rollback_to < 0 {
+            1
+        } else {
+            rollback_to
+                .checked_add(1)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "rollback next block overflow while clamping secondary issuance cursor: rollback_to={}",
+                        rollback_to
+                    )
+                })?
+        };
+        if let Some(value) = self.get_cf(
+            self.cf_sync_meta(),
+            keys::sync_meta_keys::SECONDARY_ISSUANCE_NEXT_BLOCK,
+        )? {
+            if value.len() != 8 {
+                anyhow::bail!(
+                    "invalid secondary issuance next block bytes during rollback cleanup: expected=8 got={}",
+                    value.len()
+                );
+            }
+            let current_next_block =
+                i64::from_be_bytes(value[..8].try_into().expect("length checked"));
+            if current_next_block < 1 {
+                anyhow::bail!(
+                    "invalid secondary issuance next block value during rollback cleanup: expected >= 1 got={}",
+                    current_next_block
+                );
+            }
+            let clamped_next_block = current_next_block.min(rollback_next_block);
+            if clamped_next_block != current_next_block {
+                batch.put_cf(
+                    self.cf_sync_meta(),
+                    keys::sync_meta_keys::SECONDARY_ISSUANCE_NEXT_BLOCK,
+                    clamped_next_block.to_be_bytes(),
+                );
+                secondary_issuance_cursor_repaired += 1;
+            }
+        }
+        stage.tick(secondary_issuance_cursor_repaired);
+        stage.finish(secondary_issuance_cursor_repaired);
+
         // Commit all deletes atomically
         self.write_batch(batch)?;
 
@@ -3276,5 +3323,42 @@ mod tests {
             vec![("20231114".to_string(), 100)]
         );
         assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
+    }
+
+    #[test]
+    fn test_rollback_clamps_secondary_issuance_next_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.commit().unwrap();
+
+        store.set_secondary_issuance_next_block(10).unwrap();
+        store.rollback_to_block(1).unwrap();
+        assert_eq!(store.get_secondary_issuance_next_block().unwrap(), Some(2));
+
+        store.set_secondary_issuance_next_block(1).unwrap();
+        store.rollback_to_block(1).unwrap();
+        assert_eq!(store.get_secondary_issuance_next_block().unwrap(), Some(1));
     }
 }

@@ -776,6 +776,7 @@ pub mod sync_meta_keys {
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
     pub const ROLLBACK_CLEANUP_IN_PROGRESS: &[u8] = b"rollback_cleanup_in_progress";
     pub const REORG_LATEST_EVENT: &[u8] = b"reorg_latest_event";
+    pub const SECONDARY_ISSUANCE_NEXT_BLOCK: &[u8] = b"secondary_issuance_next_block";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";

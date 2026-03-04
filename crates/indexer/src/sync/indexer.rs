@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -1134,18 +1134,14 @@ fn startup_header_gap_fail_fast_message(
     )
 }
 
-fn enqueue_issuance_blocks_in_order(
-    pending: &mut VecDeque<IssuanceBlockMeta>,
-    issuance_blocks: Vec<IssuanceBlockMeta>,
-) {
-    let mut last_enqueued_number = pending.back().map(|entry| entry.2).unwrap_or(i64::MIN);
-    for block in issuance_blocks {
-        if block.2 <= last_enqueued_number {
-            continue;
-        }
-        last_enqueued_number = block.2;
-        pending.push_back(block);
+fn secondary_issuance_bootstrap_window_start(sync_tip: i64) -> Result<i64> {
+    if sync_tip < 0 {
+        bail!(
+            "negative sync tip while computing secondary issuance bootstrap window: sync_tip={}",
+            sync_tip
+        );
     }
+    Ok(SECONDARY_ISSUANCE_MIN_BLOCK_NUMBER)
 }
 
 fn mempool_short_tx_id(tx_hash: &str) -> Result<&str> {
@@ -3457,10 +3453,7 @@ fn parse_blocks_parallel(
 
 const CACHE_INVALIDATION_INTERVAL: u64 = 10_000;
 const CHART_INVALIDATION_MAX_LIVE_LAG: u64 = 100;
-const SECONDARY_ISSUANCE_BACKFILL_THRESHOLD: u64 = 1000;
-const SECONDARY_ISSUANCE_PENDING_MAX_BLOCKS: usize = 2048;
-
-type IssuanceBlockMeta = (String, String, i64, DateTime<Utc>);
+const SECONDARY_ISSUANCE_MIN_BLOCK_NUMBER: i64 = 1;
 
 pub struct Indexer {
     run_id: String,
@@ -3478,7 +3471,6 @@ pub struct Indexer {
     cache_invalidator: CacheInvalidator,
     last_cache_invalidation: tokio::sync::Mutex<u64>,
     was_bulk_sync_active: std::sync::atomic::AtomicBool,
-    was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool,
     rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     pipeline_reset_reason_code: Arc<AtomicU8>,
@@ -3491,9 +3483,6 @@ pub struct Indexer {
     label_import_started: std::sync::atomic::AtomicBool,
     ckb_store: Option<Arc<CkbChainReader>>,
     hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
-    /// Limits concurrent background secondary issuance tasks to prevent unbounded spawning.
-    secondary_issuance_semaphore: Arc<tokio::sync::Semaphore>,
-    secondary_issuance_pending: tokio::sync::Mutex<VecDeque<IssuanceBlockMeta>>,
 }
 
 impl Indexer {
@@ -3538,9 +3527,6 @@ impl Indexer {
             Arc::new(AdaptiveBatchController::new(config.pipeline_buffer as u64));
 
         let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
-        let was_secondary_bulk =
-            progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
-
         let hodl_tracker = match store.get_hodl_tracker_state()? {
             Some(state) => {
                 info!(
@@ -3575,9 +3561,6 @@ impl Indexer {
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
-            was_secondary_issuance_bulk_active: std::sync::atomic::AtomicBool::new(
-                was_secondary_bulk,
-            ),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
@@ -3590,8 +3573,6 @@ impl Indexer {
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
-            secondary_issuance_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
-            secondary_issuance_pending: tokio::sync::Mutex::new(VecDeque::new()),
         })
     }
 
@@ -3965,10 +3946,6 @@ impl Indexer {
             }),
             updated_at: chrono::Utc::now().timestamp(),
         }
-    }
-
-    fn is_secondary_issuance_bulk_active(&self) -> bool {
-        self.progress.blocks_remaining() > SECONDARY_ISSUANCE_BACKFILL_THRESHOLD
     }
 
     // === run / run_sequential / run_pipeline ===
@@ -6408,67 +6385,47 @@ impl Indexer {
                             mode
                         );
 
-                        if !self.is_secondary_issuance_bulk_active() {
-                            let issuance_blocks: Vec<IssuanceBlockMeta> = all_parsed_blocks
-                                .iter()
-                                .map(|b| {
-                                    (
-                                        format!("0x{}", hex::encode(&b.hash)),
-                                        hex::encode(&b.dao),
-                                        b.number,
-                                        b.timestamp,
-                                    )
-                                })
-                                .collect();
-                            let enqueue_result = self
-                                .enqueue_secondary_issuance_blocks(issuance_blocks)
-                                .await;
-                            let flush_result = if enqueue_result.is_ok() {
-                                self.flush_secondary_issuance_pending(chain_tip).await
-                            } else {
-                                Ok(())
-                            };
-                            if let Err(e) = enqueue_result.and(flush_result) {
-                                let incident_id = self.report_incident(
-                                    "pipeline_secondary_issuance_failed",
-                                    format!(
-                                        "start_block={} end_block={} chain_tip={} error={:?}",
-                                        start_block, end_block, chain_tip, e
-                                    ),
-                                );
-                                error!(
-                                    run_id = %self.run_id,
-                                    incident_id = %incident_id,
-                                    start_block,
-                                    end_block,
-                                    chain_tip,
-                                    error = ?e,
-                                    "Secondary issuance update failed for parsed batch"
-                                );
-                                if is_bulk_sync_batch(
-                                    chain_tip,
-                                    end_block,
-                                    self.config.bulk_sync_threshold,
-                                ) {
-                                    return Err(e);
-                                }
-                                self.request_pipeline_reset(
-                                    "secondary issuance write failed",
-                                    None,
-                                    None,
-                                    None,
-                                );
-                                let drained = Self::drain_channel(&mut parse_rx).await;
-                                parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
-                                info!(
-                                    run_id = %self.run_id,
-                                    pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
-                                    drained,
-                                    "Secondary issuance failure drain completed"
-                                );
-                                sleep(Duration::from_secs(5)).await;
-                                continue;
+                        if let Err(e) = self.project_secondary_issuance_from_cursor(chain_tip).await
+                        {
+                            let incident_id = self.report_incident(
+                                "pipeline_secondary_issuance_failed",
+                                format!(
+                                    "start_block={} end_block={} chain_tip={} error={:?}",
+                                    start_block, end_block, chain_tip, e
+                                ),
+                            );
+                            error!(
+                                run_id = %self.run_id,
+                                incident_id = %incident_id,
+                                start_block,
+                                end_block,
+                                chain_tip,
+                                error = ?e,
+                                "Secondary issuance update failed for parsed batch"
+                            );
+                            if is_bulk_sync_batch(
+                                chain_tip,
+                                end_block,
+                                self.config.bulk_sync_threshold,
+                            ) {
+                                return Err(e);
                             }
+                            self.request_pipeline_reset(
+                                "secondary issuance write failed",
+                                None,
+                                None,
+                                None,
+                            );
+                            let drained = Self::drain_channel(&mut parse_rx).await;
+                            parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
+                            info!(
+                                run_id = %self.run_id,
+                                pipeline_epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst),
+                                drained,
+                                "Secondary issuance failure drain completed"
+                            );
+                            sleep(Duration::from_secs(5)).await;
+                            continue;
                         }
 
                         self.maybe_invalidate_chart_caches(end_block).await;
@@ -6802,53 +6759,24 @@ impl Indexer {
         self.perf.report_and_reset();
 
         if !blocks.is_empty() {
-            if !self.is_secondary_issuance_bulk_active() {
-                let mut issuance_blocks: Vec<IssuanceBlockMeta> = Vec::new();
-                for block_response in &blocks {
-                    let block_number =
-                        i64::try_from(BlockParser::parse_block_number(&block_response.block))
-                            .map_err(|_| {
-                                anyhow!(
-                            "block number exceeds i64 range: block_hash={}, block_number={}",
-                            block_response.block.header.hash,
-                            BlockParser::parse_block_number(&block_response.block)
-                        )
-                            })?;
-                    let block_timestamp =
-                        BlockParser::parse_timestamp(&block_response.block.header.timestamp);
-                    issuance_blocks.push((
-                        block_response.block.header.hash.clone(),
-                        block_response.block.header.dao.clone(),
-                        block_number,
-                        block_timestamp,
-                    ));
-                }
-                self.enqueue_secondary_issuance_blocks(issuance_blocks)
-                    .await?;
-                if let Err(e) = self.flush_secondary_issuance_pending(chain_tip).await {
-                    let bulk_sync_mode =
-                        is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
-                    if bulk_sync_mode {
-                        return Err(e).with_context(|| {
-                            format!(
-                                "bulk sync fail-fast for range {}-{} (chain_tip={}): secondary issuance write failed; no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
-                                start_block, end_block, chain_tip
-                            )
-                        });
-                    }
-                    self.cleanup_failed_batch_range(
-                        start_block,
-                        end_block,
-                        chain_tip,
-                        "sequential",
-                    )?;
+            if let Err(e) = self.project_secondary_issuance_from_cursor(chain_tip).await {
+                let bulk_sync_mode =
+                    is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+                if bulk_sync_mode {
                     return Err(e).with_context(|| {
                         format!(
-                            "secondary issuance update failed for range {}-{} (chain_tip={})",
+                            "bulk sync fail-fast for range {}-{} (chain_tip={}): secondary issuance write failed; no rollback cleanup/retry in bulk mode; delete RocksDB and restart from genesis",
                             start_block, end_block, chain_tip
                         )
                     });
                 }
+                self.cleanup_failed_batch_range(start_block, end_block, chain_tip, "sequential")?;
+                return Err(e).with_context(|| {
+                    format!(
+                        "secondary issuance update failed for range {}-{} (chain_tip={})",
+                        start_block, end_block, chain_tip
+                    )
+                });
             }
 
             self.maybe_invalidate_chart_caches(end_block).await;
@@ -6863,10 +6791,6 @@ impl Indexer {
     async fn check_bulk_sync_completion(&self) {
         let currently_bulk = self.is_bulk_sync_active();
         let was_bulk = self.was_bulk_sync_active.load(Ordering::SeqCst);
-        let currently_secondary_bulk = self.is_secondary_issuance_bulk_active();
-        let was_secondary_bulk = self
-            .was_secondary_issuance_bulk_active
-            .load(Ordering::SeqCst);
 
         if was_bulk && !currently_bulk {
             let stats = self.writer.store().memory_stats();
@@ -6909,14 +6833,8 @@ impl Indexer {
             // which runs after every batch and includes a drain guard.
         }
 
-        if was_secondary_bulk && !currently_secondary_bulk {
-            info!("Secondary issuance bulk sync completed");
-        }
-
         self.was_bulk_sync_active
             .store(currently_bulk, Ordering::SeqCst);
-        self.was_secondary_issuance_bulk_active
-            .store(currently_secondary_bulk, Ordering::SeqCst);
     }
 
     fn cleanup_failed_batch_range(
@@ -6975,89 +6893,144 @@ impl Indexer {
         })
     }
 
-    async fn enqueue_secondary_issuance_blocks(
-        &self,
-        issuance_blocks: Vec<IssuanceBlockMeta>,
-    ) -> Result<()> {
-        let mut pending = self.secondary_issuance_pending.lock().await;
-        enqueue_issuance_blocks_in_order(&mut pending, issuance_blocks);
-        if pending.len() > SECONDARY_ISSUANCE_PENDING_MAX_BLOCKS {
+    fn resolve_or_bootstrap_secondary_issuance_next_block(&self, sync_tip: i64) -> Result<i64> {
+        if sync_tip < 0 {
             bail!(
-                "secondary issuance pending queue overflow: pending_blocks={}, max_pending={}",
-                pending.len(),
-                SECONDARY_ISSUANCE_PENDING_MAX_BLOCKS
+                "invalid sync tip while resolving secondary issuance cursor: sync_tip={}",
+                sync_tip
             );
         }
-        Ok(())
-    }
 
-    async fn flush_secondary_issuance_pending(&self, chain_tip: u64) -> Result<()> {
-        let _permit = match tokio::time::timeout(
-            Duration::from_secs(5),
-            self.secondary_issuance_semaphore.acquire(),
-        )
-        .await
-        {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(_closed)) => bail!("secondary issuance semaphore closed"),
-            Err(_timeout) => {
-                warn!("Secondary issuance permit acquisition took >5s, issuance backlog");
-                match self.secondary_issuance_semaphore.acquire().await {
-                    Ok(permit) => permit,
-                    Err(_) => bail!("secondary issuance semaphore closed after timeout"),
+        let cursor = match self.writer.store().get_secondary_issuance_next_block()? {
+            Some(next_block) => next_block,
+            None => {
+                let window_start = secondary_issuance_bootstrap_window_start(sync_tip)?;
+                let mut next_block = sync_tip.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "sync tip overflow while bootstrapping secondary issuance cursor: sync_tip={}",
+                        sync_tip
+                    )
+                })?;
+                if window_start <= sync_tip {
+                    for block_number in window_start..=sync_tip {
+                        if self
+                            .writer
+                            .store()
+                            .get_block_issuance(block_number)?
+                            .is_none()
+                        {
+                            next_block = block_number;
+                            break;
+                        }
+                    }
                 }
+                self.writer
+                    .store()
+                    .set_secondary_issuance_next_block(next_block)?;
+                info!(
+                    run_id = %self.run_id,
+                    sync_tip,
+                    window_start,
+                    next_block,
+                    "Bootstrapped secondary issuance cursor"
+                );
+                next_block
             }
         };
 
-        loop {
-            let next_block = {
-                let pending = self.secondary_issuance_pending.lock().await;
-                pending.front().cloned()
-            };
-            let Some((hash, dao, number, timestamp)) = next_block else {
-                break;
-            };
+        let max_cursor = sync_tip.checked_add(1).ok_or_else(|| {
+            anyhow!(
+                "sync tip overflow while validating secondary issuance cursor: sync_tip={}",
+                sync_tip
+            )
+        })?;
+        if cursor > max_cursor {
+            bail!(
+                "secondary issuance cursor ahead of sync tip: cursor={}, sync_tip={}",
+                cursor,
+                sync_tip
+            );
+        }
+
+        Ok(cursor)
+    }
+
+    async fn project_secondary_issuance_from_cursor(&self, chain_tip: u64) -> Result<()> {
+        let (sync_tip, _) = self.repo.get_sync_tip().await?;
+        if sync_tip < 0 {
+            bail!(
+                "invalid sync tip while projecting secondary issuance: sync_tip={}",
+                sync_tip
+            );
+        }
+
+        let mut next_block = self.resolve_or_bootstrap_secondary_issuance_next_block(sync_tip)?;
+
+        while next_block <= sync_tip {
+            let header = self
+                .writer
+                .store()
+                .get_block_header(next_block)?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing block header while projecting secondary issuance: block_number={}, sync_tip={}",
+                        next_block,
+                        sync_tip
+                    )
+                })?;
+            let block_hash = format!("0x{}", hex::encode(&header.hash));
+            let dao_hex = format!("0x{}", hex::encode(&header.dao));
+            let block_timestamp = DateTime::from_timestamp_millis(header.timestamp).ok_or_else(|| {
+                anyhow!(
+                    "invalid block timestamp while projecting secondary issuance: block_number={}, timestamp_ms={}",
+                    next_block,
+                    header.timestamp
+                )
+            })?;
 
             match Self::update_secondary_issuance(
                 &self.rpc,
                 &self.writer,
-                &hash,
-                &dao,
-                number,
-                timestamp,
+                &block_hash,
+                &dao_hex,
+                next_block,
+                block_timestamp,
             )
             .await
             {
                 Ok(()) => {
-                    let mut pending = self.secondary_issuance_pending.lock().await;
-                    if pending.front().map(|entry| entry.2) == Some(number) {
-                        pending.pop_front();
-                    } else {
-                        pending.retain(|entry| entry.2 != number);
-                    }
+                    next_block = next_block.checked_add(1).ok_or_else(|| {
+                        anyhow!(
+                            "secondary issuance cursor overflow while projecting: sync_tip={}",
+                            sync_tip
+                        )
+                    })?;
+                    self.writer
+                        .store()
+                        .set_secondary_issuance_next_block(next_block)?;
                 }
                 Err(e) => {
                     if Self::should_defer_secondary_issuance(&e) {
-                        let pending_blocks = self.secondary_issuance_pending.lock().await.len();
-                        let block_number_u64 = u64::try_from(number).map_err(|_| {
-                            anyhow!(
-                                "secondary issuance pending block number must be non-negative: {}",
-                                number
-                            )
-                        })?;
+                        let block_number_u64 = require_non_negative_block_number(
+                            next_block,
+                            "secondary issuance deferred block number",
+                        )?;
                         let lag_blocks = chain_tip.saturating_sub(block_number_u64);
                         info!(
                             run_id = %self.run_id,
                             chain_tip,
-                            block_number = number,
+                            sync_tip,
+                            block_number = next_block,
                             lag_blocks,
-                            pending_blocks,
-                            "Secondary issuance not settled yet; deferring pending updates"
+                            "Secondary issuance not settled yet; deferring projection"
                         );
                         break;
                     }
                     return Err(e).with_context(|| {
-                        format!("failed to update secondary issuance for block {}", number)
+                        format!(
+                            "failed to update secondary issuance for block {}",
+                            next_block
+                        )
                     });
                 }
             }
@@ -13031,6 +13004,9 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
@@ -14035,31 +14011,16 @@ mod tests {
         assert!(msg.contains("automatic gap replay is disabled"));
     }
 
-    fn issuance_block_meta(number: i64) -> IssuanceBlockMeta {
-        (
-            format!("0xblock-{number}"),
-            "0xdao".to_string(),
-            number,
-            DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
-        )
+    #[test]
+    fn test_secondary_issuance_bootstrap_window_start_clamps_to_one() {
+        assert_eq!(secondary_issuance_bootstrap_window_start(0).unwrap(), 1);
+        assert_eq!(secondary_issuance_bootstrap_window_start(999).unwrap(), 1);
     }
 
     #[test]
-    fn test_enqueue_issuance_blocks_in_order_keeps_strictly_increasing_numbers() {
-        let mut pending = VecDeque::from(vec![issuance_block_meta(100), issuance_block_meta(101)]);
-        let incoming = vec![
-            issuance_block_meta(101),
-            issuance_block_meta(100),
-            issuance_block_meta(102),
-            issuance_block_meta(102),
-            issuance_block_meta(103),
-            issuance_block_meta(99),
-        ];
-
-        enqueue_issuance_blocks_in_order(&mut pending, incoming);
-
-        let numbers: Vec<i64> = pending.into_iter().map(|entry| entry.2).collect();
-        assert_eq!(numbers, vec![100, 101, 102, 103]);
+    fn test_secondary_issuance_bootstrap_window_start_uses_backfill_window() {
+        assert_eq!(secondary_issuance_bootstrap_window_start(1000).unwrap(), 1);
+        assert_eq!(secondary_issuance_bootstrap_window_start(1500).unwrap(), 1);
     }
 
     #[test]
@@ -15227,11 +15188,6 @@ mod tests {
     }
 
     #[test]
-    fn test_secondary_issuance_backfill_threshold_is_1000() {
-        assert_eq!(SECONDARY_ISSUANCE_BACKFILL_THRESHOLD, 1000);
-    }
-
-    #[test]
     fn test_parse_prefixed_hex_u128_errors_on_invalid_input() {
         let err = parse_prefixed_hex_u128("1234", "test field").unwrap_err();
         assert!(err.to_string().contains("missing 0x prefix"));
@@ -15373,21 +15329,6 @@ mod tests {
         assert_eq!(parsed, ar as i64);
     }
 
-    #[test]
-    fn test_secondary_issuance_skipped_when_more_than_1000_blocks_behind() {
-        let threshold = SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
-        assert!(1001 > threshold);
-        assert!(5000 > threshold);
-    }
-
-    #[test]
-    fn test_secondary_issuance_tracked_when_1000_or_fewer_blocks_behind() {
-        let threshold = SECONDARY_ISSUANCE_BACKFILL_THRESHOLD;
-        assert!(1000 <= threshold);
-        assert!(999 <= threshold);
-        assert!(1 <= threshold);
-    }
-
     #[tokio::test]
     async fn test_run_secondary_issuance_batch_propagates_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -15411,6 +15352,178 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to update secondary issuance for block 1"));
+    }
+
+    #[tokio::test]
+    async fn test_secondary_issuance_reorg_rollback_then_reproject_without_duplicates() {
+        fn header(hash_byte: u8, number: i64, dao: Vec<u8>) -> ckbadger_store::CachedBlockHeader {
+            ckbadger_store::CachedBlockHeader {
+                hash: vec![hash_byte; 32],
+                timestamp: 1_700_000_000_000 + number * 1_000,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao,
+                transactions_count: 1,
+            }
+        }
+
+        let rpc_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({"method":"get_tip_block_number"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":1,
+                "result":"0x3"
+            })))
+            .expect(1)
+            .mount(&rpc_server)
+            .await;
+
+        let new_hash_2 = format!("0x{}", "22".repeat(32));
+        let new_hash_3 = format!("0x{}", "33".repeat(32));
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method":"get_block_economic_state",
+                "params":[new_hash_2]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":2,
+                "result":{
+                    "issuance":{"primary":"0x0","secondary":"0x64"},
+                    "miner_reward":{"primary":"0x0","secondary":"0x28","committed":"0x0","proposal":"0x0"},
+                    "txs_fee":"0x0",
+                    "finalized_at":"0x0"
+                }
+            })))
+            .expect(1)
+            .mount(&rpc_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method":"get_block_economic_state",
+                "params":[new_hash_3]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc":"2.0",
+                "id":3,
+                "result":{
+                    "issuance":{"primary":"0x0","secondary":"0xc8"},
+                    "miner_reward":{"primary":"0x0","secondary":"0x32","committed":"0x0","proposal":"0x0"},
+                    "txs_fee":"0x0",
+                    "finalized_at":"0x0"
+                }
+            })))
+            .expect(1)
+            .mount(&rpc_server)
+            .await;
+
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain_store = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+        let append_store = Arc::new(CkbadgerStore::open_domain(append_dir.path()).unwrap());
+
+        // Seed old canonical chain 1-3 with issuance data fully computed.
+        let mut seed = StoreBatch::new(domain_store.as_ref());
+        seed.put_block_header(1, &header(0x11, 1, build_dao_field(1_000, 100, 100)));
+        seed.put_block_header(2, &header(0x12, 2, build_dao_field(1_100, 110, 110)));
+        seed.put_block_header(3, &header(0x13, 3, build_dao_field(1_200, 120, 120)));
+        seed.put_block_issuance(
+            2,
+            &ckbadger_store::types::SecondaryIssuance {
+                miner_reward: 1,
+                dao_reward: 2,
+                treasury: 3,
+            },
+        );
+        seed.put_block_issuance(
+            3,
+            &ckbadger_store::types::SecondaryIssuance {
+                miner_reward: 4,
+                dao_reward: 5,
+                treasury: 6,
+            },
+        );
+        seed.commit().unwrap();
+        domain_store.set_secondary_issuance_next_block(4).unwrap();
+
+        // Simulate reorg to fork_point=1: old chain blocks 2-3 should be removed and cursor clamped.
+        domain_store.rollback_to_block(1).unwrap();
+        assert!(domain_store.get_block_issuance(2).unwrap().is_none());
+        assert!(domain_store.get_block_issuance(3).unwrap().is_none());
+        assert_eq!(
+            domain_store.get_secondary_issuance_next_block().unwrap(),
+            Some(2)
+        );
+
+        // Seed new canonical headers for 2-3.
+        let mut reorg_seed = StoreBatch::new(domain_store.as_ref());
+        reorg_seed.put_block_header(2, &header(0x22, 2, build_dao_field(2_000, 200, 100)));
+        reorg_seed.put_block_header(3, &header(0x33, 3, build_dao_field(2_100, 250, 100)));
+        reorg_seed.commit().unwrap();
+
+        let config = Config {
+            domain_data_path: domain_dir.path().to_string_lossy().into_owned(),
+            append_only_data_path: append_dir.path().to_string_lossy().into_owned(),
+            ckb_rpc_url: rpc_server.uri(),
+            batch_size: 16,
+            poll_interval_ms: 1000,
+            start_block: None,
+            parallel_fetch_size: 4,
+            pipeline_enabled: false,
+            pipeline_buffer: 4,
+            redis_url: None,
+            bulk_sync_threshold: 72,
+            fast_sync_mode: true,
+            ckb_data_path: None,
+            token_labels_path: "docs/token-labels".to_string(),
+            force_startup_cleanup: false,
+        };
+        let indexer = Indexer::new(
+            "test-secondary-reorg".to_string(),
+            config,
+            Arc::clone(&domain_store),
+            Arc::clone(&append_store),
+        )
+        .await
+        .unwrap();
+
+        // Project once: should compute block 2 and 3 on new chain and advance cursor.
+        indexer
+            .project_secondary_issuance_from_cursor(3)
+            .await
+            .unwrap();
+        let issuance_2 = domain_store.get_block_issuance(2).unwrap().unwrap();
+        let issuance_3 = domain_store.get_block_issuance(3).unwrap().unwrap();
+        assert_eq!(issuance_2.miner_reward, 40);
+        assert_eq!(issuance_2.dao_reward, 0);
+        assert_eq!(issuance_2.treasury, 60);
+        assert_eq!(issuance_3.miner_reward, 50);
+        assert_eq!(issuance_3.dao_reward, 0);
+        assert_eq!(issuance_3.treasury, 150);
+        assert_eq!(
+            domain_store.get_secondary_issuance_next_block().unwrap(),
+            Some(4)
+        );
+
+        // Project again: cursor already at tip+1, should not duplicate writes or RPC calls.
+        indexer
+            .project_secondary_issuance_from_cursor(3)
+            .await
+            .unwrap();
+        let issuance_2_after = domain_store.get_block_issuance(2).unwrap().unwrap();
+        let issuance_3_after = domain_store.get_block_issuance(3).unwrap().unwrap();
+        assert_eq!(issuance_2_after.miner_reward, issuance_2.miner_reward);
+        assert_eq!(issuance_2_after.dao_reward, issuance_2.dao_reward);
+        assert_eq!(issuance_2_after.treasury, issuance_2.treasury);
+        assert_eq!(issuance_3_after.miner_reward, issuance_3.miner_reward);
+        assert_eq!(issuance_3_after.dao_reward, issuance_3.dao_reward);
+        assert_eq!(issuance_3_after.treasury, issuance_3.treasury);
+        assert_eq!(
+            domain_store.get_secondary_issuance_next_block().unwrap(),
+            Some(4)
+        );
     }
 
     fn build_dao_field(c: u64, s: u64, u: u64) -> Vec<u8> {
