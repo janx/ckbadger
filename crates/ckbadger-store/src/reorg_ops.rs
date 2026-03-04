@@ -495,10 +495,11 @@ impl CkbadgerStore {
         let mut cells_restored = 0u64;
         let rollback_started_at = Instant::now();
         let replay_start = rollback_to + 1;
-        let replay_cutoff_date = self
-            .get_block_header(replay_start)?
-            .and_then(|h| chrono::DateTime::from_timestamp(h.timestamp / 1000, 0))
-            .map(|dt| dt.format("%Y%m%d").to_string());
+        let replay_cutoff_date = self.get_block_header(replay_start)?.map(|h| {
+            ckbadger_common::block_date_from_ms(h.timestamp)
+                .format("%Y%m%d")
+                .to_string()
+        });
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
@@ -1622,6 +1623,40 @@ mod tests {
         let key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
         let err = should_delete_stats_for_replay(&key, cutoff).unwrap_err();
         assert!(err.to_string().contains("invalid cutoff date"));
+    }
+
+    #[test]
+    fn test_rollback_cutoff_date_uses_ckb_utc8_day_boundary_for_daily_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        // 2026-03-04 17:41:36 UTC == 2026-03-05 01:41:36 UTC+8
+        // Replay cutoff must be 20260305 (CKB UTC+8 boundary), not 20260304 (UTC).
+        let replay_start_header = CachedBlockHeader {
+            hash: vec![0x42; 32],
+            timestamp: 1_772_646_096_926,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &replay_start_header);
+        batch.commit().unwrap();
+
+        store
+            .put_daily_stats("20260304", &Default::default())
+            .unwrap();
+        store
+            .put_daily_stats("20260305", &Default::default())
+            .unwrap();
+
+        store.rollback_to_block(-1).unwrap();
+
+        assert!(store.get_daily_stats("20260304").unwrap().is_some());
+        assert!(store.get_daily_stats("20260305").unwrap().is_none());
     }
 
     #[test]
