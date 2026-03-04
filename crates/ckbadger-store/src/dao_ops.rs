@@ -1,6 +1,8 @@
 //! DAO operations.
 
-use rocksdb::IteratorMode;
+use rocksdb::{IteratorMode, Snapshot};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
 
 use crate::keys;
 use crate::store::CkbadgerStore;
@@ -20,6 +22,36 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
+#[cfg(test)]
+type DaoStatusPaginationHook = Box<dyn Fn(&CkbadgerStore, &[u8]) + Send + Sync + 'static>;
+
+#[cfg(test)]
+fn dao_status_pagination_hook_cell() -> &'static Mutex<Option<DaoStatusPaginationHook>> {
+    static CELL: OnceLock<Mutex<Option<DaoStatusPaginationHook>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn set_dao_status_pagination_hook(hook: Option<DaoStatusPaginationHook>) {
+    let mut guard = dao_status_pagination_hook_cell()
+        .lock()
+        .expect("dao_status_pagination_hook lock poisoned");
+    *guard = hook;
+}
+
+#[cfg(test)]
+fn run_dao_status_pagination_hook(store: &CkbadgerStore, outpoint_key: &[u8]) {
+    let hook = {
+        let mut guard = dao_status_pagination_hook_cell()
+            .lock()
+            .expect("dao_status_pagination_hook lock poisoned");
+        guard.take()
+    };
+    if let Some(hook) = hook {
+        hook(store, outpoint_key);
+    }
+}
+
 impl CkbadgerStore {
     fn load_dao_entry_for_index(
         &self,
@@ -29,6 +61,32 @@ impl CkbadgerStore {
     ) -> anyhow::Result<DaoDepositCacheEntry> {
         match self.get_dao_deposit(outpoint_key)? {
             Some(entry) => Ok(entry),
+            None => anyhow::bail!(
+                "stale {} index points to missing dao deposit: index_key=0x{}, outpoint_key=0x{}",
+                index_name,
+                bytes_to_hex(index_key),
+                bytes_to_hex(outpoint_key)
+            ),
+        }
+    }
+
+    fn load_dao_entry_for_index_from_snapshot(
+        &self,
+        snapshot: &Snapshot<'_>,
+        outpoint_key: &[u8],
+        index_name: &str,
+        index_key: &[u8],
+    ) -> anyhow::Result<DaoDepositCacheEntry> {
+        match snapshot.get_cf(self.cf_dao_deposits(), outpoint_key)? {
+            Some(value) => Ok(bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize dao deposit entry while reading {} index: index_key=0x{}, outpoint_key=0x{}, error={}",
+                    index_name,
+                    bytes_to_hex(index_key),
+                    bytes_to_hex(outpoint_key),
+                    e
+                )
+            })?),
             None => anyhow::bail!(
                 "stale {} index points to missing dao deposit: index_key=0x{}, outpoint_key=0x{}",
                 index_name,
@@ -366,7 +424,8 @@ impl CkbadgerStore {
             );
         }
         let start_key = cursor_key_exclusive.unwrap_or(prefix.as_slice());
-        let iter = self.iterator_cf(
+        let snapshot = self.snapshot();
+        let iter = snapshot.iterator_cf(
             self.cf_dao_by_status_block(),
             IteratorMode::From(start_key, rocksdb::Direction::Forward),
         );
@@ -408,7 +467,14 @@ impl CkbadgerStore {
 
             let outpoint_key = &key[DAO_BY_STATUS_OUTPOINT_OFFSET
                 ..DAO_BY_STATUS_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
-            let entry = self.load_dao_entry_for_index(outpoint_key, "dao_by_status_block", &key)?;
+            #[cfg(test)]
+            run_dao_status_pagination_hook(self, outpoint_key);
+            let entry = self.load_dao_entry_for_index_from_snapshot(
+                &snapshot,
+                outpoint_key,
+                "dao_by_status_block",
+                &key,
+            )?;
             anyhow::ensure!(
                 indexed_status == status,
                 "dao_by_status_block prefix mismatch: expected status={}, got status={}, index_key=0x{}",
@@ -656,6 +722,65 @@ mod tests {
             .list_dao_deposits_by_status_paginated(0, 2, Some(&cursor))
             .unwrap();
         assert!(second_page.is_empty());
+    }
+
+    #[test]
+    fn test_list_dao_deposits_by_status_paginated_survives_mid_scan_entry_update() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let outpoint = keys::encode_outpoint(&[0xA9; 32], 0);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dao_deposit(
+            &outpoint,
+            &DaoDepositCacheEntry {
+                capacity: 100,
+                deposit_block_number: 30,
+                lock_script_hash: vec![0x11; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.commit().unwrap();
+
+        // Simulate a concurrent status transition after index key is read but before
+        // dao_deposits row is loaded.
+        let outpoint_for_hook = outpoint;
+        set_dao_status_pagination_hook(Some(Box::new(move |store, outpoint_key| {
+            if outpoint_key != outpoint_for_hook.as_slice() {
+                return;
+            }
+            let mut entry = store
+                .get_dao_deposit(outpoint_key)
+                .expect("load dao deposit in hook")
+                .expect("dao deposit missing in hook");
+            entry.status = 1;
+            entry.withdraw_request_block = Some(31);
+            entry.withdraw_request_tx = Some(vec![0xBB; 32]);
+            entry.withdraw_request_output_index = Some(0);
+            store
+                .put_dao_deposit_direct(outpoint_key, &entry)
+                .expect("update dao deposit in hook");
+        })));
+
+        let rows = store.list_dao_deposits_by_status_paginated(0, 10, None);
+        set_dao_status_pagination_hook(None);
+
+        let rows = rows.expect("status pagination should remain consistent under mid-scan update");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, outpoint);
+        assert_eq!(rows[0].1.status, 0);
+
+        let current = store.get_dao_deposit(&outpoint).unwrap().unwrap();
+        assert_eq!(current.status, 1, "hook must have updated canonical row");
     }
 
     #[test]

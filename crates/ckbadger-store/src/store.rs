@@ -1229,6 +1229,10 @@ impl CkbadgerStore {
         self.db.iterator_cf(cf, mode)
     }
 
+    pub(crate) fn snapshot(&self) -> rocksdb::Snapshot<'_> {
+        self.db.snapshot()
+    }
+
     /// Iterate over a CF with a prefix.
     pub fn prefix_iterator_cf(
         &self,
