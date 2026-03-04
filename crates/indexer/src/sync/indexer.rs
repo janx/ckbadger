@@ -45,6 +45,7 @@ use crate::runtime_diag::{
 
 use super::dao_helpers::*;
 use super::helpers::*;
+use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::types::{
     BatchWriteMetrics, CachedCellInfo, CachedUdtCellInfo, DotbitConsumptionEvent,
@@ -1397,52 +1398,6 @@ fn parse_parsed_cell_udt_amount(
         ));
     };
     Ok(Some(amount))
-}
-
-fn dotbit_consume_event_order(tx_global_index: usize) -> Result<u64> {
-    let tx_index = u64::try_from(tx_global_index).map_err(|_| {
-        anyhow!(
-            "dotbit tx index exceeds u64 while building consume order: {}",
-            tx_global_index
-        )
-    })?;
-    tx_index.checked_mul(2).ok_or_else(|| {
-        anyhow!(
-            "dotbit consume event order overflow: tx_global_index={}",
-            tx_global_index
-        )
-    })
-}
-
-fn dotbit_create_event_order(tx_global_index: usize) -> Result<u64> {
-    dotbit_consume_event_order(tx_global_index)?
-        .checked_add(1)
-        .ok_or_else(|| {
-            anyhow!(
-                "dotbit create event order overflow: tx_global_index={}",
-                tx_global_index
-            )
-        })
-}
-
-fn should_consume_dotbit_account(latest_create_order: Option<u64>, consume_order: u64) -> bool {
-    match latest_create_order {
-        Some(order) => order <= consume_order,
-        None => true,
-    }
-}
-
-fn resolve_dotbit_account_id_for_outpoint(
-    db_account_id: Option<Vec<u8>>,
-    prev_tx_hash: &[u8],
-    prev_index: i16,
-    batch_dotbit_outpoints: &HashMap<(Vec<u8>, i16), Vec<u8>>,
-) -> Option<Vec<u8>> {
-    db_account_id.or_else(|| {
-        batch_dotbit_outpoints
-            .get(&(prev_tx_hash.to_vec(), prev_index))
-            .cloned()
-    })
 }
 
 #[derive(Default)]
@@ -13024,72 +12979,6 @@ mod tests {
         assert!(tracker
             .record("pipeline_batch_mismatch", Duration::from_secs(60))
             .is_some());
-    }
-
-    #[test]
-    fn test_dotbit_event_order_marks_output_after_input_in_same_tx() {
-        let consume_order = dotbit_consume_event_order(42).unwrap();
-        let create_order = dotbit_create_event_order(42).unwrap();
-        assert!(create_order > consume_order);
-    }
-
-    #[test]
-    fn test_should_consume_dotbit_account_when_no_later_output_exists() {
-        let consume_order = dotbit_consume_event_order(10).unwrap();
-        assert!(should_consume_dotbit_account(None, consume_order));
-        assert!(should_consume_dotbit_account(
-            Some(consume_order),
-            consume_order
-        ));
-        assert!(!should_consume_dotbit_account(
-            Some(consume_order + 1),
-            consume_order
-        ));
-    }
-
-    #[test]
-    fn test_should_consume_dotbit_account_with_cross_tx_recreate() {
-        let consume_t1 = dotbit_consume_event_order(1).unwrap();
-        let create_t2 = dotbit_create_event_order(2).unwrap();
-        assert!(
-            !should_consume_dotbit_account(Some(create_t2), consume_t1),
-            "later output should keep account live"
-        );
-
-        let consume_t3 = dotbit_consume_event_order(3).unwrap();
-        assert!(
-            should_consume_dotbit_account(Some(create_t2), consume_t3),
-            "consume after latest output should mark account consumed"
-        );
-    }
-
-    #[test]
-    fn test_resolve_dotbit_account_id_for_outpoint_prefers_store_mapping() {
-        let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
-        let tx_hash = vec![0x11; 32];
-        let store_account = vec![0x22; 20];
-        let batch_account = vec![0x33; 20];
-        batch_dotbit_outpoints.insert((tx_hash.clone(), 7), batch_account);
-
-        let resolved = resolve_dotbit_account_id_for_outpoint(
-            Some(store_account.clone()),
-            &tx_hash,
-            7,
-            &batch_dotbit_outpoints,
-        );
-        assert_eq!(resolved, Some(store_account));
-    }
-
-    #[test]
-    fn test_resolve_dotbit_account_id_for_outpoint_falls_back_to_batch_mapping() {
-        let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
-        let tx_hash = vec![0x44; 32];
-        let batch_account = vec![0x55; 20];
-        batch_dotbit_outpoints.insert((tx_hash.clone(), 3), batch_account.clone());
-
-        let resolved =
-            resolve_dotbit_account_id_for_outpoint(None, &tx_hash, 3, &batch_dotbit_outpoints);
-        assert_eq!(resolved, Some(batch_account));
     }
 
     #[test]

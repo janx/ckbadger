@@ -1,6 +1,7 @@
 mod dao_helpers;
 mod helpers;
 mod indexer;
+mod nft_helpers;
 mod progress;
 mod sync_mode;
 mod types;
