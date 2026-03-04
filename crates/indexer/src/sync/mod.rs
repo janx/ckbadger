@@ -1,3 +1,4 @@
+mod helpers;
 mod indexer;
 mod progress;
 mod sync_mode;
