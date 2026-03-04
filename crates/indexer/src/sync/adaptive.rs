@@ -48,6 +48,8 @@ pub(crate) const ADAPTIVE_BATCH_HEALTHY_BONUS_COMMIT_MS: f64 = 1_200.0;
 pub(crate) const ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS: u64 = 1_000_000;
 pub(crate) const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS: u64 = 40_000;
 pub(crate) const ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT: u64 = 6;
+pub(crate) const ADAPTIVE_BATCH_BULK_SEVERE_MIN_TARGET_TXS: u64 = ADAPTIVE_BATCH_BASE_MIN_TXS;
+pub(crate) const ADAPTIVE_BATCH_BULK_SEVERE_MIN_INFLIGHT: u64 = 2;
 
 // ── Non-adaptive constants that live alongside the batch controller ──
 
@@ -467,6 +469,14 @@ impl AdaptiveBatchController {
         if near_tip {
             new_min_target_batch_txs = new_min_target_batch_txs
                 .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS);
+        } else if severe_pressure {
+            // When RocksDB is under sustained severe pressure in far-bulk mode,
+            // relax the usual bulk floors so controller can keep backing off.
+            let min_inflight = ADAPTIVE_BATCH_BULK_SEVERE_MIN_INFLIGHT.min(self.max_inflight_limit);
+            new_inflight_limit = new_inflight_limit.max(min_inflight);
+            new_min_target_batch_txs = new_min_target_batch_txs
+                .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS)
+                .min(ADAPTIVE_BATCH_BULK_SEVERE_MIN_TARGET_TXS);
         } else {
             let min_inflight =
                 ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT.min(self.max_inflight_limit);
@@ -673,6 +683,85 @@ mod tests {
         assert_eq!(
             adjustment.new_inflight_limit,
             ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT
+        );
+    }
+
+    #[test]
+    fn test_adaptive_batch_far_bulk_severe_pressure_can_relax_bulk_floors() {
+        let controller = AdaptiveBatchController::new(8);
+        controller.target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+        controller.min_target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+        controller
+            .inflight_limit
+            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
+
+        let first = controller.update_after_write(AdaptiveBatchInput {
+            write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 100.0,
+            commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 100.0,
+            batch_tx_count: 8_000,
+            blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+            parse_queue_fill_pct: Some(98.0),
+            writer_queue_fill_pct: Some(98.0),
+            memory_ratio_pct: Some(85.0),
+            l0_files_max: Some(120),
+            compaction_pending_bytes: Some(6 * 1024 * 1024 * 1024),
+            immutable_memtables: Some(40),
+            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+            severe_imm_threshold: 60,
+            moderate_imm_threshold: 30,
+        });
+        if let Some(first_adjustment) = first {
+            assert_eq!(
+                first_adjustment.new_inflight_limit,
+                ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT
+            );
+            assert_eq!(
+                first_adjustment.new_min_target_batch_txs,
+                ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS
+            );
+            assert_eq!(
+                first_adjustment.new_target_batch_txs,
+                ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS
+            );
+        }
+
+        let second = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 200.0,
+                commit_ms: ADAPTIVE_BATCH_SEVERE_COMMIT_MS + 200.0,
+                batch_tx_count: 8_000,
+                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_queue_fill_pct: Some(98.0),
+                writer_queue_fill_pct: Some(98.0),
+                memory_ratio_pct: Some(85.0),
+                l0_files_max: Some(130),
+                compaction_pending_bytes: Some(7 * 1024 * 1024 * 1024),
+                immutable_memtables: Some(45),
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
+            })
+            .expect("sustained severe pressure should relax far-bulk floors");
+        assert_eq!(second.reason, "severe_pressure_backoff");
+        assert!(
+            second.new_inflight_limit < ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT,
+            "far-bulk inflight floor should relax under sustained severe pressure"
+        );
+        assert!(
+            second.new_min_target_batch_txs < ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            "far-bulk min target floor should relax under sustained severe pressure"
+        );
+        assert!(
+            second.new_target_batch_txs < ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            "target batch txs should be allowed below far-bulk floor during severe pressure"
         );
     }
 
