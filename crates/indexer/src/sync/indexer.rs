@@ -30,7 +30,7 @@ use crate::config::{Config, DEEP_FORK_DEPTH};
 use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
-use crate::db::{BatchWriter, DaoWithdrawalContext, ReorgResult, Repository};
+use crate::db::{BatchWriter, DaoWithdrawalContext, Repository};
 use crate::parser::{
     analyze_spore_media_profile, BlockParser, CellParser, DaoParser, DotbitParser, MnftParser,
     ParsedClusterCell, ParsedDotbitAccountOutput, ParsedMnftClass, ParsedMnftIssuer,
@@ -44,6 +44,12 @@ use crate::runtime_diag::{
     FlightRecorder,
 };
 
+use super::types::{
+    BatchWriteMetrics, CachedCellInfo, CachedUdtCellInfo, DotbitConsumptionEvent,
+    DotbitTxActivityData, PreParsedNftData, ReorgAction, SyncAction, TxData, UndoSeqScope,
+    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary, XudtExtensionScript,
+    UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT,
+};
 use super::SyncProgress;
 
 #[allow(dead_code)]
@@ -95,41 +101,6 @@ const ADAPTIVE_REASON_EARLY_HEIGHT_BOOST: u8 = 10;
 const ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF: u8 = 11;
 const FLIGHT_RECORDER_CAPACITY: usize = 200;
 static OMNILOCK_CODE_HASHES: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-
-/// Pre-parsed mNFT/DotBit data computed in the parser stage.
-/// Moves all CPU-intensive parsing out of the t6b writer thread.
-struct PreParsedNftData {
-    mnft_issuers: Vec<(usize, ParsedMnftIssuer)>,
-    mnft_classes: Vec<(usize, usize, ParsedMnftClass)>,
-    mnft_tokens: Vec<(usize, usize, ParsedMnftToken)>,
-    dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)>,
-    consumed_dotbit: Vec<DotbitConsumptionEvent>,
-    /// DAS action string per transaction (tx_global_index → action).
-    dotbit_tx_actions: HashMap<usize, String>,
-}
-
-struct DotbitConsumptionEvent {
-    account_id: Vec<u8>,
-    block_number: i64,
-    consuming_tx_hash: [u8; 32],
-    tx_idx: i32,
-    ts_ms: i64,
-}
-
-/// Per-tx .bit activity data for direct collection activity writes.
-struct DotbitTxActivityData {
-    das_action: Option<String>,
-    created_account_ids: HashSet<Vec<u8>>,
-    consumed_account_ids: HashSet<Vec<u8>>,
-    block_number: i64,
-    tx_idx: i32,
-    timestamp_ms: i64,
-}
-
-#[derive(Debug, Clone)]
-struct XudtExtensionScript {
-    args: Vec<u8>,
-}
 
 fn decode_startup_phase(phase: u8) -> Option<&'static str> {
     match phase {
@@ -432,18 +403,6 @@ fn build_activity_input_views(
             })
         })
         .collect()
-}
-
-const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
-const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-enum UndoSeqScope {
-    TxContext = 0x0001,
-    AppendAddrTx = 0x0002,
-    AppendActivity = 0x0003,
-    AppendNftCollectionActivity = 0x0004,
 }
 
 fn next_undo_seq(
@@ -780,32 +739,6 @@ fn short_tx_hash(tx_hash: &[u8]) -> String {
     format!("{}..{}", &encoded[..10], &encoded[encoded.len() - 6..])
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct UnresolvedLocalProbeSummary {
-    sampled: usize,
-    live_hits: usize,
-    consumed_hits: usize,
-    tx_location_hits: usize,
-    missing_everywhere: usize,
-    store_errors: usize,
-    sample_details: Vec<String>,
-}
-
-impl UnresolvedLocalProbeSummary {
-    fn format_for_log(&self) -> String {
-        format!(
-            "sampled={} live_hits={} consumed_hits={} tx_location_hits={} missing_everywhere={} store_errors={} sample=[{}]",
-            self.sampled,
-            self.live_hits,
-            self.consumed_hits,
-            self.tx_location_hits,
-            self.missing_everywhere,
-            self.store_errors,
-            self.sample_details.join(", ")
-        )
-    }
-}
-
 fn classify_unresolved_local_probe(
     writer: &BatchWriter,
     unresolved_outpoints: &[(Vec<u8>, i16)],
@@ -881,36 +814,6 @@ fn classify_unresolved_local_probe(
     }
 
     summary
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct UnresolvedRpcProbeSummary {
-    sampled_tx_hashes: usize,
-    committed: usize,
-    pending: usize,
-    proposed: usize,
-    rejected: usize,
-    unknown_status: usize,
-    rpc_null: usize,
-    rpc_errors: usize,
-    sample_details: Vec<String>,
-}
-
-impl UnresolvedRpcProbeSummary {
-    fn format_for_log(&self) -> String {
-        format!(
-            "sampled_tx_hashes={} committed={} pending={} proposed={} rejected={} unknown_status={} rpc_null={} rpc_errors={} sample=[{}]",
-            self.sampled_tx_hashes,
-            self.committed,
-            self.pending,
-            self.proposed,
-            self.rejected,
-            self.unknown_status,
-            self.rpc_null,
-            self.rpc_errors,
-            self.sample_details.join(", ")
-        )
-    }
 }
 
 async fn collect_unresolved_rpc_probe(
@@ -1003,11 +906,6 @@ fn commit_phase_no_wal(
         );
     }
     Ok(commit_ms)
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct BatchWriteMetrics {
-    commit_ms: f64,
 }
 
 fn duration_from_millis(ms: f64) -> Duration {
@@ -1971,19 +1869,6 @@ fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
     epoch.fetch_add(1, Ordering::SeqCst) + 1
 }
 
-enum SyncAction {
-    CaughtUp,
-    Continue,
-    ReorgHandled,
-    DeepForkPaused,
-}
-
-#[allow(dead_code)]
-enum ReorgAction {
-    Handled(ReorgResult),
-    DeepForkPaused,
-}
-
 /// Accumulated statistics across a batch of blocks (avoids per-block DB writes)
 #[derive(Default)]
 struct BatchStats {
@@ -2020,34 +1905,6 @@ struct EpochAccum {
     end_ts: chrono::DateTime<Utc>,
     tx_count: i32,
     is_new: bool,
-}
-
-#[derive(Clone)]
-struct CachedCellInfo {
-    capacity: i64,
-    created_at_block: i64,
-    lock_script_hash: Vec<u8>,
-    lock_code_hash: Vec<u8>,
-    lock_hash_type: i16,
-    lock_args: Vec<u8>,
-    type_script_hash: Option<Vec<u8>>,
-    type_code_hash: Option<Vec<u8>>,
-    type_args: Option<Vec<u8>>,
-    data_size: i32,
-    occupied_capacity: i64,
-    udt_amount: Option<u128>,
-}
-
-#[derive(Clone)]
-#[allow(dead_code)]
-struct CachedUdtCellInfo {
-    type_script_hash: Vec<u8>,
-    type_code_hash: Vec<u8>,
-    type_hash_type: i16,
-    type_args: Vec<u8>,
-    lock_script_hash: Vec<u8>,
-    amount: u128,
-    standard: String,
 }
 
 fn parse_parsed_cell_udt_amount(
@@ -3197,30 +3054,6 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
         .and_then(|d| d.with_second(0))
         .and_then(|d| d.with_nanosecond(0))
         .unwrap_or(dt)
-}
-
-struct TxData {
-    hash: [u8; 32],
-    block_number: i64,
-    block_hash: Vec<u8>,
-    tx_index: i32,
-    version: i32,
-    inputs_count: i16,
-    outputs_count: i16,
-    witnesses_count: i16,
-    cell_deps_count: i16,
-    header_deps_count: i16,
-    is_cellbase: bool,
-    inputs: Vec<crate::parser::transaction::ParsedInput>,
-    cells: Vec<crate::parser::cell::ParsedCell>,
-    witnesses: Vec<String>,
-    outputs_data: Vec<String>,
-    total_input_capacity: i64,
-    total_output_capacity: i64,
-    fee: i64,
-    tx_size: i32,
-    cycles: Option<i64>,
-    timestamp: chrono::DateTime<Utc>,
 }
 
 type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
