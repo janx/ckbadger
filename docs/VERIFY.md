@@ -7,7 +7,7 @@ The indexer includes a `verify` subcommand for acceptance testing data integrity
 ```bash
 cargo run -p ckbadger-indexer -- verify --depth fast        # Quick checks (seconds)
 cargo run -p ckbadger-indexer -- verify --depth sampling    # Sampling + explorer (minutes)
-cargo run -p ckbadger-indexer -- verify --list-checks       # List all 54 checks
+cargo run -p ckbadger-indexer -- verify --list-checks       # List all 55 checks
 cargo run -p ckbadger-indexer -- verify --no-explorer       # Skip explorer HTTP checks
 cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1  # Custom API URL
 cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114         # Add RPC spot-checks
@@ -19,7 +19,7 @@ cargo run -p ckbadger-indexer -- verify --checks genesis_block,dao_statistics_sa
 | Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                         |
 | --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast** (F1-F6)      | 6      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane                                                                                                                                                                              |
-| **Sampling** (S1-S21) | 21     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs                                               |
+| **Sampling** (S1-S22) | 22     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, top-asset holder/address consistency         |
 | **Explorer** (X1-X27) | 27     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, daily deposit, circulation ratio, supply, burnt, mining reward, treasury, NervosDAO point-in-time stats, depositors count) |
 
 ## Explorer Response Cache

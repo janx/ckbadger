@@ -1,7 +1,7 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
 //! Fast tier (F1-F6): few API calls, seconds.
-//! Sampling tier (S1-S21): N API calls or chart validation, minutes.
+//! Sampling tier (S1-S22): N API calls or chart validation, minutes.
 
 use super::checks::*;
 use super::report::format_number;
@@ -23,6 +23,10 @@ const SPORE_OWNER_MAX_PAGES: usize = 50;
 const NFT_ASSET_LIST_LIMIT: usize = 100;
 const NFT_COLLECTION_SAMPLE_MAX: usize = 20;
 const SECONDARY_ISSUANCE_MAX_DRIFT_CKB: i128 = 10_000;
+const TOP_ASSET_LIMIT: usize = 10;
+const TOP_HOLDER_LIMIT: usize = 10;
+const ADDRESS_COUNT_PAGE_LIMIT: usize = 100;
+const ADDRESS_TOKENS_LIMIT: usize = 100;
 
 // ---------------------------------------------------------------------------
 // Lightweight API response types (deserialized from ckbadger API JSON).
@@ -165,6 +169,51 @@ struct NftCollectionDetailApiRecord {
     collection_id: String,
     total_count: i64,
     live_count: i64,
+    holders_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenDetailApiRecord {
+    type_script_hash: String,
+    holders_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SporeClusterDetailApiRecord {
+    cluster_id: String,
+    holders_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenHolderApiRecord {
+    lock_script_hash: String,
+    balance: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NftHolderApiRecord {
+    lock_script_hash: String,
+    item_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressDetailApiRecord {
+    lock_script_hash: String,
+    live_cells_count: i64,
+    transactions_count: i64,
+    recent_activities_count: i64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressTokenApiRecord {
+    type_script_hash: String,
+    balance: String,
 }
 
 /// Simple chart point with a single value (e.g. transaction-count).
@@ -259,6 +308,227 @@ fn parse_u128_to_i128_strict(raw: &str, field_name: &str) -> anyhow::Result<i128
         .parse::<u128>()
         .map_err(|e| anyhow::anyhow!("invalid {} '{}': {}", field_name, raw, e))?;
     i128::try_from(value).map_err(|_| anyhow::anyhow!("{} overflows i128: {}", field_name, raw))
+}
+
+#[derive(Clone)]
+struct AddressCountSnapshot {
+    lock_script_hash: String,
+    live_cells_count: i64,
+    transactions_count: i64,
+    recent_activities_count: i64,
+    tx_total: i64,
+    activity_total: i64,
+    live_cell_total: i64,
+}
+
+fn count_cursor_records<T, F>(
+    ctx: &CheckContext,
+    mut build_path: F,
+    entity: &str,
+) -> anyhow::Result<i64>
+where
+    T: serde::de::DeserializeOwned,
+    F: FnMut(Option<&str>) -> String,
+{
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = std::collections::HashSet::<String>::new();
+    let mut total = 0i64;
+
+    loop {
+        let path = build_path(cursor.as_deref());
+        let page: CursorPage<T> = api_get(ctx, &path)?;
+        let page_len = i64::try_from(page.data.len()).map_err(|_| {
+            anyhow::anyhow!(
+                "record count exceeds i64 while scanning {} via {}",
+                entity,
+                path
+            )
+        })?;
+        total = total
+            .checked_add(page_len)
+            .ok_or_else(|| anyhow::anyhow!("record count overflow while scanning {}", entity))?;
+
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        if !seen_cursors.insert(next_cursor.clone()) {
+            anyhow::bail!("repeated cursor while scanning {}: {}", entity, next_cursor);
+        }
+        cursor = Some(next_cursor);
+    }
+
+    Ok(total)
+}
+
+fn fetch_address_count_snapshot(
+    ctx: &CheckContext,
+    holder_lock_hash: &str,
+) -> anyhow::Result<AddressCountSnapshot> {
+    let address: AddressDetailApiRecord = api_get(ctx, &format!("addresses/{}", holder_lock_hash))?;
+
+    let tx_total = count_cursor_records::<serde_json::Value, _>(
+        ctx,
+        |cursor| match cursor {
+            Some(c) => format!(
+                "addresses/{}/transactions?limit={}&cursor={}",
+                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT, c
+            ),
+            None => format!(
+                "addresses/{}/transactions?limit={}",
+                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT
+            ),
+        },
+        &format!("address {} transactions", holder_lock_hash),
+    )?;
+
+    let activity_total = count_cursor_records::<serde_json::Value, _>(
+        ctx,
+        |cursor| match cursor {
+            Some(c) => format!(
+                "addresses/{}/activities?limit={}&cursor={}",
+                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT, c
+            ),
+            None => format!(
+                "addresses/{}/activities?limit={}",
+                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT
+            ),
+        },
+        &format!("address {} activities", holder_lock_hash),
+    )?;
+
+    let live_cell_total = count_cursor_records::<serde_json::Value, _>(
+        ctx,
+        |cursor| match cursor {
+            Some(c) => format!(
+                "cells/live?lock_script_hash={}&limit={}&cursor={}",
+                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT, c
+            ),
+            None => format!(
+                "cells/live?lock_script_hash={}&limit={}",
+                holder_lock_hash, ADDRESS_COUNT_PAGE_LIMIT
+            ),
+        },
+        &format!("address {} live cells", holder_lock_hash),
+    )?;
+
+    Ok(AddressCountSnapshot {
+        lock_script_hash: address.lock_script_hash,
+        live_cells_count: address.live_cells_count,
+        transactions_count: address.transactions_count,
+        recent_activities_count: address.recent_activities_count,
+        tx_total,
+        activity_total,
+        live_cell_total,
+    })
+}
+
+fn address_count_mismatch_details(
+    holder_lock_hash: &str,
+    snapshot: &AddressCountSnapshot,
+) -> Vec<String> {
+    let mut details = vec![];
+    if normalize_hex_key(&snapshot.lock_script_hash) != normalize_hex_key(holder_lock_hash) {
+        details.push(format!(
+            "address lock_script_hash mismatch: address=0x{}, holder=0x{}",
+            normalize_hex_key(&snapshot.lock_script_hash),
+            normalize_hex_key(holder_lock_hash)
+        ));
+    }
+    if snapshot.transactions_count != snapshot.recent_activities_count {
+        details.push(format!(
+            "address transactionsCount={} != recentActivitiesCount={}",
+            snapshot.transactions_count, snapshot.recent_activities_count
+        ));
+    }
+    if snapshot.tx_total != snapshot.transactions_count {
+        details.push(format!(
+            "transactions endpoint total={} != address transactionsCount={}",
+            snapshot.tx_total, snapshot.transactions_count
+        ));
+    }
+    if snapshot.activity_total != snapshot.transactions_count {
+        details.push(format!(
+            "activities endpoint total={} != address transactionsCount={}",
+            snapshot.activity_total, snapshot.transactions_count
+        ));
+    }
+    if snapshot.tx_total != snapshot.activity_total {
+        details.push(format!(
+            "transactions endpoint total={} != activities endpoint total={}",
+            snapshot.tx_total, snapshot.activity_total
+        ));
+    }
+    if snapshot.live_cell_total != snapshot.live_cells_count {
+        details.push(format!(
+            "live cells endpoint total={} != address liveCellsCount={}",
+            snapshot.live_cell_total, snapshot.live_cells_count
+        ));
+    }
+    details
+}
+
+fn token_holder_balance_mismatch_details(
+    ctx: &CheckContext,
+    token_type_hash: &str,
+    holder_lock_hash: &str,
+    holder_balance: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut details = vec![];
+    let holder_balance_value = parse_i128_strict(holder_balance, "token holder balance")?;
+    let address_tokens: CursorPage<AddressTokenApiRecord> = api_get(
+        ctx,
+        &format!(
+            "addresses/{}/tokens?limit={}",
+            holder_lock_hash, ADDRESS_TOKENS_LIMIT
+        ),
+    )?;
+    let token_key = normalize_hex_key(token_type_hash);
+    let token_entry = address_tokens
+        .data
+        .iter()
+        .find(|entry| normalize_hex_key(&entry.type_script_hash) == token_key);
+
+    match token_entry {
+        Some(entry) => {
+            let address_balance = parse_i128_strict(&entry.balance, "address token balance")?;
+            if address_balance != holder_balance_value {
+                details.push(format!(
+                    "token balance mismatch: holders={} address_tokens={}",
+                    holder_balance_value, address_balance
+                ));
+            }
+        }
+        None => {
+            if address_tokens.next_cursor.is_some() {
+                details.push(format!(
+                    "address tokens list (limit={}) truncated and missing token 0x{}",
+                    ADDRESS_TOKENS_LIMIT, token_key
+                ));
+            } else {
+                details.push(format!("address tokens list missing token 0x{}", token_key));
+            }
+        }
+    }
+
+    Ok(details)
+}
+
+fn load_address_snapshot(
+    ctx: &CheckContext,
+    cache: &mut std::collections::HashMap<String, AddressCountSnapshot>,
+    holder_lock_hash: &str,
+) -> anyhow::Result<AddressCountSnapshot> {
+    let holder_key = normalize_hex_key(holder_lock_hash);
+    if holder_key.is_empty() {
+        anyhow::bail!("holder lock script hash is empty");
+    }
+    if let Some(snapshot) = cache.get(&holder_key) {
+        return Ok(snapshot.clone());
+    }
+
+    let snapshot = fetch_address_count_snapshot(ctx, holder_lock_hash)?;
+    cache.insert(holder_key, snapshot.clone());
+    Ok(snapshot)
 }
 
 fn extract_activity_token_deltas(
@@ -2653,6 +2923,235 @@ impl Check for NftAssetCollectionConsistency {
     }
 }
 
+/// S22: Top token/NFT asset holders must align with address-page counts.
+pub struct AssetTopHoldersAddressConsistency;
+
+impl Check for AssetTopHoldersAddressConsistency {
+    fn name(&self) -> &'static str {
+        "asset_top_holders_address_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Top asset holders align with address activities/cells/transactions counts"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some((TOP_ASSET_LIMIT * TOP_HOLDER_LIMIT * 2) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let token_assets: CursorPageWithTotal<AssetListApiRecord> =
+            api_get(ctx, &format!("assets?type=token&limit={}", TOP_ASSET_LIMIT))?;
+        let nft_assets: CursorPageWithTotal<AssetListApiRecord> =
+            api_get(ctx, &format!("assets?type=nft&limit={}", TOP_ASSET_LIMIT))?;
+
+        if token_assets.data.is_empty() && nft_assets.data.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no token/nft assets available for holder consistency checks".to_string(),
+            ));
+        }
+
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        let mut address_cache = std::collections::HashMap::<String, AddressCountSnapshot>::new();
+
+        for asset in token_assets.data.iter().take(TOP_ASSET_LIMIT) {
+            let mut asset_details = vec![];
+            if asset.asset_type != "token" {
+                asset_details.push(format!(
+                    "unexpected asset type '{}' in token list",
+                    asset.asset_type
+                ));
+            }
+
+            let detail: TokenDetailApiRecord = api_get(ctx, &format!("tokens/{}", asset.id))?;
+            let detail_id = normalize_hex_key(&detail.type_script_hash);
+            let asset_id = normalize_hex_key(&asset.id);
+            if detail_id != asset_id {
+                asset_details.push(format!(
+                    "detail typeScriptHash mismatch: detail=0x{}, list=0x{}",
+                    detail_id, asset_id
+                ));
+            }
+            if detail.holders_count != asset.holders_count {
+                asset_details.push(format!(
+                    "detail holdersCount={} != list holdersCount={}",
+                    detail.holders_count, asset.holders_count
+                ));
+            }
+
+            let holders: CursorPageWithTotal<TokenHolderApiRecord> = api_get(
+                ctx,
+                &format!("tokens/{}/holders?limit={}", asset.id, TOP_HOLDER_LIMIT),
+            )?;
+            match holders.total {
+                Some(total) if total == detail.holders_count => {}
+                Some(total) => asset_details.push(format!(
+                    "holders total={} != detail holdersCount={}",
+                    total, detail.holders_count
+                )),
+                None => asset_details.push("holders response missing total".to_string()),
+            }
+
+            if !asset_details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("token={}", asset.id),
+                    details: asset_details,
+                });
+            }
+
+            for holder in holders.data.iter().take(TOP_HOLDER_LIMIT) {
+                let mut holder_details = vec![];
+                if normalize_hex_key(&holder.lock_script_hash).is_empty() {
+                    holder_details.push("holder lock script hash is empty".to_string());
+                } else {
+                    let snapshot =
+                        load_address_snapshot(ctx, &mut address_cache, &holder.lock_script_hash)?;
+                    holder_details.extend(address_count_mismatch_details(
+                        &holder.lock_script_hash,
+                        &snapshot,
+                    ));
+                }
+                holder_details.extend(token_holder_balance_mismatch_details(
+                    ctx,
+                    &asset.id,
+                    &holder.lock_script_hash,
+                    &holder.balance,
+                )?);
+
+                if !holder_details.is_empty() {
+                    findings.push(Finding {
+                        entity: format!("token={} holder={}", asset.id, holder.lock_script_hash),
+                        details: holder_details,
+                    });
+                }
+                checked += 1;
+                progress.inc(1);
+            }
+        }
+
+        for asset in nft_assets.data.iter().take(TOP_ASSET_LIMIT) {
+            let mut asset_details = vec![];
+            if asset.asset_type != "nft" {
+                asset_details.push(format!(
+                    "unexpected asset type '{}' in nft list",
+                    asset.asset_type
+                ));
+            }
+
+            let (detail_id, detail_holders_count, holders): (
+                String,
+                i64,
+                CursorPageWithTotal<NftHolderApiRecord>,
+            ) = if asset.standard.eq_ignore_ascii_case("spore") {
+                let detail: SporeClusterDetailApiRecord =
+                    api_get(ctx, &format!("spore/clusters/{}", asset.id))?;
+                let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
+                    ctx,
+                    &format!(
+                        "spore/clusters/{}/holders?limit={}",
+                        asset.id, TOP_HOLDER_LIMIT
+                    ),
+                )?;
+                (detail.cluster_id, detail.holders_count, holders_page)
+            } else {
+                let detail: NftCollectionDetailApiRecord =
+                    api_get(ctx, &format!("assets/nfts/{}", asset.id))?;
+                let holders_page: CursorPageWithTotal<NftHolderApiRecord> = api_get(
+                    ctx,
+                    &format!(
+                        "assets/nfts/{}/holders?limit={}",
+                        asset.id, TOP_HOLDER_LIMIT
+                    ),
+                )?;
+                (detail.collection_id, detail.holders_count, holders_page)
+            };
+
+            let detail_id_key = normalize_hex_key(&detail_id);
+            let asset_id_key = normalize_hex_key(&asset.id);
+            if detail_id_key != asset_id_key {
+                asset_details.push(format!(
+                    "detail id mismatch: detail=0x{}, list=0x{}",
+                    detail_id_key, asset_id_key
+                ));
+            }
+            if detail_holders_count != asset.holders_count {
+                asset_details.push(format!(
+                    "detail holdersCount={} != list holdersCount={}",
+                    detail_holders_count, asset.holders_count
+                ));
+            }
+            match holders.total {
+                Some(total) if total == detail_holders_count => {}
+                Some(total) => asset_details.push(format!(
+                    "holders total={} != detail holdersCount={}",
+                    total, detail_holders_count
+                )),
+                None => asset_details.push("holders response missing total".to_string()),
+            }
+
+            if !asset_details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("nft={} standard={}", asset.id, asset.standard),
+                    details: asset_details,
+                });
+            }
+
+            for holder in holders.data.iter().take(TOP_HOLDER_LIMIT) {
+                let mut holder_details = vec![];
+                if holder.item_count <= 0 {
+                    holder_details.push(format!(
+                        "holder itemCount={} expected > 0",
+                        holder.item_count
+                    ));
+                }
+                if normalize_hex_key(&holder.lock_script_hash).is_empty() {
+                    holder_details.push("holder lock script hash is empty".to_string());
+                } else {
+                    let snapshot =
+                        load_address_snapshot(ctx, &mut address_cache, &holder.lock_script_hash)?;
+                    holder_details.extend(address_count_mismatch_details(
+                        &holder.lock_script_hash,
+                        &snapshot,
+                    ));
+                }
+
+                if !holder_details.is_empty() {
+                    findings.push(Finding {
+                        entity: format!(
+                            "nft={} holder={} standard={}",
+                            asset.id, holder.lock_script_hash, asset.standard
+                        ),
+                        details: holder_details,
+                    });
+                }
+                checked += 1;
+                progress.inc(1);
+            }
+        }
+
+        if checked == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no holders returned by top token/nft assets".to_string(),
+            ));
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!(
+                    "{} holder address checks across top {} token + top {} nft assets",
+                    checked, TOP_ASSET_LIMIT, TOP_ASSET_LIMIT
+                ),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CKB RPC helpers (blocking, used only by S18)
 // ---------------------------------------------------------------------------
@@ -2761,6 +3260,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(TokenActivityTransferBidirectional),
         Box::new(SporeOwnerRoundtrip),
         Box::new(NftAssetCollectionConsistency),
+        Box::new(AssetTopHoldersAddressConsistency),
     ]
 }
 
@@ -2784,7 +3284,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 27);
+        assert_eq!(checks.len(), 28);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -2803,6 +3303,7 @@ mod tests {
         assert!(names.contains(&"token_activity_transfer_bidirectional"));
         assert!(names.contains(&"spore_owner_roundtrip"));
         assert!(names.contains(&"nft_asset_collection_consistency"));
+        assert!(names.contains(&"asset_top_holders_address_consistency"));
     }
 
     #[test]
@@ -2817,7 +3318,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 6);
-        assert_eq!(sampling_count, 21);
+        assert_eq!(sampling_count, 22);
     }
 
     #[test]
@@ -3075,6 +3576,57 @@ mod tests {
         let a = sample_indices_with_cap(7, 20, 8, 8);
         let b = sample_indices_with_cap(7, 20, 8, 8);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_address_count_mismatch_details_empty_when_consistent() {
+        let snapshot = AddressCountSnapshot {
+            lock_script_hash: "0xabc".to_string(),
+            live_cells_count: 3,
+            transactions_count: 5,
+            recent_activities_count: 5,
+            tx_total: 5,
+            activity_total: 5,
+            live_cell_total: 3,
+        };
+
+        let details = address_count_mismatch_details("0xabc", &snapshot);
+        assert!(details.is_empty());
+    }
+
+    #[test]
+    fn test_address_count_mismatch_details_reports_mismatches() {
+        let snapshot = AddressCountSnapshot {
+            lock_script_hash: "0xdef".to_string(),
+            live_cells_count: 7,
+            transactions_count: 6,
+            recent_activities_count: 4,
+            tx_total: 3,
+            activity_total: 2,
+            live_cell_total: 9,
+        };
+
+        let details = address_count_mismatch_details("0xabc", &snapshot);
+        assert!(details
+            .iter()
+            .any(|line| line.contains("lock_script_hash mismatch")));
+        assert!(details
+            .iter()
+            .any(|line| line.contains("transactionsCount=6 != recentActivitiesCount=4")));
+        assert!(details
+            .iter()
+            .any(|line| line
+                .contains("transactions endpoint total=3 != address transactionsCount=6")));
+        assert!(details.iter().any(
+            |line| line.contains("activities endpoint total=2 != address transactionsCount=6")
+        ));
+        assert!(details
+            .iter()
+            .any(|line| line
+                .contains("transactions endpoint total=3 != activities endpoint total=2")));
+        assert!(details
+            .iter()
+            .any(|line| line.contains("live cells endpoint total=9 != address liveCellsCount=7")));
     }
 
     #[test]
