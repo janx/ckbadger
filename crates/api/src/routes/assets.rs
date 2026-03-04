@@ -25,6 +25,8 @@ const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection_____________
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
+const NFT_HOLDER_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
+const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -791,21 +793,25 @@ fn normalize_nft_activity_action_filter(
     }
 }
 
-fn is_canonical_nft_collection_activity_entry(
+fn canonical_nft_collection_activity_locations(
     store: &CkbadgerStore,
-    block_number: i64,
-    tx_index: i32,
-    entry: &NftCollectionActivityEntry,
-) -> anyhow::Result<bool> {
-    let Some((canonical_block, canonical_tx_index)) = store.get_tx_location(&entry.tx_hash)? else {
-        return Ok(false);
-    };
-    if canonical_block != block_number || canonical_tx_index != tx_index {
-        return Ok(false);
+    rows: &[(i64, i32, NftCollectionActivityEntry)],
+) -> anyhow::Result<HashMap<Vec<u8>, (i64, i32)>> {
+    if rows.is_empty() {
+        return Ok(HashMap::new());
     }
-    Ok(store
-        .get_tx_index(canonical_block, canonical_tx_index)?
-        .is_some())
+    let tx_hashes: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|(_, _, entry)| entry.tx_hash.clone())
+        .collect();
+    let tx_batch = store.get_txs_by_hash_batch(&tx_hashes)?;
+    let mut out = HashMap::with_capacity(tx_batch.len());
+    for (tx_hash, tx_row_opt) in tx_batch {
+        if let Some((block_number, tx_index, _)) = tx_row_opt {
+            out.insert(tx_hash, (block_number, tx_index));
+        }
+    }
+    Ok(out)
 }
 
 pub(crate) fn list_canonical_nft_collection_activities_page(
@@ -835,10 +841,11 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
             break;
         }
         let rows_len = rows.len();
+        let canonical_locations = canonical_nft_collection_activity_locations(store, &rows)?;
         let mut last_seen = None;
         for (block_number, tx_index, entry) in rows {
             last_seen = Some((block_number, tx_index));
-            if is_canonical_nft_collection_activity_entry(store, block_number, tx_index, &entry)? {
+            if canonical_locations.get(&entry.tx_hash) == Some(&(block_number, tx_index)) {
                 out.push((block_number, tx_index, entry));
                 if out.len() >= limit {
                     return Ok(out);
@@ -876,10 +883,11 @@ pub(crate) fn count_canonical_nft_collection_activities(
             break;
         }
         let rows_len = rows.len();
+        let canonical_locations = canonical_nft_collection_activity_locations(store, &rows)?;
         let mut last_seen = None;
         for (block_number, tx_index, entry) in rows {
             last_seen = Some((block_number, tx_index));
-            if is_canonical_nft_collection_activity_entry(store, block_number, tx_index, &entry)? {
+            if canonical_locations.get(&entry.tx_hash) == Some(&(block_number, tx_index)) {
                 total = total.checked_add(1).ok_or_else(|| {
                     anyhow::anyhow!(
                         "canonical nft collection activity count overflow: collection_id=0x{}",
@@ -1358,15 +1366,20 @@ fn collect_nft_item_lifecycle_actions(
     let mut created_txs: HashSet<Vec<u8>> = HashSet::new();
     let mut consumed_txs: HashSet<Vec<u8>> = HashSet::new();
 
+    let outpoint_refs: Vec<(&[u8], i16)> = outpoints
+        .iter()
+        .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
+        .collect();
+    let consumed_meta = state
+        .store
+        .get_consumed_cell_meta_batch(&outpoint_refs)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
     for (tx_hash, output_index) in outpoints {
         created_txs.insert(tx_hash.clone());
 
-        if let Some(consumed) = state
-            .store
-            .get_consumed_cell_info(&tx_hash, output_index)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-        {
-            let consumed_by_tx = consumed.consumed_by_tx.ok_or_else(|| {
+        if let Some(meta) = consumed_meta.get(&(tx_hash.clone(), output_index)) {
+            let consumed_by_tx = meta.consumed_by_tx.clone().ok_or_else(|| {
                 ApiError::internal(format!(
                     "consumed nft outpoint missing consumer tx: nft_id=0x{}, tx_hash=0x{}, output_index={}",
                     hex::encode(nft_id_bytes),
@@ -1426,26 +1439,43 @@ fn build_nft_item_activities_response(
     };
     let lifecycle_rows =
         collect_nft_item_lifecycle_actions(state, nft_id_bytes, lifecycle_standard)?;
+    let tx_hashes: Vec<Vec<u8>> = lifecycle_rows
+        .iter()
+        .map(|(tx_hash, _)| tx_hash.clone())
+        .collect();
+    let tx_batch_rows = state
+        .store
+        .get_txs_by_hash_batch(&tx_hashes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut tx_rows_by_hash: HashMap<Vec<u8>, (i64, i32, ckbadger_store::types::TxIndexEntry)> =
+        HashMap::with_capacity(tx_batch_rows.len());
+    for (tx_hash, tx_row_opt) in tx_batch_rows {
+        let tx_row = tx_row_opt.ok_or_else(|| {
+            ApiError::internal(format!(
+                "nft lifecycle tx not found in tx index: nft_id=0x{}, tx_hash=0x{}",
+                hex::encode(nft_id_bytes),
+                hex::encode(&tx_hash)
+            ))
+        })?;
+        tx_rows_by_hash.insert(tx_hash, tx_row);
+    }
+
     let mut rows = Vec::with_capacity(lifecycle_rows.len());
     for (tx_hash, action) in lifecycle_rows {
-        let (block_number, tx_index, tx_entry) = state
-            .store
-            .get_tx_by_hash(&tx_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "nft lifecycle tx not found in tx index: nft_id=0x{}, tx_hash=0x{}",
-                    hex::encode(nft_id_bytes),
-                    hex::encode(&tx_hash)
-                ))
-            })?;
-
         if action_filter
             .map(|filter| filter != action)
             .unwrap_or(false)
         {
             continue;
         }
+        let (block_number, tx_index, tx_entry) =
+            tx_rows_by_hash.get(&tx_hash).cloned().ok_or_else(|| {
+                ApiError::internal(format!(
+                    "nft lifecycle tx lookup missing from batch result: nft_id=0x{}, tx_hash=0x{}",
+                    hex::encode(nft_id_bytes),
+                    hex::encode(&tx_hash)
+                ))
+            })?;
 
         rows.push(MnftItemActivityResponse {
             tx_hash: format!("0x{}", hex::encode(&tx_hash)),
@@ -1635,7 +1665,12 @@ async fn get_nft_collection(
         fully_onchain_ratio: format_ratio_4(0, agg.live_count),
     };
 
-    let holders_count = count_nft_collection_holders(&state, &collection_id_bytes, &agg)?;
+    let holders_count = count_nft_collection_holders_cached(
+        state.store.as_ref(),
+        &state.mem_cache,
+        &collection_id_bytes,
+        &agg,
+    )?;
     let activities_count = count_nft_collection_activities_cached(
         state.store.as_ref(),
         state.append_only_store.as_ref(),
@@ -1656,6 +1691,75 @@ async fn get_nft_collection(
         live_occupied_capacity,
         storage_profile,
     })
+}
+
+fn fetch_did_collection_entries_by_ids(
+    store: &CkbadgerStore,
+    collection_id_bytes: &[u8],
+    nft_ids: &[Vec<u8>],
+) -> Result<Vec<(Vec<u8>, ckbadger_store::types::DobEntry)>, ApiRouteError> {
+    let entries = store
+        .get_spores_batch(nft_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut out = Vec::with_capacity(entries.len());
+
+    for (nft_id, entry_opt) in entries {
+        let entry = entry_opt.ok_or_else(|| {
+            ApiError::internal(format!(
+                "nft_by_collection index points to missing spore_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
+                hex::encode(collection_id_bytes),
+                hex::encode(&nft_id)
+            ))
+        })?;
+        if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
+            return Err(ApiError::internal(format!(
+                "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
+                hex::encode(collection_id_bytes),
+                hex::encode(&nft_id),
+                entry.standard.as_str()
+            )));
+        }
+        out.push((nft_id, entry));
+    }
+
+    Ok(out)
+}
+
+fn fetch_nft_collection_entries_by_ids(
+    store: &CkbadgerStore,
+    collection_id_bytes: &[u8],
+    nft_ids: &[Vec<u8>],
+) -> Result<Vec<(Vec<u8>, ckbadger_store::types::NftEntry)>, ApiRouteError> {
+    let entries = store
+        .get_nfts_batch(nft_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut out = Vec::with_capacity(entries.len());
+
+    for (nft_id, entry_opt) in entries {
+        let entry = entry_opt.ok_or_else(|| {
+            ApiError::internal(format!(
+                "nft_by_collection index points to missing nft_data entry: collection_id=0x{}, nft_id=0x{}",
+                hex::encode(collection_id_bytes),
+                hex::encode(&nft_id)
+            ))
+        })?;
+        if !nft_entry_matches_collection(collection_id_bytes, &entry) {
+            return Err(ApiError::internal(format!(
+                "nft_by_collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}, entry_collection_id={}",
+                hex::encode(collection_id_bytes),
+                hex::encode(&nft_id),
+                entry.standard.as_str(),
+                entry
+                    .collection_id
+                    .as_ref()
+                    .map(|id| format!("0x{}", hex::encode(id)))
+                    .unwrap_or_else(|| "null".to_string())
+            )));
+        }
+        out.push((nft_id, entry));
+    }
+
+    Ok(out)
 }
 
 async fn list_nft_collection_items(
@@ -1709,28 +1813,11 @@ async fn list_nft_collection_items(
                     break;
                 }
 
-                for nft_id in &nft_ids {
-                    let entry = state
-                        .store
-                        .get_spore(nft_id)
-                        .map_err(|e| ApiError::internal(e.to_string()))?
-                        .ok_or_else(|| {
-                            ApiError::internal(format!(
-                                "nft_by_collection index points to missing spore_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
-                                hex::encode(&collection_id_bytes),
-                                hex::encode(nft_id)
-                            ))
-                        })?;
-
-                    if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
-                        return Err(ApiError::internal(format!(
-                            "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(nft_id),
-                            entry.standard.as_str()
-                        )));
-                    }
-
+                for (nft_id, entry) in fetch_did_collection_entries_by_ids(
+                    state.store.as_ref(),
+                    &collection_id_bytes,
+                    &nft_ids,
+                )? {
                     let status_match = match status_filter {
                         NftItemStatusFilter::All => true,
                         NftItemStatusFilter::Live => entry.is_live,
@@ -1746,7 +1833,7 @@ async fn list_nft_collection_items(
                             .as_deref()
                             .map(|name| name.to_ascii_lowercase().contains(search))
                             .unwrap_or(false);
-                        let nft_id_hex = hex::encode(nft_id);
+                        let nft_id_hex = hex::encode(&nft_id);
                         let id_match = nft_id_hex.contains(search)
                             || format!("0x{nft_id_hex}").contains(search);
                         if !name_match && !id_match {
@@ -1754,7 +1841,7 @@ async fn list_nft_collection_items(
                         }
                     }
 
-                    matched_items.push((nft_id.clone(), entry));
+                    matched_items.push((nft_id, entry));
                     if matched_items.len() > limit as usize {
                         break;
                     }
@@ -1776,30 +1863,11 @@ async fn list_nft_collection_items(
                 )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            for nft_id in nft_ids {
-                let entry = state
-                    .store
-                    .get_spore(&nft_id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "nft_by_collection index points to missing spore_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(&nft_id)
-                        ))
-                    })?;
-
-                if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
-                    return Err(ApiError::internal(format!(
-                        "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
-                        hex::encode(&collection_id_bytes),
-                        hex::encode(&nft_id),
-                        entry.standard.as_str()
-                    )));
-                }
-
-                matched_items.push((nft_id, entry));
-            }
+            matched_items.extend(fetch_did_collection_entries_by_ids(
+                state.store.as_ref(),
+                &collection_id_bytes,
+                &nft_ids,
+            )?);
         }
 
         let has_more = matched_items.len() as i64 > limit;
@@ -1863,42 +1931,20 @@ async fn list_nft_collection_items(
                 break;
             }
 
-            for nft_id in &nft_ids {
-                let entry = state
-                    .store
-                    .get_nft(nft_id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "nft_by_collection index points to missing nft_data entry: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(nft_id)
-                        ))
-                    })?;
-
-                if !nft_entry_matches_collection(&collection_id_bytes, &entry) {
-                    return Err(ApiError::internal(format!(
-                        "nft_by_collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}, entry_collection_id={}",
-                        hex::encode(&collection_id_bytes),
-                        hex::encode(nft_id),
-                        entry.standard.as_str(),
-                        entry
-                            .collection_id
-                            .as_ref()
-                            .map(|id| format!("0x{}", hex::encode(id)))
-                            .unwrap_or_else(|| "null".to_string())
-                    )));
-                }
-
+            for (nft_id, entry) in fetch_nft_collection_entries_by_ids(
+                state.store.as_ref(),
+                &collection_id_bytes,
+                &nft_ids,
+            )? {
                 if !nft_item_matches_status(status_filter, &entry) {
                     continue;
                 }
 
-                if !nft_item_matches_search(search_lower.as_deref(), nft_id, &entry) {
+                if !nft_item_matches_search(search_lower.as_deref(), &nft_id, &entry) {
                     continue;
                 }
 
-                matched_items.push((nft_id.clone(), entry));
+                matched_items.push((nft_id, entry));
                 if matched_items.len() > limit as usize {
                     break;
                 }
@@ -1920,35 +1966,11 @@ async fn list_nft_collection_items(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        for nft_id in nft_ids {
-            let entry = state
-                .store
-                .get_nft(&nft_id)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "nft_by_collection index points to missing nft_data entry: collection_id=0x{}, nft_id=0x{}",
-                        hex::encode(&collection_id_bytes),
-                        hex::encode(&nft_id)
-                    ))
-                })?;
-
-            if !nft_entry_matches_collection(&collection_id_bytes, &entry) {
-                return Err(ApiError::internal(format!(
-                    "nft_by_collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}, entry_collection_id={}",
-                    hex::encode(&collection_id_bytes),
-                    hex::encode(&nft_id),
-                    entry.standard.as_str(),
-                    entry
-                        .collection_id
-                        .as_ref()
-                        .map(|id| format!("0x{}", hex::encode(id)))
-                        .unwrap_or_else(|| "null".to_string())
-                )));
-            }
-
-            matched_items.push((nft_id, entry));
-        }
+        matched_items.extend(fetch_nft_collection_entries_by_ids(
+            state.store.as_ref(),
+            &collection_id_bytes,
+            &nft_ids,
+        )?);
     }
 
     let has_more = matched_items.len() as i64 > limit;
@@ -2088,75 +2110,117 @@ async fn list_nft_collection_items(
     }
 }
 
-fn list_collection_nft_ids(
-    state: &Arc<AppState>,
+fn collect_nft_collection_holder_counts(
+    store: &CkbadgerStore,
     collection_id_bytes: &[u8],
-) -> Result<Vec<Vec<u8>>, ApiRouteError> {
-    let mut all_ids = Vec::new();
+    agg: &ckbadger_store::types::NftCollectionAggregate,
+) -> Result<HashMap<Vec<u8>, i64>, ApiRouteError> {
+    let mut holder_counts: HashMap<Vec<u8>, i64> = HashMap::new();
     let mut cursor: Option<Vec<u8>> = None;
     let scan_batch_size = 1_000usize;
 
     loop {
-        let batch = state
-            .store
+        let nft_ids = store
             .list_nft_ids_by_collection(collection_id_bytes, cursor.as_deref(), scan_batch_size)
             .map_err(|e| ApiError::internal(e.to_string()))?;
-        if batch.is_empty() {
+        if nft_ids.is_empty() {
             break;
         }
-        cursor = batch.last().cloned();
-        all_ids.extend(batch.iter().cloned());
-        if batch.len() < scan_batch_size {
+        match agg.standard {
+            ckbadger_store::types::NftStandard::DidCkb => {
+                for (_, entry) in
+                    fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
+                {
+                    if !entry.is_live {
+                        continue;
+                    }
+                    if let Some(owner_lock_hash) = entry.owner_lock_hash {
+                        *holder_counts.entry(owner_lock_hash).or_insert(0) += 1;
+                    }
+                }
+            }
+            _ => {
+                for (_, entry) in
+                    fetch_nft_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
+                {
+                    if !entry.is_live {
+                        continue;
+                    }
+                    if let Some(owner_lock_hash) = entry.owner_lock_hash {
+                        *holder_counts.entry(owner_lock_hash).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        cursor = nft_ids.last().cloned();
+        if nft_ids.len() < scan_batch_size {
             break;
         }
     }
 
-    Ok(all_ids)
+    Ok(holder_counts)
 }
 
 /// Count unique holders (live NFT owners) for a collection.
 fn count_nft_collection_holders(
-    state: &Arc<AppState>,
+    store: &CkbadgerStore,
     collection_id_bytes: &[u8],
     agg: &ckbadger_store::types::NftCollectionAggregate,
 ) -> Result<i64, ApiRouteError> {
-    let nft_ids = list_collection_nft_ids(state, collection_id_bytes)?;
-    let mut unique_owners: HashSet<Vec<u8>> = HashSet::new();
+    let holder_counts = collect_nft_collection_holder_counts(store, collection_id_bytes, agg)?;
+    Ok(holder_counts.len() as i64)
+}
 
-    match agg.standard {
-        ckbadger_store::types::NftStandard::DidCkb => {
-            for nft_id in &nft_ids {
-                if let Some(entry) = state
-                    .store
-                    .get_spore(nft_id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                {
-                    if entry.is_live {
-                        if let Some(owner_lock_hash) = entry.owner_lock_hash {
-                            unique_owners.insert(owner_lock_hash);
-                        }
-                    }
-                }
-            }
-        }
-        _ => {
-            for nft_id in &nft_ids {
-                if let Some(entry) = state
-                    .store
-                    .get_nft(nft_id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                {
-                    if entry.is_live {
-                        if let Some(owner_lock_hash) = entry.owner_lock_hash {
-                            unique_owners.insert(owner_lock_hash);
-                        }
-                    }
-                }
-            }
-        }
+fn list_nft_collection_holders_ranked(
+    store: &CkbadgerStore,
+    collection_id_bytes: &[u8],
+    agg: &ckbadger_store::types::NftCollectionAggregate,
+) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
+    let mut holders: Vec<(Vec<u8>, i64)> =
+        collect_nft_collection_holder_counts(store, collection_id_bytes, agg)?
+            .into_iter()
+            .collect();
+    holders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(holders)
+}
+
+fn count_nft_collection_holders_cached(
+    store: &CkbadgerStore,
+    mem_cache: &InMemoryCache,
+    collection_id_bytes: &[u8],
+    agg: &ckbadger_store::types::NftCollectionAggregate,
+) -> Result<i64, ApiRouteError> {
+    let cache_key = format!(
+        "assets:nft_collection_holders_count:0x{}",
+        hex::encode(collection_id_bytes)
+    );
+    if let Some(cached) = mem_cache.get::<i64>(&cache_key) {
+        return Ok(cached);
     }
 
-    Ok(unique_owners.len() as i64)
+    let total = count_nft_collection_holders(store, collection_id_bytes, agg)?;
+    mem_cache.set(&cache_key, &total, NFT_HOLDER_COUNT_CACHE_TTL);
+    Ok(total)
+}
+
+fn list_nft_collection_holders_ranked_cached(
+    store: &CkbadgerStore,
+    mem_cache: &InMemoryCache,
+    collection_id_bytes: &[u8],
+    agg: &ckbadger_store::types::NftCollectionAggregate,
+) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
+    let cache_key = format!(
+        "assets:nft_collection_holders_ranked:0x{}",
+        hex::encode(collection_id_bytes)
+    );
+    if let Some(cached) = mem_cache.get::<Vec<(Vec<u8>, i64)>>(&cache_key) {
+        return Ok(cached);
+    }
+
+    let holders = list_nft_collection_holders_ranked(store, collection_id_bytes, agg)?;
+    mem_cache.set(&cache_key, &holders, NFT_HOLDER_LIST_CACHE_TTL);
+    Ok(holders)
 }
 
 async fn list_nft_collection_holders(
@@ -2180,77 +2244,12 @@ async fn list_nft_collection_holders(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
-    let nft_ids = list_collection_nft_ids(&state, &collection_id_bytes)?;
-    let mut holder_counts: HashMap<Vec<u8>, i64> = HashMap::new();
-
-    match agg.standard {
-        ckbadger_store::types::NftStandard::DidCkb => {
-            for nft_id in &nft_ids {
-                let entry = state
-                    .store
-                    .get_spore(nft_id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "nft_by_collection index points to missing spore_data did:ckb entry: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(nft_id)
-                        ))
-                    })?;
-                if entry.standard != ckbadger_store::types::DobStandard::DidCkb {
-                    return Err(ApiError::internal(format!(
-                        "did:ckb collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}",
-                        hex::encode(&collection_id_bytes),
-                        hex::encode(nft_id),
-                        entry.standard.as_str()
-                    )));
-                }
-                if !entry.is_live {
-                    continue;
-                }
-                if let Some(owner_lock_hash) = entry.owner_lock_hash {
-                    *holder_counts.entry(owner_lock_hash).or_insert(0) += 1;
-                }
-            }
-        }
-        _ => {
-            for nft_id in &nft_ids {
-                let entry = state
-                    .store
-                    .get_nft(nft_id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "nft_by_collection index points to missing nft_data entry: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(nft_id)
-                        ))
-                    })?;
-                if !nft_entry_matches_collection(&collection_id_bytes, &entry) {
-                    return Err(ApiError::internal(format!(
-                        "nft_by_collection index mismatch: collection_id=0x{}, nft_id=0x{}, entry_standard={}, entry_collection_id={}",
-                        hex::encode(&collection_id_bytes),
-                        hex::encode(nft_id),
-                        entry.standard.as_str(),
-                        entry
-                            .collection_id
-                            .as_ref()
-                            .map(|id| format!("0x{}", hex::encode(id)))
-                            .unwrap_or_else(|| "null".to_string())
-                    )));
-                }
-                if !entry.is_live {
-                    continue;
-                }
-                if let Some(owner_lock_hash) = entry.owner_lock_hash {
-                    *holder_counts.entry(owner_lock_hash).or_insert(0) += 1;
-                }
-            }
-        }
-    }
-
-    let mut holders: Vec<(Vec<u8>, i64)> = holder_counts.into_iter().collect();
-    holders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let holders = list_nft_collection_holders_ranked_cached(
+        state.store.as_ref(),
+        &state.mem_cache,
+        &collection_id_bytes,
+        &agg,
+    )?;
 
     let total = holders.len() as i64;
     let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
@@ -2654,5 +2653,149 @@ mod tests {
             count_nft_collection_activities_cached(&domain, &append, &mem_cache, &collection_id)
                 .unwrap();
         assert_eq!(cached_count, 2);
+    }
+
+    #[test]
+    fn test_count_nft_collection_holders_cached_uses_ttl_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let collection_id = [0xBC; 32];
+
+        let aggregate = ckbadger_store::types::NftCollectionAggregate {
+            name: Some("sample".to_string()),
+            standard: ckbadger_store::types::NftStandard::MnftClass,
+            total_count: 2,
+            live_count: 2,
+        };
+
+        let make_nft = |owner: &[u8]| ckbadger_store::types::NftEntry {
+            standard: ckbadger_store::types::NftStandard::MnftToken,
+            collection_id: Some(collection_id.to_vec()),
+            token_id: None,
+            owner_lock_hash: Some(owner.to_vec()),
+            name: None,
+            is_live: true,
+            created_at_block: 1,
+            extra: ckbadger_store::types::NftExtra::MnftToken {
+                token_index: 0,
+                characteristic: vec![],
+                configure: 0,
+                state: 0,
+            },
+        };
+
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_nft_collection_aggregate(&collection_id, &aggregate);
+        batch.put_nft(&[0x01; 32], &make_nft(&[0xA1; 32]));
+        batch.put_nft_by_collection(&collection_id, &[0x01; 32]);
+        batch.put_nft(&[0x02; 32], &make_nft(&[0xA2; 32]));
+        batch.put_nft_by_collection(&collection_id, &[0x02; 32]);
+        batch.commit().unwrap();
+
+        let mem_cache = InMemoryCache::new();
+        let first =
+            count_nft_collection_holders_cached(&domain, &mem_cache, &collection_id, &aggregate)
+                .unwrap();
+        assert_eq!(first, 2);
+
+        // Add a new live holder. Cached count should remain unchanged until TTL refresh.
+        let mut overwrite_batch = StoreBatch::new(&domain);
+        overwrite_batch.put_nft(&[0x03; 32], &make_nft(&[0xA3; 32]));
+        overwrite_batch.put_nft_by_collection(&collection_id, &[0x03; 32]);
+        overwrite_batch.commit().unwrap();
+
+        let cached_after_write =
+            count_nft_collection_holders_cached(&domain, &mem_cache, &collection_id, &aggregate)
+                .unwrap();
+        assert_eq!(cached_after_write, 2);
+    }
+
+    #[test]
+    fn test_list_nft_collection_holders_ranked_cached_uses_ttl_cache() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let collection_id = [0xBD; 32];
+
+        let aggregate = ckbadger_store::types::NftCollectionAggregate {
+            name: Some("sample".to_string()),
+            standard: ckbadger_store::types::NftStandard::MnftClass,
+            total_count: 2,
+            live_count: 2,
+        };
+
+        let make_nft = |owner: &[u8]| ckbadger_store::types::NftEntry {
+            standard: ckbadger_store::types::NftStandard::MnftToken,
+            collection_id: Some(collection_id.to_vec()),
+            token_id: None,
+            owner_lock_hash: Some(owner.to_vec()),
+            name: None,
+            is_live: true,
+            created_at_block: 1,
+            extra: ckbadger_store::types::NftExtra::MnftToken {
+                token_index: 0,
+                characteristic: vec![],
+                configure: 0,
+                state: 0,
+            },
+        };
+
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_nft_collection_aggregate(&collection_id, &aggregate);
+        batch.put_nft(&[0x01; 32], &make_nft(&[0xA1; 32]));
+        batch.put_nft_by_collection(&collection_id, &[0x01; 32]);
+        batch.put_nft(&[0x02; 32], &make_nft(&[0xA2; 32]));
+        batch.put_nft_by_collection(&collection_id, &[0x02; 32]);
+        batch.commit().unwrap();
+
+        let mem_cache = InMemoryCache::new();
+        let first = list_nft_collection_holders_ranked_cached(
+            &domain,
+            &mem_cache,
+            &collection_id,
+            &aggregate,
+        )
+        .unwrap();
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first
+                .iter()
+                .find(|(lock_hash, _)| lock_hash == &[0xA1; 32])
+                .unwrap()
+                .1,
+            1
+        );
+
+        // Add another live NFT for holder A1; cached ranking should remain stale until TTL refresh.
+        let mut overwrite_batch = StoreBatch::new(&domain);
+        overwrite_batch.put_nft(&[0x03; 32], &make_nft(&[0xA1; 32]));
+        overwrite_batch.put_nft_by_collection(&collection_id, &[0x03; 32]);
+        overwrite_batch.commit().unwrap();
+
+        let cached_after_write = list_nft_collection_holders_ranked_cached(
+            &domain,
+            &mem_cache,
+            &collection_id,
+            &aggregate,
+        )
+        .unwrap();
+        assert_eq!(
+            cached_after_write
+                .iter()
+                .find(|(lock_hash, _)| lock_hash == &[0xA1; 32])
+                .unwrap()
+                .1,
+            1
+        );
+
+        let uncached_after_write =
+            list_nft_collection_holders_ranked(&domain, &collection_id, &aggregate).unwrap();
+        assert_eq!(
+            uncached_after_write
+                .iter()
+                .find(|(lock_hash, _)| lock_hash == &[0xA1; 32])
+                .unwrap()
+                .1,
+            2
+        );
     }
 }

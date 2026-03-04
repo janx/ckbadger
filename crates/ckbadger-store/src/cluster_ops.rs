@@ -4,6 +4,8 @@ use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::ClusterAggregate;
 
+pub(crate) type ClusterAggregateBatchEntry = (Vec<u8>, Option<ClusterAggregate>);
+
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -24,6 +26,49 @@ impl CkbadgerStore {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
+    }
+
+    /// Batch-fetch multiple cluster aggregates in one RocksDB multi_get call.
+    pub fn get_cluster_aggregates_batch(
+        &self,
+        cluster_ids: &[Vec<u8>],
+    ) -> anyhow::Result<Vec<ClusterAggregateBatchEntry>> {
+        if cluster_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let cf = self.cf_cluster_agg();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = cluster_ids
+            .iter()
+            .map(|cluster_id| (cf, cluster_id.as_slice()))
+            .collect();
+        let values = self.multi_get_cf(cf_keys);
+        let mut results = Vec::with_capacity(cluster_ids.len());
+
+        for (cluster_id, value_result) in cluster_ids.iter().zip(values) {
+            let aggregate = match value_result {
+                Ok(Some(value)) => {
+                    Some(bincode::deserialize::<ClusterAggregate>(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize cluster aggregate in get_cluster_aggregates_batch: cluster_id=0x{}, error={}",
+                            bytes_to_hex(cluster_id),
+                            e
+                        )
+                    })?)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_cluster_aggregates_batch: cluster_id=0x{}, error={}",
+                        bytes_to_hex(cluster_id),
+                        e
+                    ));
+                }
+            };
+            results.push((cluster_id.clone(), aggregate));
+        }
+
+        Ok(results)
     }
 
     /// List all cluster aggregates. Scans the small `cluster_agg` CF.
@@ -201,6 +246,66 @@ mod tests {
 
         let results = store.list_cluster_aggregates().unwrap();
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_get_cluster_aggregates_batch_reads_multiple_entries() {
+        let (_dir, store) = test_store();
+        let id_a = [0x11u8; 32];
+        let id_b = [0x22u8; 32];
+        let id_missing = vec![0x33u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cluster_aggregate(
+            &id_a,
+            &ClusterAggregate {
+                name: Some("A".to_string()),
+                total_count: 1,
+                live_count: 1,
+                owner_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_cluster_aggregate(
+            &id_b,
+            &ClusterAggregate {
+                name: Some("B".to_string()),
+                total_count: 2,
+                live_count: 2,
+                owner_count: 2,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+
+        let ids = vec![id_a.to_vec(), id_missing.clone(), id_b.to_vec()];
+        let rows = store.get_cluster_aggregates_batch(&ids).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            rows[0].1.as_ref().and_then(|v| v.name.as_deref()),
+            Some("A")
+        );
+        assert!(rows[1].1.is_none());
+        assert_eq!(
+            rows[2].1.as_ref().and_then(|v| v.name.as_deref()),
+            Some("B")
+        );
+    }
+
+    #[test]
+    fn test_get_cluster_aggregates_batch_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let id = [0x44u8; 32];
+        store
+            .put_cf(store.cf_cluster_agg(), &id, b"invalid-cluster-aggregate")
+            .unwrap();
+
+        let err = store
+            .get_cluster_aggregates_batch(&[id.to_vec()])
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize cluster aggregate in get_cluster_aggregates_batch"));
     }
 
     #[test]

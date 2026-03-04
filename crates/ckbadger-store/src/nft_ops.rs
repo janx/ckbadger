@@ -7,6 +7,8 @@ use crate::types::{
     NftTypeIndex,
 };
 
+pub(crate) type NftBatchEntry = (Vec<u8>, Option<NftEntry>);
+
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
@@ -23,6 +25,39 @@ impl CkbadgerStore {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
+    }
+
+    /// Batch-fetch multiple NFT entries by ID in a single RocksDB multi_get.
+    pub fn get_nfts_batch(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<NftBatchEntry>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let cf = self.cf_nft_data();
+        let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            ids.iter().map(|id| (cf, id.as_slice())).collect();
+        let values = self.multi_get_cf(cf_keys);
+        let mut result = Vec::with_capacity(ids.len());
+        for (id, value_result) in ids.iter().zip(values) {
+            let entry = match value_result {
+                Ok(Some(value)) => Some(bincode::deserialize::<NftEntry>(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize nft entry in get_nfts_batch: nft_id=0x{}, error={}",
+                        bytes_to_hex(id),
+                        e
+                    )
+                })?),
+                Ok(None) => None,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_nfts_batch: nft_id=0x{}, error={}",
+                        bytes_to_hex(id),
+                        e
+                    ));
+                }
+            };
+            result.push((id.clone(), entry));
+        }
+        Ok(result)
     }
 
     /// List all NFTs.
@@ -442,6 +477,76 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to deserialize nft entry in list_nfts"));
+    }
+
+    #[test]
+    fn test_get_nfts_batch_reads_multiple_entries() {
+        let (_dir, store) = test_store();
+        let nft_a = [0x11u8; 32];
+        let nft_b = [0x22u8; 32];
+
+        let make_entry = |owner: &[u8]| NftEntry {
+            standard: NftStandard::MnftToken,
+            collection_id: Some(vec![0x01; 32]),
+            token_id: None,
+            owner_lock_hash: Some(owner.to_vec()),
+            name: None,
+            is_live: true,
+            created_at_block: 1,
+            extra: crate::types::NftExtra::MnftToken {
+                token_index: 0,
+                characteristic: vec![],
+                configure: 0,
+                state: 0,
+            },
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft(&nft_a, &make_entry(&[0xA1; 32]));
+        batch.put_nft(&nft_b, &make_entry(&[0xA2; 32]));
+        batch.commit().unwrap();
+
+        let fetched = store
+            .get_nfts_batch(&[nft_a.to_vec(), nft_b.to_vec(), vec![0x33; 32]])
+            .unwrap();
+        assert_eq!(fetched.len(), 3);
+        assert_eq!(fetched[0].0, nft_a.to_vec());
+        assert_eq!(fetched[1].0, nft_b.to_vec());
+        assert_eq!(
+            fetched[0]
+                .1
+                .as_ref()
+                .unwrap()
+                .owner_lock_hash
+                .as_ref()
+                .unwrap(),
+            &[0xA1; 32]
+        );
+        assert_eq!(
+            fetched[1]
+                .1
+                .as_ref()
+                .unwrap()
+                .owner_lock_hash
+                .as_ref()
+                .unwrap(),
+            &[0xA2; 32]
+        );
+        assert!(fetched[2].1.is_none());
+    }
+
+    #[test]
+    fn test_get_nfts_batch_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        let nft_id = [0x44u8; 32];
+        store
+            .put_cf(store.cf_nft_data(), &nft_id, b"invalid-nft-payload")
+            .unwrap();
+
+        let err = store.get_nfts_batch(&[nft_id.to_vec()]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize nft entry in get_nfts_batch"));
     }
 
     #[test]

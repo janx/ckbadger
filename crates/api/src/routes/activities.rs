@@ -8,6 +8,7 @@ use ckbadger_store::{
     CkbadgerStore,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
@@ -167,24 +168,25 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     }
 }
 
-fn is_canonical_activity_entry(
+fn canonical_activity_locations(
     store: &CkbadgerStore,
-    block_num: i64,
-    tx_idx: i32,
-    entry: &ActivityEntry,
-) -> anyhow::Result<bool> {
-    if entry.block_number != block_num || entry.tx_index != tx_idx {
-        return Ok(false);
+    rows: &[(i64, i32, ActivityEntry)],
+) -> anyhow::Result<HashMap<Vec<u8>, (i64, i32)>> {
+    if rows.is_empty() {
+        return Ok(HashMap::new());
     }
-    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(&entry.tx_hash)? else {
-        return Ok(false);
-    };
-    if canonical_block != block_num || canonical_tx_idx != tx_idx {
-        return Ok(false);
+    let tx_hashes: Vec<Vec<u8>> = rows
+        .iter()
+        .map(|(_, _, entry)| entry.tx_hash.clone())
+        .collect();
+    let tx_batch = store.get_txs_by_hash_batch(&tx_hashes)?;
+    let mut out = HashMap::with_capacity(tx_batch.len());
+    for (tx_hash, tx_row_opt) in tx_batch {
+        if let Some((block_num, tx_idx, _)) = tx_row_opt {
+            out.insert(tx_hash, (block_num, tx_idx));
+        }
     }
-    Ok(store
-        .get_tx_index(canonical_block, canonical_tx_idx)?
-        .is_some())
+    Ok(out)
 }
 
 fn list_canonical_activities_page(
@@ -208,10 +210,14 @@ fn list_canonical_activities_page(
             break;
         }
         let rows_len = rows.len();
+        let canonical_locations = canonical_activity_locations(store, &rows)?;
         let mut last_seen = None;
         for (block_num, tx_idx, entry) in rows {
             last_seen = Some((block_num, tx_idx));
-            if is_canonical_activity_entry(store, block_num, tx_idx, &entry)? {
+            if entry.block_number == block_num
+                && entry.tx_index == tx_idx
+                && canonical_locations.get(&entry.tx_hash) == Some(&(block_num, tx_idx))
+            {
                 out.push((block_num, tx_idx, entry));
                 if out.len() >= limit {
                     return Ok(out);

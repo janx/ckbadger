@@ -324,6 +324,40 @@ impl CkbadgerStore {
         }
     }
 
+    pub fn get_latest_dao_daily_snapshot(&self) -> anyhow::Result<Option<DaoDailySnapshot>> {
+        let prefix = [stats_prefix::DAO_DAILY_SNAPSHOT];
+        let seek_key = [stats_prefix::DAO_DAILY_SNAPSHOT + 1];
+        let iter = self.iterator_cf(
+            self.cf_stats_dao(),
+            rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Reverse),
+        );
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_dao in get_latest_dao_daily_snapshot: {}",
+                    e
+                )
+            })?;
+            if key.first().copied().unwrap_or_default() < stats_prefix::DAO_DAILY_SNAPSHOT {
+                break;
+            }
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let snapshot: DaoDailySnapshot = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize dao daily snapshot in get_latest_dao_daily_snapshot: key=0x{}, error={}",
+                    bytes_to_hex(&key),
+                    e
+                )
+            })?;
+            return Ok(Some(snapshot));
+        }
+
+        Ok(None)
+    }
+
     pub fn get_latest_dao_statistics(&self) -> anyhow::Result<Option<DaoLatestStatistics>> {
         let key = keys::encode_stats_key(stats_prefix::DAO_LATEST_STATS, b"latest");
         match self.get_cf(self.cf_stats_dao(), &key)? {
@@ -1368,6 +1402,42 @@ mod tests {
 
         // Non-existent date returns None
         assert!(store.get_dao_daily_snapshot("20240116").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_latest_dao_daily_snapshot_returns_latest_by_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let mut snap = DaoDailySnapshot {
+            date: "2024-01-15".to_string(),
+            total_deposited: 100,
+            depositors_count: 1,
+            new_deposits: 1,
+            withdrawals: 0,
+            compensation: 0,
+            cumulative_deposit_amount: 100,
+            total_issuance: 10_000,
+            secondary_pool: 100,
+            occupied_capacity: 50,
+            cum_miner_secondary: 1,
+            cum_dao_compensation: 2,
+            cum_treasury: 3,
+        };
+        put_dao_snapshot(&store, "20240115", &snap);
+
+        snap.date = "2024-01-16".to_string();
+        put_dao_snapshot(&store, "20240116", &snap);
+
+        // Write another key in the same CF with a different stats prefix.
+        let other_key =
+            crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
+        store
+            .put_cf(store.cf_stats_dao(), &other_key, b"non-snapshot")
+            .unwrap();
+
+        let latest = store.get_latest_dao_daily_snapshot().unwrap().unwrap();
+        assert_eq!(latest.date, "2024-01-16");
     }
 
     #[test]

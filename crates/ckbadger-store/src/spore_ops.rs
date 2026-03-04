@@ -99,7 +99,7 @@ impl CkbadgerStore {
         limit: usize,
     ) -> anyhow::Result<Vec<(Vec<u8>, DobEntry)>> {
         let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
-        let mut results = Vec::new();
+        let mut spore_ids: Vec<Vec<u8>> = Vec::new();
 
         for item in iter {
             let (key, _) = item.map_err(|e| {
@@ -113,16 +113,18 @@ impl CkbadgerStore {
             }
             // Key: cluster_id(32B) + spore_id(32B) = 64 bytes
             if key.len() == 64 {
-                let spore_id = key[32..64].to_vec();
-                if let Some(entry) = self.get_spore(&spore_id)? {
-                    results.push((spore_id, entry));
-                    if results.len() >= limit {
-                        break;
-                    }
+                spore_ids.push(key[32..64].to_vec());
+                if spore_ids.len() >= limit {
+                    break;
                 }
             }
         }
-        Ok(results)
+
+        let entries = self.get_spores_batch(&spore_ids)?;
+        Ok(entries
+            .into_iter()
+            .filter_map(|(spore_id, entry)| entry.map(|entry| (spore_id, entry)))
+            .collect())
     }
 
     /// Count spores in a cluster using the secondary index.
@@ -409,6 +411,7 @@ impl CkbadgerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::DobExtra;
     use crate::types::{ClusterDailyDelta, SporeDailyDelta, SporeTypeIndex};
     use tempfile::TempDir;
 
@@ -532,6 +535,71 @@ mod tests {
         assert!(err.to_string().contains(
             "failed to deserialize spore daily delta in list_spore_daily_deltas_in_range"
         ));
+    }
+
+    #[test]
+    fn test_list_spores_by_cluster_returns_entries() {
+        let (_dir, store) = test_store();
+        let cluster_id = [0x44u8; 32];
+        let spore_a = [0xA1u8; 32];
+        let spore_b = [0xB2u8; 32];
+        let other_cluster = [0x55u8; 32];
+        let spore_other = [0xC3u8; 32];
+
+        let make_entry = |created_at_block: i64| DobEntry {
+            standard: crate::types::DobStandard::Spore,
+            collection_id: Some(cluster_id.to_vec()),
+            owner_lock_hash: Some(vec![0x11; 32]),
+            name: Some("spore".to_string()),
+            description: None,
+            is_live: true,
+            created_at_block,
+            created_at_tx: vec![0x22; 32],
+            extra: DobExtra::Spore {
+                content_type: "text/plain".to_string(),
+                content_length: 5,
+                media_profile: Default::default(),
+            },
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore(&spore_a, &make_entry(10));
+        batch.put_spore(&spore_b, &make_entry(20));
+        batch.put_spore(
+            &spore_other,
+            &DobEntry {
+                collection_id: Some(other_cluster.to_vec()),
+                ..make_entry(30)
+            },
+        );
+        batch.put_spore_by_cluster(&cluster_id, &spore_a);
+        batch.put_spore_by_cluster(&cluster_id, &spore_b);
+        batch.put_spore_by_cluster(&other_cluster, &spore_other);
+        batch.commit().unwrap();
+
+        let rows = store.list_spores_by_cluster(&cluster_id, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, spore_a.to_vec());
+        assert_eq!(rows[1].0, spore_b.to_vec());
+    }
+
+    #[test]
+    fn test_list_spores_by_cluster_fails_on_invalid_spore_payload() {
+        let (_dir, store) = test_store();
+        let cluster_id = [0x66u8; 32];
+        let spore_id = [0x77u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore_by_cluster(&cluster_id, &spore_id);
+        batch.commit().unwrap();
+        store
+            .put_cf(store.cf_spore_data(), &spore_id, b"invalid-spore-payload")
+            .unwrap();
+
+        let err = store.list_spores_by_cluster(&cluster_id, 10).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize spore entry in get_spores_batch"));
     }
 
     #[test]

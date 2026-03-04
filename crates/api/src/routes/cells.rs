@@ -2557,6 +2557,29 @@ fn list_canonical_addr_txs_page(
     Ok(out)
 }
 
+fn load_cells_preferring_consumed(
+    store: &CkbadgerStore,
+    outpoints: &[(&[u8], i16)],
+) -> Result<
+    HashMap<(Vec<u8>, i16), ckbadger_store::LiveCellInfo>,
+    (axum::http::StatusCode, axum::Json<ApiError>),
+> {
+    if outpoints.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut cells = store
+        .get_cells_batch(outpoints)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let consumed_cells = store
+        .get_consumed_cells_batch(outpoints)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    for (outpoint, cell) in consumed_cells {
+        cells.insert(outpoint, cell);
+    }
+    Ok(cells)
+}
+
 async fn get_address_transactions(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
@@ -2632,23 +2655,19 @@ async fn get_address_transactions(
             let mut script_code_hashes: std::collections::HashSet<Vec<u8>> =
                 std::collections::HashSet::new();
 
-            // Check outputs belonging to this address
-            for idx in 0..outputs_count {
-                let cell = state
-                    .store
-                    .get_cell(&tx_hash, idx)
-                    .ok()
-                    .flatten()
-                    .or_else(|| state.store.get_consumed_cell(&tx_hash, idx).ok().flatten());
-                if let Some(cell) = cell {
-                    if let Some(ref tch) = cell.type_code_hash {
-                        script_code_hashes.insert(tch.clone());
-                    }
-                    script_code_hashes.insert(cell.lock_code_hash.clone());
-                    if cell.lock_script_hash == lock_hash {
-                        output_capacity += cell.capacity as i128;
-                        has_outputs = true;
-                    }
+            // Check outputs belonging to this address via batch cell lookups.
+            let output_outpoints: Vec<(&[u8], i16)> = (0..outputs_count)
+                .map(|output_index| (tx_hash.as_slice(), output_index))
+                .collect();
+            let output_cells = load_cells_preferring_consumed(state.store.as_ref(), &output_outpoints)?;
+            for cell in output_cells.values() {
+                if let Some(ref tch) = cell.type_code_hash {
+                    script_code_hashes.insert(tch.clone());
+                }
+                script_code_hashes.insert(cell.lock_code_hash.clone());
+                if cell.lock_script_hash == lock_hash {
+                    output_capacity += cell.capacity as i128;
+                    has_outputs = true;
                 }
             }
 
@@ -2661,13 +2680,34 @@ async fn get_address_transactions(
                         tx_hash_arr.copy_from_slice(&tx_hash);
                         if let Some(tx_view) = ckb_store.get_transaction(&tx_hash_arr) {
                             use ckb_types::prelude::*;
+                            let mut input_outpoints: Vec<(Vec<u8>, i16)> = Vec::new();
                             for input in tx_view.inputs().into_iter() {
                                 let prev_hash: [u8; 32] =
                                     input.previous_output().tx_hash().unpack();
-                                let prev_index: u32 = input.previous_output().index().unpack();
+                                let prev_index_u32: u32 = input.previous_output().index().unpack();
+                                let prev_index =
+                                    i16::try_from(prev_index_u32).map_err(|_| {
+                                        ApiError::internal(format!(
+                                            "input output index exceeds i16 for tx 0x{} at block {}: prev_index={}",
+                                            hex::encode(&tx_hash),
+                                            block_number,
+                                            prev_index_u32
+                                        ))
+                                    })?;
+                                input_outpoints.push((prev_hash.to_vec(), prev_index));
+                            }
+
+                            let input_refs: Vec<(&[u8], i16)> = input_outpoints
+                                .iter()
+                                .map(|(prev_hash, prev_index)| (prev_hash.as_slice(), *prev_index))
+                                .collect();
+                            let input_cells =
+                                load_cells_preferring_consumed(state.store.as_ref(), &input_refs)?;
+
+                            for (prev_hash, prev_index) in input_outpoints {
                                 // Check if this input is a DAO withdrawal request
                                 if let Ok(Some(outpoint_key)) =
-                                    state.store.get_dao_deposit_by_withdraw_tx(&prev_hash, prev_index as i16)
+                                    state.store.get_dao_deposit_by_withdraw_tx(&prev_hash, prev_index)
                                 {
                                     if let Ok(Some(entry)) =
                                         state.store.get_dao_deposit(&outpoint_key)
@@ -2677,18 +2717,7 @@ async fn get_address_transactions(
                                         }
                                     }
                                 }
-                                let cell = state
-                                    .store
-                                    .get_consumed_cell(&prev_hash, prev_index as i16)
-                                    .ok()
-                                    .flatten()
-                                    .or_else(|| {
-                                        state
-                                            .store
-                                            .get_cell(&prev_hash, prev_index as i16)
-                                            .ok()
-                                            .flatten()
-                                    });
+                                let cell = input_cells.get(&(prev_hash.clone(), prev_index));
                                 if let Some(cell) = cell {
                                     if let Some(ref tch) = cell.type_code_hash {
                                         script_code_hashes.insert(tch.clone());
@@ -3628,5 +3657,41 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].lock_script_hash, "0x01");
         assert_eq!(rows[0].last_activity_block, 100);
+    }
+
+    #[test]
+    fn test_load_cells_preferring_consumed_merges_live_and_consumed_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let tx_live = [0x11u8; 32];
+        let tx_consumed = [0x22u8; 32];
+
+        let live_cell = LiveCellInfo {
+            capacity: 42_00000000,
+            ..make_info()
+        };
+        let consumed_cell = LiveCellInfo {
+            capacity: 99_00000000,
+            ..make_info()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_live, 0, &live_cell);
+        batch.put_cell(&tx_consumed, 0, &consumed_cell);
+        batch.put_consumed_cell_with_consumer(&tx_consumed, 0, &consumed_cell, 123, None);
+        batch.delete_cell(&tx_consumed, 0);
+        batch.commit().unwrap();
+
+        let outpoints: Vec<(&[u8], i16)> = vec![(&tx_live, 0), (&tx_consumed, 0)];
+        let cells = load_cells_preferring_consumed(&store, &outpoints).unwrap();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(
+            cells.get(&(tx_live.to_vec(), 0)).map(|c| c.capacity),
+            Some(42_00000000)
+        );
+        assert_eq!(
+            cells.get(&(tx_consumed.to_vec(), 0)).map(|c| c.capacity),
+            Some(99_00000000)
+        );
     }
 }

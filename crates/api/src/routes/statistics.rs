@@ -1551,6 +1551,55 @@ fn current_snapshot_date(store: &ckbadger_store::CkbadgerStore) -> Result<NaiveD
     Ok(date)
 }
 
+const LIVE_CELL_SCAN_BATCH_SIZE: usize = 2_048;
+
+fn visit_live_cells_in_batches<F>(
+    store: &ckbadger_store::CkbadgerStore,
+    mut visit: F,
+) -> Result<(), String>
+where
+    F: FnMut(&ckbadger_store::LiveCellInfo) -> Result<(), String>,
+{
+    let mut batch: Vec<(Vec<u8>, i16)> = Vec::with_capacity(LIVE_CELL_SCAN_BATCH_SIZE);
+
+    let mut flush_batch = |batch: &mut Vec<(Vec<u8>, i16)>| -> Result<(), String> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let outpoints: Vec<(&[u8], i16)> = batch
+            .iter()
+            .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
+            .collect();
+        let cells = store
+            .get_cells_batch(&outpoints)
+            .map_err(|e| e.to_string())?;
+
+        for cell in cells.values() {
+            visit(cell)?;
+        }
+
+        batch.clear();
+        Ok(())
+    };
+
+    let iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
+    for item in iter.flatten() {
+        let (key, _) = item;
+        if key.len() != ckbadger_store::keys::OUTPOINT_KEY_SIZE {
+            continue;
+        }
+        let (tx_hash, output_index) = ckbadger_store::keys::decode_outpoint(&key);
+        batch.push((tx_hash, output_index));
+
+        if batch.len() >= LIVE_CELL_SCAN_BATCH_SIZE {
+            flush_batch(&mut batch)?;
+        }
+    }
+
+    flush_batch(&mut batch)
+}
+
 fn occupied_capacity_bucket_index(occupied_shannons: i128) -> usize {
     let ckb_100 = 100_i128 * SHANNONS_PER_CKB;
     let ckb_1k = 1_000_i128 * SHANNONS_PER_CKB;
@@ -1591,38 +1640,24 @@ async fn get_cell_age_vs_occupied_capacity_chart(
     let mut d30_180d: i128 = 0;
     let mut gt_180d: i128 = 0;
 
-    let iter = state
-        .store
-        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (key, _) = item;
-        let cell = state
-            .store
-            .get_cell_by_outpoint_key(&key)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing canonical cell for live marker: outpoint=0x{}",
-                    hex::encode(&key)
-                ))
-            })?;
+    visit_live_cells_in_batches(state.store.as_ref(), |cell| {
         let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
-            continue;
+            return Ok(());
         };
         let age_days_raw = (snapshot_date - created_date).num_days();
         if age_days_raw < 0 {
-            return Err(ApiError::internal(format!(
+            return Err(format!(
                 "negative cell age detected: snapshot_date={}, created_date={}, created_at_block={}",
                 snapshot_date, created_date, cell.created_at_block
-            )));
+            ));
         }
         let age_days = age_days_raw;
         let occupied = cell.occupied_capacity as i128;
         if occupied < 0 {
-            return Err(ApiError::internal(format!(
+            return Err(format!(
                 "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
                 cell.created_at_block, occupied
-            )));
+            ));
         }
         match age_days {
             0 => lt_1d += occupied,
@@ -1631,7 +1666,9 @@ async fn get_cell_age_vs_occupied_capacity_chart(
             30..=179 => d30_180d += occupied,
             _ => gt_180d += occupied,
         }
-    }
+        Ok(())
+    })
+    .map_err(ApiError::internal)?;
 
     let snapshot_values = HashMap::from([
         ("lt1d".to_string(), shannon_to_ckb_string(lt_1d)),
@@ -1785,32 +1822,20 @@ async fn get_cell_size_distribution_chart(
     let mut bucket_counts = vec![0_i128; bucket_labels.len()];
     let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
 
-    let iter = state
-        .store
-        .iterator_cf(state.store.cf_live_cells(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (key, _) = item;
-        let cell = state
-            .store
-            .get_cell_by_outpoint_key(&key)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing canonical cell for live marker: outpoint=0x{}",
-                    hex::encode(&key)
-                ))
-            })?;
+    visit_live_cells_in_batches(state.store.as_ref(), |cell| {
         let occupied = cell.occupied_capacity as i128;
         if occupied < 0 {
-            return Err(ApiError::internal(format!(
+            return Err(format!(
                 "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
                 cell.created_at_block, occupied
-            )));
+            ));
         }
         let idx = occupied_capacity_bucket_index(occupied);
         bucket_counts[idx] += 1;
         bucket_occupied[idx] += occupied;
-    }
+        Ok(())
+    })
+    .map_err(ApiError::internal)?;
 
     let data = bucket_labels
         .iter()
@@ -3430,5 +3455,70 @@ mod tests {
             occupied_capacity_bucket_index(1_000_000 * SHANNONS_PER_CKB),
             5
         );
+    }
+
+    #[test]
+    fn test_visit_live_cells_in_batches_reads_only_live_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let live_a = ckbadger_store::LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 10,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+        let live_b = ckbadger_store::LiveCellInfo {
+            capacity: 200_00000000,
+            created_at_block: 20,
+            lock_script_hash: vec![0x44; 32],
+            lock_code_hash: vec![0x55; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x66; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+        let consumed_only = ckbadger_store::LiveCellInfo {
+            capacity: 300_00000000,
+            created_at_block: 30,
+            lock_script_hash: vec![0x77; 32],
+            lock_code_hash: vec![0x88; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x99; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0xA1; 32], 0, &live_a);
+        batch.put_cell(&[0xA2; 32], 0, &live_b);
+        batch.put_consumed_cell(&[0xA3; 32], 0, &consumed_only, 99);
+        batch.commit().unwrap();
+
+        let mut seen_blocks = Vec::new();
+        visit_live_cells_in_batches(&store, |cell| {
+            seen_blocks.push(cell.created_at_block);
+            Ok(())
+        })
+        .unwrap();
+
+        seen_blocks.sort_unstable();
+        assert_eq!(seen_blocks, vec![10, 20]);
     }
 }

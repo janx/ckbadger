@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use super::assets::{
@@ -1097,59 +1097,34 @@ fn serve_clusters_from_cache(
     limit: usize,
     state: &Arc<AppState>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterResponse>> {
-    // Build cluster responses from cached entries
-    let mut clusters: Vec<ClusterResponse> = cached
-        .into_iter()
-        .filter_map(|entry| {
-            if entry.standard != "spore" {
-                return None;
-            }
-            let cluster_id_hex = entry.cluster_id.as_ref().unwrap_or(&entry.id);
-            let cluster_id_bytes =
-                hex::decode(cluster_id_hex.strip_prefix("0x").unwrap_or(cluster_id_hex)).ok()?;
+    let cluster_ids = unique_cluster_ids_from_cached_entries(&cached);
 
-            let cluster_entry = state.store.get_spore(&cluster_id_bytes).ok().flatten();
-            let cluster_aggregate = state
-                .store
-                .get_cluster_aggregate(&cluster_id_bytes)
-                .ok()
-                .flatten();
-            let created_at_block = cluster_entry
-                .as_ref()
-                .map(|e| e.created_at_block)
-                .unwrap_or(0);
-            let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
-            let owner_lock_hash = cluster_entry
-                .as_ref()
-                .and_then(|e| e.owner_lock_hash.clone());
+    let spore_entries = state
+        .store
+        .get_spores_batch(&cluster_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut spore_map: HashMap<Vec<u8>, ckbadger_store::DobEntry> =
+        HashMap::with_capacity(spore_entries.len());
+    for (cluster_id, entry_opt) in spore_entries {
+        if let Some(entry) = entry_opt {
+            spore_map.insert(cluster_id, entry);
+        }
+    }
 
-            Some(ClusterResponse {
-                cluster_id: entry.id,
-                name: entry.name,
-                description,
-                owner_lock_hash: owner_lock_hash
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h)))
-                    .unwrap_or_default(),
-                owner_address: None,
-                spores_count: entry.transfers_count as i32, // transfers_count holds spore count for DOB
-                holders_count: cluster_aggregate
-                    .as_ref()
-                    .map(|a| a.owner_count)
-                    .unwrap_or(0),
-                activities_count: 0,
-                created_at_block,
-                live_capacity: None,
-                live_occupied_capacity: None,
-                storage_profile: cluster_storage_profile_from_aggregate(
-                    cluster_aggregate.as_ref(),
-                    entry.transfers_count,
-                ),
-            })
-        })
-        .collect();
+    let cluster_aggregates = state
+        .store
+        .get_cluster_aggregates_batch(&cluster_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut cluster_agg_map: HashMap<Vec<u8>, ckbadger_store::ClusterAggregate> =
+        HashMap::with_capacity(cluster_aggregates.len());
+    for (cluster_id, aggregate_opt) in cluster_aggregates {
+        if let Some(aggregate) = aggregate_opt {
+            cluster_agg_map.insert(cluster_id, aggregate);
+        }
+    }
 
-    clusters.sort_by(|a, b| b.created_at_block.cmp(&a.created_at_block));
+    let clusters =
+        build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map);
 
     let filtered: Vec<_> = clusters
         .iter()
@@ -1172,6 +1147,69 @@ fn serve_clusters_from_cache(
         limit as i64,
         next_cursor,
     ))
+}
+
+fn cluster_id_bytes_from_cached_entry(entry: &CachedAssetEntry) -> Option<Vec<u8>> {
+    if entry.standard != "spore" {
+        return None;
+    }
+    let cluster_id_hex = entry.cluster_id.as_ref().unwrap_or(&entry.id);
+    hex::decode(cluster_id_hex.strip_prefix("0x").unwrap_or(cluster_id_hex)).ok()
+}
+
+fn unique_cluster_ids_from_cached_entries(cached: &[CachedAssetEntry]) -> Vec<Vec<u8>> {
+    let mut unique_ids = Vec::new();
+    let mut seen: HashSet<Vec<u8>> = HashSet::new();
+    for cluster_id in cached.iter().filter_map(cluster_id_bytes_from_cached_entry) {
+        if seen.insert(cluster_id.clone()) {
+            unique_ids.push(cluster_id);
+        }
+    }
+    unique_ids
+}
+
+fn build_cluster_responses_from_cached_entries(
+    cached: Vec<CachedAssetEntry>,
+    spore_map: &HashMap<Vec<u8>, ckbadger_store::DobEntry>,
+    cluster_agg_map: &HashMap<Vec<u8>, ckbadger_store::ClusterAggregate>,
+) -> Vec<ClusterResponse> {
+    let mut clusters = Vec::new();
+
+    for entry in cached {
+        let Some(cluster_id) = cluster_id_bytes_from_cached_entry(&entry) else {
+            continue;
+        };
+
+        let cluster_entry = spore_map.get(&cluster_id);
+        let cluster_aggregate = cluster_agg_map.get(&cluster_id);
+        let created_at_block = cluster_entry.map(|e| e.created_at_block).unwrap_or(0);
+        let description = cluster_entry.and_then(|e| e.description.clone());
+        let owner_lock_hash = cluster_entry.and_then(|e| e.owner_lock_hash.clone());
+
+        clusters.push(ClusterResponse {
+            cluster_id: entry.id,
+            name: entry.name,
+            description,
+            owner_lock_hash: owner_lock_hash
+                .as_ref()
+                .map(|h| format!("0x{}", hex::encode(h)))
+                .unwrap_or_default(),
+            owner_address: None,
+            spores_count: entry.transfers_count as i32, // transfers_count holds spore count for DOB
+            holders_count: cluster_aggregate.map(|a| a.owner_count).unwrap_or(0),
+            activities_count: 0,
+            created_at_block,
+            live_capacity: None,
+            live_occupied_capacity: None,
+            storage_profile: cluster_storage_profile_from_aggregate(
+                cluster_aggregate,
+                entry.transfers_count,
+            ),
+        });
+    }
+
+    clusters.sort_by(|a, b| b.created_at_block.cmp(&a.created_at_block));
+    clusters
 }
 
 fn load_spores_cached_or_store(state: &Arc<AppState>) -> Result<CachedSporeRows, ApiRouteError> {
@@ -1905,6 +1943,131 @@ mod tests {
         assert_eq!(page.len(), 2);
         assert_eq!(page[0].1.created_at_block, 300);
         assert_eq!(page[1].1.created_at_block, 100);
+    }
+
+    #[test]
+    fn test_build_cluster_responses_from_cached_entries_uses_maps_and_sorts() {
+        let first_cluster = vec![0x11; 32];
+        let second_cluster = vec![0x22; 32];
+
+        let cached = vec![
+            CachedAssetEntry {
+                id: format!("0x{}", hex::encode(&first_cluster)),
+                asset_type: "nft".to_string(),
+                standard: "spore".to_string(),
+                name: Some("First".to_string()),
+                symbol: None,
+                icon_url: None,
+                holders_count: 0,
+                transfers_count: 7,
+                transfers_24h: 0,
+                decimals: None,
+                total_supply: None,
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: None,
+                live_occupied_capacity: None,
+                storage_tier: None,
+                fully_onchain_ratio: None,
+                fully_onchain_count: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                description: None,
+            },
+            CachedAssetEntry {
+                id: format!("0x{}", hex::encode(&second_cluster)),
+                asset_type: "nft".to_string(),
+                standard: "spore".to_string(),
+                name: Some("Second".to_string()),
+                symbol: None,
+                icon_url: None,
+                holders_count: 0,
+                transfers_count: 3,
+                transfers_24h: 0,
+                decimals: None,
+                total_supply: None,
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: None,
+                live_occupied_capacity: None,
+                storage_tier: None,
+                fully_onchain_ratio: None,
+                fully_onchain_count: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                description: None,
+            },
+        ];
+
+        let mut spore_map = HashMap::new();
+        spore_map.insert(
+            first_cluster.clone(),
+            ckbadger_store::DobEntry {
+                standard: ckbadger_store::DobStandard::SporeCluster,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0xAA; 32]),
+                name: Some("Cluster A".to_string()),
+                description: Some("A".to_string()),
+                is_live: true,
+                created_at_block: 100,
+                created_at_tx: vec![0xAA; 32],
+                extra: ckbadger_store::DobExtra::SporeCluster,
+            },
+        );
+        spore_map.insert(
+            second_cluster.clone(),
+            ckbadger_store::DobEntry {
+                standard: ckbadger_store::DobStandard::SporeCluster,
+                collection_id: None,
+                owner_lock_hash: Some(vec![0xBB; 32]),
+                name: Some("Cluster B".to_string()),
+                description: Some("B".to_string()),
+                is_live: true,
+                created_at_block: 200,
+                created_at_tx: vec![0xBB; 32],
+                extra: ckbadger_store::DobExtra::SporeCluster,
+            },
+        );
+
+        let mut cluster_agg_map = HashMap::new();
+        cluster_agg_map.insert(
+            first_cluster.clone(),
+            ckbadger_store::ClusterAggregate {
+                owner_count: 12,
+                ..Default::default()
+            },
+        );
+        cluster_agg_map.insert(
+            second_cluster.clone(),
+            ckbadger_store::ClusterAggregate {
+                owner_count: 34,
+                ..Default::default()
+            },
+        );
+
+        let clusters =
+            build_cluster_responses_from_cached_entries(cached, &spore_map, &cluster_agg_map);
+        assert_eq!(clusters.len(), 2);
+        assert_eq!(
+            clusters[0].cluster_id,
+            format!("0x{}", hex::encode(&second_cluster))
+        );
+        assert_eq!(clusters[0].created_at_block, 200);
+        assert_eq!(clusters[0].holders_count, 34);
+        assert_eq!(
+            clusters[1].cluster_id,
+            format!("0x{}", hex::encode(&first_cluster))
+        );
+        assert_eq!(clusters[1].created_at_block, 100);
+        assert_eq!(clusters[1].holders_count, 12);
     }
 
     #[test]

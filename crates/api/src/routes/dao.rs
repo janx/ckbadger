@@ -16,6 +16,7 @@ use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);
+const DAO_ADDRESS_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(30);
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -157,7 +158,7 @@ pub struct DaoDepositResponse {
     pub compensation: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressDaoSummaryResponse {
     pub has_dao_activity: bool,
@@ -171,6 +172,86 @@ pub struct AddressDaoSummaryResponse {
     pub total_compensation_earned: String,
     pub total_compensation_earned_ckb: String,
     pub estimated_apc: String,
+}
+
+fn dao_address_summary_cache_key(lock_hash: &[u8], latest_block_number: i64) -> String {
+    format!(
+        "dao:summary:tip:{}:lock:0x{}",
+        latest_block_number,
+        hex::encode(lock_hash)
+    )
+}
+
+#[derive(Default)]
+struct DaoStatisticsAccumulator {
+    total_deposited: i128,
+    unique_depositors: HashSet<Vec<u8>>,
+    active_count: i32,
+    total_compensation_paid: i128,
+    total_blocks_held: f64,
+    active_filtered_count: usize,
+    total_unclaimed: u128,
+}
+
+fn accumulate_dao_statistics_entry(
+    acc: &mut DaoStatisticsAccumulator,
+    entry: &ckbadger_store::DaoDepositCacheEntry,
+    latest_block_number: i64,
+    latest_ar: u64,
+) -> anyhow::Result<()> {
+    match entry.status {
+        0 => {
+            acc.total_deposited += entry.capacity as i128;
+            acc.unique_depositors.insert(entry.lock_script_hash.clone());
+            acc.active_count += 1;
+
+            if entry.deposit_block_number <= latest_block_number {
+                acc.total_blocks_held += (latest_block_number - entry.deposit_block_number) as f64;
+                acc.active_filtered_count += 1;
+
+                if entry.capacity < 0 {
+                    anyhow::bail!(
+                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        entry.capacity
+                    );
+                }
+                let capacity = entry.capacity as u128;
+                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
+                        entry.deposit_block_number,
+                        hex::encode(&entry.lock_script_hash),
+                        capacity
+                    )
+                })?;
+                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
+                if ar_deposit > 0 && latest_ar > ar_deposit {
+                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
+                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
+                            entry.deposit_block_number,
+                            hex::encode(&entry.lock_script_hash),
+                            free_capacity,
+                            ar_deposit,
+                            latest_ar
+                        )
+                    })?;
+                    acc.total_unclaimed += compensation;
+                }
+            }
+        }
+        2 => {
+            if let Some(comp) = entry.compensation {
+                acc.total_compensation_paid += comp as i128;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -489,6 +570,10 @@ async fn get_address_dao_summary(
     }
 
     let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "summary")?;
+    let cache_key = dao_address_summary_cache_key(&hash, latest_block_number);
+    if let Some(cached) = state.mem_cache.get::<AddressDaoSummaryResponse>(&cache_key) {
+        return ok(cached);
+    }
 
     let mut active_count = 0i32;
     let mut pending_count = 0i32;
@@ -555,8 +640,8 @@ async fn get_address_dao_summary(
         })
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if active_count == 0 && pending_count == 0 && completed_count == 0 {
-        return ok(AddressDaoSummaryResponse {
+    let response = if active_count == 0 && pending_count == 0 && completed_count == 0 {
+        AddressDaoSummaryResponse {
             has_dao_activity: false,
             active_deposits_count: 0,
             pending_withdrawals_count: 0,
@@ -568,38 +653,41 @@ async fn get_address_dao_summary(
             total_compensation_earned: "0".to_string(),
             total_compensation_earned_ckb: "0".to_string(),
             estimated_apc: "".to_string(),
-        });
-    }
+        }
+    } else {
+        let latest_snapshot = state
+            .store
+            .get_latest_dao_daily_snapshot()
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let estimated_apc = latest_snapshot
+            .as_ref()
+            .map(snapshot_estimated_apc)
+            .transpose()?
+            .flatten()
+            .unwrap_or_default();
 
-    let latest_snapshot = state
-        .store
-        .list_dao_daily_snapshots()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .last()
-        .cloned();
-    let estimated_apc = latest_snapshot
-        .as_ref()
-        .map(snapshot_estimated_apc)
-        .transpose()?
-        .flatten()
-        .unwrap_or_default();
+        let total_locked_str = total_locked.to_string();
+        let total_comp_str = total_comp_earned.to_string();
 
-    let total_locked_str = total_locked.to_string();
-    let total_comp_str = total_comp_earned.to_string();
+        AddressDaoSummaryResponse {
+            has_dao_activity: true,
+            active_deposits_count: active_count,
+            pending_withdrawals_count: pending_count,
+            completed_withdrawals_count: completed_count,
+            total_locked_capacity: total_locked_str.clone(),
+            total_locked_ckb: shannon_to_ckb(&total_locked_str),
+            unclaimed_compensation: total_unclaimed.to_string(),
+            unclaimed_compensation_ckb: shannon_to_ckb(&total_unclaimed.to_string()),
+            total_compensation_earned: total_comp_str.clone(),
+            total_compensation_earned_ckb: shannon_to_ckb(&total_comp_str),
+            estimated_apc,
+        }
+    };
 
-    ok(AddressDaoSummaryResponse {
-        has_dao_activity: true,
-        active_deposits_count: active_count,
-        pending_withdrawals_count: pending_count,
-        completed_withdrawals_count: completed_count,
-        total_locked_capacity: total_locked_str.clone(),
-        total_locked_ckb: shannon_to_ckb(&total_locked_str),
-        unclaimed_compensation: total_unclaimed.to_string(),
-        unclaimed_compensation_ckb: shannon_to_ckb(&total_unclaimed.to_string()),
-        total_compensation_earned: total_comp_str.clone(),
-        total_compensation_earned_ckb: shannon_to_ckb(&total_comp_str),
-        estimated_apc,
-    })
+    state
+        .mem_cache
+        .set(&cache_key, &response, DAO_ADDRESS_SUMMARY_CACHE_TTL);
+    ok(response)
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
@@ -621,88 +709,26 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         return ok(cached);
     }
 
-    let mut total_deposited: i128 = 0;
-    let mut unique_depositors: HashSet<Vec<u8>> = HashSet::new();
-    let mut active_count = 0i32;
-    let mut total_compensation_paid: i128 = 0;
-    let mut total_blocks_held: f64 = 0.0;
-    let mut active_filtered_count = 0usize;
-
-    // Calculate unclaimed compensation
-    let mut total_unclaimed: u128 = 0;
+    let mut acc = DaoStatisticsAccumulator::default();
     state
         .store
-        .scan_dao_deposits_by_status(0, |_, entry| {
-            total_deposited += entry.capacity as i128;
-            unique_depositors.insert(entry.lock_script_hash.clone());
-            active_count += 1;
-
-            if entry.deposit_block_number <= latest_block_number {
-                total_blocks_held += (latest_block_number - entry.deposit_block_number) as f64;
-                active_filtered_count += 1;
-
-                if entry.capacity < 0 {
-                    anyhow::bail!(
-                        "negative DAO deposit capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        entry.capacity
-                    );
-                }
-                let capacity = entry.capacity as u128;
-                let free_capacity = capacity.checked_sub(DAO_OCCUPIED_CAPACITY).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "DAO deposit capacity below occupied capacity: deposit_block={}, lock_script_hash=0x{}, capacity={}",
-                        entry.deposit_block_number,
-                        hex::encode(&entry.lock_script_hash),
-                        capacity
-                    )
-                })?;
-                let ar_deposit = dao_deposit_ar_as_u64(entry, "statistics")?;
-                if ar_deposit > 0 && latest_ar > ar_deposit {
-                    let gross = free_capacity * latest_ar as u128 / ar_deposit as u128;
-                    let compensation = gross.checked_sub(free_capacity).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "DAO compensation underflow: deposit_block={}, lock_script_hash=0x{}, free_capacity={}, ar_deposit={}, latest_ar={}",
-                            entry.deposit_block_number,
-                            hex::encode(&entry.lock_script_hash),
-                            free_capacity,
-                            ar_deposit,
-                            latest_ar
-                        )
-                    })?;
-                    total_unclaimed += compensation;
-                }
-            }
-
-            Ok(())
+        .scan_dao_deposits(|_, entry| {
+            accumulate_dao_statistics_entry(&mut acc, entry, latest_block_number, latest_ar)
         })
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    state
-        .store
-        .scan_dao_deposits_by_status(2, |_, entry| {
-            if let Some(comp) = entry.compensation {
-                total_compensation_paid += comp as i128;
-            }
-            Ok(())
-        })
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let total_depositors = acc.unique_depositors.len() as i32;
 
-    let total_depositors = unique_depositors.len() as i32;
-
-    let avg_epochs = if active_filtered_count > 0 {
-        (total_blocks_held / active_filtered_count as f64) / 1800.0
+    let avg_epochs = if acc.active_filtered_count > 0 {
+        (acc.total_blocks_held / acc.active_filtered_count as f64) / 1800.0
     } else {
         0.0
     };
 
     let latest_snapshot = state
         .store
-        .list_dao_daily_snapshots()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .last()
-        .cloned();
+        .get_latest_dao_daily_snapshot()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
     let estimated_apc = match latest_snapshot.as_ref() {
         Some(snapshot) => snapshot_estimated_apc(snapshot)?.unwrap_or_default(),
         None => String::new(),
@@ -710,8 +736,8 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
 
     let avg_days = epochs_to_days(avg_epochs);
 
-    let total_deposited_str = total_deposited.to_string();
-    let total_comp_str = total_compensation_paid.to_string();
+    let total_deposited_str = acc.total_deposited.to_string();
+    let total_comp_str = acc.total_compensation_paid.to_string();
     let (mining_reward, deposit_compensation, burnt) = if let Some(s) = latest_snapshot.as_ref() {
         if s.cum_miner_secondary < 0 {
             return Err(ApiError::internal(format!(
@@ -744,11 +770,11 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         total_deposited: total_deposited_str.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited_str),
         total_depositors,
-        active_deposits: active_count,
+        active_deposits: acc.active_count,
         total_compensation_paid: total_comp_str.clone(),
         total_compensation_paid_ckb: shannon_to_ckb(&total_comp_str),
-        unclaimed_compensation: total_unclaimed.to_string(),
-        unclaimed_compensation_ckb: shannon_to_ckb(&total_unclaimed.to_string()),
+        unclaimed_compensation: acc.total_unclaimed.to_string(),
+        unclaimed_compensation_ckb: shannon_to_ckb(&acc.total_unclaimed.to_string()),
         average_deposit_days: avg_days,
         estimated_apc,
         mining_reward: mining_reward.clone(),
@@ -932,7 +958,11 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     ensure_derived_ready(state.as_ref())?;
 
     let cache_key = "chart:dao-total-deposit";
+    if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
+        return ok(cached);
+    }
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
         return ok(cached);
     }
 
@@ -961,6 +991,7 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     };
 
     state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+    state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
     ok(response)
 }
 
@@ -968,7 +999,11 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     ensure_derived_ready(state.as_ref())?;
 
     let cache_key = "chart:dao-daily-deposit";
+    if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
+        return ok(cached);
+    }
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
         return ok(cached);
     }
 
@@ -1017,6 +1052,7 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
     };
 
     state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+    state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
     ok(response)
 }
 
@@ -1026,7 +1062,11 @@ async fn get_circulation_ratio_chart(
     ensure_derived_ready(state.as_ref())?;
 
     let cache_key = "chart:dao-circulation-ratio";
+    if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
+        return ok(cached);
+    }
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+        state.mem_cache.set(cache_key, &cached, CHART_CACHE_TTL);
         return ok(cached);
     }
 
@@ -1069,14 +1109,17 @@ async fn get_circulation_ratio_chart(
     };
 
     state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
+    state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
     ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::InMemoryCache;
     use ckbadger_store::types::CachedBlockHeader;
     use ckbadger_store::types::DaoDepositCacheEntry;
+    use std::time::Duration;
 
     fn snapshot(total_issuance: i128, cum_treasury: i128) -> ckbadger_store::DaoDailySnapshot {
         ckbadger_store::DaoDailySnapshot {
@@ -1250,5 +1293,115 @@ mod tests {
         };
 
         assert_eq!(dao_deposit_ar_as_u64(&entry, "statistics").unwrap(), 42);
+    }
+
+    #[test]
+    fn test_accumulate_dao_statistics_entry_tracks_active_and_completed() {
+        let mut acc = DaoStatisticsAccumulator::default();
+        let active = DaoDepositCacheEntry {
+            capacity: (DAO_OCCUPIED_CAPACITY + 1_000) as i64,
+            deposit_block_number: 90,
+            lock_script_hash: vec![0xAB; 32],
+            deposit_ar: 100,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+        };
+        let completed = DaoDepositCacheEntry {
+            capacity: 0,
+            deposit_block_number: 80,
+            lock_script_hash: vec![0xCD; 32],
+            deposit_ar: 100,
+            status: 2,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: Some(500),
+        };
+
+        accumulate_dao_statistics_entry(&mut acc, &active, 100, 200).unwrap();
+        accumulate_dao_statistics_entry(&mut acc, &completed, 100, 200).unwrap();
+
+        assert_eq!(acc.total_deposited, active.capacity as i128);
+        assert_eq!(acc.unique_depositors.len(), 1);
+        assert_eq!(acc.active_count, 1);
+        assert_eq!(acc.total_compensation_paid, 500);
+        assert_eq!(acc.total_blocks_held, 10.0);
+        assert_eq!(acc.active_filtered_count, 1);
+        assert_eq!(acc.total_unclaimed, 1_000);
+    }
+
+    #[test]
+    fn test_dao_address_summary_cache_key_contains_tip_and_lock() {
+        let lock_hash = [0xAB; 32];
+        let key = dao_address_summary_cache_key(&lock_hash, 12345);
+        assert_eq!(
+            key,
+            format!("dao:summary:tip:12345:lock:0x{}", hex::encode(lock_hash))
+        );
+    }
+
+    #[test]
+    fn test_address_dao_summary_response_roundtrips_in_mem_cache() {
+        let cache = InMemoryCache::new();
+        let key = "dao:summary:test";
+        let response = AddressDaoSummaryResponse {
+            has_dao_activity: true,
+            active_deposits_count: 1,
+            pending_withdrawals_count: 2,
+            completed_withdrawals_count: 3,
+            total_locked_capacity: "100".to_string(),
+            total_locked_ckb: "1".to_string(),
+            unclaimed_compensation: "10".to_string(),
+            unclaimed_compensation_ckb: "0.1".to_string(),
+            total_compensation_earned: "20".to_string(),
+            total_compensation_earned_ckb: "0.2".to_string(),
+            estimated_apc: "3.14".to_string(),
+        };
+
+        cache.set(key, &response, Duration::from_secs(30));
+        let loaded = cache.get::<AddressDaoSummaryResponse>(key).unwrap();
+        assert_eq!(loaded.has_dao_activity, response.has_dao_activity);
+        assert_eq!(loaded.active_deposits_count, response.active_deposits_count);
+        assert_eq!(
+            loaded.completed_withdrawals_count,
+            response.completed_withdrawals_count
+        );
+        assert_eq!(loaded.total_locked_capacity, response.total_locked_capacity);
+        assert_eq!(loaded.estimated_apc, response.estimated_apc);
+    }
+
+    #[test]
+    fn test_chart_response_roundtrips_in_mem_cache() {
+        let cache = InMemoryCache::new();
+        let key = "dao:chart:test";
+        let response = ChartResponse {
+            data: vec![ChartDataPoint {
+                date: "2026-03-04".to_string(),
+                value: "1.23".to_string(),
+                value2: Some("42".to_string()),
+            }],
+            title: "Sample".to_string(),
+            y_axis_label: "CKB".to_string(),
+            y2_axis_label: Some("Count".to_string()),
+        };
+
+        cache.set(key, &response, Duration::from_secs(30));
+        let loaded = cache.get::<ChartResponse>(key).unwrap();
+        assert_eq!(loaded.title, response.title);
+        assert_eq!(loaded.y_axis_label, response.y_axis_label);
+        assert_eq!(loaded.data.len(), 1);
+        assert_eq!(loaded.data[0].date, "2026-03-04");
+        assert_eq!(loaded.data[0].value2.as_deref(), Some("42"));
     }
 }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{decode_consumed_cell_meta, ConsumedCellInfo, LiveCellInfo};
+use crate::types::{decode_consumed_cell_meta, ConsumedCellInfo, ConsumedCellMeta, LiveCellInfo};
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -169,12 +169,161 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<HashMap<(Vec<u8>, i16), LiveCellInfo>> {
+        if outpoints.is_empty() {
+            return Ok(HashMap::new());
+        }
+
         let mut result = HashMap::with_capacity(outpoints.len());
-        for (tx_hash, idx) in outpoints {
-            if let Some(info) = self.get_consumed_cell(tx_hash, *idx)? {
-                result.insert((tx_hash.to_vec(), *idx), info);
+        let consumed_cf = self.cf_consumed_cells();
+        let cells_cf = self.cf_cells();
+
+        let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| keys::encode_outpoint(tx_hash, *idx))
+            .collect();
+
+        let consumed_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (consumed_cf, k.as_slice())).collect();
+        let consumed_values = self.multi_get_cf(consumed_cf_keys);
+
+        let mut present_indices = Vec::new();
+        let mut cell_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
+        for (i, value_result) in consumed_values.into_iter().enumerate() {
+            match value_result {
+                Ok(Some(value)) => {
+                    decode_consumed_cell_meta(&value).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "failed to decode consumed cell meta in get_consumed_cells_batch: outpoint=0x{}",
+                            bytes_to_hex(&keys[i])
+                        )
+                    })?;
+                    present_indices.push(i);
+                    cell_cf_keys.push((cells_cf, keys[i].as_slice()));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_consumed_cells_batch: outpoint=0x{}, error={}",
+                        bytes_to_hex(&keys[i]),
+                        e
+                    ));
+                }
             }
         }
+
+        let cell_values = self.multi_get_cf(cell_cf_keys);
+        for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
+            let outpoint_idx = present_indices[batch_idx];
+            let outpoint_key = &keys[outpoint_idx];
+            match value_result {
+                Ok(Some(value)) => {
+                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize canonical cell in get_consumed_cells_batch: outpoint=0x{}, error={}",
+                            bytes_to_hex(outpoint_key),
+                            e
+                        )
+                    })?;
+                    let (tx_hash, idx) = outpoints[outpoint_idx];
+                    result.insert((tx_hash.to_vec(), idx), info);
+                }
+                Ok(None) => {
+                    return Err(anyhow::anyhow!(
+                        "missing canonical cell for consumed outpoint in get_consumed_cells_batch: outpoint=0x{}",
+                        bytes_to_hex(outpoint_key)
+                    ));
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed while reading canonical cell in get_consumed_cells_batch: outpoint=0x{}, error={}",
+                        bytes_to_hex(outpoint_key),
+                        e
+                    ));
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn get_consumed_cell_meta_batch(
+        &self,
+        outpoints: &[(&[u8], i16)],
+    ) -> anyhow::Result<HashMap<(Vec<u8>, i16), ConsumedCellMeta>> {
+        if outpoints.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let mut result = HashMap::with_capacity(outpoints.len());
+        let consumed_cf = self.cf_consumed_cells();
+        let cells_cf = self.cf_cells();
+
+        let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
+            .iter()
+            .map(|(tx_hash, idx)| keys::encode_outpoint(tx_hash, *idx))
+            .collect();
+
+        let consumed_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
+            keys.iter().map(|k| (consumed_cf, k.as_slice())).collect();
+        let consumed_values = self.multi_get_cf(consumed_cf_keys);
+
+        let mut present_indices = Vec::new();
+        let mut cell_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
+        let mut metas: Vec<Option<ConsumedCellMeta>> = vec![None; keys.len()];
+        for (i, value_result) in consumed_values.into_iter().enumerate() {
+            match value_result {
+                Ok(Some(value)) => {
+                    let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "failed to decode consumed cell meta in get_consumed_cell_meta_batch: outpoint=0x{}",
+                            bytes_to_hex(&keys[i])
+                        )
+                    })?;
+                    metas[i] = Some(meta);
+                    present_indices.push(i);
+                    cell_cf_keys.push((cells_cf, keys[i].as_slice()));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed in get_consumed_cell_meta_batch: outpoint=0x{}, error={}",
+                        bytes_to_hex(&keys[i]),
+                        e
+                    ));
+                }
+            }
+        }
+
+        let cell_values = self.multi_get_cf(cell_cf_keys);
+        for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
+            let outpoint_idx = present_indices[batch_idx];
+            let outpoint_key = &keys[outpoint_idx];
+            match value_result {
+                Ok(Some(_)) => {
+                    let (tx_hash, idx) = outpoints[outpoint_idx];
+                    let meta = metas[outpoint_idx].clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "missing decoded consumed cell meta in get_consumed_cell_meta_batch: outpoint=0x{}",
+                            bytes_to_hex(outpoint_key)
+                        )
+                    })?;
+                    result.insert((tx_hash.to_vec(), idx), meta);
+                }
+                Ok(None) => {
+                    return Err(anyhow::anyhow!(
+                        "missing canonical cell for consumed outpoint in get_consumed_cell_meta_batch: outpoint=0x{}",
+                        bytes_to_hex(outpoint_key)
+                    ));
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "rocksdb multi_get failed while checking canonical cell in get_consumed_cell_meta_batch: outpoint=0x{}, error={}",
+                        bytes_to_hex(outpoint_key),
+                        e
+                    ));
+                }
+            }
+        }
+
         Ok(result)
     }
 
@@ -656,6 +805,75 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta"));
+    }
+
+    #[test]
+    fn test_get_consumed_cells_batch_fails_when_marker_has_no_canonical_cell() {
+        let (_dir, store) = test_store();
+        let tx_hash = [0xDE; 32];
+        let cell = make_cell(123_00000000, 61_00000000, &[0x01; 32]);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, 0, &cell);
+        batch.put_consumed_cell_with_consumer(&tx_hash, 0, &cell, 100, None);
+        batch.delete_cell(&tx_hash, 0);
+        batch.commit().unwrap();
+        store
+            .delete_cf(store.cf_cells(), &keys::encode_outpoint(&tx_hash, 0))
+            .unwrap();
+
+        let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
+        let err = store.get_consumed_cells_batch(&refs).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("missing canonical cell for consumed outpoint in get_consumed_cells_batch"));
+    }
+
+    #[test]
+    fn test_get_consumed_cell_meta_batch_returns_consumer_metadata() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x01u8; 32];
+        let consumed_cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        let tx_hash = [0x11u8; 32];
+        let consumed_by_tx = [0x22u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, 0, &consumed_cell);
+        batch.put_consumed_cell_with_consumer(
+            &tx_hash,
+            0,
+            &consumed_cell,
+            12345,
+            Some(&consumed_by_tx),
+        );
+        batch.delete_cell(&tx_hash, 0);
+        batch.commit().unwrap();
+
+        let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
+        let metas = store.get_consumed_cell_meta_batch(&refs).unwrap();
+        let meta = metas.get(&(tx_hash.to_vec(), 0)).unwrap();
+        assert_eq!(meta.consumed_at_block, 12345);
+        assert_eq!(meta.consumed_by_tx, Some(consumed_by_tx.to_vec()));
+    }
+
+    #[test]
+    fn test_get_consumed_cell_meta_batch_fails_on_invalid_consumed_payload() {
+        let (_dir, store) = test_store();
+        let tx_hash = [0xCE; 32];
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        store
+            .put_cf(
+                store.cf_consumed_cells(),
+                &outpoint_key,
+                b"invalid-consumed-payload",
+            )
+            .unwrap();
+
+        let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
+        let err = store.get_consumed_cell_meta_batch(&refs).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to decode consumed cell meta in get_consumed_cell_meta_batch"));
     }
 
     #[test]

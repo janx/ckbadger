@@ -10,8 +10,10 @@ use ckbadger_common::dao::{
 use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration as StdDuration;
 use tokio::time::{sleep, Instant};
 
+use crate::cache::InMemoryCache;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
@@ -35,6 +37,7 @@ type TxIoBundle = (
 );
 const DAO_TYPE_CODE_HASH_HEX: &str =
     "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -81,18 +84,60 @@ pub struct TransactionResponse {
     pub timestamp: String,
 }
 
-/// Helper: get the tx hash for a (block_num, tx_idx) from the CKB node's RocksDB.
-fn get_tx_hash_from_ckb_store(
+/// Helper: get all tx hashes in a block from the CKB node's RocksDB.
+fn get_block_tx_hashes_from_ckb_store(
     ckb_store: &Option<Arc<ckb_store_reader::CkbChainReader>>,
     block_num: i64,
-    tx_idx: i32,
-) -> Option<Vec<u8>> {
+) -> Option<Vec<Vec<u8>>> {
     let store = ckb_store.as_ref()?;
     let block_hash_bytes = store.get_block_hash(block_num as u64)?;
     let block = store.get_block(&block_hash_bytes)?;
-    let txs = block.transactions();
-    let tx = txs.get(tx_idx as usize)?;
-    Some(tx.hash().raw_data().to_vec())
+    Some(
+        block
+            .transactions()
+            .into_iter()
+            .map(|tx| tx.hash().raw_data().to_vec())
+            .collect(),
+    )
+}
+
+fn tx_hash_from_prefetched_hashes(
+    block_tx_hashes: &Option<Vec<Vec<u8>>>,
+    tx_idx: i32,
+) -> Option<Vec<u8>> {
+    let idx = usize::try_from(tx_idx).ok()?;
+    block_tx_hashes.as_ref()?.get(idx).cloned()
+}
+
+fn tx_block_hashes_cache_key(block_num: i64) -> String {
+    format!("transactions:block_tx_hashes:{block_num}")
+}
+
+fn get_block_tx_hashes_cached_with_fetch<F>(
+    mem_cache: &InMemoryCache,
+    block_num: i64,
+    fetch: F,
+) -> Option<Vec<Vec<u8>>>
+where
+    F: FnOnce(i64) -> Option<Vec<Vec<u8>>>,
+{
+    let cache_key = tx_block_hashes_cache_key(block_num);
+    if let Some(cached) = mem_cache.get::<Vec<Vec<u8>>>(&cache_key) {
+        return Some(cached);
+    }
+    let fetched = fetch(block_num)?;
+    mem_cache.set(&cache_key, &fetched, TX_BLOCK_HASHES_CACHE_TTL);
+    Some(fetched)
+}
+
+fn get_block_tx_hashes_cached(
+    mem_cache: &InMemoryCache,
+    ckb_store: &Option<Arc<ckb_store_reader::CkbChainReader>>,
+    block_num: i64,
+) -> Option<Vec<Vec<u8>>> {
+    get_block_tx_hashes_cached_with_fetch(mem_cache, block_num, |bn| {
+        get_block_tx_hashes_from_ckb_store(ckb_store, bn)
+    })
 }
 
 async fn list_transactions(
@@ -137,6 +182,7 @@ async fn list_transactions(
 
     let store = state.store.clone();
     let ckb_store = state.ckb_store.clone();
+    let mem_cache = state.mem_cache.clone();
 
     if let Some(block_number) = params.block_number {
         // List transactions for a specific block
@@ -145,10 +191,16 @@ async fn list_transactions(
 
         let store_c = store.clone();
         let ckb_store_c = ckb_store.clone();
-        let all_txs = tokio::task::spawn_blocking(move || store_c.list_block_txs(block_number))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let mem_cache_c = mem_cache.clone();
+        let (all_txs, block_tx_hashes) = tokio::task::spawn_blocking(move || {
+            let all_txs = store_c.list_block_txs(block_number)?;
+            let block_tx_hashes =
+                get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, block_number);
+            Ok::<_, anyhow::Error>((all_txs, block_tx_hashes))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
         // Get block hash for responses
         let store_c = store.clone();
@@ -183,7 +235,7 @@ async fn list_transactions(
         let txs: Vec<TransactionResponse> = page
             .into_iter()
             .map(|(tx_idx, entry)| {
-                let tx_hash = get_tx_hash_from_ckb_store(&ckb_store_c, block_number, tx_idx)
+                let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
                     .map(|h| format!("0x{}", hex::encode(&h)))
                     .unwrap_or_else(|| "0x".to_string());
 
@@ -215,6 +267,7 @@ async fn list_transactions(
 
         let store_c = store.clone();
         let ckb_store_c = ckb_store.clone();
+        let mem_cache_c = mem_cache.clone();
         let fetch_limit = (limit + 1) as usize;
 
         let txs_result =
@@ -225,13 +278,14 @@ async fn list_transactions(
 
                 for (block_num, header) in &blocks {
                     let block_txs = store_c.list_block_txs(*block_num)?;
+                    let block_tx_hashes =
+                        get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, *block_num);
                     // For the first block (cursor_block), filter by cursor_index
                     for (tx_idx, entry) in block_txs.into_iter().rev() {
                         if *block_num == cursor_block && tx_idx >= cursor_index {
                             continue;
                         }
-                        // Look up tx hash from CKB store
-                        let tx_hash = get_tx_hash_from_ckb_store(&ckb_store_c, *block_num, tx_idx)
+                        let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
                             .unwrap_or_default();
                         results.push((*block_num, header.hash.clone(), tx_idx, entry, tx_hash));
                         if results.len() >= fetch_limit {
@@ -1505,6 +1559,8 @@ async fn get_transaction_lifecycle(
 mod tests {
     use super::*;
     use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn test_transaction_response_serialization() {
@@ -1534,6 +1590,54 @@ mod tests {
         assert_eq!(params.limit, 20);
         assert!(params.block_number.is_none());
         assert!(params.cursor.is_none());
+    }
+
+    #[test]
+    fn test_tx_hash_from_prefetched_hashes_returns_hash_by_index() {
+        let hashes = Some(vec![vec![0x11; 32], vec![0x22; 32]]);
+        assert_eq!(
+            tx_hash_from_prefetched_hashes(&hashes, 1),
+            Some(vec![0x22; 32])
+        );
+    }
+
+    #[test]
+    fn test_tx_hash_from_prefetched_hashes_rejects_invalid_index() {
+        let hashes = Some(vec![vec![0x11; 32]]);
+        assert_eq!(tx_hash_from_prefetched_hashes(&hashes, -1), None);
+        assert_eq!(tx_hash_from_prefetched_hashes(&hashes, 3), None);
+        assert_eq!(tx_hash_from_prefetched_hashes(&None, 0), None);
+    }
+
+    #[test]
+    fn test_tx_block_hashes_cache_key_is_stable() {
+        assert_eq!(
+            tx_block_hashes_cache_key(42),
+            "transactions:block_tx_hashes:42"
+        );
+    }
+
+    #[test]
+    fn test_get_block_tx_hashes_cached_with_fetch_uses_cache() {
+        let cache = InMemoryCache::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let first_calls = calls.clone();
+        let first = get_block_tx_hashes_cached_with_fetch(&cache, 99, move |_| {
+            first_calls.fetch_add(1, Ordering::SeqCst);
+            Some(vec![vec![0x11; 32]])
+        })
+        .unwrap();
+        assert_eq!(first, vec![vec![0x11; 32]]);
+
+        let second_calls = calls.clone();
+        let second = get_block_tx_hashes_cached_with_fetch(&cache, 99, move |_| {
+            second_calls.fetch_add(1, Ordering::SeqCst);
+            Some(vec![vec![0x22; 32]])
+        })
+        .unwrap();
+        assert_eq!(second, vec![vec![0x11; 32]]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
