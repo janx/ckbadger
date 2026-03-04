@@ -447,23 +447,22 @@ impl BatchWriter {
         }
 
         // Check consumed cells for missing entries
-        let missing: Vec<_> = outpoints
+        let missing: Vec<(&[u8], i16)> = outpoints
             .iter()
             .filter(|(h, i)| !result.contains_key(&(h.to_vec(), *i)))
+            .map(|(h, i)| (*h, *i))
             .collect();
 
         if !missing.is_empty() {
-            for (tx_hash, output_index) in missing {
-                if let Some(info) = self.store.get_consumed_cell_info(tx_hash, *output_index)? {
-                    let live = info.to_live_cell_info();
-                    validate_input_cell_occupied_capacity(
-                        &live,
-                        tx_hash,
-                        *output_index,
-                        "consumed",
-                    )?;
-                    result.insert((tx_hash.to_vec(), *output_index), live);
-                }
+            let consumed = self.store.get_consumed_cells_batch(&missing)?;
+            for ((tx_hash, output_index), live) in consumed {
+                validate_input_cell_occupied_capacity(
+                    &live,
+                    tx_hash.as_slice(),
+                    output_index,
+                    "consumed",
+                )?;
+                result.insert((tx_hash, output_index), live);
             }
         }
 
@@ -692,6 +691,32 @@ mod tests {
             err.to_string()
                 .contains("missing preloaded cell info during consumption"),
             "expected missing-preloaded-cell error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_get_full_cells_info_batch_uses_consumed_batch_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let tx_hash = vec![0xAC; 32];
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+
+        // Invalid payload forces decode path; this assertion verifies batch lookup branch.
+        store
+            .put_cf(store.cf_consumed_cells(), &outpoint_key, &[0xFF])
+            .unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), 0i16)];
+        let err = writer
+            .get_full_cells_info_batch(&outpoints, false)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to decode consumed cell meta in get_consumed_cells_batch"),
+            "expected consumed batch lookup error context, got: {}",
             err
         );
     }

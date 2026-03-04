@@ -312,18 +312,36 @@ impl Indexer {
                     adaptive_snapshot.target_batch_txs,
                     adaptive_snapshot.min_target_batch_txs,
                 );
+                let max_inputs = adaptive_sub_batch_input_cap(
+                    adaptive_snapshot.target_batch_txs,
+                    adaptive_snapshot.min_target_batch_txs,
+                );
                 let mut send_failed_reason: Option<String> = None;
                 let tx_counts: Vec<usize> = blocks
                     .iter()
                     .map(|block| block.block.transactions.len())
                     .collect();
+                let input_counts: Vec<usize> = blocks
+                    .iter()
+                    .map(|block| {
+                        block
+                            .block
+                            .transactions
+                            .iter()
+                            .map(|tx| tx.inputs.len())
+                            .sum::<usize>()
+                    })
+                    .collect();
                 adaptive_batch_controller_for_fetcher
                     .observe_tx_density(tx_counts.iter().sum(), tx_counts.len());
-                let sub_batch_plan = plan_fetch_sub_batches(&tx_counts, max_txs);
+                let sub_batch_plan =
+                    plan_fetch_sub_batches(&tx_counts, &input_counts, max_txs, max_inputs);
                 let mut block_iter = blocks.into_iter();
                 let mut sub_start_block = start_block;
 
-                for (idx, (sub_block_count, sub_txs)) in sub_batch_plan.into_iter().enumerate() {
+                for (idx, (sub_block_count, sub_txs, sub_inputs)) in
+                    sub_batch_plan.into_iter().enumerate()
+                {
                     let sub_blocks: Vec<_> = block_iter.by_ref().take(sub_block_count).collect();
                     if sub_blocks.len() != sub_block_count {
                         error!(
@@ -347,6 +365,7 @@ impl Indexer {
                             sub_start_block,
                             sub_end_block,
                             txs = sub_txs,
+                            inputs = sub_inputs,
                             "Fetcher: sending sub-batch"
                         );
                     }

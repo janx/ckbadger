@@ -41,6 +41,7 @@ fuzzing/reports/
 playwright-report/
 test-results/
 .verify-cache/
+artifacts/
 
 # Docker data volumes
 docker-data/

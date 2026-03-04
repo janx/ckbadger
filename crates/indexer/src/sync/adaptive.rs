@@ -58,6 +58,8 @@ pub(crate) const UDT_CELL_CACHE_CAPACITY: usize = 100_000;
 pub(crate) const PARSER_UNRESOLVED_RETRY_DELAY_MS: u64 = 500;
 pub(crate) const PARSER_UNRESOLVED_PROBE_SAMPLE_SIZE: usize = 5;
 pub(crate) const PARSER_UNRESOLVED_RPC_PROBE_TIMEOUT_SECS: u64 = 8;
+pub(crate) const ADAPTIVE_SUB_BATCH_INPUT_CAP_SCALE_NUM: u64 = 5;
+pub(crate) const ADAPTIVE_SUB_BATCH_INPUT_CAP_SCALE_DEN: u64 = 4;
 
 // ── Snapshot / input / adjustment types ──────────────────────────────
 
@@ -518,12 +520,21 @@ impl AdaptiveBatchController {
 
 // ── Free functions ───────────────────────────────────────────────────
 
-/// Build a fetch sub-batch plan based on per-block tx counts.
-/// Returns `(block_count, tx_count)` tuples for each sub-batch.
-pub(crate) fn plan_fetch_sub_batches(tx_counts: &[usize], tx_cap: usize) -> Vec<(usize, usize)> {
+/// Build a fetch sub-batch plan based on per-block tx/input counts.
+/// Returns `(block_count, tx_count, input_count)` tuples for each sub-batch.
+pub(crate) fn plan_fetch_sub_batches(
+    tx_counts: &[usize],
+    input_counts: &[usize],
+    tx_cap: usize,
+    input_cap: usize,
+) -> Vec<(usize, usize, usize)> {
     assert!(
-        tx_cap > 0,
-        "tx_cap must be > 0 to avoid infinite sub-batch splitting"
+        tx_counts.len() == input_counts.len(),
+        "tx_counts and input_counts must have the same length"
+    );
+    assert!(
+        tx_cap > 0 && input_cap > 0,
+        "tx_cap and input_cap must be > 0 to avoid infinite sub-batch splitting"
     );
 
     if tx_counts.is_empty() {
@@ -533,20 +544,27 @@ pub(crate) fn plan_fetch_sub_batches(tx_counts: &[usize], tx_cap: usize) -> Vec<
     let mut plan = Vec::new();
     let mut sub_blocks = 0usize;
     let mut sub_txs = 0usize;
+    let mut sub_inputs = 0usize;
 
-    for &txs in tx_counts {
+    for (&txs, &inputs) in tx_counts.iter().zip(input_counts.iter()) {
         sub_blocks += 1;
-        sub_txs += txs;
+        sub_txs = sub_txs
+            .checked_add(txs)
+            .expect("sub-batch tx total overflow while planning fetch splits");
+        sub_inputs = sub_inputs
+            .checked_add(inputs)
+            .expect("sub-batch input total overflow while planning fetch splits");
 
-        if sub_txs >= tx_cap {
-            plan.push((sub_blocks, sub_txs));
+        if sub_txs >= tx_cap || sub_inputs >= input_cap {
+            plan.push((sub_blocks, sub_txs, sub_inputs));
             sub_blocks = 0;
             sub_txs = 0;
+            sub_inputs = 0;
         }
     }
 
     if sub_blocks > 0 {
-        plan.push((sub_blocks, sub_txs));
+        plan.push((sub_blocks, sub_txs, sub_inputs));
     }
 
     plan
@@ -558,6 +576,21 @@ pub(crate) fn adaptive_sub_batch_tx_cap(target_batch_txs: u64, min_target_batch_
     target_batch_txs
         .saturating_mul(2)
         .clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS) as usize
+}
+
+pub(crate) fn adaptive_sub_batch_input_cap(
+    target_batch_txs: u64,
+    min_target_batch_txs: u64,
+) -> usize {
+    let tx_cap = adaptive_sub_batch_tx_cap(target_batch_txs, min_target_batch_txs) as u64;
+    let scaled = tx_cap
+        .saturating_mul(ADAPTIVE_SUB_BATCH_INPUT_CAP_SCALE_NUM)
+        .saturating_add(ADAPTIVE_SUB_BATCH_INPUT_CAP_SCALE_DEN - 1)
+        / ADAPTIVE_SUB_BATCH_INPUT_CAP_SCALE_DEN;
+    scaled
+        .clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS)
+        .try_into()
+        .expect("adaptive input cap must fit usize")
 }
 
 pub(super) fn bump_pipeline_reset_epoch(epoch: &AtomicU64) -> u64 {
@@ -1164,19 +1197,25 @@ mod tests {
 
     #[test]
     fn test_plan_fetch_sub_batches_without_split() {
-        let plan = plan_fetch_sub_batches(&[10, 20, 30], 1000);
-        assert_eq!(plan, vec![(3, 60)]);
+        let plan = plan_fetch_sub_batches(&[10, 20, 30], &[11, 22, 33], 1000, 1000);
+        assert_eq!(plan, vec![(3, 60, 66)]);
     }
 
     #[test]
-    fn test_plan_fetch_sub_batches_with_split() {
-        let plan = plan_fetch_sub_batches(&[2, 2, 1, 5], 3);
-        assert_eq!(plan, vec![(2, 4), (2, 6)]);
+    fn test_plan_fetch_sub_batches_with_tx_split() {
+        let plan = plan_fetch_sub_batches(&[2, 2, 1, 5], &[1, 1, 1, 1], 3, 10);
+        assert_eq!(plan, vec![(2, 4, 2), (2, 6, 2)]);
+    }
+
+    #[test]
+    fn test_plan_fetch_sub_batches_with_input_split() {
+        let plan = plan_fetch_sub_batches(&[2, 2, 1, 5], &[3, 3, 1, 1], 100, 5);
+        assert_eq!(plan, vec![(2, 4, 6), (2, 6, 2)]);
     }
 
     #[test]
     fn test_plan_fetch_sub_batches_empty() {
-        let plan = plan_fetch_sub_batches(&[], 100);
+        let plan = plan_fetch_sub_batches(&[], &[], 100, 100);
         assert!(plan.is_empty());
     }
 
@@ -1219,9 +1258,39 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "tx_cap must be > 0")]
+    fn test_adaptive_sub_batch_input_cap_scales_from_tx_cap() {
+        assert_eq!(
+            adaptive_sub_batch_input_cap(10_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            25_000
+        );
+        assert_eq!(
+            adaptive_sub_batch_input_cap(40_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            100_000
+        );
+    }
+
+    #[test]
+    fn test_adaptive_sub_batch_input_cap_respects_ceiling() {
+        assert_eq!(
+            adaptive_sub_batch_input_cap(ADAPTIVE_BATCH_MAX_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            ADAPTIVE_BATCH_MAX_TXS as usize
+        );
+        assert_eq!(
+            adaptive_sub_batch_input_cap(ADAPTIVE_BATCH_MAX_TXS * 2, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            ADAPTIVE_BATCH_MAX_TXS as usize
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "tx_counts and input_counts must have the same length")]
+    fn test_plan_fetch_sub_batches_panics_on_mismatched_block_vectors() {
+        let _ = plan_fetch_sub_batches(&[1], &[1, 2], 100, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "tx_cap and input_cap must be > 0")]
     fn test_plan_fetch_sub_batches_panics_on_zero_limit() {
-        let _ = plan_fetch_sub_batches(&[1], 0);
+        let _ = plan_fetch_sub_batches(&[1], &[1], 0, 100);
     }
 
     #[test]
