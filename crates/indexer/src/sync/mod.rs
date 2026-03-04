@@ -1,4 +1,5 @@
 mod dao_helpers;
+mod diagnostics;
 mod helpers;
 mod indexer;
 mod nft_helpers;
