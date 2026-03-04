@@ -44,6 +44,7 @@ use crate::runtime_diag::{
     FlightRecorder,
 };
 
+use super::sync_mode::*;
 use super::types::{
     BatchWriteMetrics, CachedCellInfo, CachedUdtCellInfo, DotbitConsumptionEvent,
     DotbitTxActivityData, PreParsedNftData, ReorgAction, SyncAction, TxData, UndoSeqScope,
@@ -921,49 +922,6 @@ fn next_fetch_start_after_batch(end_block: u64) -> u64 {
 
 fn should_abort_unresolved_retry_on_epoch_change(batch_epoch: u64, current_epoch: u64) -> bool {
     batch_epoch != current_epoch
-}
-
-fn should_skip_address_balances(_bulk_sync_mode: bool) -> bool {
-    // Address balances must always be updated inline to keep bulk sync exact.
-    false
-}
-
-fn is_bulk_sync_active_by_lag(blocks_behind: u64, bulk_sync_threshold: u64) -> bool {
-    blocks_behind > bulk_sync_threshold
-}
-
-fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_threshold: u64) -> bool {
-    let blocks_behind = chain_tip.checked_sub(batch_end).unwrap_or_else(|| {
-        panic!(
-            "invalid bulk-sync batch range: batch_end={} exceeds chain_tip={}",
-            batch_end, chain_tip
-        )
-    });
-    blocks_behind > bulk_sync_threshold
-}
-
-fn should_run_reorg_handling(blocks_behind: u64, bulk_sync_threshold: u64) -> bool {
-    blocks_behind <= bulk_sync_threshold
-}
-
-fn ensure_bulk_sync_fresh_start(
-    bulk_sync_mode: bool,
-    sync_tip_block: i64,
-    sync_tip_hash: &Option<Vec<u8>>,
-) -> Result<()> {
-    if !bulk_sync_mode {
-        return Ok(());
-    }
-    if sync_tip_block == 0 && sync_tip_hash.is_none() {
-        return Ok(());
-    }
-    bail!(
-        "bulk sync fail-fast: bulk sync only supports fresh-db rebuilds from genesis; \
-         detected existing sync tip state (tip_block={}, tip_hash_present={}). \
-         delete RocksDB and restart from genesis",
-        sync_tip_block,
-        sync_tip_hash.is_some()
-    );
 }
 
 fn require_non_negative_block_number(value: i64, context: &str) -> Result<u64> {
@@ -13048,50 +13006,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_bulk_sync_active_by_lag_threshold() {
-        assert!(!is_bulk_sync_active_by_lag(1000, 1000));
-        assert!(is_bulk_sync_active_by_lag(1001, 1000));
-        assert!(!is_bulk_sync_active_by_lag(0, 1000));
-    }
-
-    #[test]
-    fn test_is_bulk_sync_batch_uses_tip_distance() {
-        assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
-        assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
-    }
-
-    #[test]
-    fn test_should_run_reorg_handling_only_in_live_sync_window() {
-        assert!(should_run_reorg_handling(0, 1000));
-        assert!(should_run_reorg_handling(1000, 1000));
-        assert!(!should_run_reorg_handling(1001, 1000));
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid bulk-sync batch range")]
-    fn test_is_bulk_sync_batch_panics_when_batch_end_exceeds_tip() {
-        let _ = is_bulk_sync_batch(100, 150, 1000);
-    }
-
-    #[test]
-    fn test_ensure_bulk_sync_fresh_start_allows_empty_tip_state() {
-        ensure_bulk_sync_fresh_start(true, 0, &None).unwrap();
-    }
-
-    #[test]
-    fn test_ensure_bulk_sync_fresh_start_rejects_existing_tip_in_bulk_mode() {
-        let err = ensure_bulk_sync_fresh_start(true, 0, &Some(vec![0x11; 32])).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("bulk sync only supports fresh-db rebuilds from genesis"));
-    }
-
-    #[test]
-    fn test_ensure_bulk_sync_fresh_start_skips_check_when_not_bulk() {
-        ensure_bulk_sync_fresh_start(false, 123, &Some(vec![0x22; 32])).unwrap();
-    }
-
-    #[test]
     fn test_require_chain_tip_number_errors_on_missing_tip() {
         let err = require_chain_tip_number(None, "CKB RocksDB").unwrap_err();
         assert!(err
@@ -13467,12 +13381,6 @@ mod tests {
     fn test_should_abort_unresolved_retry_on_epoch_change() {
         assert!(!should_abort_unresolved_retry_on_epoch_change(10, 10));
         assert!(should_abort_unresolved_retry_on_epoch_change(10, 11));
-    }
-
-    #[test]
-    fn test_address_balances_are_never_skipped_in_bulk_mode() {
-        assert!(!should_skip_address_balances(true));
-        assert!(!should_skip_address_balances(false));
     }
 
     #[test]
