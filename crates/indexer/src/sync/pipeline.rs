@@ -38,6 +38,14 @@ use super::token_helpers::*;
 use super::types::{CachedCellInfo, DotbitConsumptionEvent, PreParsedNftData, ReorgAction, TxData};
 use super::undo::*;
 
+fn requires_direct_reads_for_fetch(
+    bulk_sync_allowed: bool,
+    blocks_behind: u64,
+    bulk_sync_threshold: u64,
+) -> bool {
+    bulk_sync_allowed && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
+}
+
 impl Indexer {
     pub(super) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
@@ -92,6 +100,7 @@ impl Indexer {
         let pipeline_reset_reason_code = Arc::clone(&self.pipeline_reset_reason_code);
         let pipeline_epoch_for_fetcher = Arc::clone(&self.pipeline_reset_epoch);
         let ckb_store = self.ckb_store.clone();
+        let bulk_sync_allowed_for_fetcher = self.bulk_sync_allowed.load(Ordering::SeqCst);
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
         let adaptive_batch_controller_for_fetcher = Arc::clone(&self.adaptive_batch_controller);
         let parse_tx_for_fetcher_depth = parse_tx.clone();
@@ -259,7 +268,11 @@ impl Indexer {
                     }
                 } else {
                     let blocks_behind = chain_tip.saturating_sub(start_block);
-                    if is_bulk_sync_active_by_lag(blocks_behind, config.bulk_sync_threshold) {
+                    if requires_direct_reads_for_fetch(
+                        bulk_sync_allowed_for_fetcher,
+                        blocks_behind,
+                        config.bulk_sync_threshold,
+                    ) {
                         record_worker_exit_reason(
                             &fetcher_exit_reason_for_fetcher,
                             format!(
@@ -1760,10 +1773,8 @@ impl Indexer {
         let mut consecutive_idle_timeouts: u64 = 0;
         loop {
             // Bulk sync is an optimistic rebuild path and must not run reorg/deep-fork handling.
-            let should_handle_reorg = should_run_reorg_handling(
-                self.progress.blocks_remaining(),
-                self.config.bulk_sync_threshold,
-            );
+            let should_handle_reorg =
+                self.should_handle_reorg_for_lag(self.progress.blocks_remaining());
             if should_handle_reorg && self.repo.has_unresolved_deep_fork()? {
                 let drained = Self::drain_channel(&mut parse_rx).await;
                 parse_tx_pending_txs_for_writer.store(0, Ordering::Relaxed);
@@ -1888,7 +1899,7 @@ impl Indexer {
 
                     let blocks_behind =
                         blocks_behind_tip(chain_tip, db_tip, "pipeline writer reorg check")?;
-                    if should_run_reorg_handling(blocks_behind, self.config.bulk_sync_threshold) {
+                    if self.should_handle_reorg_for_lag(blocks_behind) {
                         if let Some(ref stored_hash) = db_tip_hash {
                             if db_tip > 0 {
                                 let db_tip_u64 = require_non_negative_block_number(
@@ -2410,5 +2421,18 @@ impl Indexer {
             Self::fetch_blocks_with_config(&self.rpc, start, end, self.config.parallel_fetch_size)
                 .await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::requires_direct_reads_for_fetch;
+
+    #[test]
+    fn test_requires_direct_reads_for_fetch_only_when_bulk_allowed_and_lagging() {
+        assert!(requires_direct_reads_for_fetch(true, 1001, 1000));
+        assert!(!requires_direct_reads_for_fetch(false, 1001, 1000));
+        assert!(!requires_direct_reads_for_fetch(true, 1000, 1000));
+        assert!(!requires_direct_reads_for_fetch(true, 0, 1000));
     }
 }

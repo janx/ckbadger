@@ -7,7 +7,6 @@ use tracing::{debug, error, info, warn};
 
 use super::adaptive::bump_pipeline_reset_epoch;
 use super::indexer::Indexer;
-use super::sync_mode::should_run_reorg_handling;
 use super::types::SyncAction;
 
 impl Indexer {
@@ -20,10 +19,8 @@ impl Indexer {
             }
 
             // Bulk sync is an optimistic rebuild path and must not run reorg/deep-fork handling.
-            let should_handle_reorg = should_run_reorg_handling(
-                self.progress.blocks_remaining(),
-                self.config.bulk_sync_threshold,
-            );
+            let should_handle_reorg =
+                self.should_handle_reorg_for_lag(self.progress.blocks_remaining());
             if should_handle_reorg && self.repo.has_unresolved_deep_fork()? {
                 if let Some(repeat) = self.repeated_warning_snapshot(
                     "sequential_deep_fork_unresolved",

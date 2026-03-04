@@ -703,7 +703,7 @@ impl Indexer {
         }
 
         let blocks_behind = chain_tip.saturating_sub(start_block);
-        if should_run_reorg_handling(blocks_behind, self.config.bulk_sync_threshold) {
+        if self.should_handle_reorg_for_lag(blocks_behind) {
             if let Some(ref stored_hash) = db_tip_hash {
                 if db_tip > 0 {
                     let db_tip_u64 =

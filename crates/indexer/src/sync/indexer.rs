@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -102,6 +102,25 @@ pub(super) fn blocks_behind_tip(chain_tip: u64, base_tip: i64, context: &str) ->
     })
 }
 
+pub(super) fn is_fresh_sync_tip_state(
+    sync_tip_block: i64,
+    sync_tip_hash: &Option<Vec<u8>>,
+) -> bool {
+    sync_tip_block == 0 && sync_tip_hash.is_none()
+}
+
+pub(super) fn should_startup_bulk_sync_mode(
+    blocks_behind: u64,
+    bulk_sync_threshold: u64,
+    has_direct_ckb_store: bool,
+    sync_tip_block: i64,
+    sync_tip_hash: &Option<Vec<u8>>,
+) -> bool {
+    has_direct_ckb_store
+        && is_fresh_sync_tip_state(sync_tip_block, sync_tip_hash)
+        && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
+}
+
 fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
     tip.ok_or_else(|| anyhow!("Failed to get chain tip from {}", source))
 }
@@ -161,6 +180,7 @@ pub struct Indexer {
     pub(crate) cache_invalidator: CacheInvalidator,
     pub(crate) last_cache_invalidation: tokio::sync::Mutex<u64>,
     pub(crate) was_bulk_sync_active: std::sync::atomic::AtomicBool,
+    pub(crate) bulk_sync_allowed: AtomicBool,
     pub(crate) rebuild_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) pipeline_reset_notify_flag: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) pipeline_reset_reason_code: Arc<AtomicU8>,
@@ -200,7 +220,7 @@ impl Indexer {
             cache_invalidator.clone(),
         );
 
-        let (tip_number, _) = repo.get_sync_tip().await?;
+        let (tip_number, tip_hash) = repo.get_sync_tip().await?;
         let chain_tip = if let Some(ref store) = ckb_store {
             require_chain_tip_number(store.tip_number(), "CKB RocksDB during indexer startup")?
         } else {
@@ -216,7 +236,10 @@ impl Indexer {
         let adaptive_batch_controller =
             Arc::new(AdaptiveBatchController::new(config.pipeline_buffer as u64));
 
-        let was_bulk = progress.blocks_remaining() > config.bulk_sync_threshold;
+        let bulk_sync_allowed =
+            is_fresh_sync_tip_state(tip_number, &tip_hash) && ckb_store.is_some();
+        let was_bulk =
+            bulk_sync_allowed && progress.blocks_remaining() > config.bulk_sync_threshold;
         let hodl_tracker = match store.get_hodl_tracker_state()? {
             Some(state) => {
                 info!(
@@ -251,6 +274,7 @@ impl Indexer {
             cache_invalidator,
             last_cache_invalidation: tokio::sync::Mutex::new(0),
             was_bulk_sync_active: std::sync::atomic::AtomicBool::new(was_bulk),
+            bulk_sync_allowed: AtomicBool::new(bulk_sync_allowed),
             rebuild_pause_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_notify_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pipeline_reset_reason_code: Arc::new(AtomicU8::new(PIPELINE_RESET_REASON_UNKNOWN)),
@@ -283,7 +307,19 @@ impl Indexer {
     }
 
     pub fn is_bulk_sync_active(&self) -> bool {
-        self.progress.blocks_remaining() > self.config.bulk_sync_threshold
+        self.is_bulk_sync_enabled_for_lag(self.progress.blocks_remaining())
+    }
+
+    pub(crate) fn is_bulk_sync_enabled_for_lag(&self, blocks_behind: u64) -> bool {
+        self.bulk_sync_allowed.load(Ordering::SeqCst)
+            && is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold)
+    }
+
+    pub(crate) fn should_handle_reorg_for_lag(&self, blocks_behind: u64) -> bool {
+        if !self.bulk_sync_allowed.load(Ordering::SeqCst) {
+            return true;
+        }
+        should_run_reorg_handling(blocks_behind, self.config.bulk_sync_threshold)
     }
 
     /// Dynamically switch RocksDB compaction options based on how far behind tip we are.
@@ -296,7 +332,7 @@ impl Indexer {
         let domain_store = self.writer.store();
         let append_store = &self.append_only_store;
         let in_bulk = domain_store.is_bulk_sync_mode();
-        let should_be_bulk = blocks_behind > self.config.bulk_sync_threshold;
+        let should_be_bulk = self.is_bulk_sync_enabled_for_lag(blocks_behind);
 
         if should_be_bulk && !in_bulk {
             info!(
@@ -628,8 +664,19 @@ impl Indexer {
 
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
-        let bulk_sync_mode =
-            is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold);
+        let (start_block, start_block_hash) = self.repo.get_sync_tip().await?;
+        let fresh_sync_tip = is_fresh_sync_tip_state(start_block, &start_block_hash);
+        let has_direct_ckb_store = self.ckb_store.is_some();
+        let bulk_sync_allowed = fresh_sync_tip && has_direct_ckb_store;
+        self.bulk_sync_allowed
+            .store(bulk_sync_allowed, Ordering::SeqCst);
+        let bulk_sync_mode = should_startup_bulk_sync_mode(
+            blocks_behind,
+            self.config.bulk_sync_threshold,
+            has_direct_ckb_store,
+            start_block,
+            &start_block_hash,
+        );
         info!(
             run_id = %self.run_id,
             "Starting indexer (pipeline={}, {} blocks behind, threshold={})",
@@ -651,9 +698,28 @@ impl Indexer {
             );
             self.writer.store().set_bulk_sync_compaction_options();
             self.append_only_store.set_bulk_sync_compaction_options();
+        } else if fresh_sync_tip
+            && !has_direct_ckb_store
+            && is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold)
+        {
+            info!(
+                run_id = %self.run_id,
+                blocks_behind,
+                threshold = self.config.bulk_sync_threshold,
+                "CKB_DATA_PATH is not configured; bulk sync is disabled and indexer will run live catch-up via JSON-RPC"
+            );
+        } else if !fresh_sync_tip
+            && is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold)
+        {
+            info!(
+                run_id = %self.run_id,
+                sync_tip = start_block,
+                blocks_behind,
+                threshold = self.config.bulk_sync_threshold,
+                "Existing sync tip detected; bulk sync is disabled for non-fresh DB, running live catch-up mode"
+            );
         }
 
-        let (start_block, start_block_hash) = self.repo.get_sync_tip().await?;
         ensure_bulk_sync_fresh_start(bulk_sync_mode, start_block, &start_block_hash)?;
         let consistent_block = self.writer.find_last_consistent_block()?;
         let actual_start = match consistent_block {
@@ -854,6 +920,27 @@ mod tests {
     fn test_blocks_behind_tip_rejects_inverted_tip_order() {
         let err = blocks_behind_tip(100, 101, "unit-test").unwrap_err();
         assert!(err.to_string().contains("exceeds chain_tip"));
+    }
+
+    #[test]
+    fn test_is_fresh_sync_tip_state_requires_zero_without_hash() {
+        assert!(is_fresh_sync_tip_state(0, &None));
+        assert!(!is_fresh_sync_tip_state(0, &Some(vec![0x11; 32])));
+        assert!(!is_fresh_sync_tip_state(1, &None));
+    }
+
+    #[test]
+    fn test_should_startup_bulk_sync_mode_requires_fresh_tip_and_lag() {
+        assert!(should_startup_bulk_sync_mode(1001, 1000, true, 0, &None));
+        assert!(!should_startup_bulk_sync_mode(1000, 1000, true, 0, &None));
+        assert!(!should_startup_bulk_sync_mode(1001, 1000, false, 0, &None));
+        assert!(!should_startup_bulk_sync_mode(
+            1001,
+            1000,
+            true,
+            10,
+            &Some(vec![0x22; 32])
+        ));
     }
 
     #[test]
