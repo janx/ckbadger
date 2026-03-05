@@ -264,40 +264,24 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
         .flatten()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
-    let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
-        if let Some(ref sp) = sync_progress_from_store {
-            let stale = chrono::Utc::now().timestamp() - sp.updated_at > 60;
-            if !stale && is_syncing {
-                (
-                    sp.progress_percentage,
-                    Some(sp.eta_formatted.clone()),
-                    Some(sp.blocks_per_second),
-                    Some(sp.ema_blocks_per_second),
-                )
-            } else {
-                let p = if tip_block > 0 {
-                    (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
-                } else {
-                    0.0
-                };
-                let (ema, eta) = if is_syncing {
-                    if let Some(rate) = db_ema_rate {
-                        if rate > 0.0 {
-                            let remaining = blocks_behind as f64;
-                            let eta_secs = remaining / rate;
-                            let eta_str = format_duration_smart(eta_secs);
-                            (Some(rate), Some(eta_str))
-                        } else {
-                            (Some(rate), None)
-                        }
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
-                };
-                (p, eta, ema, ema)
-            }
+    let (
+        progress,
+        estimated_time,
+        blocks_per_second,
+        ema_blocks_per_second,
+        txs_per_second,
+        ema_txs_per_second,
+    ) = if let Some(ref sp) = sync_progress_from_store {
+        let stale = chrono::Utc::now().timestamp() - sp.updated_at > 60;
+        if !stale && is_syncing {
+            (
+                sp.progress_percentage,
+                Some(sp.eta_formatted.clone()),
+                Some(sp.blocks_per_second),
+                Some(sp.ema_blocks_per_second),
+                sp.txs_per_second,
+                sp.ema_txs_per_second,
+            )
         } else {
             let p = if tip_block > 0 {
                 (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
@@ -320,8 +304,32 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
             } else {
                 (None, None)
             };
-            (p, eta, ema, ema)
+            (p, eta, ema, ema, None, None)
+        }
+    } else {
+        let p = if tip_block > 0 {
+            (synced_block as f64 / tip_block as f64 * 100.0).min(100.0)
+        } else {
+            0.0
         };
+        let (ema, eta) = if is_syncing {
+            if let Some(rate) = db_ema_rate {
+                if rate > 0.0 {
+                    let remaining = blocks_behind as f64;
+                    let eta_secs = remaining / rate;
+                    let eta_str = format_duration_smart(eta_secs);
+                    (Some(rate), Some(eta_str))
+                } else {
+                    (Some(rate), None)
+                }
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+        (p, eta, ema, ema, None, None)
+    };
 
     SyncStatus {
         is_syncing,
@@ -332,6 +340,8 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
         chart_data_may_be_incomplete: blocks_behind > 1000,
         blocks_per_second,
         ema_blocks_per_second,
+        txs_per_second,
+        ema_txs_per_second,
         sync_mode,
         started_at: sync_started_at,
         elapsed_time,

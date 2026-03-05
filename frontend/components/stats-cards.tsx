@@ -4,35 +4,33 @@ import { useQuery } from '@tanstack/react-query';
 import { api, NetworkStats } from '@/lib/api';
 import { TerminalNumber } from '@/components/ui/terminal-number';
 
-function formatSyncSpeed(blocksPerSecond: number | null): string | null {
-  if (blocksPerSecond === null || blocksPerSecond <= 0) {
+function formatRate(value: number | null | undefined): string | null {
+  if (value === null || value === undefined || value <= 0) {
     return null;
   }
-  if (blocksPerSecond >= 1000) {
-    return `${(blocksPerSecond / 1000).toFixed(1)}K`;
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}K`;
   }
-  return blocksPerSecond.toFixed(0);
+  return value.toFixed(0);
 }
 
 export function SyncBanner({ stats }: { stats: NetworkStats }) {
   const { syncStatus } = stats;
 
-  if (!syncStatus.isSyncing) {
+  if (!syncStatus.isSyncing || syncStatus.syncMode !== 'bulk') {
     return null;
   }
 
-  const syncSpeed = formatSyncSpeed(syncStatus.emaBlocksPerSecond);
-  const isBulkSync = syncStatus.syncMode === 'bulk';
-  const hasExtraInfo = syncSpeed || syncStatus.estimatedTime || syncStatus.elapsedTime;
+  const syncSpeed = formatRate(syncStatus.emaBlocksPerSecond);
+  const txnsSpeed = formatRate(syncStatus.emaTxsPerSecond ?? syncStatus.txsPerSecond ?? null);
+  const hasExtraInfo = syncSpeed || txnsSpeed || syncStatus.estimatedTime || syncStatus.elapsedTime;
 
   return (
     <div className="terminal-card border-terminal-dark p-3">
       <div className="relative z-10 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="bg-terminal-green h-2 w-2 animate-pulse rounded-full" />
-          <span className="text-terminal-dim font-mono text-sm font-medium">
-            {isBulkSync ? 'BULK SYNCING...' : 'SYNCING BLOCKCHAIN DATA...'}
-          </span>
+          <span className="text-terminal-dim font-mono text-sm font-medium">BULK SYNCING...</span>
         </div>
         <span className="text-terminal-dark font-mono text-sm">
           <TerminalNumber value={syncStatus.progress.toFixed(1)} glowIntensity="subtle" />% (
@@ -47,6 +45,11 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           {syncSpeed && (
             <span>
               <TerminalNumber value={syncSpeed} glowIntensity="subtle" /> blocks/s
+            </span>
+          )}
+          {txnsSpeed && (
+            <span>
+              <TerminalNumber value={txnsSpeed} glowIntensity="subtle" /> txns/s
             </span>
           )}
           {syncStatus.elapsedTime && <span>Elapsed: {syncStatus.elapsedTime}</span>}

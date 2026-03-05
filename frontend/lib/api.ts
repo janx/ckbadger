@@ -99,6 +99,8 @@ interface SyncStatus {
   chartDataMayBeIncomplete: boolean;
   blocksPerSecond: number | null;
   emaBlocksPerSecond: number | null;
+  txsPerSecond?: number | null;
+  emaTxsPerSecond?: number | null;
   syncMode: string;
   startedAt: number | null;
   elapsedTime: string | null;

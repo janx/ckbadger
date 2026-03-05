@@ -82,6 +82,9 @@ impl SyncStatusData {
                 self.derived_sync_in_progress = true;
             }
         } else {
+            if self.sync_started_at.is_none() || start_block < self.sync_started_block {
+                self.sync_started_at = Some(chrono::Utc::now().timestamp());
+            }
             self.sync_started_block = start_block;
             self.derived_sync_in_progress = false;
         }
@@ -413,6 +416,17 @@ mod tests {
         assert_eq!(status.sync_started_at, Some(123));
         assert_eq!(status.bulk_sync_completed_at, Some(456));
         assert_eq!(status.bulk_sync_completed_block, Some(999));
+    }
+
+    #[test]
+    fn test_init_sync_start_non_bulk_initializes_started_at_when_missing() {
+        let mut status = SyncStatusData::default();
+
+        status.init_sync_start(200, false);
+
+        assert_eq!(status.sync_started_block, 200);
+        assert!(status.sync_started_at.is_some());
+        assert!(!status.derived_sync_in_progress);
     }
 
     #[test]

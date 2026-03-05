@@ -14,6 +14,8 @@ pub struct SyncStatus {
     pub chart_data_may_be_incomplete: bool,
     pub blocks_per_second: Option<f64>,
     pub ema_blocks_per_second: Option<f64>,
+    pub txs_per_second: Option<f64>,
+    pub ema_txs_per_second: Option<f64>,
     pub sync_mode: String,
     pub started_at: Option<i64>,
     pub elapsed_time: Option<String>,
