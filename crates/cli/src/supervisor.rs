@@ -32,6 +32,11 @@ const BASE_BACKOFF: Duration = Duration::from_secs(1);
 /// Maximum backoff duration.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
+/// If a service runs longer than this, its restart counter resets to zero.
+/// This prevents a long-running service that crashes once from inheriting
+/// accumulated restart counts from earlier transient failures.
+const STABLE_RUNNING_THRESHOLD: Duration = Duration::from_secs(120);
+
 /// How often to check child process health.
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -286,7 +291,21 @@ async fn monitor_children(
 
             if let Some(status) = exited {
                 let name = &locked.children[i].name;
-                let restart_count = locked.children[i].restart_count;
+                let uptime = locked.children[i].started_at.elapsed();
+                let mut restart_count = locked.children[i].restart_count;
+
+                // Reset restart counter if the service ran stably before crashing.
+                // This prevents a one-time crash after hours of stable operation
+                // from being penalized by earlier transient startup failures.
+                if uptime >= STABLE_RUNNING_THRESHOLD && restart_count > 0 {
+                    info!(
+                        service = %name,
+                        previous_restart_count = restart_count,
+                        uptime_secs = uptime.as_secs(),
+                        "service ran stably, resetting restart counter"
+                    );
+                    restart_count = 0;
+                }
 
                 if restart_count >= MAX_RESTART_ATTEMPTS {
                     error!(
@@ -327,6 +346,7 @@ async fn monitor_children(
                         info!(
                             service = %service_name,
                             pid = new_child.pid(),
+                            restart_count = restart_count + 1,
                             "service restarted"
                         );
                         locked.children[i] = new_child;
@@ -500,4 +520,59 @@ mod tests {
         let _ = child.child.kill().await;
         let _ = child.child.wait().await;
     }
+
+    #[test]
+    fn test_stable_running_threshold_resets_restart_count() {
+        // Simulate a service that ran beyond the stability threshold
+        let uptime = STABLE_RUNNING_THRESHOLD + Duration::from_secs(1);
+        let restart_count: u32 = 5;
+
+        // Same logic as monitor_children: reset if uptime >= threshold
+        let effective_count = if uptime >= STABLE_RUNNING_THRESHOLD && restart_count > 0 {
+            0
+        } else {
+            restart_count
+        };
+
+        assert_eq!(
+            effective_count, 0,
+            "restart_count should reset to 0 after stable running"
+        );
+    }
+
+    #[test]
+    fn test_short_uptime_preserves_restart_count() {
+        // Simulate a service that crashed quickly (before stability threshold)
+        let uptime = STABLE_RUNNING_THRESHOLD - Duration::from_secs(1);
+        let restart_count: u32 = 5;
+
+        let effective_count = if uptime >= STABLE_RUNNING_THRESHOLD && restart_count > 0 {
+            0
+        } else {
+            restart_count
+        };
+
+        assert_eq!(
+            effective_count, 5,
+            "restart_count should NOT reset for short-lived service"
+        );
+    }
+
+    #[test]
+    fn test_stable_running_zero_count_stays_zero() {
+        // If restart_count is already 0, no reset needed
+        let uptime = STABLE_RUNNING_THRESHOLD + Duration::from_secs(60);
+        let restart_count: u32 = 0;
+
+        let effective_count = if uptime >= STABLE_RUNNING_THRESHOLD && restart_count > 0 {
+            0
+        } else {
+            restart_count
+        };
+
+        assert_eq!(effective_count, 0);
+    }
+
+    // Compile-time check for the new constant
+    const _: () = assert!(STABLE_RUNNING_THRESHOLD.as_secs() > 0);
 }

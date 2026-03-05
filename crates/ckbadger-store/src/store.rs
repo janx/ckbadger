@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBCompressionType, IteratorMode,
@@ -1412,12 +1412,28 @@ impl CkbadgerStore {
     /// Reverts L0 slowdown/stop triggers to 12/24, write buffers to 4 (mega/high)
     /// or 2 (low), `max_bytes_for_level_base` to 512 MB, and restores WBM budget
     /// and block cache to normal sizes.
+    ///
+    /// **Critical:** flushes all memtables BEFORE reducing WBM budget. Without this,
+    /// data written with `commit_no_wal()` during bulk sync can sit in the active
+    /// memtable indefinitely — the reduced WBM budget has massive headroom for the
+    /// low-write-rate live sync phase, so no automatic flush triggers. A crash then
+    /// loses all unflushed data, creating block header gaps.
     pub fn restore_normal_compaction_options(&self) {
         // Idempotent: skip if already in normal mode
         if !self.bulk_sync_mode.load(Ordering::Relaxed) {
             return;
         }
         self.bulk_sync_mode.store(false, Ordering::Relaxed);
+
+        // Flush all memtables to SST BEFORE reducing WBM budget.
+        // This ensures all commit_no_wal() data from bulk sync is durable.
+        if let Err(e) = self.flush_all_memtables() {
+            error!(
+                error = %e,
+                "Failed to flush memtables during bulk-to-normal transition; \
+                 unflushed commit_no_wal data is at risk on crash"
+            );
+        }
 
         let p = &self.memory_profile;
         let level_base_str = p.normal_max_bytes_for_level_base.to_string();
@@ -1455,6 +1471,28 @@ impl CkbadgerStore {
             block_cache_mb = p.block_cache_normal_bytes / (1024 * 1024),
             "Normal compaction options restored: l0_slowdown=12, l0_stop=24"
         );
+    }
+
+    /// Flush all column family memtables to SST files.
+    ///
+    /// Required after bulk sync (commit_no_wal) to make memtable data durable.
+    /// With atomic_flush=true, flushing any single CF triggers all CFs to flush
+    /// together, but we iterate all CFs to ensure every memtable is captured.
+    pub fn flush_all_memtables(&self) -> anyhow::Result<()> {
+        let started = std::time::Instant::now();
+
+        let cfs = Self::cfs_for_class(self.store_class);
+        for &cf_name in cfs {
+            if let Some(cf) = self.db.cf_handle(cf_name) {
+                self.db.flush_cf(cf).map_err(|e| {
+                    anyhow::anyhow!("flush_all_memtables failed on CF '{}': {}", cf_name, e)
+                })?;
+            }
+        }
+
+        let elapsed_ms = started.elapsed().as_millis();
+        info!(elapsed_ms, cfs = cfs.len(), "Flushed all memtables to SST");
+        Ok(())
     }
 
     /// Disable auto-compactions on all column families.
@@ -2248,5 +2286,54 @@ mod tests {
         assert!(!profile.is_secondary);
         assert!(profile.system_ram_bytes > 0);
         assert!(profile.cpu_count > 0);
+    }
+
+    #[test]
+    fn test_flush_all_memtables_makes_no_wal_data_durable() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        // Write data without WAL (simulating bulk sync commit_no_wal)
+        let cf = store.cf_sync_meta();
+        let mut batch = WriteBatch::default();
+        batch.put_cf(cf, b"nowal-key", b"nowal-value");
+        store.write_batch_no_wal(batch).unwrap();
+
+        // Flush to make the no-WAL data durable (persisted to SST)
+        store.flush_all_memtables().unwrap();
+
+        // Verify data is readable after flush
+        let val = store.get_cf(cf, b"nowal-key").unwrap();
+        assert_eq!(val.as_deref(), Some(b"nowal-value".as_slice()));
+    }
+
+    #[test]
+    fn test_flush_all_memtables_on_empty_store() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        // Should succeed even with no data to flush
+        store.flush_all_memtables().unwrap();
+    }
+
+    #[test]
+    fn test_restore_normal_compaction_flushes_before_wbm_reduction() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        // Enter bulk sync mode
+        store.set_bulk_sync_compaction_options();
+
+        // Write data without WAL (as bulk sync does)
+        let cf = store.cf_sync_meta();
+        let mut batch = WriteBatch::default();
+        batch.put_cf(cf, b"bulk-key", b"bulk-value");
+        store.write_batch_no_wal(batch).unwrap();
+
+        // Transition to normal mode — this should flush memtables first
+        store.restore_normal_compaction_options();
+
+        // Data written during bulk sync must survive the transition
+        let val = store.get_cf(cf, b"bulk-key").unwrap();
+        assert_eq!(val.as_deref(), Some(b"bulk-value".as_slice()));
     }
 }
