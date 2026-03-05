@@ -18,14 +18,18 @@ pub struct TuiServiceConfig {
     pub append_only_data_path: String,
     pub api_url: String,
     pub refresh_ms: u64,
+    pub supervisor_socket_path: Option<String>,
+    pub service_log_dir: Option<String>,
 }
 
 /// Run the TUI. Blocks until user exits.
 pub async fn run_tui(config: TuiServiceConfig) -> Result<()> {
-    let db = TuiDb::new(
+    let db = TuiDb::new_with_monitoring(
         &config.api_url,
         &config.domain_data_path,
         &config.append_only_data_path,
+        config.supervisor_socket_path.as_deref(),
+        config.service_log_dir.as_deref(),
     )
     .await;
 
@@ -115,11 +119,18 @@ mod tests {
             append_only_data_path: "/data/append".to_string(),
             api_url: "http://localhost:3001/api/v1".to_string(),
             refresh_ms: 500,
+            supervisor_socket_path: Some("/run/indexer.sock".to_string()),
+            service_log_dir: Some("/run/logs".to_string()),
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");
         assert_eq!(config.append_only_data_path, "/data/append");
         assert_eq!(config.api_url, "http://localhost:3001/api/v1");
         assert_eq!(config.refresh_ms, 500);
+        assert_eq!(
+            config.supervisor_socket_path.as_deref(),
+            Some("/run/indexer.sock")
+        );
+        assert_eq!(config.service_log_dir.as_deref(), Some("/run/logs"));
     }
 }

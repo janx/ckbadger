@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 ckbadger-common = { path = "../common" }
 ckbadger-store = { path = "../ckbadger-store" }
+ckbadger-ipc = { path = "../ipc" }
 
 anyhow = { workspace = true }
 chrono = { workspace = true }

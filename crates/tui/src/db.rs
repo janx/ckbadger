@@ -6,6 +6,7 @@ use ckbadger_store::{CkbadgerStore, MemoryProfile};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -86,6 +87,20 @@ pub struct RuntimeDiagData {
 }
 
 #[derive(Debug, Clone)]
+pub struct SupervisorServiceData {
+    pub name: String,
+    pub pid: u32,
+    pub status: String,
+    pub uptime_secs: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServiceLogTailData {
+    pub service: String,
+    pub last_line: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ChainInfoData {
     pub latest_block: i64,
     pub epoch_number: i64,
@@ -128,6 +143,7 @@ fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
 }
 
 const LEGACY_BULK_SYNC_THRESHOLD_BLOCKS: i64 = 1000;
+const SYNC_PROGRESS_STALE_SECS: i64 = 60;
 
 fn derive_sync_status_fields(
     tip_block: i64,
@@ -178,9 +194,15 @@ fn response_indicates_derived_syncing(status_code: u16, body: &str) -> bool {
         .is_some_and(|error| error == "derived_syncing")
 }
 
+fn sync_progress_is_stale(progress: &SyncProgressData, now_ts: i64) -> bool {
+    now_ts.saturating_sub(progress.updated_at) > SYNC_PROGRESS_STALE_SECS
+}
+
 pub struct TuiDb {
     store: Option<Arc<CkbadgerStore>>,
     api_url: String,
+    supervisor_socket_path: Option<PathBuf>,
+    service_log_dir: Option<PathBuf>,
     http: reqwest::Client,
     memory_profile: MemoryProfile,
     domain_data_path: PathBuf,
@@ -201,6 +223,33 @@ impl TuiDb {
     }
 
     pub async fn new(api_url: &str, domain_data_path: &str, append_only_data_path: &str) -> Self {
+        Self::new_with_monitoring(api_url, domain_data_path, append_only_data_path, None, None)
+            .await
+    }
+
+    pub async fn new_with_supervisor_socket(
+        api_url: &str,
+        domain_data_path: &str,
+        append_only_data_path: &str,
+        supervisor_socket_path: Option<&str>,
+    ) -> Self {
+        Self::new_with_monitoring(
+            api_url,
+            domain_data_path,
+            append_only_data_path,
+            supervisor_socket_path,
+            None,
+        )
+        .await
+    }
+
+    pub async fn new_with_monitoring(
+        api_url: &str,
+        domain_data_path: &str,
+        append_only_data_path: &str,
+        supervisor_socket_path: Option<&str>,
+        service_log_dir: Option<&str>,
+    ) -> Self {
         // Try to open the domain store in secondary (read-only) mode
         let secondary_path = format!("{}-tui-secondary", domain_data_path);
         let store = match CkbadgerStore::open_domain_secondary(domain_data_path, &secondary_path) {
@@ -225,6 +274,8 @@ impl TuiDb {
         Self {
             store,
             api_url: api_url.to_string(),
+            supervisor_socket_path: supervisor_socket_path.map(PathBuf::from),
+            service_log_dir: service_log_dir.map(PathBuf::from),
             http,
             memory_profile: MemoryProfile::for_secondary(),
             domain_data_path: PathBuf::from(domain_data_path),
@@ -242,23 +293,8 @@ impl TuiDb {
     }
 
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
-        // Refresh secondary to get latest data
         self.refresh_store();
-
-        let progress_data: Option<SyncProgressData> = self.get_sync_progress_from_store();
-        let status_data: Option<SyncStatusData> = self.get_sync_status_from_store();
-
-        if let Some(ref progress) = progress_data {
-            return Ok(self.build_from_progress(progress, &status_data));
-        }
-
-        if let Some(ref status) = status_data {
-            return self.build_from_status(status);
-        }
-
-        Err(anyhow::anyhow!(
-            "sync status unavailable: store not accessible or empty"
-        ))
+        self.get_sync_status_without_refresh()
     }
 
     fn get_sync_progress_from_store(&self) -> Option<SyncProgressData> {
@@ -422,7 +458,50 @@ impl TuiDb {
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
         self.refresh_store();
+        self.get_memory_stats_without_refresh()
+    }
 
+    pub async fn get_runtime_diag(&self) -> Option<RuntimeDiagData> {
+        self.refresh_store();
+        self.get_runtime_diag_without_refresh()
+    }
+
+    pub async fn get_local_snapshot(
+        &self,
+    ) -> (
+        Result<SyncStatusRow>,
+        Option<MemoryStatsData>,
+        Option<RuntimeDiagData>,
+    ) {
+        self.refresh_store();
+        (
+            self.get_sync_status_without_refresh(),
+            self.get_memory_stats_without_refresh(),
+            self.get_runtime_diag_without_refresh(),
+        )
+    }
+
+    fn get_sync_status_without_refresh(&self) -> Result<SyncStatusRow> {
+        let now_ts = chrono::Utc::now().timestamp();
+        let progress_data: Option<SyncProgressData> = self
+            .get_sync_progress_from_store()
+            .filter(|progress| !sync_progress_is_stale(progress, now_ts));
+        let status_data: Option<SyncStatusData> = self.get_sync_status_from_store();
+
+        if let Some(ref progress) = progress_data {
+            return Ok(self.build_from_progress(progress, &status_data));
+        }
+
+        if let Some(ref status) = status_data {
+            return self.build_from_status(status);
+        }
+
+        Err(anyhow::anyhow!(
+            "sync status unavailable: store not accessible or empty"
+        ))
+    }
+
+    fn get_memory_stats_without_refresh(&self) -> Option<MemoryStatsData> {
         let store = self.store.as_ref()?;
         let bytes = store.get_memory_stats().ok()??;
         let mut mem: MemoryStatsData = serde_json::from_slice(&bytes).ok()?;
@@ -436,6 +515,30 @@ impl TuiDb {
             }
         }
         Some(mem)
+    }
+
+    fn get_runtime_diag_without_refresh(&self) -> Option<RuntimeDiagData> {
+        let store = self.store.as_ref()?;
+        let status = store.get_runtime_status().ok()?;
+        let heartbeat_age_secs = if status.last_heartbeat_at > 0 {
+            Some((chrono::Utc::now().timestamp() - status.last_heartbeat_at).max(0))
+        } else {
+            None
+        };
+
+        Some(RuntimeDiagData {
+            active_run_id: status.active_run_id,
+            last_run_id: status.last_run_id,
+            heartbeat_block: status.last_heartbeat_block,
+            heartbeat_target_block: status.last_heartbeat_target_block,
+            heartbeat_stage: status.last_heartbeat_stage,
+            heartbeat_age_secs,
+            heartbeat_oom_events: status.last_heartbeat_oom_events,
+            heartbeat_oom_kill_events: status.last_heartbeat_oom_kill_events,
+            last_incident_summary: status.last_incident_summary,
+            last_shutdown_reason: status.last_shutdown_reason,
+            last_exit_code: status.last_exit_code,
+        })
     }
 
     pub async fn get_chain_info_and_api_service_info(
@@ -484,17 +587,93 @@ impl TuiDb {
             }
         }
     }
+
+    pub async fn get_supervisor_services(&self) -> Option<Vec<SupervisorServiceData>> {
+        let socket_path = self.supervisor_socket_path.as_ref()?;
+        if !socket_path.exists() {
+            return None;
+        }
+
+        let request = ckbadger_ipc::IpcRequest::GetServiceStatus;
+        let response = tokio::time::timeout(
+            Duration::from_millis(400),
+            ckbadger_ipc::ipc_request(socket_path, &request),
+        )
+        .await
+        .ok()?
+        .ok()?;
+
+        let ckbadger_ipc::IpcResponse::ServiceStatus { services } = response else {
+            return None;
+        };
+
+        Some(
+            services
+                .into_iter()
+                .map(|service| SupervisorServiceData {
+                    name: service.name,
+                    pid: service.pid,
+                    status: service.status.to_string(),
+                    uptime_secs: service.uptime_secs,
+                })
+                .collect(),
+        )
+    }
+
+    pub async fn get_service_log_tails(&self) -> Option<Vec<ServiceLogTailData>> {
+        let log_dir = self.service_log_dir.as_ref()?;
+        if !log_dir.exists() {
+            return None;
+        }
+
+        let entries = std::fs::read_dir(log_dir).ok()?;
+        let mut tails = Vec::new();
+        for entry in entries {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("log") {
+                continue;
+            }
+            let service = path.file_stem()?.to_str()?.to_string();
+            if let Some(last_line) = read_last_non_empty_line(&path) {
+                tails.push(ServiceLogTailData { service, last_line });
+            }
+        }
+
+        tails.sort_by(|a, b| a.service.cmp(&b.service));
+        Some(tails)
+    }
+}
+
+fn read_last_non_empty_line(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    content.lines().rev().find_map(|line| {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         derive_sync_status_fields, parse_epoch_string, response_indicates_derived_syncing,
-        sync_modes_from_progress, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
+        sync_modes_from_progress, sync_progress_is_stale, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
+        SYNC_PROGRESS_STALE_SECS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
-    use ckbadger_store::CkbadgerStore;
+    use ckbadger_ipc::{
+        IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus,
+    };
+    use ckbadger_store::{CkbadgerStore, RuntimeStatus};
+    use std::future::Future;
     use std::path::Path;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     fn sample_progress() -> SyncProgressData {
         SyncProgressData {
@@ -613,6 +792,15 @@ mod tests {
         assert_eq!(LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, 1000);
     }
 
+    #[test]
+    fn sync_progress_stale_rule_is_stable() {
+        assert_eq!(SYNC_PROGRESS_STALE_SECS, 60);
+        let progress = sample_progress();
+        let now_ts = progress.updated_at + SYNC_PROGRESS_STALE_SECS;
+        assert!(!sync_progress_is_stale(&progress, now_ts));
+        assert!(sync_progress_is_stale(&progress, now_ts + 1));
+    }
+
     #[tokio::test]
     async fn tui_db_exposes_paths_and_profile_without_store() {
         let db = TuiDb::new(
@@ -649,7 +837,8 @@ mod tests {
 
         let store = CkbadgerStore::open_domain(&domain_path).unwrap();
 
-        let progress = sample_progress();
+        let mut progress = sample_progress();
+        progress.updated_at = chrono::Utc::now().timestamp();
         let progress_bytes = serde_json::to_vec(&progress).unwrap();
         store.put_sync_progress(&progress_bytes).unwrap();
 
@@ -687,5 +876,255 @@ mod tests {
 
         std::fs::remove_dir_all(domain_path).unwrap();
         std::fs::remove_dir_all(append_path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tui_sync_status_ignores_stale_progress_data() {
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let domain_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-domain"));
+        let append_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-append"));
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+
+        let mut stale_progress = sample_progress();
+        stale_progress.current_block = 100;
+        stale_progress.target_block = 200;
+        stale_progress.updated_at = chrono::Utc::now().timestamp() - (SYNC_PROGRESS_STALE_SECS + 5);
+        store
+            .put_sync_progress(&serde_json::to_vec(&stale_progress).unwrap())
+            .unwrap();
+
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: 150,
+                tip_block_hash: vec![0x22; 32],
+                derived_tip_block_number: 150,
+                total_transactions: 9000,
+                total_cells_created: 20000,
+                total_cells_consumed: 10000,
+                last_synced_at: chrono::Utc::now().timestamp(),
+                derived_last_synced_at: chrono::Utc::now().timestamp(),
+                derived_sync_in_progress: false,
+                sync_started_at: Some(1_700_000_000),
+                sync_started_block: 1,
+                sync_ema_rate: Some(42.0),
+                bulk_sync_completed_at: None,
+                bulk_sync_completed_block: None,
+                deep_fork_detected: false,
+                deep_fork_info: None,
+            })
+            .unwrap();
+
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+
+        let sync = db.get_sync_status().await.unwrap();
+        assert_eq!(sync.tip_block, 150);
+        assert!(sync.rate_realtime.is_none());
+        assert_eq!(sync.rate_ema, Some(42.0));
+
+        std::fs::remove_dir_all(domain_path).unwrap();
+        std::fs::remove_dir_all(append_path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tui_runtime_diag_reads_runtime_status_from_store() {
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let domain_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-domain"));
+        let append_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-append"));
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        store
+            .set_runtime_status(&RuntimeStatus {
+                active_run_id: Some("run-active".to_string()),
+                last_run_id: Some("run-last".to_string()),
+                run_started_at: 1_700_000_000,
+                last_heartbeat_at: chrono::Utc::now().timestamp() - 7,
+                last_heartbeat_block: 123,
+                last_heartbeat_target_block: 130,
+                last_heartbeat_stage: Some("bulk_sync".to_string()),
+                last_heartbeat_oom_events: Some(2),
+                last_heartbeat_oom_kill_events: Some(1),
+                last_shutdown_reason: Some("graceful_shutdown".to_string()),
+                last_exit_code: Some(0),
+                last_incident_id: Some("run-active-inc-000001".to_string()),
+                last_incident_at: chrono::Utc::now().timestamp() - 12,
+                last_incident_summary: Some("pipeline backpressure".to_string()),
+                last_shutdown_at: chrono::Utc::now().timestamp() - 20,
+            })
+            .unwrap();
+
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+
+        let runtime = db.get_runtime_diag().await.expect("runtime diagnostics");
+        assert_eq!(runtime.active_run_id.as_deref(), Some("run-active"));
+        assert_eq!(runtime.last_run_id.as_deref(), Some("run-last"));
+        assert_eq!(runtime.heartbeat_block, 123);
+        assert_eq!(runtime.heartbeat_target_block, 130);
+        assert_eq!(runtime.heartbeat_stage.as_deref(), Some("bulk_sync"));
+        assert!(runtime.heartbeat_age_secs.is_some());
+        assert_eq!(runtime.heartbeat_oom_events, Some(2));
+        assert_eq!(runtime.heartbeat_oom_kill_events, Some(1));
+        assert_eq!(
+            runtime.last_incident_summary.as_deref(),
+            Some("pipeline backpressure")
+        );
+        assert_eq!(
+            runtime.last_shutdown_reason.as_deref(),
+            Some("graceful_shutdown")
+        );
+        assert_eq!(runtime.last_exit_code, Some(0));
+
+        std::fs::remove_dir_all(domain_path).unwrap();
+        std::fs::remove_dir_all(append_path).unwrap();
+    }
+
+    struct StaticStatusHandler;
+
+    impl IpcHandler for StaticStatusHandler {
+        fn handle(
+            &self,
+            request: IpcRequest,
+        ) -> Pin<Box<dyn Future<Output = IpcResponse> + Send + '_>> {
+            Box::pin(async move {
+                match request {
+                    IpcRequest::GetServiceStatus => IpcResponse::ServiceStatus {
+                        services: vec![
+                            ServiceInfo {
+                                name: "indexer".to_string(),
+                                pid: 1234,
+                                status: ServiceStatus::Running,
+                                uptime_secs: 42,
+                            },
+                            ServiceInfo {
+                                name: "api".to_string(),
+                                pid: 5678,
+                                status: ServiceStatus::Restarting,
+                                uptime_secs: 7,
+                            },
+                        ],
+                    },
+                    IpcRequest::Ping => IpcResponse::Pong,
+                    IpcRequest::Shutdown { .. } => IpcResponse::Ok,
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn tui_supervisor_services_reads_ipc_status() {
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(format!("ckbadger-tui-ipc-{test_id}"));
+        let domain_path = root.join("data-domain");
+        let append_path = root.join("data-append");
+        let socket_path = root.join("indexer.sock");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let handler: Arc<dyn IpcHandler + Send + Sync> = Arc::new(StaticStatusHandler);
+        let server = IpcServer::new(socket_path.clone(), handler);
+        let server_handle = tokio::spawn(async move {
+            server.listen().await.unwrap();
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        let db = TuiDb::new_with_supervisor_socket(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+            Some(socket_path.to_str().unwrap()),
+        )
+        .await;
+
+        let services = db
+            .get_supervisor_services()
+            .await
+            .expect("supervisor services");
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].name, "indexer");
+        assert_eq!(services[0].status, "running");
+        assert_eq!(services[1].name, "api");
+        assert_eq!(services[1].status, "restarting");
+
+        server_handle.abort();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tui_service_log_tails_reads_last_non_empty_lines() {
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let root = std::env::temp_dir().join(format!("ckbadger-tui-logs-{test_id}"));
+        let domain_path = root.join("data-domain");
+        let append_path = root.join("data-append");
+        let log_dir = root.join("run-logs");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        std::fs::write(
+            log_dir.join("indexer.log"),
+            "2026-01-01 boot\n\n2026-01-01 pipeline mismatch\n",
+        )
+        .unwrap();
+        std::fs::write(log_dir.join("api.log"), "first\nsecond\n").unwrap();
+
+        let db = TuiDb::new_with_monitoring(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+            None,
+            Some(log_dir.to_str().unwrap()),
+        )
+        .await;
+
+        let tails = db.get_service_log_tails().await.expect("service log tails");
+        assert_eq!(tails.len(), 2);
+        assert_eq!(tails[0].service, "api");
+        assert_eq!(tails[0].last_line, "second");
+        assert_eq!(tails[1].service, "indexer");
+        assert_eq!(tails[1].last_line, "2026-01-01 pipeline mismatch");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

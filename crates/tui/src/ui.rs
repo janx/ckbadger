@@ -12,7 +12,10 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, ChartStats};
-use crate::db::{ApiServiceInfo, ChainInfoData, RuntimeDiagData, SyncStatusRow, TuiDb};
+use crate::db::{
+    ApiServiceInfo, ChainInfoData, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData,
+    SyncStatusRow, TuiDb,
+};
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
@@ -104,6 +107,8 @@ pub struct App {
     chain_info: Option<ChainInfoData>,
     api_service: ApiServiceInfo,
     runtime_diag: Option<RuntimeDiagData>,
+    supervisor_services: Option<Vec<SupervisorServiceData>>,
+    service_log_tails: Option<Vec<ServiceLogTailData>>,
     last_refresh: Instant,
     last_sample: Instant,
     status_message: Option<(String, Instant)>,
@@ -163,6 +168,8 @@ impl App {
             chain_info: None,
             api_service: ApiServiceInfo::default(),
             runtime_diag: None,
+            supervisor_services: None,
+            service_log_tails: None,
             last_refresh: Instant::now(),
             last_sample: Instant::now(),
             status_message: None,
@@ -298,10 +305,16 @@ impl App {
     }
 
     pub async fn refresh(&mut self) {
-        let (sync_status_result, memory_stats, (chain_info, api_service)) = tokio::join!(
-            self.db.get_sync_status(),
-            self.db.get_memory_stats(),
+        let (
+            (sync_status_result, memory_stats, runtime_diag),
+            (chain_info, api_service),
+            services,
+            log_tails,
+        ) = tokio::join!(
+            self.db.get_local_snapshot(),
             self.db.get_chain_info_and_api_service_info(),
+            self.db.get_supervisor_services(),
+            self.db.get_service_log_tails(),
         );
 
         match sync_status_result {
@@ -315,7 +328,9 @@ impl App {
         self.memory_stats = memory_stats;
         self.chain_info = chain_info;
         self.api_service = api_service;
-        self.runtime_diag = None;
+        self.runtime_diag = runtime_diag;
+        self.supervisor_services = services;
+        self.service_log_tails = log_tails;
         self.last_refresh = Instant::now();
 
         self.detect_events();
@@ -2664,9 +2679,32 @@ fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let (state, state_color) = runtime_health_state(app.runtime_diag.as_ref());
+    let services = app.supervisor_services.as_deref();
+    let log_tails = app.service_log_tails.as_deref();
+    let (state, state_color) = runtime_health_state(app.runtime_diag.as_ref(), services);
     let Some(diag) = app.runtime_diag.as_ref() else {
-        f.render_widget(Paragraph::new("No runtime diagnostics"), inner);
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("State ", Style::default().fg(SLATE_500)),
+                Span::styled(
+                    format!("[{}]", state),
+                    Style::default()
+                        .fg(state_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(Span::styled(
+                "No runtime diagnostics",
+                Style::default().fg(SLATE_500),
+            )),
+        ];
+        if let Some(service_line) = supervisor_services_line(services) {
+            lines.push(service_line);
+        }
+        if let Some(tail_line) = service_log_tails_line(log_tails, inner.width as usize) {
+            lines.push(tail_line);
+        }
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         return;
     };
 
@@ -2698,7 +2736,7 @@ fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
         .map(|s| trim_for_panel(s, inner.width as usize))
         .unwrap_or_else(|| "-".to_string());
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("State ", Style::default().fg(SLATE_500)),
             Span::styled(
@@ -2760,6 +2798,12 @@ fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]),
     ];
+    if let Some(service_line) = supervisor_services_line(services) {
+        lines.push(service_line);
+    }
+    if let Some(tail_line) = service_log_tails_line(log_tails, inner.width as usize) {
+        lines.push(tail_line);
+    }
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
@@ -2780,8 +2824,14 @@ fn api_health_state(info: &ApiServiceInfo) -> (&'static str, Color) {
     }
 }
 
-fn runtime_health_state(info: Option<&RuntimeDiagData>) -> (&'static str, Color) {
+fn runtime_health_state(
+    info: Option<&RuntimeDiagData>,
+    services: Option<&[SupervisorServiceData]>,
+) -> (&'static str, Color) {
     let Some(info) = info else {
+        if services.is_some() {
+            return ("SUP", CYAN);
+        }
         return ("N/A", SLATE_500);
     };
     if info
@@ -2802,6 +2852,57 @@ fn runtime_health_state(info: Option<&RuntimeDiagData>) -> (&'static str, Color)
     } else {
         ("OK", TERMINAL_GREEN)
     }
+}
+
+fn supervisor_services_line(services: Option<&[SupervisorServiceData]>) -> Option<Line<'static>> {
+    let services = services?;
+    if services.is_empty() {
+        return None;
+    }
+
+    let mut statuses = Vec::new();
+    for service in services {
+        let short_name = match service.name.as_str() {
+            "frontend-server" => "frontend",
+            other => other,
+        };
+        statuses.push(format!(
+            "{}:{}#{}({}s)",
+            short_name, service.status, service.pid, service.uptime_secs
+        ));
+    }
+
+    Some(Line::from(vec![
+        Span::styled("Svc ", Style::default().fg(SLATE_500)),
+        Span::styled(statuses.join("  "), Style::default().fg(CYAN)),
+    ]))
+}
+
+fn service_log_tails_line(
+    tails: Option<&[ServiceLogTailData]>,
+    panel_width: usize,
+) -> Option<Line<'static>> {
+    let tails = tails?;
+    if tails.is_empty() {
+        return None;
+    }
+
+    let max_items = 2usize;
+    let per_item_limit = panel_width.saturating_div(max_items).max(24);
+    let mut parts = Vec::new();
+    for tail in tails.iter().take(max_items) {
+        let item = format!("{}: {}", tail.service, tail.last_line);
+        parts.push(trim_for_panel(&item, per_item_limit));
+    }
+    if tails.len() > max_items {
+        parts.push(format!("+{}", tails.len() - max_items));
+    }
+
+    let joined = trim_for_panel(&parts.join(" | "), panel_width.saturating_sub(8));
+    Some(Line::from(vec![
+        Span::styled("Tail ", Style::default().fg(SLATE_500)),
+        Span::styled(joined, Style::default().fg(AMBER)),
+    ]))
 }
 
 fn format_latency_ms(latency_ms: Option<f64>) -> String {
@@ -3809,14 +3910,17 @@ mod tests {
         format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
         heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
         overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, runtime_health_state, runtime_live_delta, sparkline,
-        stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,
-        storage_runtime_columns, sync_bottleneck, sync_chart_specs, sync_timing_lines,
-        system_kv_line, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
-        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
-        SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
+        pipeline_reset_line, rate_jitter, runtime_health_state, runtime_live_delta,
+        service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs, stale_status,
+        startup_phase_label, storage_runtime_columns, supervisor_services_line, sync_bottleneck,
+        sync_chart_specs, sync_timing_lines, system_kv_line, trend_delta, trim_for_panel,
+        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
+        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS,
+        TERMINAL_DIM,
     };
-    use crate::db::{ApiServiceInfo, RuntimeDiagData, TuiDb};
+    use crate::db::{
+        ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
+    };
     use ckbadger_common::MemoryStatsData;
     use ratatui::layout::Rect;
     use ratatui::text::Line;
@@ -4279,13 +4383,13 @@ mod tests {
     #[test]
     fn test_runtime_health_state() {
         assert_eq!(
-            runtime_health_state(None),
+            runtime_health_state(None, None),
             ("N/A", Color::Rgb(160, 174, 192))
         );
 
         let idle = RuntimeDiagData::default();
         assert_eq!(
-            runtime_health_state(Some(&idle)),
+            runtime_health_state(Some(&idle), None),
             ("IDLE", Color::Rgb(160, 174, 192))
         );
 
@@ -4295,7 +4399,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            runtime_health_state(Some(&ok)),
+            runtime_health_state(Some(&ok), None),
             ("OK", Color::Rgb(0, 255, 65))
         );
 
@@ -4305,7 +4409,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            runtime_health_state(Some(&stale)),
+            runtime_health_state(Some(&stale), None),
             ("STALE", Color::Rgb(255, 176, 0))
         );
 
@@ -4316,9 +4420,67 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            runtime_health_state(Some(&warn)),
+            runtime_health_state(Some(&warn), None),
             ("WARN", Color::Rgb(255, 176, 0))
         );
+    }
+
+    #[test]
+    fn test_runtime_health_state_with_supervisor_only() {
+        let services = vec![SupervisorServiceData {
+            name: "indexer".to_string(),
+            pid: 123,
+            status: "running".to_string(),
+            uptime_secs: 9,
+        }];
+        assert_eq!(
+            runtime_health_state(None, Some(&services)),
+            ("SUP", Color::Rgb(56, 189, 248))
+        );
+    }
+
+    #[test]
+    fn test_supervisor_services_line_format() {
+        let services = vec![
+            SupervisorServiceData {
+                name: "indexer".to_string(),
+                pid: 123,
+                status: "running".to_string(),
+                uptime_secs: 9,
+            },
+            SupervisorServiceData {
+                name: "frontend-server".to_string(),
+                pid: 456,
+                status: "restarting".to_string(),
+                uptime_secs: 2,
+            },
+        ];
+
+        let line = supervisor_services_line(Some(&services)).expect("service line");
+        let text = line_text(&line);
+        assert!(text.contains("Svc"));
+        assert!(text.contains("indexer:running#123(9s)"));
+        assert!(text.contains("frontend:restarting#456(2s)"));
+    }
+
+    #[test]
+    fn test_service_log_tails_line_format() {
+        let tails = vec![
+            ServiceLogTailData {
+                service: "api".to_string(),
+                last_line: "bind failed: addr in use".to_string(),
+            },
+            ServiceLogTailData {
+                service: "indexer".to_string(),
+                last_line: "pipeline batch mismatch at block 123".to_string(),
+            },
+        ];
+
+        let line = service_log_tails_line(Some(&tails), 120).expect("tail line");
+        let text = line_text(&line);
+        assert!(text.contains("Tail"));
+        assert!(text.contains("api: bind failed: addr in use"));
+        assert!(text.contains("indexer: pipeline batch mismatch at block 123"));
     }
 
     #[test]

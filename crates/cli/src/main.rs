@@ -262,6 +262,8 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
         append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         refresh_ms: 1000,
+        supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),
+        service_log_dir: Some(work.log_dir.to_string_lossy().to_string()),
     };
 
     run_tui(tui_config).await
