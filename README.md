@@ -502,6 +502,45 @@ ckbadger run
 
 No Docker, no Redis, no Node.js — just the single binary and static assets.
 
+## Troubleshooting
+
+### Indexer Exits With `Too many open files`
+
+Symptoms:
+
+- Indexer logs show `IO error ... Too many open files`
+- Supervisor repeatedly restarts indexer (`service exited, restarting`)
+- Sync height stops advancing
+
+Root cause:
+
+- Process file descriptor soft limit (`ulimit -n`) is too low (commonly `1024`)
+- RocksDB opens many SST files during compaction/rollback cleanup, which can exceed that limit
+
+Fix (current shell/session):
+
+```bash
+# Stop current supervisor (if running from this work dir)
+kill "$(cat run/supervisor.pid)" 2>/dev/null || true
+
+# Raise fd limit for this shell, then restart
+ulimit -n 65535
+ckbadger run
+```
+
+Verify:
+
+```bash
+pid=$(cat run/supervisor.pid)
+awk '/Max open files/ {print}' /proc/$pid/limits
+rg -n "Too many open files" data/domain/LOG
+```
+
+Persistent fix:
+
+- If managed by `systemd`, set `LimitNOFILE=65535` in the service unit.
+- If started manually, run `ulimit -n 65535` in the same shell before `ckbadger run`.
+
 ## Development
 
 ### Project Structure
