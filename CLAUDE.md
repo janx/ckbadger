@@ -100,9 +100,18 @@ For any non-trivial task, use this structure in the final summary or PR descript
 ## Commands
 
 ```bash
-# Rust
+# CLI usage
+cargo build -p ckbadger                  # Build CLI binary
+ckbadger init                            # Create ckbadger.toml config
+ckbadger run                             # Start supervisor (indexer + api + frontend)
+ckbadger tui                             # Run monitoring TUI
+ckbadger status                          # Show service and sync status
+ckbadger verify --depth fast             # Data integrity verification
+ckbadger label-import                    # Import token/script labels
+ckbadger purge                           # Delete local RocksDB data
+
+# Rust development
 cargo check                              # Type check all crates
-cargo build -p ckbadger-api              # Build specific crate
 cargo clippy                             # Lint
 cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
@@ -110,21 +119,13 @@ cargo test test_name                     # Single test (partial match)
 cargo test -p ckbadger-indexer           # Tests in one crate
 cargo test -- --nocapture                # With stdout
 
-# Indexer with Redis cache invalidation
-cargo build -p ckbadger-indexer --features redis-cache
-REDIS_URL=redis://localhost:6379 cargo run -p ckbadger-indexer --features redis-cache
-
-# Frontend
+# Frontend development
 pnpm dev                                 # Dev server (:3000)
-pnpm build                               # Production build
+pnpm build                               # Static export to out/
 pnpm lint                                # ESLint
 cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
 cd frontend && pnpm test                 # Vitest
 cd frontend && npx vitest run            # Non-interactive
-
-# Verify (requires running API at localhost:3001)
-cargo run -p ckbadger-indexer -- verify --depth fast
-cargo run -p ckbadger-indexer -- verify --depth sampling
 
 # Pre-commit
 cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
@@ -133,47 +134,43 @@ cargo check && cargo clippy && cd frontend && pnpm type-check && pnpm lint
 pnpm format                              # Prettier (all files)
 
 # Make shortcuts
-make up                                  # Start local stack
-make rebuild SERVICES=api                # Rebuild + restart service(s)
-make tui                                 # Run monitoring TUI
-make reset CONFIRM=1                     # Delete local RocksDB + redis data
+make build                               # cargo build -p ckbadger
+make check                               # cargo check && cargo clippy
+make test                                # All tests (Rust + frontend)
+make lint                                # Frontend lint + type-check
 make verify                              # Run verify --depth fast
 ```
-
-`up` default mode from `.env`: `COMPOSE_PROFILES=internal` => internal CKB node, unset => external CKB.
 
 ## Performance Notes
 
 - Performance-affecting PRs should include before/after numbers.
 - Benchmark snapshots are generated on demand; no committed `docs/PERFORMANCE_RESULTS.md` baseline is required.
 
-## AI-Friendly Page Output
-
-Frontend pages support `md` (markdown) and `raw` (structured JSON) formats. Format negotiation: `query.format` > URL suffix (`.md`/`.raw`) > `Accept` header. When adding/changing routes or formats, see `docs/AI_FORMATS.md` for the full checklist (MANDATORY).
-
 ## Project Structure
 
 ```
 crates/
-  api/            # Axum REST/WebSocket server (port 3001)
-  indexer/        # Blockchain sync daemon (three-stage pipeline)
+  cli/            # Single CLI binary (ckbadger) with subcommands + supervisor
+  config/         # ckbadger.toml config parsing (ckbadger-config)
+  ipc/            # Unix socket IPC protocol (ckbadger-ipc)
+  api/            # Axum REST/WebSocket server library (port 3001)
+  indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/verify/   #   Data integrity verification suite (54 checks)
   ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 40 canonical CFs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
-  tui/            # Terminal monitoring UI (sync/memory/throughput)
-frontend/         # Next.js 15 App Router + React 19
-docs/AI_FORMATS.md           # AI-friendly page output details
+  tui/            # Terminal monitoring UI library (sync/memory/throughput)
+frontend/         # Next.js 15 static export (SPA) + React 19
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
-docs/INDEXER_PIPELINE.md     # Pipeline architecture + Redis sync data
+docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
 docs/STORE_SCHEMA.md         # Column families reference (40 CFs)
 docs/VERIFY.md               # Data integrity verification details
 ```
 
 ## Indexer Pipeline Configuration
 
-Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) -> **Writer** (DB I/O). See `docs/INDEXER_PIPELINE.md` for architecture details, Redis sync data structs, and progress tracking.
+Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) -> **Writer** (DB I/O). See `docs/INDEXER_PIPELINE.md` for architecture details and progress tracking.
 
 | Parameter             | Default | Description                             |
 | --------------------- | ------- | --------------------------------------- |
@@ -183,11 +180,11 @@ Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) ->
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests                 |
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat as bulk sync |
 
-Redis keys: `sync:status` (60s TTL), `sync:progress` (30s), `memory:stats` (30s). Fallback: RocksDB `get_sync_tip()`/`get_sync_status()`. Requires `redis-cache` feature + `REDIS_URL`.
+Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync_status()`/`get_sync_progress()`/`get_memory_stats()`).
 
 ## Label Import
 
-`label_import` auto-runs on indexer start if `$TOKEN_LABELS_PATH/information/` exists (default: `docs/token-labels`). Manual: `cargo run -p ckbadger-indexer -- label-import`. Flags: `--token-labels-path`, `--network`, `--import-udt`, `--import-scripts`.
+`label_import` auto-runs on indexer start if `$TOKEN_LABELS_PATH/information/` exists (default: `docs/token-labels`). Manual: `ckbadger label-import`. Flags: `--token-labels-path`, `--network`, `--import-udt`, `--import-scripts`.
 
 ## ckbadger-store (Embedded Storage Engine)
 
@@ -200,9 +197,9 @@ Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 54 checks across 3 tiers: Fast (6, seconds), Sampling (21, minutes), Explorer (27, minutes). See `docs/VERIFY.md` for full details.
 
 ```bash
-cargo run -p ckbadger-indexer -- verify --depth fast      # Quick sanity
-cargo run -p ckbadger-indexer -- verify --depth sampling   # Full validation
-cargo run -p ckbadger-indexer -- verify --list-checks      # List all checks
+ckbadger verify --depth fast              # Quick sanity
+ckbadger verify --depth sampling          # Full validation
+ckbadger verify --list-checks             # List all checks
 ```
 
 ## Rust Style
@@ -320,8 +317,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | react-force-graph-2d      | No SSR - `next/dynamic` with `ssr: false`                         |
 | API casing                | Backend `camelCase` via serde, frontend types match               |
 | Daily charts              | Exclude incomplete current day                                    |
-| Next.js standalone        | Monorepo path: `.next/standalone/frontend/`                       |
-| Docker + host CKB         | Use `network_mode: host`                                          |
+| Next.js static export     | Dynamic routes need `revalidate = 0` + `generateStaticParams`     |
 | Vitest globals            | Add `vitest/globals` to tsconfig types                            |
 | MSW handlers              | Must start server in setup.ts `beforeAll`                         |
 | RocksDB secondary mode    | API uses `open_secondary()` — read-only, no write locks           |
@@ -331,6 +327,9 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 
 | What             | Where                                                                                                      |
 | ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| CLI binary       | `crates/cli/src/main.rs` (subcommands, supervisor)                                                         |
+| Config           | `crates/config/src/lib.rs` (ckbadger.toml parsing)                                                         |
+| IPC protocol     | `crates/ipc/src/` (Unix socket server/client)                                                              |
 | Storage engine   | `crates/ckbadger-store/src/` (types, store, keys, \*\_ops.rs)                                              |
 | API routes       | `crates/api/src/routes/*.rs` (15 modules)                                                                  |
 | Response types   | `crates/api/src/response.rs`                                                                               |
@@ -342,11 +341,9 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Verify checks    | `crates/indexer/src/verify/*.rs`                                                                           |
 | TUI              | `crates/tui/src/`                                                                                          |
 | Frontend API     | `frontend/lib/api.ts`                                                                                      |
-| AI format routes | `frontend/app/ai-md/`, `frontend/app/ai-raw/`, `frontend/lib/ai/`                                          |
-| Capabilities     | `frontend/app/capabilities/route.ts`, `frontend/lib/ai/capabilities.ts`                                    |
 | LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                |
 | UI components    | `frontend/components/ui/`                                                                                  |
-| Pages            | `frontend/app/`                                                                                            |
+| Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                             |
 | Tests (Rust)     | Inline `#[cfg(test)]`, `crates/api/tests/api_integration.rs`                                               |
 | Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                              |
 | CI               | `.github/workflows/ci.yml`                                                                                 |

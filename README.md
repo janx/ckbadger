@@ -7,7 +7,7 @@
 
 ## Overview
 
-**ckbadger** is a next-generation CKB blockchain explorer designed with four core principles:
+**ckbadger** is a next-generation CKB blockchain explorer designed with three core principles:
 
 - **CKB Native** - Make CKB concepts tangible instead of just-another-explorer. CKB chain data is the only source of truth, all other data are derived from it.
 - **Local First** - Optimized for decentralized deployment on localhosts
@@ -50,11 +50,11 @@ state transitions.
 To keep the `Unrivaled Speed` principle concrete, performance work should report against these targets
 on localhost deployments:
 
-| Metric                              | Target                                                        | Measurement                                                                                                          |
-| ----------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Database rebuild speed              | Maximize sustained throughput without correctness regressions | Record total sync duration and progress EMA (`blocks/sec`) from indexer logs                                         |
-| API latency (common read endpoints) | `p50 <= 10ms`, `p95 <= 50ms`, `p99 <= 100ms` on warm cache    | Benchmark `/api/v1` list/detail endpoints and report p50/p95/p99                                                     |
-| Correctness guardrail               | `0` verification failures after speed optimizations           | Run `cargo run -p ckbadger-indexer -- verify --depth fast` (and `--depth sampling` for aggregate/DAO/supply changes) |
+| Metric                              | Target                                                        | Measurement                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Database rebuild speed              | Maximize sustained throughput without correctness regressions | Record total sync duration and progress EMA (`blocks/sec`) from indexer logs                 |
+| API latency (common read endpoints) | `p50 <= 10ms`, `p95 <= 50ms`, `p99 <= 100ms` on warm cache    | Benchmark `/api/v1` list/detail endpoints and report p50/p95/p99                             |
+| Correctness guardrail               | `0` verification failures after speed optimizations           | Run `ckbadger verify --depth fast` (and `--depth sampling` for aggregate/DAO/supply changes) |
 
 - Performance-affecting PRs should include before/after numbers.
 - Benchmark snapshots are generated on demand; no committed `docs/PERFORMANCE_RESULTS.md` baseline is required.
@@ -85,221 +85,134 @@ on localhost deployments:
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **AI-Friendly Multi-Format Pages** - Use `.md` for summaries, `.raw` for tool-oriented payloads, plus `/capabilities` for machine discovery
 - **System Status Page** - Monitor sync progress, pipeline health, and integrity checks
-- **Data Integrity Verification** - 43 built-in checks for acceptance testing via API
+- **Data Integrity Verification** - 54 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Frontend                                 │
-│         Next.js 15 + TanStack Query + react-force-graph         │
-└─────────────────────────────────────────────────────────────────┘
+                    ckbadger run (supervisor)
+                    ┌──────────────────────────────────────────┐
+                    │  ┌──────────┐ ┌─────┐ ┌───────────────┐ │
+                    │  │ Indexer  │ │ API │ │Frontend Server│ │
+                    │  └────┬─────┘ └──┬──┘ └───────┬───────┘ │
+                    │       │          │             │          │
+                    │       │   Unix Socket IPC      │          │
+                    │       │          │             │          │
+                    │  ┌────┴──────────┴────┐   ┌───┴───────┐ │
+                    │  │      RocksDB       │   │  Static   │ │
+                    │  │  Domain + Append   │   │  Assets   │ │
+                    │  └────────────────────┘   └───────────┘ │
+                    └──────────────────────────────────────────┘
                                 │
                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                         API Layer                                │
-│              Rust (Axum) - REST / WebSocket                      │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                ┌───────────────┼───────────────┐
-                ▼               ▼               ▼
-           ┌───────────┐   ┌───────────┐   ┌──────────┐
-           │  RocksDB  │   │  RocksDB  │   │  Redis   │
-           │  (Domain) │   │(Append-Only)│  │  (Cache) │
-           └───────────┘   └───────────┘   └──────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       Rust Indexer                               │
-│     Block Fetcher → Cell Parser → Script Decoder → DB Writer     │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        CKB Node                                  │
-│               RPC (+ optional direct RocksDB read)               │
-└─────────────────────────────────────────────────────────────────┘
+                    ┌──────────────────────┐
+                    │      CKB Node        │
+                    │    (external RPC)     │
+                    └──────────────────────┘
 ```
 
 ## Tech Stack
 
 | Layer             | Technology                                     | Purpose                         |
 | ----------------- | ---------------------------------------------- | ------------------------------- |
-| **Frontend**      | Next.js 15, TanStack Query, Zustand            | SSR + real-time data            |
+| **CLI**           | Rust (Clap), single `ckbadger` binary          | All subcommands, supervisor     |
+| **Frontend**      | Next.js 15 (static export), TanStack Query     | Client-side SPA                 |
 | **UI**            | Tailwind CSS, Custom Components                | Responsive design               |
 | **Visualization** | react-force-graph-2d, D3.js                    | Cell relationship graphs        |
 | **API**           | Rust (Axum)                                    | High-performance REST/WebSocket |
 | **Indexer**       | Rust (3-stage pipeline)                        | Block parsing, cell tracking    |
 | **Storage**       | RocksDB (domain + append-only, ckbadger-store) | Embedded dual-store data engine |
-| **Cache**         | Redis                                          | API cache + sync progress       |
+| **Cache**         | In-memory LRU                                  | API response cache              |
+| **IPC**           | Unix domain sockets                            | Inter-process communication     |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Docker & Docker Compose
+- A running CKB node with RPC accessible (default: `http://127.0.0.1:8114`)
 
-### Option 1: With Built-in CKB Node (Recommended for quick start)
+### Installation
+
+Download the ckbadger package and add `bin/` to your PATH:
+
+```
+ckbadger-v0.1.0-linux-x86_64/
+├── bin/
+│   └── ckbadger               # Single binary
+└── share/
+    ├── frontend/              # Static web assets
+    └── token-labels/          # Default token label data
+```
+
+### Usage
 
 ```bash
-# Clone the repository
-git clone https://github.com/nervosnetwork/ckbadger.git
-cd ckbadger
+# Initialize work directory
+ckbadger init
 
-# Start all services including CKB node
-docker compose --profile internal up -d
-
-# View logs
-docker compose logs -f
+# Start all services (indexer + API + frontend server)
+ckbadger run
 
 # Access the explorer
-open http://localhost:3000
+open http://localhost:8100
 ```
 
-### Option 2: Use Existing CKB Node on Host
-
-If you already have a CKB node running on your host machine:
+### Subcommands
 
 ```bash
-# Clone the repository
-git clone https://github.com/nervosnetwork/ckbadger.git
-cd ckbadger
-
-# Configure to use host CKB node
-# Edit .env file:
-#   CKB_RPC_URL=http://host.docker.internal:8114  (macOS/Windows)
-#   CKB_RPC_URL=http://172.17.0.1:8114            (Linux)
-
-# Start services without CKB node
-docker compose up -d
-
-# Access the explorer
-open http://localhost:3000
+ckbadger init             # Initialize work directory (ckbadger.toml, data/, run/)
+ckbadger run              # Supervisor: start indexer + api + frontend-server
+ckbadger run --only X     # Start specific services (indexer, api, frontend)
+ckbadger tui              # Terminal monitoring UI
+ckbadger status           # Lightweight sync/service status query
+ckbadger verify           # Data integrity checks
+ckbadger label-import     # Import token/script labels
+ckbadger purge --confirm  # Delete derived data, keep config
 ```
 
-### Minimal Setup
-
-For resource-constrained environments (4GB RAM):
-
-```bash
-docker compose -f docker-compose.minimal.yml up -d
-```
-
-### Local-First Shortcuts
-
-Use repository `Makefile` targets for the most common local workflow:
-
-```bash
-# Start local stack (always redis/indexer/api/frontend; ckb-node only in internal mode)
-make up
-
-# Rebuild + restart one or multiple compose services
-make rebuild SERVICES=api
-make rebuild SERVICES="api frontend"
-
-# Run monitoring TUI
-make tui
-
-# Reset local RocksDB + redis cache data (keeps ckb-data)
-make reset CONFIRM=1
-
-# Run verification against local API
-make verify
-
-# Sampling checks + RPC spot-checks
-make verify VERIFY_DEPTH=sampling VERIFY_RPC_URL=http://localhost:8114
-```
-
-`make up` mode resolution:
-
-- If `.env` contains `COMPOSE_PROFILES=internal`, it starts `redis + ckb-node + indexer + api + frontend`
-- Otherwise it starts `redis + indexer + api + frontend` (external CKB mode)
-- You can override per command:
-  - `make up CKB_NODE_MODE=internal`
-  - `make up CKB_NODE_MODE=external`
-
-`make rebuild SERVICES="<name> [name ...]"`:
-
-- Allowed services: `redis`, `ckb-node`, `indexer`, `api`, `frontend`
-- Uses `--no-deps` for non-`ckb-node` services, so only listed target services are recreated
-- Including `ckb-node` requires internal mode (`COMPOSE_PROFILES=internal` or `CKB_NODE_MODE=internal`)
-
-`make tui`:
-
-- Runs `ckbadger-tui` for sync/memory/throughput monitoring
-- Host-only execution (no Docker fallback)
-- No RocksDB local path pre-check; TUI reads sync/memory data from Redis + API
-- Pass extra args with `TUI_ARGS`, for example:
-  - `make tui TUI_ARGS="--refresh-ms 500 --api-url http://localhost:3001/api/v1"`
-
-`make reset CONFIRM=1` cleanup scope:
-
-- Deletes local RocksDB paths (`CKBADGER_DOMAIN_DATA_PATH`, `CKBADGER_APPEND_ONLY_DATA_PATH`) and both api secondary paths
-- Deletes compose volumes `ckbadger-data` and `redis-data` (if present)
-- Keeps `ckb-data` volume (CKB chain data is not removed)
+All subcommands accept `-C <path>` to specify work directory (default: current directory).
 
 ## Configuration
 
-### Environment Variables
+All configuration lives in a single `ckbadger.toml` file. Priority: **CLI args > ckbadger.toml > defaults**. No .env files. No environment variables.
 
-```bash
-# .env.example
+```toml
+[ckb]
+rpc_url = "http://127.0.0.1:8114"
+network = "mainnet"               # mainnet | testnet
 
-# CKB Node Configuration
-# For Makefile up mode selection:
-#   COMPOSE_PROFILES=internal  -> internal CKB node in Docker
-#   COMPOSE_PROFILES unset     -> external CKB node (host)
-#
-# For built-in node (--profile internal): uses http://ckb-node:8114 automatically
-# For external node: set your host's CKB RPC URL
-CKB_RPC_URL=http://host.docker.internal:8114  # macOS/Windows
-# CKB_RPC_URL=http://172.17.0.1:8114          # Linux
-CKB_NETWORK=mainnet  # mainnet | testnet | devnet
+[api]
+host = "127.0.0.1"
+port = 8101
 
-# ckbadger domain RocksDB data path
-CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store
-# ckbadger append-only RocksDB data path
-CKBADGER_APPEND_ONLY_DATA_PATH=./data/ckbadger-store-append-only
+[frontend]
+port = 8100                       # Static file HTTP server
 
-# Redis (optional)
-REDIS_URL=redis://localhost:6379
+[indexer]
+batch_size = 10000
+parallel_fetch_size = 64
+pipeline_buffer = 8
+bulk_sync_threshold = 1000
 
-# API Server
-API_PORT=3001
-API_RATE_LIMIT=100  # requests per minute
-
-# Frontend
-NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
-NEXT_PUBLIC_WS_URL=ws://localhost:3001/ws
-# Optional server-side API base for Next.js route handlers (.md/.raw)
-# In docker-compose frontend container, set this to http://api:3001/api/v1
-CKBADGER_SERVER_API_URL=http://localhost:3001/api/v1
-
-# Verify subcommand (runs outside Docker, calls the ckbadger API)
-CKBADGER_API_URL=http://localhost:3001/api/v1
-# VERIFY_CKB_RPC_URL=http://localhost:8114
+[log]
+level = "info"
 ```
 
-### Indexer Configuration
+### Work Directory Structure
 
-`ckbadger-indexer` is configured via CLI flags and environment variables.
-
-```bash
-# CLI
-cargo run -p ckbadger-indexer -- \
-  --batch-size 10000 \
-  --parallel-fetch-size 64 \
-  --pipeline-enabled \
-  --pipeline-buffer 8 \
-  --bulk-sync-threshold 1000
-
-# Environment variables
-CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store
-CKBADGER_APPEND_ONLY_DATA_PATH=./data/ckbadger-store-append-only
-CKB_RPC_URL=http://localhost:8114
-REDIS_URL=redis://localhost:6379
-TOKEN_LABELS_PATH=docs/token-labels
+```
+./
+├── ckbadger.toml              # Sole configuration file
+├── token-labels/              # Optional: overrides share/token-labels
+├── labels.toml                # Optional: overrides imported label info
+├── data/
+│   ├── domain/                # Mutable canonical state (RocksDB)
+│   └── append-only/           # Immutable history (RocksDB)
+└── run/                       # Runtime state (gitignored)
+    ├── supervisor.pid
+    ├── indexer.sock            # Indexer IPC socket
+    └── logs/                   # Process logs
 ```
 
 ## API Reference
@@ -431,7 +344,7 @@ GET  /api/v1/graph/proposals/{block_number}               # Proposal relationshi
 ### WebSocket Subscriptions
 
 ```javascript
-const ws = new WebSocket('ws://localhost:3001/ws');
+const ws = new WebSocket('ws://localhost:8101/ws');
 
 // Subscribe to new blocks
 ws.send(
@@ -510,17 +423,17 @@ Examples:
 
 ```bash
 # Markdown
-curl http://localhost:3000/blocks.md
-curl "http://localhost:3000/blocks?format=md&limit=20"
-curl -H "Accept: text/markdown" http://localhost:3000/charts/hash-rate
+curl http://localhost:8100/blocks.md
+curl "http://localhost:8100/blocks?format=md&limit=20"
+curl -H "Accept: text/markdown" http://localhost:8100/charts/hash-rate
 
 # Raw (default profile)
-curl http://localhost:3000/blocks/123.raw
-curl "http://localhost:3000/cell/0x...txhash...-0?format=raw"
-curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:3000/tx/0x...hash...
+curl http://localhost:8100/blocks/123.raw
+curl "http://localhost:8100/cell/0x...txhash...-0?format=raw"
+curl -H "Accept: application/vnd.ckbadger.raw+json" http://localhost:8100/tx/0x...hash...
 
 # Raw debugger profile (tx only)
-curl "http://localhost:3000/tx/0x...hash....raw?profile=debugger" \
+curl "http://localhost:8100/tx/0x...hash....raw?profile=debugger" \
   | jq '.data.txDebugger.mockTransaction'
 ```
 
@@ -538,14 +451,14 @@ AI discovery:
 
 - `frontend/public/llms.txt`
 - `frontend/public/llms-full.txt`
-- `http://localhost:3000/capabilities` (machine-readable format/profile/route matrix)
+- `http://localhost:8100/capabilities` (machine-readable format/profile/route matrix)
 
 Debugger workflow (`.raw?profile=debugger`):
 
 ```bash
 # 1) Fetch debugger payload and extract mock transaction
 TX_HASH=0x...replace_with_real_tx_hash...
-curl "http://localhost:3000/tx/${TX_HASH}.raw?profile=debugger" \
+curl "http://localhost:8100/tx/${TX_HASH}.raw?profile=debugger" \
   | jq '.data.txDebugger.mockTransaction' > /tmp/mock_tx.json
 
 # 2) Run ckb-debugger with extracted tx-file
@@ -559,7 +472,7 @@ ckb-debugger \
 Troubleshooting:
 
 - `invalid_profile` / `profile_not_supported`: check `profile` and route support via `/capabilities`
-- RPC errors (`rpc_http_error`, `rpc_error`): ensure CKB node RPC is reachable (`CKB_RPC_URL`, default `http://127.0.0.1:8114`)
+- RPC errors (`rpc_http_error`, `rpc_error`): ensure CKB node RPC is reachable (`ckb.rpc_url` in ckbadger.toml, default `http://127.0.0.1:8114`)
 - `tx_not_found`: verify transaction hash on the same network as the connected node
 
 Matrix run helper (lock/type + input/output):
@@ -578,27 +491,16 @@ CONTINUE_ON_ERROR=1 scripts/run_tx_debugger_matrix.sh 0x...tx_hash...
 
 ## Deployment
 
-### Docker Compose (Recommended for small deployments)
+Download the ckbadger package for your platform, extract it, and add `bin/` to your PATH. Then:
 
 ```bash
-# Built-in CKB node
-docker compose --profile internal up -d
-
-# External CKB node on host (set CKB_RPC_URL in .env first)
-docker compose up -d
+mkdir my-explorer && cd my-explorer
+ckbadger init
+# Edit ckbadger.toml to point to your CKB node
+ckbadger run
 ```
 
-### Kubernetes (Production scale)
-
-```bash
-# Install local Helm chart
-helm install ckbadger ./deploy/helm/ckbadger \
-  --namespace ckbadger \
-  --create-namespace \
-  -f ./deploy/helm/ckbadger/values.yaml
-```
-
-Helm chart templates and values are under `deploy/helm/ckbadger/`.
+No Docker, no Redis, no Node.js — just the single binary and static assets.
 
 ## Development
 
@@ -607,50 +509,42 @@ Helm chart templates and values are under `deploy/helm/ckbadger/`.
 ```
 ckbadger/
 ├── crates/
+│   ├── cli/                # Single binary, clap subcommands, wires everything
+│   ├── config/             # TOML configuration, WorkDir, labels.toml
+│   ├── ipc/                # Unix socket IPC (JSON-over-socket protocol)
 │   ├── common/             # Shared types and utilities
-│   ├── indexer/            # Blockchain indexer
+│   ├── indexer/            # Blockchain indexer (library)
 │   │   └── src/
 │   │       ├── rpc/        # CKB RPC client
 │   │       ├── parser/     # Block, cell, script, spore, .bit, mNFT, RGB++ parsers
 │   │       ├── db/         # RocksDB write operations
 │   │       ├── sync/       # Synchronization logic
-│   │       └── verify/     # Data integrity verification (43 checks via API)
-│   ├── api/                # REST API server
+│   │       └── verify/     # Data integrity verification (54 checks via API)
+│   ├── api/                # REST API server (library)
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)
 │   │       └── ws/         # WebSocket handlers
-│   ├── ckbadger-store/     # Embedded RocksDB storage engine (37 column families; split stats CFs)
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine (40 column families)
 │   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
-│   └── tui/                # Terminal monitoring UI (sync/memory/throughput)
-├── frontend/               # Next.js application
-│   ├── app/                # App router pages
-│   │   ├── ai-md/          # Markdown route handlers for AI-friendly page output
-│   │   └── ai-raw/         # Raw route handlers for tool-oriented payload output
+│   └── tui/                # Terminal monitoring UI (library)
+├── frontend/               # Next.js static export (SPA)
+│   ├── app/                # App router pages (client components)
 │   ├── components/         # React components
 │   │   ├── ui/             # Reusable UI (Hash, Capacity, etc.)
 │   │   └── cell-graph.tsx  # Force-directed graph visualization
 │   ├── hooks/              # Custom hooks (WebSocket, etc.)
 │   ├── lib/                # API client, utilities
-│   │   └── ai/             # Markdown/raw parsing/rendering/capabilities helpers
-│   ├── middleware.ts       # Format rewrite for .md/.raw, ?format, and Accept negotiation
 │   └── public/             # Static assets + LLM discovery files
 ├── docs/                   # Documentation & references
 │   ├── rfcs/               # [submodule] CKB RFCs - protocol specs
 │   ├── docs.nervos.org/    # [submodule] Official Nervos docs
 │   ├── token-labels/       # [submodule] Known token metadata
-│   ├── ACTIVITY_SYSTEM.md  # Activity system design documentation
-│   ├── ARCHITECTURE_MAP.md # Module ownership and entry points
-│   ├── DAO_CALCULATIONS.md # DAO formula documentation
-│   ├── INDEXER_PIPELINE.md # Pipeline architecture documentation
-│   ├── POSTMORTEM.md       # Historical bugs & lessons learned
-│   ├── REORG_HANDLING.md   # Chain reorganization handling
-│   └── WORLD_VIEW.md       # CKB worldview and design philosophy
-├── docker/                 # Dockerfiles (indexer, api, frontend)
+│   └── plans/              # Design documents and implementation plans
 ├── .github/workflows/      # CI/CD pipelines
-└── docker-compose.yml      # Development setup
+└── Makefile                # Dev shortcuts
 ```
 
-### Running Locally
+### Running Locally (Development)
 
 ```bash
 # Clone with submodules (for CKB reference docs)
@@ -660,79 +554,70 @@ cd ckbadger
 # Or initialize submodules after clone
 git submodule update --init --recursive
 
-# Start dependencies
-docker compose up -d redis ckb-node
+# Build and run via CLI
+cargo run -p ckbadger-cli -- init
+cargo run -p ckbadger-cli -- run
 
-# Run indexer (from project root)
-cargo run -p ckbadger-indexer --release
+# Or run individual services for development
+cargo run -p ckbadger-cli -- run --only indexer
+cargo run -p ckbadger-cli -- run --only api
 
-# Run API server (from project root)
-cargo run -p ckbadger-api --release
+# Run monitoring TUI
+cargo run -p ckbadger-cli -- tui
 
-# Run monitoring TUI (sync/memory/throughput, no task controls)
-cargo run -p ckbadger-tui
-
-# Run frontend
+# Run frontend dev server (for frontend development)
 cd frontend && pnpm install && pnpm dev
 ```
 
-### Docker Services
+### Services
 
-The `docker-compose.yml` includes the following services:
-
-| Service    | Description                  | Port |
-| ---------- | ---------------------------- | ---- |
-| `redis`    | Redis cache for sync status  | 6379 |
-| `ckb-node` | CKB node (profile: internal) | 8114 |
-| `indexer`  | Blockchain sync daemon       | -    |
-| `api`      | REST/WebSocket API server    | 3001 |
-| `frontend` | Next.js web application      | 3000 |
-
-```bash
-# View logs for specific service
-docker compose logs -f indexer
-
-# Restart a service
-docker compose restart indexer
-```
+| Service    | Description                   | Port |
+| ---------- | ----------------------------- | ---- |
+| `indexer`  | Blockchain sync daemon        | -    |
+| `api`      | REST/WebSocket API server     | 8101 |
+| `frontend` | Static file HTTP server (SPA) | 8100 |
 
 ### Label Import
 
 ```bash
-# Manual trigger (imports UDT + script labels once)
-cargo run -p ckbadger-indexer -- label-import
+# Manual trigger (imports UDT + script labels)
+ckbadger label-import
 
-# Custom source path / network
-cargo run -p ckbadger-indexer -- label-import \
-  --token-labels-path docs/token-labels \
-  --network mainnet
+# With custom token-labels path
+ckbadger label-import --token-labels-path /path/to/token-labels
 ```
 
-`label_import` also auto-runs in the background when the indexer starts and
-`$TOKEN_LABELS_PATH/information` exists.
+Token labels lookup order:
+
+1. `<work_dir>/token-labels/` (if exists)
+2. `<install_dir>/share/token-labels/` (default)
+
+Optional `labels.toml` in work directory can override imported label info (script name overrides, NFT storage tiers, deprecated entries).
+
+`label_import` also auto-runs when the indexer starts.
 
 ### Data Integrity Verification
 
-The indexer includes a `verify` subcommand that validates data by calling the ckbadger REST API — no direct store access needed. It can run from anywhere the API is reachable (host, CI, another machine).
+The `verify` subcommand validates data by calling the ckbadger REST API — no direct store access needed. It can run from anywhere the API is reachable.
 
 ```bash
 # Quick sanity checks (seconds)
-cargo run -p ckbadger-indexer -- verify --depth fast
+ckbadger verify --depth fast
 
 # Sampling + explorer comparison (minutes)
-cargo run -p ckbadger-indexer -- verify --depth sampling
+ckbadger verify --depth sampling
 
 # Skip explorer HTTP calls
-cargo run -p ckbadger-indexer -- verify --depth sampling --no-explorer
+ckbadger verify --depth sampling --no-explorer
 
 # Custom API URL
-cargo run -p ckbadger-indexer -- verify --api-url http://localhost:3001/api/v1
+ckbadger verify --api-url http://localhost:8101/api/v1
 
 # Add CKB RPC spot-checks
-cargo run -p ckbadger-indexer -- verify --rpc-url http://localhost:8114
+ckbadger verify --rpc-url http://localhost:8114
 
-# List all 43 available checks
-cargo run -p ckbadger-indexer -- verify --list-checks
+# List all available checks
+ckbadger verify --list-checks
 ```
 
 | Tier         | Checks | What it validates                                                                              |
@@ -749,7 +634,8 @@ Explorer API responses are cached to `.verify-cache/` with 24-hour freshness. On
 # Rust tests
 cargo test                               # All tests
 cargo test --lib                         # Unit tests only
-cargo test -p ckbadger-indexer           # Specific crate
+cargo test -p ckbadger-cli               # CLI crate
+cargo test -p ckbadger-config            # Config crate
 cargo test test_parse_epoch              # Single test (partial match)
 
 # Frontend tests
@@ -759,7 +645,6 @@ cd frontend && pnpm test:coverage        # With coverage
 # Type check & lint
 cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
 cd frontend && pnpm lint                 # ESLint
-
 ```
 
 ### Test Coverage
@@ -775,16 +660,16 @@ GitHub Actions workflow runs on every push:
 
 ## Comparison
 
-| Feature                 | ckbadger       | CKB Explorer | Etherscan |
-| ----------------------- | -------------- | ------------ | --------- |
-| Cell Relationship Graph | Interactive    | N/A          | N/A       |
-| Local Deployment        | Single command | Complex      | Closed    |
-| Real-time Updates       | WebSocket      | Polling      | WebSocket |
-| DAO Tracking            | Yes            | Basic        | N/A       |
-| sUDT/xUDT               | Yes            | Partial      | N/A       |
-| Spore NFT               | Yes            | Partial      | N/A       |
-| Self-hosted             | Yes            | Limited      | N/A       |
-| Min Resources           | 4GB RAM        | 16GB+        | N/A       |
+| Feature                 | ckbadger               | CKB Explorer | Etherscan |
+| ----------------------- | ---------------------- | ------------ | --------- |
+| Cell Relationship Graph | Interactive            | N/A          | N/A       |
+| Local Deployment        | Single binary, no deps | Complex      | Closed    |
+| Real-time Updates       | WebSocket              | Polling      | WebSocket |
+| DAO Tracking            | Yes                    | Basic        | N/A       |
+| sUDT/xUDT               | Yes                    | Partial      | N/A       |
+| Spore NFT               | Yes                    | Partial      | N/A       |
+| Self-hosted             | Yes                    | Limited      | N/A       |
+| External Dependencies   | None (no Docker/Redis) | Docker       | N/A       |
 
 ---
 

@@ -1,10 +1,11 @@
 SHELL := /bin/bash
 
-.PHONY: help build check test lint verify
+.PHONY: help build release check test lint verify
 
 help:
 	@echo "Available targets:"
-	@echo "  make build     Build the ckbadger CLI binary"
+	@echo "  make build     Build the ckbadger CLI binary (debug)"
+	@echo "  make release   Build the ckbadger CLI binary (release, optimized)"
 	@echo "  make check     Type-check and lint all Rust code"
 	@echo "  make test      Run all tests (Rust + frontend)"
 	@echo "  make lint      Run frontend lint and type-check"
@@ -12,6 +13,9 @@ help:
 
 build:
 	cargo build -p ckbadger
+
+release:
+	cargo build -p ckbadger --release
 
 check:
 	cargo check && cargo clippy
