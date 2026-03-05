@@ -1,3 +1,5 @@
+mod supervisor;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -137,7 +139,7 @@ async fn main() -> Result<()> {
         }
         Command::Status => {
             init_tracing_from_config(&workdir);
-            cmd_status(&workdir)
+            cmd_status(&workdir).await
         }
         Command::Verify(args) => {
             init_tracing_from_config(&workdir);
@@ -147,10 +149,9 @@ async fn main() -> Result<()> {
             init_tracing_from_config(&workdir);
             cmd_label_import(&workdir).await
         }
-        Command::Internal(_) => {
+        Command::Internal(args) => {
             init_tracing_from_config(&workdir);
-            println!("internal: not yet implemented");
-            Ok(())
+            cmd_internal(&workdir, &args).await
         }
     }
 }
@@ -183,68 +184,68 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
 
     let services = parse_only_flag(&args.only);
 
-    let mut handles = vec![];
-
-    if services.contains(&"indexer".to_string()) {
-        let token_labels_path = resolve_token_labels_path(&work, resolve_share_dir().as_deref())
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-
-        let indexer_config = IndexerServiceConfig {
-            domain_data_path: work.domain_data.to_string_lossy().to_string(),
-            append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
-            ckb_rpc_url: config.ckb.rpc_url.clone(),
-            ckb_data_path: config.ckb.data_path.clone(),
-            token_labels_path,
-            batch_size: config.indexer.batch_size,
-            poll_interval_ms: config.indexer.poll_interval_ms,
-            parallel_fetch_size: config.indexer.parallel_fetch_size,
-            pipeline_enabled: config.indexer.pipeline_enabled,
-            pipeline_buffer: config.indexer.pipeline_buffer,
-            bulk_sync_threshold: config.indexer.bulk_sync_threshold,
-        };
-        handles.push(tokio::spawn(async move {
-            if let Err(e) = run_indexer(indexer_config).await {
-                tracing::error!("Indexer failed: {}", e);
-            }
-        }));
-    }
-
-    if services.contains(&"api".to_string()) {
-        let frontend_dir = resolve_frontend_dir(&work);
-        let api_config = ApiServiceConfig {
-            domain_data_path: work.domain_data.to_string_lossy().to_string(),
-            append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
-            ckb_rpc_url: config.ckb.rpc_url.clone(),
-            ckb_network: config.ckb.network.clone(),
-            host: config.api.host.clone(),
-            port: config.api.port,
-            rate_limit: config.api.rate_limit,
-            rate_limit_burst: config.api.rate_limit_burst,
-            ckb_data_path: config.ckb.data_path.clone(),
-            frontend_dir,
-        };
-        handles.push(tokio::spawn(async move {
-            if let Err(e) = run_api(api_config).await {
-                tracing::error!("API server failed: {}", e);
-            }
-        }));
-    }
-
-    if handles.is_empty() {
+    if services.is_empty() {
         bail!("no services selected to run");
     }
 
-    info!("Started services: {}", services.join(", "));
+    info!("Starting services: {}", services.join(", "));
 
-    // Wait for ctrl+c
-    tokio::signal::ctrl_c().await?;
-    info!("Shutting down...");
+    supervisor::run_supervisor(&work, &config, services).await
+}
 
-    // Drop handles to cancel tasks
-    drop(handles);
+// ---------------------------------------------------------------------------
+// internal command (subprocess entry points)
+// ---------------------------------------------------------------------------
 
-    Ok(())
+async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
+    let config = load_config(workdir)?;
+    let work = WorkDir::resolve(workdir);
+
+    match args.service {
+        InternalService::Indexer => {
+            let token_labels_path =
+                resolve_token_labels_path(&work, resolve_share_dir().as_deref())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+            let indexer_config = IndexerServiceConfig {
+                domain_data_path: work.domain_data.to_string_lossy().to_string(),
+                append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+                ckb_rpc_url: config.ckb.rpc_url.clone(),
+                ckb_data_path: config.ckb.data_path.clone(),
+                token_labels_path,
+                batch_size: config.indexer.batch_size,
+                poll_interval_ms: config.indexer.poll_interval_ms,
+                parallel_fetch_size: config.indexer.parallel_fetch_size,
+                pipeline_enabled: config.indexer.pipeline_enabled,
+                pipeline_buffer: config.indexer.pipeline_buffer,
+                bulk_sync_threshold: config.indexer.bulk_sync_threshold,
+            };
+            run_indexer(indexer_config).await
+        }
+        InternalService::Api => {
+            let frontend_dir = resolve_frontend_dir(&work);
+            let api_config = ApiServiceConfig {
+                domain_data_path: work.domain_data.to_string_lossy().to_string(),
+                append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+                ckb_rpc_url: config.ckb.rpc_url.clone(),
+                ckb_network: config.ckb.network.clone(),
+                host: config.api.host.clone(),
+                port: config.api.port,
+                rate_limit: config.api.rate_limit,
+                rate_limit_burst: config.api.rate_limit_burst,
+                ckb_data_path: config.ckb.data_path.clone(),
+                frontend_dir,
+            };
+            run_api(api_config).await
+        }
+        InternalService::FrontendServer => {
+            // Frontend serving is handled by the API crate when
+            // frontend_dir is provided. This subcommand is a placeholder
+            // for future standalone frontend server support.
+            bail!("standalone frontend-server not yet implemented; frontend is served by the API service")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -269,21 +270,66 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
 // status command
 // ---------------------------------------------------------------------------
 
-fn cmd_status(workdir: &Path) -> Result<()> {
+async fn cmd_status(workdir: &Path) -> Result<()> {
     let work = WorkDir::resolve(workdir);
 
+    // 1. Try IPC to get service status from the supervisor
+    if work.indexer_sock.exists() {
+        match ckbadger_ipc::ipc_request(
+            &work.indexer_sock,
+            &ckbadger_ipc::IpcRequest::GetServiceStatus,
+        )
+        .await
+        {
+            Ok(ckbadger_ipc::IpcResponse::ServiceStatus { services }) => {
+                println!("Services:");
+                for svc in &services {
+                    println!(
+                        "  {}: {} (pid {}, uptime {}s)",
+                        svc.name, svc.status, svc.pid, svc.uptime_secs
+                    );
+                }
+                println!();
+            }
+            Ok(other) => {
+                println!("Unexpected IPC response: {:?}", other);
+            }
+            Err(e) => {
+                println!("Supervisor not reachable: {}", e);
+            }
+        }
+    } else {
+        // Check PID file as fallback
+        if work.supervisor_pid.exists() {
+            if let Ok(pid_str) = std::fs::read_to_string(&work.supervisor_pid) {
+                println!(
+                    "Supervisor PID file exists: {} (pid {})",
+                    work.supervisor_pid.display(),
+                    pid_str.trim()
+                );
+                println!("  (IPC socket not found; supervisor may have crashed)");
+                println!();
+            }
+        } else {
+            println!("Supervisor: not running");
+            println!();
+        }
+    }
+
+    // 2. Always show sync status from RocksDB
     let primary_path = work.domain_data.to_string_lossy().to_string();
     let secondary_path = format!("{}-cli-secondary", primary_path);
     match CkbadgerStore::open_domain_secondary(primary_path.as_str(), secondary_path.as_str()) {
         Ok(store) => match store.get_sync_status() {
             Ok(status) => {
-                println!("Sync tip block:        {}", status.tip_block_number);
-                println!("Derived tip block:     {}", status.derived_tip_block_number);
-                println!("Total transactions:    {}", status.total_transactions);
-                println!("Total cells created:   {}", status.total_cells_created);
-                println!("Total cells consumed:  {}", status.total_cells_consumed);
+                println!("Sync status:");
+                println!("  Tip block:           {}", status.tip_block_number);
+                println!("  Derived tip block:   {}", status.derived_tip_block_number);
+                println!("  Total transactions:  {}", status.total_transactions);
+                println!("  Total cells created: {}", status.total_cells_created);
+                println!("  Total cells consumed:{}", status.total_cells_consumed);
                 if status.deep_fork_detected {
-                    println!("WARNING: deep fork detected");
+                    println!("  WARNING: deep fork detected");
                 }
             }
             Err(e) => {

@@ -12,6 +12,7 @@ path = "src/main.rs"
 ckbadger-config = { path = "../config" }
 ckbadger-indexer = { path = "../indexer" }
 ckbadger-api = { path = "../api" }
+ckbadger-ipc = { path = "../ipc" }
 ckbadger-tui = { path = "../tui" }
 ckbadger-store = { path = "../ckbadger-store" }
 clap = { workspace = true }
