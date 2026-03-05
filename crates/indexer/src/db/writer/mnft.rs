@@ -16,6 +16,7 @@ use super::BatchWriter;
 pub(crate) struct MnftBatchState {
     tokens: HashMap<Vec<u8>, Option<NftEntry>>,
     collection_aggs: HashMap<Vec<u8>, Option<NftCollectionAggregate>>,
+    collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
 }
 
@@ -58,6 +59,44 @@ impl MnftBatchState {
             .insert(collection_id.to_vec(), Some(agg));
     }
 
+    fn get_collection_owner_count(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+    ) -> Result<i64> {
+        let key = (collection_id.to_vec(), lock_hash.to_vec());
+        if let Some(cached) = self.collection_owner_counts.get(&key) {
+            return Ok(*cached);
+        }
+        let loaded = store.get_nft_collection_owner_count(collection_id, lock_hash)?;
+        self.collection_owner_counts.insert(key, loaded);
+        Ok(loaded)
+    }
+
+    fn put_collection_owner_count(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        count: i64,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_nft_collection_owner_count(collection_id, lock_hash, count);
+        self.collection_owner_counts
+            .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
+    }
+
+    fn delete_collection_owner(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        batch: &mut StoreBatch,
+    ) {
+        batch.delete_nft_collection_owner(collection_id, lock_hash);
+        self.collection_owner_counts
+            .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
+    }
+
     fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
         if let Some(cached) = self.hourly_transfers.get(key) {
             return Ok(*cached);
@@ -92,6 +131,70 @@ impl MnftBatchState {
 impl BatchWriter {
     pub(crate) fn new_mnft_batch_state(&self) -> MnftBatchState {
         MnftBatchState::default()
+    }
+
+    fn apply_mnft_owner_transition(
+        &self,
+        collection_id: &[u8],
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut NftCollectionAggregate,
+        batch: &mut StoreBatch,
+        state: &mut MnftBatchState,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_lock) = old_owner {
+            let old_count =
+                state.get_collection_owner_count(self.store.as_ref(), collection_id, old_lock)?;
+            if old_count <= 0 {
+                bail!(
+                    "mnft owner count underflow: class_id=0x{}, lock_hash=0x{}, owner_count={}",
+                    hex::encode(collection_id),
+                    hex::encode(old_lock),
+                    old_count
+                );
+            } else if old_count == 1 {
+                if agg.holders_count <= 0 {
+                    bail!(
+                        "mnft collection holders_count underflow: class_id=0x{}, holders_count={}",
+                        hex::encode(collection_id),
+                        agg.holders_count
+                    );
+                }
+                state.delete_collection_owner(collection_id, old_lock, batch);
+                agg.holders_count -= 1;
+            } else {
+                state.put_collection_owner_count(collection_id, old_lock, old_count - 1, batch);
+            }
+        }
+
+        if let Some(new_lock) = new_owner {
+            let current =
+                state.get_collection_owner_count(self.store.as_ref(), collection_id, new_lock)?;
+            if current == 0 {
+                agg.holders_count = agg.holders_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "mnft collection holders_count overflow: class_id=0x{}, lock_hash=0x{}",
+                        hex::encode(collection_id),
+                        hex::encode(new_lock)
+                    )
+                })?;
+            }
+            let next = current.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mnft owner count overflow: class_id=0x{}, lock_hash=0x{}, current={}",
+                    hex::encode(collection_id),
+                    hex::encode(new_lock),
+                    current
+                )
+            })?;
+            state.put_collection_owner_count(collection_id, new_lock, next, batch);
+        }
+
+        Ok(())
     }
 
     pub fn insert_mnft_issuer(
@@ -228,6 +331,14 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &token.token_id)?;
+        let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
         let entry = NftEntry {
             standard: NftStandard::MnftToken,
             collection_id: Some(token.class_id.clone()),
@@ -276,8 +387,69 @@ impl BatchWriter {
                     agg.live_count
                 )
             })?;
+            self.apply_mnft_owner_transition(
+                &token.class_id,
+                None,
+                Some(token.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
+            state.put_collection_aggregate(&token.class_id, agg, batch);
+        } else if !was_live {
+            let Some(mut agg) =
+                state.get_collection_aggregate(self.store.as_ref(), &token.class_id)?
+            else {
+                bail!(
+                    "mnft collection aggregate missing while re-activating token: class_id=0x{}, token_id=0x{}",
+                    hex::encode(&token.class_id),
+                    hex::encode(&token.token_id)
+                );
+            };
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mnft collection live_count overflow while re-activating token: class_id=0x{}, token_id=0x{}, live_count={}",
+                    hex::encode(&token.class_id),
+                    hex::encode(&token.token_id),
+                    agg.live_count
+                )
+            })?;
+            self.apply_mnft_owner_transition(
+                &token.class_id,
+                None,
+                Some(token.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
             state.put_collection_aggregate(&token.class_id, agg, batch);
         } else {
+            if old_owner.is_none() {
+                bail!(
+                    "mnft live token missing owner_lock_hash during transfer: class_id=0x{}, token_id=0x{}",
+                    hex::encode(&token.class_id),
+                    hex::encode(&token.token_id)
+                );
+            }
+            let Some(mut agg) =
+                state.get_collection_aggregate(self.store.as_ref(), &token.class_id)?
+            else {
+                bail!(
+                    "mnft collection aggregate missing while transferring token: class_id=0x{}, token_id=0x{}",
+                    hex::encode(&token.class_id),
+                    hex::encode(&token.token_id)
+                );
+            };
+            self.apply_mnft_owner_transition(
+                &token.class_id,
+                old_owner.as_deref(),
+                Some(token.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
+            state.put_collection_aggregate(&token.class_id, agg, batch);
+
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
             let key = ckbadger_store::keys::encode_nft_hourly_key(&token.class_id, hour_bucket);
@@ -326,6 +498,13 @@ impl BatchWriter {
                 );
             }
             let collection_id = entry.collection_id.clone();
+            let old_owner = entry.owner_lock_hash.clone();
+            if old_owner.is_none() {
+                bail!(
+                    "mnft live token missing owner_lock_hash during consume: token_id=0x{}",
+                    hex::encode(token_id)
+                );
+            }
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_nft(token_id, &entry);
@@ -349,6 +528,14 @@ impl BatchWriter {
                     );
                 }
                 agg.live_count -= 1;
+                self.apply_mnft_owner_transition(
+                    cid,
+                    old_owner.as_deref(),
+                    None,
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
                 state.put_collection_aggregate(cid, agg, batch);
             } else {
                 bail!(
@@ -612,6 +799,7 @@ mod tests {
             .unwrap();
         assert_eq!(agg.total_count, 2);
         assert_eq!(agg.live_count, 2);
+        assert_eq!(agg.holders_count, 2);
     }
 
     #[test]
@@ -709,6 +897,7 @@ mod tests {
             .unwrap();
         assert_eq!(agg.total_count, 2);
         assert_eq!(agg.live_count, 2);
+        assert_eq!(agg.holders_count, 2);
     }
 
     #[test]
@@ -771,6 +960,7 @@ mod tests {
             .unwrap();
         assert_eq!(agg.total_count, 2);
         assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.holders_count, 0);
     }
 
     #[test]

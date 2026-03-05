@@ -53,6 +53,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Refactor First When It Helps** - Before implementing new code, evaluate whether a focused refactor will reduce complexity or risk; if yes, refactor first and then implement.
 - **Single Calculation Path for Read Data** - For any data that must be read/derived, keep exactly one computation path and make that single path correct.
 - **No Fallback Calculation Chains** - Reject defensive multi-path computation such as "if path A is wrong, fallback to B, then fallback to C"; do not add path B/C, fix path A.
+- **No Workaround Fixes for Bugs** - Do not ship bypasses, route detours, temporary guards, degraded-mode switches, or UX-level evasions as bug fixes. Identify and fix the upstream root cause in the owning computation/write path.
 - Do not add silent guards to mask bad states on correctness-critical paths (for example `max(0)`, `saturating_sub`, `unwrap_or(0)`).
 - If an invariant is violated, return/raise an error with enough context (block/tx/key/date) to locate the upstream bug quickly.
 

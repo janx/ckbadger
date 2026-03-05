@@ -120,6 +120,84 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// Get the live NFT count for a specific owner in a collection.
+    pub fn get_nft_collection_owner_count(
+        &self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+    ) -> anyhow::Result<i64> {
+        if collection_id.is_empty() || collection_id.len() > 32 {
+            anyhow::bail!(
+                "invalid collection_id length in get_nft_collection_owner_count: expected 1..=32, got {}",
+                collection_id.len()
+            );
+        }
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "invalid lock_hash length in get_nft_collection_owner_count: expected 32, got {}",
+                lock_hash.len()
+            );
+        }
+
+        let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        match self.get_cf(self.cf_stats_nft(), &key)? {
+            Some(value) if value.len() == 8 => {
+                Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
+            }
+            _ => Ok(0),
+        }
+    }
+
+    /// List all owners and live NFT counts for a collection.
+    pub fn list_nft_collection_owner_counts(
+        &self,
+        collection_id: &[u8],
+    ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
+        if collection_id.is_empty() || collection_id.len() > 32 {
+            anyhow::bail!(
+                "invalid collection_id length in list_nft_collection_owner_counts: expected 1..=32, got {}",
+                collection_id.len()
+            );
+        }
+
+        let prefix = keys::encode_nft_collection_owner_prefix(collection_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft in list_nft_collection_owner_counts: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::NFT_COLLECTION_OWNER_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid nft collection owner key length: expected {}, got {}",
+                    keys::NFT_COLLECTION_OWNER_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if value.len() != 8 {
+                anyhow::bail!(
+                    "invalid nft collection owner value length: expected 8, got {}",
+                    value.len()
+                );
+            }
+
+            let count = i64::from_le_bytes(value[..8].try_into().unwrap());
+            if count <= 0 {
+                continue;
+            }
+            results.push((key[33..65].to_vec(), count));
+        }
+
+        Ok(results)
+    }
+
     pub fn get_nft_type_index(
         &self,
         type_script_hash: &[u8],
@@ -413,6 +491,8 @@ mod tests {
             standard: NftStandard::MnftClass,
             total_count: 50,
             live_count: 42,
+            holders_count: 11,
+            activities_count: 37,
         };
 
         let mut batch = StoreBatch::new(&store);
@@ -424,6 +504,8 @@ mod tests {
         assert_eq!(result.standard, NftStandard::MnftClass);
         assert_eq!(result.total_count, 50);
         assert_eq!(result.live_count, 42);
+        assert_eq!(result.holders_count, 11);
+        assert_eq!(result.activities_count, 37);
     }
 
     #[test]
@@ -440,6 +522,8 @@ mod tests {
                 standard: NftStandard::MnftClass,
                 total_count: 10,
                 live_count: 8,
+                holders_count: 3,
+                activities_count: 15,
             },
         );
         batch.put_nft_collection_aggregate(
@@ -449,6 +533,8 @@ mod tests {
                 standard: NftStandard::DotBit,
                 total_count: 100,
                 live_count: 90,
+                holders_count: 50,
+                activities_count: 800,
             },
         );
         batch.commit().unwrap();
@@ -464,6 +550,54 @@ mod tests {
         assert_eq!(agg.standard, NftStandard::MnftClass);
         assert_eq!(agg.total_count, 0);
         assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.holders_count, 0);
+        assert_eq!(agg.activities_count, 0);
+    }
+
+    #[test]
+    fn test_nft_collection_owner_count_roundtrip() {
+        let (_dir, store) = test_store();
+        let collection_id = [0x31u8; 32];
+        let owner_a = [0x41u8; 32];
+        let owner_b = [0x42u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_owner_count(&collection_id, &owner_a, 2);
+        batch.put_nft_collection_owner_count(&collection_id, &owner_b, 1);
+        batch.commit().unwrap();
+
+        let count_a = store
+            .get_nft_collection_owner_count(&collection_id, &owner_a)
+            .unwrap();
+        let count_b = store
+            .get_nft_collection_owner_count(&collection_id, &owner_b)
+            .unwrap();
+        assert_eq!(count_a, 2);
+        assert_eq!(count_b, 1);
+
+        let mut rows = store
+            .list_nft_collection_owner_counts(&collection_id)
+            .unwrap();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], (owner_a.to_vec(), 2));
+        assert_eq!(rows[1], (owner_b.to_vec(), 1));
+    }
+
+    #[test]
+    fn test_nft_collection_owner_count_length_validation() {
+        let (_dir, store) = test_store();
+        let err = store
+            .get_nft_collection_owner_count(&[0x11; 33], &[0x22; 32])
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid collection_id length in get_nft_collection_owner_count"));
+
+        let err = store.list_nft_collection_owner_counts(&[]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("invalid collection_id length in list_nft_collection_owner_counts"));
     }
 
     #[test]

@@ -567,7 +567,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             name: display_name.clone(),
             symbol: None,
             icon_url: None,
-            holders_count: agg.live_count,
+            holders_count: agg.holders_count,
             transfers_count: agg.total_count,
             transfers_24h,
             decimals: None,

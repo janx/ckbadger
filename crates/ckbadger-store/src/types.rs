@@ -464,6 +464,10 @@ pub struct NftCollectionAggregate {
     pub standard: NftStandard,
     pub total_count: i64,
     pub live_count: i64,
+    #[serde(default)]
+    pub holders_count: i64,
+    #[serde(default)]
+    pub activities_count: i64,
 }
 
 // ============================================

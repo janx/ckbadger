@@ -149,6 +149,66 @@ fn build_activity_input_views(
         .collect()
 }
 
+fn apply_nft_collection_activity_count_deltas(
+    store: &CkbadgerStore,
+    batch: &mut StoreBatch,
+    deltas: HashMap<Vec<u8>, i64>,
+) -> Result<()> {
+    if deltas.is_empty() {
+        return Ok(());
+    }
+
+    let mut aggregates: HashMap<Vec<u8>, ckbadger_store::types::NftCollectionAggregate> =
+        HashMap::new();
+
+    for (collection_id, delta) in deltas {
+        if delta == 0 {
+            continue;
+        }
+        let agg = if let Some(cached) = aggregates.get_mut(&collection_id) {
+            cached
+        } else {
+            match store.get_nft_collection_aggregate(&collection_id)? {
+                Some(loaded) => aggregates.entry(collection_id.clone()).or_insert(loaded),
+                None => {
+                    if store.get_cluster_aggregate(&collection_id)?.is_some() {
+                        // Spore cluster activities share the same append-only CF but do not
+                        // belong to nft_collection_agg.
+                        continue;
+                    }
+                    bail!(
+                        "missing collection aggregate while applying activity_count delta: collection_id=0x{}",
+                        hex::encode(&collection_id)
+                    );
+                }
+            }
+        };
+
+        let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "nft collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
+                hex::encode(&collection_id),
+                agg.activities_count,
+                delta
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "nft collection activities_count underflow: collection_id=0x{}, current={}, delta={}",
+                hex::encode(&collection_id),
+                agg.activities_count,
+                delta
+            );
+        }
+        agg.activities_count = next;
+    }
+
+    for (collection_id, agg) in aggregates {
+        batch.put_nft_collection_aggregate(&collection_id, &agg);
+    }
+    Ok(())
+}
+
 fn parse_udt_cells_with_store_fallback_inner<F>(
     tx: &crate::rpc::TransactionView,
     mut standard_lookup: F,
@@ -2678,6 +2738,7 @@ impl Indexer {
             block_tx_idx += tx_count_for_block;
         }
         let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
+        let mut nft_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Write .bit collection activities directly (bypassing accumulator)
         for (_tx_hash, activity) in &dotbit_tx_activity_data {
             let inserted = resolve_dotbit_tx_activity(
@@ -2704,6 +2765,12 @@ impl Indexer {
                     ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                     &append_key,
                 );
+                let delta = nft_activity_count_deltas
+                    .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                    .or_insert(0);
+                *delta = delta.checked_add(1).ok_or_else(|| {
+                    anyhow!("dotbit nft activity delta overflow while writing batch")
+                })?;
             }
         }
         for (collection_id, block_number, tx_idx) in nft_activity_acc.flush(&mut nft_activity_batch)
@@ -2718,7 +2785,16 @@ impl Indexer {
                 ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                 &append_key,
             );
+            let delta = nft_activity_count_deltas.entry(collection_id).or_insert(0);
+            *delta = delta
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("nft activity delta overflow while writing batch"))?;
         }
+        apply_nft_collection_activity_count_deltas(
+            self.writer.store(),
+            &mut consume_batch,
+            nft_activity_count_deltas,
+        )?;
         let commit_started = Instant::now();
         consume_batch.commit()?;
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -5080,6 +5156,7 @@ impl Indexer {
             }
 
             let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut nft_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
             // Group C: NFT/Spore processing
             {
@@ -5491,6 +5568,14 @@ impl Indexer {
                             ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                             &append_key,
                         );
+                        let delta = nft_activity_count_deltas
+                            .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                            .or_insert(0);
+                        *delta = delta.checked_add(1).ok_or_else(|| {
+                            anyhow!(
+                                "dotbit nft activity delta overflow while writing grouped batch"
+                            )
+                        })?;
                     }
                 }
                 for (collection_id, block_number, tx_idx) in
@@ -5509,8 +5594,17 @@ impl Indexer {
                         ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
                         &append_key,
                     );
+                    let delta = nft_activity_count_deltas.entry(collection_id).or_insert(0);
+                    *delta = delta.checked_add(1).ok_or_else(|| {
+                        anyhow!("nft activity delta overflow while writing grouped batch")
+                    })?;
                 }
             }
+            apply_nft_collection_activity_count_deltas(
+                self.writer.store(),
+                &mut data_batch,
+                nft_activity_count_deltas,
+            )?;
 
             // Activity writes (live sync)
             let mut activity_batch = StoreBatch::new(self.writer.store());
@@ -6287,6 +6381,46 @@ mod tests {
             tx_size: 1,
             cycles: None,
         }
+    }
+
+    #[test]
+    fn test_apply_nft_collection_activity_count_deltas_updates_only_nft_collections() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let nft_collection_id = vec![0x11; 32];
+        let cluster_id = vec![0x22; 32];
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_nft_collection_aggregate(
+            &nft_collection_id,
+            &ckbadger_store::types::NftCollectionAggregate {
+                standard: ckbadger_store::types::NftStandard::MnftClass,
+                activities_count: 3,
+                ..Default::default()
+            },
+        );
+        seed.put_cluster_aggregate(
+            &cluster_id,
+            &ckbadger_store::types::ClusterAggregate {
+                name: Some("cluster".to_string()),
+                ..Default::default()
+            },
+        );
+        seed.commit().unwrap();
+
+        let mut deltas = HashMap::new();
+        deltas.insert(nft_collection_id.clone(), 2);
+        deltas.insert(cluster_id, 4);
+
+        let mut batch = StoreBatch::new(&store);
+        apply_nft_collection_activity_count_deltas(&store, &mut batch, deltas).unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_nft_collection_aggregate(&nft_collection_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.activities_count, 5);
     }
 
     #[test]

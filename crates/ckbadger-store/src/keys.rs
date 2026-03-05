@@ -177,6 +177,7 @@ pub mod stats_prefix {
     pub const DOTBIT_ACCOUNT_OUTPOINT: u8 = 0x19;
     pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
+    pub const NFT_COLLECTION_OWNER: u8 = 0x1C;
 }
 
 // Flat re-exports for convenience
@@ -207,6 +208,7 @@ pub const STATS_PREFIX_MNFT_TOKEN_OUTPOINT: u8 = stats_prefix::MNFT_TOKEN_OUTPOI
 pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUNT_OUTPOINT;
 pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
+pub const STATS_PREFIX_NFT_COLLECTION_OWNER: u8 = stats_prefix::NFT_COLLECTION_OWNER;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -425,6 +427,26 @@ pub fn encode_nft_daily_key(collection_id: &[u8], date_yyyymmdd: u32) -> [u8; NF
 pub fn encode_nft_daily_prefix(collection_id: &[u8]) -> [u8; 33] {
     let mut prefix = [0u8; 33];
     prefix[0] = STATS_PREFIX_NFT_DAILY;
+    prefix[1..33].copy_from_slice(&pad_id_32(collection_id));
+    prefix
+}
+
+pub const NFT_COLLECTION_OWNER_KEY_SIZE: usize = 65;
+
+pub fn encode_nft_collection_owner_key(
+    collection_id: &[u8],
+    lock_hash: &[u8],
+) -> [u8; NFT_COLLECTION_OWNER_KEY_SIZE] {
+    let mut key = [0u8; NFT_COLLECTION_OWNER_KEY_SIZE];
+    key[0] = STATS_PREFIX_NFT_COLLECTION_OWNER;
+    key[1..33].copy_from_slice(&pad_id_32(collection_id));
+    key[33..65].copy_from_slice(&pad_id_32(lock_hash));
+    key
+}
+
+pub fn encode_nft_collection_owner_prefix(collection_id: &[u8]) -> [u8; 33] {
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_NFT_COLLECTION_OWNER;
     prefix[1..33].copy_from_slice(&pad_id_32(collection_id));
     prefix
 }
@@ -1305,6 +1327,27 @@ mod tests {
         let full_key = encode_nft_hourly_key(&short_id, 999);
         assert_eq!(prefix.len(), 33);
         assert!(full_key.starts_with(&prefix));
+    }
+
+    #[test]
+    fn test_nft_collection_owner_key_structure() {
+        let collection_id = [0xA1u8; 32];
+        let owner = [0xB2u8; 32];
+        let key = encode_nft_collection_owner_key(&collection_id, &owner);
+        assert_eq!(key.len(), NFT_COLLECTION_OWNER_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_NFT_COLLECTION_OWNER);
+        assert_eq!(&key[1..33], &collection_id);
+        assert_eq!(&key[33..65], &owner);
+    }
+
+    #[test]
+    fn test_nft_collection_owner_prefix_short_collection_id() {
+        let collection_id = [0xCCu8; 24];
+        let prefix = encode_nft_collection_owner_prefix(&collection_id);
+        let key = encode_nft_collection_owner_key(&collection_id, &[0xDDu8; 32]);
+        assert_eq!(prefix.len(), 33);
+        assert_eq!(prefix[0], STATS_PREFIX_NFT_COLLECTION_OWNER);
+        assert!(key.starts_with(&prefix));
     }
 
     #[test]

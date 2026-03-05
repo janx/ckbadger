@@ -1075,9 +1075,33 @@ impl CkbadgerStore {
             );
         }
 
+        // NFT collection-owner counters are stored in stats_nft CF under a dedicated prefix.
+        let iter = self.iterator_cf(self.cf_stats_nft(), IteratorMode::Start);
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_nft while clearing nft collection owner counters in rollback cleanup: {}",
+                    e
+                )
+            })?;
+            if key.first() == Some(&keys::STATS_PREFIX_NFT_COLLECTION_OWNER) {
+                batch.delete_cf(self.cf_stats_nft(), &key);
+                secondary_keys_deleted += 1;
+            }
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
         let mut cluster_aggs: HashMap<Vec<u8>, ClusterAggregate> = HashMap::new();
         let mut cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
         let mut nft_collection_aggs: HashMap<Vec<u8>, NftCollectionAggregate> = HashMap::new();
+        let mut nft_collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
 
         let iter = self.iterator_cf(self.cf_spore_data(), IteratorMode::Start);
         for item in iter {
@@ -1197,6 +1221,22 @@ impl CkbadgerStore {
                                 "did:ckb live_count overflow while repairing rollback state"
                             )
                         })?;
+                        let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "did:ckb live entry missing owner_lock_hash while repairing rollback state: spore_id=0x{}",
+                                bytes_to_hex(&spore_id)
+                            )
+                        })?;
+                        let owner_key = (
+                            DID_CKB_SENTINEL_COLLECTION.to_vec(),
+                            owner_lock_hash.clone(),
+                        );
+                        let owner_count = nft_collection_owner_counts.entry(owner_key).or_insert(0);
+                        *owner_count = owner_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "did:ckb owner count overflow while repairing rollback state"
+                            )
+                        })?;
                     }
                 }
             }
@@ -1265,6 +1305,20 @@ impl CkbadgerStore {
                                 "dotbit live_count overflow while repairing rollback state"
                             )
                         })?;
+                        let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "dotbit live entry missing owner_lock_hash while repairing rollback state: nft_id=0x{}",
+                                bytes_to_hex(&nft_id)
+                            )
+                        })?;
+                        let owner_key =
+                            (DOTBIT_SENTINEL_COLLECTION.to_vec(), owner_lock_hash.clone());
+                        let owner_count = nft_collection_owner_counts.entry(owner_key).or_insert(0);
+                        *owner_count = owner_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "dotbit owner count overflow while repairing rollback state"
+                            )
+                        })?;
                     }
                 }
                 NftStandard::MnftClass => {
@@ -1303,6 +1357,22 @@ impl CkbadgerStore {
                                     bytes_to_hex(collection_id)
                                 )
                             })?;
+                            let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "mNFT live entry missing owner_lock_hash while repairing rollback state: collection_id=0x{}, nft_id=0x{}",
+                                    bytes_to_hex(collection_id),
+                                    bytes_to_hex(&nft_id)
+                                )
+                            })?;
+                            let owner_key = (collection_id.clone(), owner_lock_hash.clone());
+                            let owner_count =
+                                nft_collection_owner_counts.entry(owner_key).or_insert(0);
+                            *owner_count = owner_count.checked_add(1).ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "mNFT owner count overflow while repairing rollback state: collection_id=0x{}",
+                                    bytes_to_hex(collection_id)
+                                )
+                            })?;
                         }
                     }
                 }
@@ -1327,6 +1397,22 @@ impl CkbadgerStore {
                         agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
                             anyhow::anyhow!(
                                 "did:ckb live_count overflow while repairing rollback state"
+                            )
+                        })?;
+                        let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "did:ckb live entry missing owner_lock_hash while repairing rollback state: nft_id=0x{}",
+                                bytes_to_hex(&nft_id)
+                            )
+                        })?;
+                        let owner_key = (
+                            DID_CKB_SENTINEL_COLLECTION.to_vec(),
+                            owner_lock_hash.clone(),
+                        );
+                        let owner_count = nft_collection_owner_counts.entry(owner_key).or_insert(0);
+                        *owner_count = owner_count.checked_add(1).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "did:ckb owner count overflow while repairing rollback state"
                             )
                         })?;
                     }
@@ -1373,7 +1459,56 @@ impl CkbadgerStore {
             aggregate_rows_written += 1;
         }
 
-        for (collection_id, agg) in &nft_collection_aggs {
+        let mut nft_owner_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        for ((collection_id, lock_hash), count) in &nft_collection_owner_counts {
+            let owner_key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+            batch.put_cf(
+                self.cf_stats_nft(),
+                owner_key,
+                count.to_le_bytes().as_slice(),
+            );
+            secondary_keys_written += 1;
+            let holder_total = nft_owner_totals.entry(collection_id.clone()).or_insert(0);
+            *holder_total = holder_total.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "nft collection holders_count overflow while repairing rollback state: collection_id=0x{}",
+                    bytes_to_hex(collection_id)
+                )
+            })?;
+        }
+
+        let activity_store = tx_index_store.unwrap_or(self);
+        let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        let iter = activity_store.iterator_cf(
+            activity_store.cf_nft_collection_activities(),
+            IteratorMode::Start,
+        );
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate nft_collection_activities while repairing rollback state: {}",
+                    e
+                )
+            })?;
+            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid nft_collection_activities key length while repairing rollback state: expected {}, got {}",
+                    keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE,
+                    key.len()
+                );
+            }
+            let collection_id = key[..32].to_vec();
+            let total = nft_activity_totals.entry(collection_id).or_insert(0);
+            *total = total.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "nft collection activities_count overflow while repairing rollback state"
+                )
+            })?;
+        }
+
+        for (collection_id, agg) in &mut nft_collection_aggs {
+            agg.holders_count = nft_owner_totals.get(collection_id).copied().unwrap_or(0);
+            agg.activities_count = nft_activity_totals.get(collection_id).copied().unwrap_or(0);
             let encoded = bincode::serialize(agg).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to serialize nft collection aggregate during rollback repair: collection_id=0x{}, error={}",
@@ -3270,6 +3405,8 @@ mod tests {
                 standard: NftStandard::MnftClass,
                 total_count: 99,
                 live_count: 99,
+                holders_count: 99,
+                activities_count: 99,
             },
         );
         batch.commit().unwrap();

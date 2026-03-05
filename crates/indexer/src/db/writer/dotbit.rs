@@ -176,6 +176,7 @@ pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<NftEntry>>,
     collection_agg_loaded: bool,
     collection_agg: Option<NftCollectionAggregate>,
+    collection_owner_counts: HashMap<Vec<u8>, i64>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
 }
 
@@ -216,6 +217,32 @@ impl DotbitBatchState {
         self.collection_agg_loaded = true;
     }
 
+    fn get_collection_owner_count(
+        &mut self,
+        store: &CkbadgerStore,
+        lock_hash: &[u8],
+    ) -> Result<i64> {
+        if let Some(cached) = self.collection_owner_counts.get(lock_hash) {
+            return Ok(*cached);
+        }
+        let loaded =
+            store.get_nft_collection_owner_count(&DOTBIT_SENTINEL_COLLECTION, lock_hash)?;
+        self.collection_owner_counts
+            .insert(lock_hash.to_vec(), loaded);
+        Ok(loaded)
+    }
+
+    fn put_collection_owner_count(&mut self, lock_hash: &[u8], count: i64, batch: &mut StoreBatch) {
+        batch.put_nft_collection_owner_count(&DOTBIT_SENTINEL_COLLECTION, lock_hash, count);
+        self.collection_owner_counts
+            .insert(lock_hash.to_vec(), count);
+    }
+
+    fn delete_collection_owner(&mut self, lock_hash: &[u8], batch: &mut StoreBatch) {
+        batch.delete_nft_collection_owner(&DOTBIT_SENTINEL_COLLECTION, lock_hash);
+        self.collection_owner_counts.insert(lock_hash.to_vec(), 0);
+    }
+
     fn get_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
         if let Some(cached) = self.hourly_transfers.get(key) {
             return Ok(*cached);
@@ -250,6 +277,63 @@ impl DotbitBatchState {
 impl BatchWriter {
     pub(crate) fn new_dotbit_batch_state(&self) -> DotbitBatchState {
         DotbitBatchState::default()
+    }
+
+    fn apply_dotbit_owner_transition(
+        &self,
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut NftCollectionAggregate,
+        batch: &mut StoreBatch,
+        state: &mut DotbitBatchState,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_lock) = old_owner {
+            let old_count = state.get_collection_owner_count(self.store.as_ref(), old_lock)?;
+            if old_count <= 0 {
+                bail!(
+                    "dotbit owner count underflow: lock_hash=0x{}, owner_count={}",
+                    hex::encode(old_lock),
+                    old_count
+                );
+            } else if old_count == 1 {
+                if agg.holders_count <= 0 {
+                    bail!(
+                        "dotbit collection holders_count underflow: holders_count={}",
+                        agg.holders_count
+                    );
+                }
+                state.delete_collection_owner(old_lock, batch);
+                agg.holders_count -= 1;
+            } else {
+                state.put_collection_owner_count(old_lock, old_count - 1, batch);
+            }
+        }
+
+        if let Some(new_lock) = new_owner {
+            let current = state.get_collection_owner_count(self.store.as_ref(), new_lock)?;
+            if current == 0 {
+                agg.holders_count = agg.holders_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dotbit collection holders_count overflow: lock_hash=0x{}",
+                        hex::encode(new_lock)
+                    )
+                })?;
+            }
+            let next = current.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "dotbit owner count overflow: lock_hash=0x{}, current={}",
+                    hex::encode(new_lock),
+                    current
+                )
+            })?;
+            state.put_collection_owner_count(new_lock, next, batch);
+        }
+
+        Ok(())
     }
 
     pub fn insert_dotbit_account(
@@ -287,6 +371,13 @@ impl BatchWriter {
             .unwrap_or_else(|| format!("0x{}", hex::encode(&account.account_id)));
         let existing = state.get_account(self.store.as_ref(), &account.account_id)?;
         let was_live = existing.as_ref().is_some_and(|entry| entry.is_live);
+        let old_owner = if was_live {
+            existing
+                .as_ref()
+                .and_then(|entry| entry.owner_lock_hash.clone())
+        } else {
+            None
+        };
 
         let entry = NftEntry {
             standard: NftStandard::DotBit,
@@ -320,8 +411,25 @@ impl BatchWriter {
                     standard: NftStandard::DotBit,
                     ..Default::default()
                 });
-            agg.total_count += 1;
-            agg.live_count += 1;
+            agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit collection total_count overflow while inserting: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                )
+            })?;
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit collection live_count overflow while inserting: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                )
+            })?;
+            self.apply_dotbit_owner_transition(
+                None,
+                Some(account.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
             state.put_collection_aggregate(agg, batch);
         } else if !was_live {
             let Some(mut agg) = state.get_collection_aggregate(self.store.as_ref())? else {
@@ -330,9 +438,42 @@ impl BatchWriter {
                     hex::encode(&account.account_id)
                 );
             };
-            agg.live_count += 1;
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit collection live_count overflow while re-activating account: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                )
+            })?;
+            self.apply_dotbit_owner_transition(
+                None,
+                Some(account.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
             state.put_collection_aggregate(agg, batch);
         } else {
+            let Some(mut agg) = state.get_collection_aggregate(self.store.as_ref())? else {
+                bail!(
+                    "dotbit collection aggregate missing while transferring account: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                );
+            };
+            if old_owner.is_none() {
+                bail!(
+                    "dotbit live account missing owner_lock_hash during transfer: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                );
+            }
+            self.apply_dotbit_owner_transition(
+                old_owner.as_deref(),
+                Some(account.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
+            state.put_collection_aggregate(agg, batch);
+
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
             let key = ckbadger_store::keys::encode_nft_hourly_key(
@@ -385,6 +526,13 @@ impl BatchWriter {
                     hex::encode(account_id)
                 );
             }
+            let old_owner = entry.owner_lock_hash.clone();
+            if old_owner.is_none() {
+                bail!(
+                    "dotbit live account missing owner_lock_hash during consume: account_id=0x{}",
+                    hex::encode(account_id)
+                );
+            }
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_nft(account_id, &entry);
@@ -401,6 +549,7 @@ impl BatchWriter {
                 );
             }
             agg.live_count -= 1;
+            self.apply_dotbit_owner_transition(old_owner.as_deref(), None, &mut agg, batch, state)?;
             state.put_collection_aggregate(agg, batch);
             return Ok(Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
         }
@@ -649,12 +798,82 @@ mod tests {
             .unwrap();
         assert_eq!(agg.total_count, 1);
         assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.holders_count, 1);
         let entry = writer
             .store()
             .get_nft(&account.account.account_id)
             .unwrap()
             .unwrap();
         assert!(entry.is_live);
+    }
+
+    #[test]
+    fn test_dotbit_transfer_updates_holder_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let writer = BatchWriter::new(Arc::new(store));
+
+        let make_account = |owner_byte: u8| ParsedDotbitAccountOutput {
+            output_index: 6,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: vec![0x11; 20],
+                account: Some("alice.bit".to_string()),
+                type_script_hash: vec![0x21; 32],
+                next_account_id: None,
+                expired_at: None,
+                registered_at: None,
+                status: None,
+                owner_lock_hash: vec![owner_byte; 32],
+            },
+        };
+
+        let tx_hash = vec![0x41; 32];
+        let mut seed = StoreBatch::new(writer.store());
+        let mut seed_state = writer.new_dotbit_batch_state();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_account(0x31),
+                &tx_hash,
+                1,
+                0,
+                &mut seed,
+                &mut seed_state,
+            )
+            .unwrap();
+        seed.commit().unwrap();
+
+        let mut transfer_batch = StoreBatch::new(writer.store());
+        let mut transfer_state = writer.new_dotbit_batch_state();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_account(0x32),
+                &tx_hash,
+                2,
+                3_600_000,
+                &mut transfer_batch,
+                &mut transfer_state,
+            )
+            .unwrap();
+        transfer_batch.commit().unwrap();
+
+        let agg = writer
+            .store()
+            .get_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.holders_count, 1);
+        let owner_a_count = writer
+            .store()
+            .get_nft_collection_owner_count(&DOTBIT_SENTINEL_COLLECTION, &[0x31; 32])
+            .unwrap();
+        let owner_b_count = writer
+            .store()
+            .get_nft_collection_owner_count(&DOTBIT_SENTINEL_COLLECTION, &[0x32; 32])
+            .unwrap();
+        assert_eq!(owner_a_count, 0);
+        assert_eq!(owner_b_count, 1);
     }
 
     #[test]
@@ -707,6 +926,7 @@ mod tests {
             .unwrap();
         assert_eq!(agg.total_count, 1);
         assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.holders_count, 0);
     }
 
     #[test]

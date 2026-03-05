@@ -655,6 +655,21 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_nft_collection_agg(), collection_id, &value);
     }
 
+    pub fn put_nft_collection_owner_count(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        count: i64,
+    ) {
+        let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        self.put_cf(self.store.cf_stats_nft(), key, count.to_le_bytes());
+    }
+
+    pub fn delete_nft_collection_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
+        let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
+        self.delete_cf(self.store.cf_stats_nft(), key);
+    }
+
     // ---- Activities ----
 
     pub fn put_activity(

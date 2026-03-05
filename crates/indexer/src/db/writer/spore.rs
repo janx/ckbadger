@@ -27,6 +27,7 @@ pub(crate) struct SporeBatchState {
     spore_hourly_transfers: HashMap<Vec<u8>, i64>,
     did_collection_agg_loaded: bool,
     did_collection_agg: Option<NftCollectionAggregate>,
+    did_owner_counts: HashMap<Vec<u8>, i64>,
     did_hourly_transfers: HashMap<Vec<u8>, i64>,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
 }
@@ -160,6 +161,26 @@ impl SporeBatchState {
         self.did_collection_agg_loaded = true;
     }
 
+    fn get_did_owner_count(&mut self, store: &CkbadgerStore, lock_hash: &[u8]) -> Result<i64> {
+        if let Some(cached) = self.did_owner_counts.get(lock_hash) {
+            return Ok(*cached);
+        }
+        let loaded =
+            store.get_nft_collection_owner_count(&DID_CKB_SENTINEL_COLLECTION, lock_hash)?;
+        self.did_owner_counts.insert(lock_hash.to_vec(), loaded);
+        Ok(loaded)
+    }
+
+    fn put_did_owner_count(&mut self, lock_hash: &[u8], count: i64, batch: &mut StoreBatch) {
+        batch.put_nft_collection_owner_count(&DID_CKB_SENTINEL_COLLECTION, lock_hash, count);
+        self.did_owner_counts.insert(lock_hash.to_vec(), count);
+    }
+
+    fn delete_did_owner(&mut self, lock_hash: &[u8], batch: &mut StoreBatch) {
+        batch.delete_nft_collection_owner(&DID_CKB_SENTINEL_COLLECTION, lock_hash);
+        self.did_owner_counts.insert(lock_hash.to_vec(), 0);
+    }
+
     fn get_did_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
         if let Some(cached) = self.did_hourly_transfers.get(key) {
             return Ok(*cached);
@@ -267,6 +288,63 @@ impl BatchWriter {
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("spore owner count overflow"))?;
             state.put_cluster_owner_count(cluster_id, new_lock, next, batch);
+        }
+
+        Ok(())
+    }
+
+    fn apply_did_owner_transition(
+        &self,
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut NftCollectionAggregate,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_lock) = old_owner {
+            let old_count = state.get_did_owner_count(self.store.as_ref(), old_lock)?;
+            if old_count <= 0 {
+                bail!(
+                    "did:ckb owner count underflow: lock_hash=0x{}, owner_count={}",
+                    hex::encode(old_lock),
+                    old_count
+                );
+            } else if old_count == 1 {
+                if agg.holders_count <= 0 {
+                    bail!(
+                        "did:ckb holders_count underflow: holders_count={}",
+                        agg.holders_count
+                    );
+                }
+                state.delete_did_owner(old_lock, batch);
+                agg.holders_count -= 1;
+            } else {
+                state.put_did_owner_count(old_lock, old_count - 1, batch);
+            }
+        }
+
+        if let Some(new_lock) = new_owner {
+            let current = state.get_did_owner_count(self.store.as_ref(), new_lock)?;
+            if current == 0 {
+                agg.holders_count = agg.holders_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "did:ckb holders_count overflow: lock_hash=0x{}",
+                        hex::encode(new_lock)
+                    )
+                })?;
+            }
+            let next = current.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "did:ckb owner count overflow: lock_hash=0x{}, current={}",
+                    hex::encode(new_lock),
+                    current
+                )
+            })?;
+            state.put_did_owner_count(new_lock, next, batch);
         }
 
         Ok(())
@@ -503,6 +581,13 @@ impl BatchWriter {
                         hex::encode(&spore.spore_id)
                     )
                 })?;
+                self.apply_did_owner_transition(
+                    None,
+                    Some(spore.owner_lock_hash.as_slice()),
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
             } else if !was_live {
                 agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
                     anyhow::anyhow!(
@@ -510,7 +595,27 @@ impl BatchWriter {
                         hex::encode(&spore.spore_id)
                     )
                 })?;
+                self.apply_did_owner_transition(
+                    None,
+                    Some(spore.owner_lock_hash.as_slice()),
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
             } else {
+                if old_owner.is_none() {
+                    bail!(
+                        "did:ckb live entry missing owner_lock_hash during transfer: spore_id=0x{}",
+                        hex::encode(&spore.spore_id)
+                    );
+                }
+                self.apply_did_owner_transition(
+                    old_owner.as_deref(),
+                    Some(spore.owner_lock_hash.as_slice()),
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
                 let hour_bucket = timestamp_ms / 3_600_000;
                 let key = ckbadger_store::keys::encode_nft_hourly_key(
                     &DID_CKB_SENTINEL_COLLECTION,
@@ -702,6 +807,12 @@ impl BatchWriter {
                 let Some(mut agg) = state.get_did_collection_aggregate(self.store.as_ref())? else {
                     bail!("did:ckb collection aggregate missing");
                 };
+                if old_owner.is_none() {
+                    bail!(
+                        "did:ckb live entry missing owner_lock_hash during consume: spore_id=0x{}",
+                        hex::encode(spore_id)
+                    );
+                }
                 if agg.live_count <= 0 {
                     bail!(
                         "did:ckb collection live_count underflow on consume: live_count={}, spore_id=0x{}",
@@ -710,6 +821,13 @@ impl BatchWriter {
                     );
                 }
                 agg.live_count -= 1;
+                self.apply_did_owner_transition(
+                    old_owner.as_deref(),
+                    None,
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
                 state.put_did_collection_aggregate(agg, batch);
                 return Ok(Some(DID_CKB_SENTINEL_COLLECTION.to_vec()));
             }
@@ -1378,6 +1496,7 @@ mod tests {
         assert_eq!(agg.name.as_deref(), Some("did:ckb"));
         assert_eq!(agg.total_count, 1);
         assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.holders_count, 1);
 
         let ids = store
             .list_nft_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
@@ -1474,6 +1593,7 @@ mod tests {
             .unwrap();
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.holders_count, 0);
     }
 
     #[test]

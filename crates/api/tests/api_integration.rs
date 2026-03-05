@@ -2103,6 +2103,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             standard: NftStandard::MnftClass,
             total_count: 6,
             live_count: 6,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.commit().unwrap();
@@ -4316,6 +4318,8 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
             standard: NftStandard::DotBit,
             total_count: 1,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.commit().unwrap();
@@ -4446,6 +4450,8 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
             standard: NftStandard::DidCkb,
             total_count: 2,
             live_count: 2,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.commit().unwrap();
@@ -4500,6 +4506,8 @@ async fn test_nft_collection_items_supports_did_ckb_collection_from_spore_data()
             standard: NftStandard::DidCkb,
             total_count: 1,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft_by_collection(&did_collection_id, &did_id);
@@ -4727,6 +4735,8 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
             standard: NftStandard::MnftToken,
             total_count: 100,
             live_count: 60,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.commit().unwrap();
@@ -4866,6 +4876,8 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
             standard: NftStandard::DotBit,
             total_count: 200,
             live_count: 120,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.commit().unwrap();
@@ -4929,6 +4941,40 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
 }
 
 #[tokio::test]
+async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 200,
+            live_count: 120,
+            holders_count: 77,
+            activities_count: 6_543,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/assets/nfts/dotbit")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["holdersCount"], 77);
+    assert_eq!(json["activitiesCount"], 6543);
+}
+
+#[tokio::test]
 async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let store = test_store();
     let collection_id = b"did_ckb_collection______________".to_vec();
@@ -4959,6 +5005,8 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
             standard: NftStandard::DidCkb,
             total_count: 1,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft_by_collection(&collection_id, &did_id);
@@ -5156,6 +5204,8 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
             standard: NftStandard::DotBit,
             total_count: 20,
             live_count: 12,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.commit().unwrap();
@@ -5196,6 +5246,8 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
             standard: NftStandard::DotBit,
             total_count: 2,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft(
@@ -5374,6 +5426,8 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
             standard: NftStandard::DotBit,
             total_count: 1,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft(
@@ -5448,6 +5502,8 @@ async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fas
             standard: NftStandard::DotBit,
             total_count: 1,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft(
@@ -5507,6 +5563,8 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             standard: NftStandard::MnftClass,
             total_count: 1,
             live_count: 1,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft(
@@ -5611,6 +5669,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
             standard: NftStandard::DotBit,
             total_count: 4,
             live_count: 3,
+            holders_count: 2,
+            activities_count: 0,
         },
     );
     batch.put_nft(
@@ -5685,6 +5745,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
     batch.put_nft_by_collection(&collection_id, &nft_b);
     batch.put_nft_by_collection(&collection_id, &nft_c);
     batch.put_nft_by_collection(&collection_id, &nft_d);
+    batch.put_nft_collection_owner_count(&collection_id, &owner_a, 2);
+    batch.put_nft_collection_owner_count(&collection_id, &owner_b, 1);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -5742,6 +5804,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             standard: NftStandard::DotBit,
             total_count: 1,
             live_count: 0,
+            holders_count: 0,
+            activities_count: 0,
         },
     );
     batch.put_nft(
