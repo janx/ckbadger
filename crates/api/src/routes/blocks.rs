@@ -7,7 +7,6 @@ use axum::{
 };
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::hardforks_for_network;
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_CACHE_KEY};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -100,24 +99,11 @@ async fn list_blocks(
         }
     }
 
-    let total = match state
-        .cache
-        .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
-        .await
-    {
-        Some(status) => status.tip_block_number + 1,
-        None => {
-            let store = state.store.clone();
-            tokio::task::spawn_blocking(move || {
-                store
-                    .get_sync_status()
-                    .map(|s| s.tip_block_number + 1)
-                    .unwrap_or(0)
-            })
-            .await
-            .unwrap_or(0)
-        }
-    };
+    let total = state
+        .store
+        .get_sync_status()
+        .map(|s| s.tip_block_number + 1)
+        .unwrap_or(0);
 
     // Use from_block: for cursor pagination, we want blocks with number < cursor
     // list_blocks_desc takes from_block as the starting point (inclusive in scan, but we want exclusive)

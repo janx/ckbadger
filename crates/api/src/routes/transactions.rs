@@ -7,7 +7,6 @@ use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_CACHE_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -160,24 +159,11 @@ async fn list_transactions(
         .await
         .unwrap_or(0)
     } else {
-        match state
-            .cache
-            .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
-            .await
-        {
-            Some(status) => status.total_transactions,
-            None => {
-                let store = state.store.clone();
-                tokio::task::spawn_blocking(move || {
-                    store
-                        .get_sync_status()
-                        .map(|s| s.total_transactions)
-                        .unwrap_or(0)
-                })
-                .await
-                .unwrap_or(0)
-            }
-        }
+        state
+            .store
+            .get_sync_status()
+            .map(|s| s.total_transactions)
+            .unwrap_or(0)
     };
 
     let store = state.store.clone();
@@ -663,24 +649,11 @@ async fn get_transaction_detail(
         .unwrap_or_default();
 
     // Get tip block for confirmations
-    let tip_block = match state
-        .cache
-        .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
-        .await
-    {
-        Some(status) => status.tip_block_number,
-        None => {
-            let store = state.store.clone();
-            tokio::task::spawn_blocking(move || {
-                store
-                    .get_sync_status()
-                    .map(|s| s.tip_block_number)
-                    .unwrap_or(0)
-            })
-            .await
-            .unwrap_or(0)
-        }
-    };
+    let tip_block = state
+        .store
+        .get_sync_status()
+        .map(|s| s.tip_block_number)
+        .unwrap_or(0);
 
     let confirmations = tip_block - block_number + 1;
 
@@ -1441,24 +1414,11 @@ async fn get_transaction_lifecycle(
         .unwrap_or_default();
 
     // Get sync tip
-    let tip = match state
-        .cache
-        .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
-        .await
-    {
-        Some(status) => status.tip_block_number,
-        None => {
-            let store = state.store.clone();
-            tokio::task::spawn_blocking(move || {
-                store
-                    .get_sync_status()
-                    .map(|s| s.tip_block_number)
-                    .unwrap_or(0)
-            })
-            .await
-            .unwrap_or(0)
-        }
-    };
+    let tip = state
+        .store
+        .get_sync_status()
+        .map(|s| s.tip_block_number)
+        .unwrap_or(0);
 
     if is_cellbase {
         return ok(TransactionLifecycleResponse {
