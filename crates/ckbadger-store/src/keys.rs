@@ -803,6 +803,8 @@ pub mod sync_meta_keys {
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
+    pub const SYNC_PROGRESS: &[u8] = b"sync_progress";
+    pub const MEMORY_STATS: &[u8] = b"memory_stats";
 }
 
 #[cfg(test)]

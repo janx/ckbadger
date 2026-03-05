@@ -32,9 +32,6 @@ struct Cli {
     #[arg(long, env = "CKB_RPC_URL", global = true)]
     ckb_rpc_url: Option<String>,
 
-    #[arg(long, env = "REDIS_URL")]
-    redis_url: Option<String>,
-
     #[arg(long, default_value = "10000")]
     batch_size: usize,
 
@@ -147,7 +144,6 @@ async fn main() -> Result<()> {
                 parallel_fetch_size: cli.parallel_fetch_size,
                 pipeline_enabled: cli.pipeline_enabled,
                 pipeline_buffer: cli.pipeline_buffer,
-                redis_url: cli.redis_url.or_else(|| std::env::var("REDIS_URL").ok()),
                 bulk_sync_threshold: cli.bulk_sync_threshold,
                 fast_sync_mode: true,
                 ckb_data_path,

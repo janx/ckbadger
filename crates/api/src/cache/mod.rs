@@ -1,74 +1,56 @@
 mod mem_cache;
 
-#[cfg(feature = "redis-cache")]
-mod redis_cache;
-
-#[cfg(feature = "redis-cache")]
-pub use redis_cache::*;
-
 pub use mem_cache::InMemoryCache;
 
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
 use ckbadger_store::CkbadgerStore;
 use serde::{de::DeserializeOwned, Serialize};
 use std::time::Duration;
 
+/// Cache backend using in-memory TTL cache.
+/// Previously supported Redis; now always uses in-memory storage.
 #[derive(Clone)]
-pub enum CacheBackend {
-    #[cfg(feature = "redis-cache")]
-    Redis(Box<RedisCache>),
-    None,
+pub struct CacheBackend {
+    inner: InMemoryCache,
 }
 
 impl CacheBackend {
-    pub async fn get<T: DeserializeOwned>(&self, _key: &str) -> Option<T> {
-        match self {
-            #[cfg(feature = "redis-cache")]
-            CacheBackend::Redis(cache) => cache.get(_key).await,
-            CacheBackend::None => None,
+    pub fn new() -> Self {
+        Self {
+            inner: InMemoryCache::new(),
         }
     }
 
-    pub async fn set<T: Serialize>(&self, _key: &str, _value: &T, _ttl: Duration) {
-        match self {
-            #[cfg(feature = "redis-cache")]
-            CacheBackend::Redis(cache) => cache.set(_key, _value, _ttl).await,
-            CacheBackend::None => {}
-        }
+    pub async fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
+        self.inner.get(key)
     }
 
-    pub async fn delete(&self, _key: &str) {
-        match self {
-            #[cfg(feature = "redis-cache")]
-            CacheBackend::Redis(cache) => cache.delete(_key).await,
-            CacheBackend::None => {}
-        }
+    pub async fn set<T: Serialize>(&self, key: &str, value: &T, ttl: Duration) {
+        self.inner.set(key, value, ttl);
     }
 
-    pub async fn hgetall<T: serde::de::DeserializeOwned>(&self, _key: &str) -> Vec<T> {
-        match self {
-            #[cfg(feature = "redis-cache")]
-            CacheBackend::Redis(cache) => cache.hgetall(_key).await,
-            CacheBackend::None => Vec::new(),
-        }
+    pub async fn delete(&self, key: &str) {
+        self.inner.delete(key);
     }
 
-    /// Get sync status from Redis, with fallback to store queries.
-    pub async fn get_sync_status_from_store(&self, store: &CkbadgerStore) -> SyncStatusData {
-        if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
-            return status;
-        }
+    /// hgetall is no longer supported (was Redis-specific).
+    /// Returns an empty Vec. Callers that used this for proposals
+    /// should use the dedicated proposals endpoint instead.
+    pub async fn hgetall<T: DeserializeOwned>(&self, _key: &str) -> Vec<T> {
+        Vec::new()
+    }
 
+    /// Get sync status from store queries (no Redis).
+    pub async fn get_sync_status_from_store(
+        &self,
+        store: &CkbadgerStore,
+    ) -> ckbadger_common::sync::SyncStatusData {
         let sync = store.get_sync_status().unwrap_or_default();
         let tip = sync.tip_block_number;
-
-        // Fallback should not depend on historical stats CF placement.
-        // Use sync_status counters as the source of truth.
         let total_tx = sync.total_transactions;
         let total_cells = sync.total_cells_created;
         let total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
 
-        SyncStatusData {
+        ckbadger_common::sync::SyncStatusData {
             tip_block_number: tip,
             tip_block_hash: hex::encode(&sync.tip_block_hash),
             derived_tip_block_number: Some(sync.derived_tip_block_number),
@@ -87,16 +69,18 @@ impl CacheBackend {
         }
     }
 
-    /// Get sync status tip block (lightweight, Redis-first with store fallback)
+    /// Get sync status tip block from store.
     pub async fn get_sync_tip_from_store(&self, store: &CkbadgerStore) -> i64 {
-        if let Some(status) = self.get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY).await {
-            return status.tip_block_number;
-        }
-
         store
             .get_sync_status()
             .map(|s| s.tip_block_number)
             .unwrap_or(0)
+    }
+}
+
+impl Default for CacheBackend {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -144,16 +128,33 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_cache_backend_none_hgetall_returns_empty_vec() {
-        let cache = CacheBackend::None;
+    async fn test_cache_backend_hgetall_returns_empty_vec() {
+        let cache = CacheBackend::new();
         let result: Vec<String> = cache.hgetall("any_key").await;
         assert!(result.is_empty());
     }
 
     #[tokio::test]
-    async fn test_cache_backend_none_get_returns_none() {
-        let cache = CacheBackend::None;
+    async fn test_cache_backend_get_returns_none_for_missing() {
+        let cache = CacheBackend::new();
         let result: Option<String> = cache.get("any_key").await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cache_backend_set_and_get() {
+        let cache = CacheBackend::new();
+        cache.set("key1", &42i64, Duration::from_secs(60)).await;
+        let result: Option<i64> = cache.get("key1").await;
+        assert_eq!(result, Some(42));
+    }
+
+    #[tokio::test]
+    async fn test_cache_backend_delete() {
+        let cache = CacheBackend::new();
+        cache.set("key1", &42i64, Duration::from_secs(60)).await;
+        cache.delete("key1").await;
+        let result: Option<i64> = cache.get("key1").await;
         assert!(result.is_none());
     }
 
@@ -178,21 +179,17 @@ mod tests {
 
     #[test]
     fn test_cache_ttl_address_balance_is_short() {
-        // Address balance TTL should be short enough for responsiveness
-        // but long enough to avoid excessive DB queries
         assert!(CacheTtl::ADDRESS_BALANCE.as_secs() >= 10);
         assert!(CacheTtl::ADDRESS_BALANCE.as_secs() <= 120);
     }
 
     #[test]
     fn test_cache_ttl_mining_reward_is_long() {
-        // Mining rewards are immutable once confirmed
         assert!(CacheTtl::MINING_REWARD.as_secs() >= 3600);
     }
 
     #[test]
     fn test_cache_keys_are_unique() {
-        // Ensure different key generators produce non-overlapping keys
         let addr_key = CacheKeys::address_balance("test");
         let block_key = CacheKeys::block_by_hash("test");
         let tx_key = CacheKeys::transaction("test");
@@ -209,7 +206,6 @@ mod tests {
 
     #[test]
     fn test_cache_ttl_chart_longer_than_block() {
-        // Chart data changes slowly, should cache much longer than block/tx data
         assert!(CacheTtl::CHART > CacheTtl::BLOCK);
         assert!(CacheTtl::CHART > CacheTtl::TRANSACTION);
         assert!(CacheTtl::CHART > CacheTtl::NETWORK_STATS);
@@ -217,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sync_status_fallback_uses_sync_totals() {
-        let cache = CacheBackend::None;
+        let cache = CacheBackend::new();
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
 

@@ -7,7 +7,7 @@ use axum::{
 };
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::hardforks_for_network;
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
+use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_CACHE_KEY};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -102,7 +102,7 @@ async fn list_blocks(
 
     let total = match state
         .cache
-        .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+        .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
         .await
     {
         Some(status) => status.tip_block_number + 1,

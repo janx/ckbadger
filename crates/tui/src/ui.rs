@@ -12,9 +12,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::chart::{render_bar_chart, ChartStats};
-use crate::db::{
-    ApiServiceInfo, ChainInfoData, RedisServiceInfo, RuntimeDiagData, SyncStatusRow, TuiDb,
-};
+use crate::db::{ApiServiceInfo, ChainInfoData, RuntimeDiagData, SyncStatusRow, TuiDb};
 
 const RATE_HISTORY_SIZE: usize = 3600;
 const LOG_HISTORY_SIZE: usize = 200;
@@ -104,7 +102,6 @@ pub struct App {
     sync_status: Option<SyncStatusRow>,
     memory_stats: Option<MemoryStatsData>,
     chain_info: Option<ChainInfoData>,
-    redis_service: RedisServiceInfo,
     api_service: ApiServiceInfo,
     runtime_diag: Option<RuntimeDiagData>,
     last_refresh: Instant,
@@ -164,7 +161,6 @@ impl App {
             sync_status: None,
             memory_stats: None,
             chain_info: None,
-            redis_service: RedisServiceInfo::default(),
             api_service: ApiServiceInfo::default(),
             runtime_diag: None,
             last_refresh: Instant::now(),
@@ -302,11 +298,10 @@ impl App {
     }
 
     pub async fn refresh(&mut self) {
-        let (sync_status_result, memory_stats, (chain_info, api_service), redis_service) = tokio::join!(
+        let (sync_status_result, memory_stats, (chain_info, api_service)) = tokio::join!(
             self.db.get_sync_status(),
             self.db.get_memory_stats(),
             self.db.get_chain_info_and_api_service_info(),
-            self.db.get_redis_service_info(),
         );
 
         match sync_status_result {
@@ -319,7 +314,6 @@ impl App {
 
         self.memory_stats = memory_stats;
         self.chain_info = chain_info;
-        self.redis_service = redis_service;
         self.api_service = api_service;
         self.runtime_diag = None;
         self.last_refresh = Instant::now();
@@ -2231,7 +2225,7 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
         ));
 
     let Some(mem) = &app.memory_stats else {
-        let msg = Paragraph::new("No memory stats (Redis unavailable)").block(block);
+        let msg = Paragraph::new("No memory stats (store unavailable)").block(block);
         f.render_widget(msg, area);
         return;
     };
@@ -2579,139 +2573,10 @@ fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
 fn draw_service_windows(f: &mut Frame, app: &App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(34),
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-        ])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
-    draw_redis_health(f, app, cols[0]);
-    draw_api_health(f, app, cols[1]);
-    draw_runtime_health(f, app, cols[2]);
-}
-
-fn draw_redis_health(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(SLATE_800))
-        .title(Span::styled(
-            "Redis Health",
-            Style::default().fg(FOREGROUND),
-        ));
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if inner.height == 0 {
-        return;
-    }
-
-    let info = &app.redis_service;
-    let (state, state_color) = redis_health_state(info);
-    let max_age = redis_max_key_age(info);
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled("State ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format!("[{}]", state),
-                Style::default()
-                    .fg(state_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  RTT ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_latency_ms(info.latency_ms),
-                Style::default().fg(FOREGROUND),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Keys ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(info.db_keys_total.unwrap_or(0)),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-            Span::styled("  exp ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(info.db_keys_expiring.unwrap_or(0)),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-            Span::styled("  pers ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(info.db_keys_persistent.unwrap_or(0)),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Mem ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_bytes(info.used_memory_bytes.unwrap_or(0)),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-            Span::styled("  peak ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_bytes(info.used_memory_peak_bytes.unwrap_or(0)),
-                Style::default().fg(TERMINAL_DIM),
-            ),
-            Span::styled("  frag ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_ratio(info.mem_fragmentation_ratio),
-                Style::default().fg(AMBER),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Hit ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_hit_rate(info.keyspace_hits, info.keyspace_misses),
-                Style::default().fg(TERMINAL_GREEN),
-            ),
-            Span::styled("  evict ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_num_u64(info.evicted_keys.unwrap_or(0)),
-                Style::default().fg(AMBER),
-            ),
-            Span::styled("  max-age ", Style::default().fg(SLATE_500)),
-            Span::styled(format_age_secs(max_age), Style::default().fg(TERMINAL_DIM)),
-        ]),
-    ];
-
-    lines.push(redis_key_line(
-        "sync:status",
-        info.sync_status_type.as_deref(),
-        info.sync_status_value_bytes,
-        info.sync_status_ttl_secs,
-        info.sync_status_age_secs,
-    ));
-    lines.push(redis_key_line(
-        "sync:progress",
-        info.sync_progress_type.as_deref(),
-        info.sync_progress_value_bytes,
-        info.sync_progress_ttl_secs,
-        info.sync_progress_age_secs,
-    ));
-    lines.push(redis_key_line(
-        "memory:stats",
-        info.memory_stats_type.as_deref(),
-        info.memory_stats_value_bytes,
-        info.memory_stats_ttl_secs,
-        info.memory_stats_age_secs,
-    ));
-
-    if let Some(err) = &info.error {
-        lines.push(Line::from(vec![
-            Span::styled("Err ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                trim_for_panel(err, inner.width as usize),
-                Style::default().fg(AMBER),
-            ),
-        ]));
-    } else if !info.enabled {
-        lines.push(Line::from(Span::styled(
-            "Not configured (REDIS_URL)",
-            Style::default().fg(SLATE_500),
-        )));
-    }
-
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    draw_api_health(f, app, cols[0]);
+    draw_runtime_health(f, app, cols[1]);
 }
 
 fn draw_api_health(f: &mut Frame, app: &App, area: Rect) {
@@ -2899,31 +2764,6 @@ fn draw_runtime_health(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-fn redis_max_key_age(info: &RedisServiceInfo) -> Option<i64> {
-    [
-        info.sync_status_age_secs,
-        info.sync_progress_age_secs,
-        info.memory_stats_age_secs,
-    ]
-    .into_iter()
-    .flatten()
-    .max()
-}
-
-fn redis_health_state(info: &RedisServiceInfo) -> (&'static str, Color) {
-    if !info.enabled {
-        return ("OFF", SLATE_500);
-    }
-    if !info.reachable {
-        return ("DOWN", ERROR_RED);
-    }
-    if redis_max_key_age(info).is_some_and(|age| age > 30) {
-        ("STALE", AMBER)
-    } else {
-        ("OK", TERMINAL_GREEN)
-    }
-}
-
 fn api_health_state(info: &ApiServiceInfo) -> (&'static str, Color) {
     if !info.reachable {
         return ("DOWN", ERROR_RED);
@@ -2974,53 +2814,6 @@ fn format_age_secs(age_secs: Option<i64>) -> String {
     age_secs
         .map(|v| format!("{v}s"))
         .unwrap_or_else(|| "-".to_string())
-}
-
-fn format_ttl(ttl_secs: Option<i64>) -> String {
-    match ttl_secs {
-        Some(-1) => "persist".to_string(),
-        Some(v) => format!("{v}s"),
-        None => "-".to_string(),
-    }
-}
-
-fn format_ratio(value: Option<f64>) -> String {
-    value
-        .map(|v| format!("{v:.2}"))
-        .unwrap_or_else(|| "-".to_string())
-}
-
-fn format_hit_rate(hits: Option<u64>, misses: Option<u64>) -> String {
-    match (hits, misses) {
-        (Some(h), Some(m)) if h + m > 0 => format!("{:.1}%", h as f64 * 100.0 / (h + m) as f64),
-        _ => "-".to_string(),
-    }
-}
-
-fn redis_key_line(
-    name: &str,
-    key_type: Option<&str>,
-    value_bytes: Option<u64>,
-    ttl_secs: Option<i64>,
-    age_secs: Option<i64>,
-) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(name.to_string(), Style::default().fg(SLATE_500)),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            key_type.unwrap_or("-").to_string(),
-            Style::default().fg(TERMINAL_DIM),
-        ),
-        Span::styled(" ", Style::default().fg(SLATE_700)),
-        Span::styled(
-            format_bytes(value_bytes.unwrap_or(0)),
-            Style::default().fg(FOREGROUND),
-        ),
-        Span::styled(" ttl ", Style::default().fg(SLATE_500)),
-        Span::styled(format_ttl(ttl_secs), Style::default().fg(AMBER)),
-        Span::styled(" age ", Style::default().fg(SLATE_500)),
-        Span::styled(format_age_secs(age_secs), Style::default().fg(TERMINAL_DIM)),
-    ])
 }
 
 fn trim_for_panel(text: &str, width: usize) -> String {
@@ -3752,7 +3545,7 @@ fn draw_system_environment(
         ),
     ];
 
-    // Live indexer state from Redis memory stats
+    // Live indexer state from memory stats
     if let Some(m) = mem {
         let mode_str = if m.bulk_sync_mode {
             "Bulk Sync"
@@ -4012,20 +3805,18 @@ mod tests {
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
         consumed_cells_source_label, dense_right_lines, derived_status_line, detail_right_lines,
         diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_hit_rate, format_num, format_num_commas,
-        format_rate_pair, format_ratio, format_signed_num_i128, format_stage_commit_gap_ms,
-        format_ttl, header_right_line, header_title_line, heartbeat_is_on,
-        io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
+        footer_status_message, format_age_secs, format_num, format_num_commas, format_rate_pair,
+        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
+        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
         overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, redis_health_state, redis_key_line, redis_max_key_age,
-        runtime_health_state, runtime_live_delta, sparkline, stack_sync_charts, stale_age_secs,
-        stale_status, startup_phase_label, storage_runtime_columns, sync_bottleneck,
-        sync_chart_specs, sync_timing_lines, system_kv_line, trend_delta, trim_for_panel,
-        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS,
-        TERMINAL_DIM,
+        pipeline_reset_line, rate_jitter, runtime_health_state, runtime_live_delta, sparkline,
+        stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,
+        storage_runtime_columns, sync_bottleneck, sync_chart_specs, sync_timing_lines,
+        system_kv_line, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
+        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
-    use crate::db::{ApiServiceInfo, RedisServiceInfo, RuntimeDiagData, TuiDb};
+    use crate::db::{ApiServiceInfo, RuntimeDiagData, TuiDb};
     use ckbadger_common::MemoryStatsData;
     use ratatui::layout::Rect;
     use ratatui::text::Line;
@@ -4565,39 +4356,6 @@ mod tests {
     }
 
     #[test]
-    fn test_redis_health_state() {
-        let off = RedisServiceInfo::default();
-        assert_eq!(redis_health_state(&off), ("OFF", Color::Rgb(160, 174, 192)));
-
-        let down = RedisServiceInfo {
-            enabled: true,
-            reachable: false,
-            ..Default::default()
-        };
-        assert_eq!(redis_health_state(&down), ("DOWN", Color::Rgb(239, 68, 68)));
-
-        let stale = RedisServiceInfo {
-            enabled: true,
-            reachable: true,
-            sync_progress_age_secs: Some(40),
-            ..Default::default()
-        };
-        assert_eq!(
-            redis_health_state(&stale),
-            ("STALE", Color::Rgb(255, 176, 0))
-        );
-
-        let ok = RedisServiceInfo {
-            enabled: true,
-            reachable: true,
-            sync_progress_age_secs: Some(10),
-            ..Default::default()
-        };
-        assert_eq!(redis_health_state(&ok), ("OK", Color::Rgb(0, 255, 65)));
-        assert_eq!(redis_max_key_age(&ok), Some(10));
-    }
-
-    #[test]
     fn test_api_health_state() {
         let down = ApiServiceInfo::default();
         assert_eq!(api_health_state(&down), ("DOWN", Color::Rgb(239, 68, 68)));
@@ -4648,27 +4406,9 @@ mod tests {
     fn test_health_format_helpers() {
         assert_eq!(format_age_secs(None), "-");
         assert_eq!(format_age_secs(Some(12)), "12s");
-        assert_eq!(format_ttl(None), "-");
-        assert_eq!(format_ttl(Some(-1)), "persist");
-        assert_eq!(format_ttl(Some(20)), "20s");
-        assert_eq!(format_ratio(None), "-");
-        assert_eq!(format_ratio(Some(1.236)), "1.24");
-        assert_eq!(format_hit_rate(None, None), "-");
-        assert_eq!(format_hit_rate(Some(95), Some(5)), "95.0%");
         assert_eq!(trim_for_panel("abcdef", 0), "");
         assert_eq!(trim_for_panel("abcdef", 6), "...");
         assert_eq!(trim_for_panel("abcdefghijkl", 10), "a...");
-    }
-
-    #[test]
-    fn test_redis_key_line_format() {
-        let line = redis_key_line("sync:status", Some("string"), Some(2048), Some(30), Some(2));
-        let text = line_text(&line);
-        assert!(text.contains("sync:status"));
-        assert!(text.contains("string"));
-        assert!(text.contains("2.00 KB"));
-        assert!(text.contains("ttl 30s"));
-        assert!(text.contains("age 2s"));
     }
 
     #[test]
@@ -4799,7 +4539,6 @@ mod tests {
     #[tokio::test]
     async fn test_app_refresh_without_store_dependency() {
         let db = TuiDb::new(
-            None,
             "http://127.0.0.1:9/api/v1",
             "/tmp/ckbadger-store",
             "/tmp/ckbadger-store-append-only",
@@ -4815,7 +4554,6 @@ mod tests {
     #[tokio::test]
     async fn test_log_warning_deduplicates_recent_same_message() {
         let db = TuiDb::new(
-            None,
             "http://127.0.0.1:9/api/v1",
             "/tmp/ckbadger-store",
             "/tmp/ckbadger-store-append-only",

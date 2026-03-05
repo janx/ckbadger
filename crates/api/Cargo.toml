@@ -50,9 +50,6 @@ dotenvy = { workspace = true }
 # CLI
 clap = { workspace = true }
 
-# Redis (always included for task command queue; redis-cache feature enables response caching)
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-
 # Rate limiting
 governor = { version = "0.8", features = ["dashmap"] }
 dashmap = "6.1"
@@ -71,10 +68,6 @@ ckb-types = { workspace = true }
 
 # RocksDB (for iterator mode in direct store access)
 rocksdb = { workspace = true }
-
-[features]
-default = []
-redis-cache = []
 
 [dev-dependencies]
 tokio-test = { workspace = true }

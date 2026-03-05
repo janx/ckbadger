@@ -24,8 +24,6 @@ pub struct Config {
     pub pipeline_enabled: bool,
     #[serde(default = "default_pipeline_buffer")]
     pub pipeline_buffer: usize,
-    #[serde(default)]
-    pub redis_url: Option<String>,
     #[serde(default = "default_bulk_sync_threshold")]
     pub bulk_sync_threshold: u64,
     #[serde(default = "default_fast_sync_mode")]
@@ -151,7 +149,6 @@ mod tests {
             parallel_fetch_size: 64,
             pipeline_enabled: true,
             pipeline_buffer: 16,
-            redis_url: None,
             bulk_sync_threshold: 72,
             fast_sync_mode: true,
             ckb_data_path: None,

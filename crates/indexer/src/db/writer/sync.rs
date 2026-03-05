@@ -46,7 +46,7 @@ impl BatchWriter {
         ema_rate: Option<f64>,
         refresh_dao_statistics: bool,
     ) -> Result<()> {
-        // Persist sync status in RocksDB so restart/fallback paths do not rely on Redis.
+        // Persist sync status in RocksDB for restart/recovery paths.
         self.store.update_sync_status(|status| {
             status.tip_block_number = block_number;
             status.tip_block_hash = block_hash.to_vec();

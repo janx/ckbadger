@@ -428,11 +428,11 @@ async fn get_pending_proposals(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ckbadger_common::PendingProposalsResponse> {
     use ckbadger_common::{
-        CachedProposal, PendingProposal, PendingProposalsResponse, PENDING_PROPOSALS_REDIS_KEY,
+        CachedProposal, PendingProposal, PendingProposalsResponse, PENDING_PROPOSALS_CACHE_KEY,
     };
 
     let cached_proposals: Vec<CachedProposal> =
-        state.cache.hgetall(PENDING_PROPOSALS_REDIS_KEY).await;
+        state.cache.hgetall(PENDING_PROPOSALS_CACHE_KEY).await;
 
     // Get tip block number from the store (sync, not async)
     let tip = state

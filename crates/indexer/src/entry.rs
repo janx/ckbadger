@@ -28,7 +28,6 @@ pub struct IndexerServiceConfig {
     pub pipeline_enabled: bool,
     pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
-    pub redis_url: Option<String>,
 }
 
 impl From<IndexerServiceConfig> for Config {
@@ -43,7 +42,6 @@ impl From<IndexerServiceConfig> for Config {
             parallel_fetch_size: svc.parallel_fetch_size,
             pipeline_enabled: svc.pipeline_enabled,
             pipeline_buffer: svc.pipeline_buffer,
-            redis_url: svc.redis_url,
             bulk_sync_threshold: svc.bulk_sync_threshold,
             fast_sync_mode: true,
             ckb_data_path: svc.ckb_data_path,
@@ -255,11 +253,8 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     .await?;
     let indexer = Arc::new(indexer);
 
-    spawn_cycles_task_worker(
-        store.clone(),
-        config.ckb_rpc_url.clone(),
-        config.redis_url.clone(),
-    );
+    let (_cycles_tx, _cycles_result_store) =
+        spawn_cycles_task_worker(store.clone(), config.ckb_rpc_url.clone());
 
     let data_source = if indexer.is_direct_db_read() {
         "DB"
@@ -1187,7 +1182,6 @@ mod tests {
             pipeline_enabled: false,
             pipeline_buffer: 4,
             bulk_sync_threshold: 100,
-            redis_url: Some("redis://localhost".to_string()),
         };
 
         let config: Config = svc.into();
@@ -1202,7 +1196,6 @@ mod tests {
         assert!(!config.pipeline_enabled);
         assert_eq!(config.pipeline_buffer, 4);
         assert_eq!(config.bulk_sync_threshold, 100);
-        assert_eq!(config.redis_url.as_deref(), Some("redis://localhost"));
         assert!(config.fast_sync_mode);
         assert!(!config.force_startup_cleanup);
         assert!(config.start_block.is_none());

@@ -5,13 +5,13 @@
 //! 2. Proposed: Transaction's short ID written to a block's proposal zone
 //! 3. Committed: Transaction included in a block (2-10 blocks after proposal)
 //!
-//! This module provides types for caching proposal details in Redis,
+//! This module provides types for caching proposal details in-memory,
 //! enabling the frontend to display pending proposals with full tx metadata.
 
 use serde::{Deserialize, Serialize};
 
-/// Redis key prefix for pending proposals hash map
-pub const PENDING_PROPOSALS_REDIS_KEY: &str = "proposals:pending";
+/// Cache key for pending proposals (used by in-memory cache).
+pub const PENDING_PROPOSALS_CACHE_KEY: &str = "proposals:pending";
 
 /// TTL for proposal entries (5 minutes = ~30 blocks)
 pub const PROPOSAL_CACHE_TTL_SECS: u64 = 300;
@@ -20,11 +20,10 @@ pub const PROPOSAL_CACHE_TTL_SECS: u64 = 300;
 pub const PROPOSAL_WINDOW_CLOSEST: u64 = 2; // Minimum blocks before commit allowed
 pub const PROPOSAL_WINDOW_FARTHEST: u64 = 10; // Maximum blocks before proposal expires
 
-/// Cached proposal entry stored in Redis.
+/// Cached proposal entry stored in-memory by the indexer.
 ///
-/// Key: `proposals:pending` (Redis Hash)
-/// Field: proposal_id_hex (20 char hex string, e.g., "abcd1234567890abcdef")
-/// Value: JSON-serialized CachedProposal
+/// Key: proposal_id_hex (20 char hex string, e.g., "abcd1234567890abcdef")
+/// Value: CachedProposal
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CachedProposal {

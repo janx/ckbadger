@@ -252,6 +252,26 @@ impl CkbadgerStore {
         })
     }
 
+    /// Store sync progress data (JSON serialized, ephemeral monitoring).
+    pub fn put_sync_progress(&self, data: &[u8]) -> anyhow::Result<()> {
+        self.put_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_PROGRESS, data)
+    }
+
+    /// Get sync progress data (JSON bytes).
+    pub fn get_sync_progress(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        self.get_cf(self.cf_sync_meta(), sync_meta_keys::SYNC_PROGRESS)
+    }
+
+    /// Store memory stats data (JSON serialized, ephemeral monitoring).
+    pub fn put_memory_stats(&self, data: &[u8]) -> anyhow::Result<()> {
+        self.put_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS, data)
+    }
+
+    /// Get memory stats data (JSON bytes).
+    pub fn get_memory_stats(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        self.get_cf(self.cf_sync_meta(), sync_meta_keys::MEMORY_STATS)
+    }
+
     pub fn get_latest_reorg_event(&self) -> anyhow::Result<Option<ReorgEvent>> {
         if let Some(value) = self.get_cf(self.cf_sync_meta(), sync_meta_keys::REORG_LATEST_EVENT)? {
             let event: ReorgEvent = bincode::deserialize(&value).map_err(|e| {

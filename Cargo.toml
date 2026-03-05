@@ -58,9 +58,6 @@ rayon = "1.10"
 config = "0.14"
 dotenvy = "0.15"
 
-# Cache
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
-
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
 

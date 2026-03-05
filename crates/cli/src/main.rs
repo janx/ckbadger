@@ -202,7 +202,6 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
             pipeline_enabled: config.indexer.pipeline_enabled,
             pipeline_buffer: config.indexer.pipeline_buffer,
             bulk_sync_threshold: config.indexer.bulk_sync_threshold,
-            redis_url: None,
         };
         handles.push(tokio::spawn(async move {
             if let Err(e) = run_indexer(indexer_config).await {
@@ -223,7 +222,6 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
             rate_limit: config.api.rate_limit,
             rate_limit_burst: config.api.rate_limit_burst,
             ckb_data_path: config.ckb.data_path.clone(),
-            redis_url: None,
             frontend_dir,
         };
         handles.push(tokio::spawn(async move {
@@ -262,7 +260,6 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
         append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         refresh_ms: 1000,
-        redis_url: None,
     };
 
     run_tui(tui_config).await

@@ -1,13 +1,11 @@
 use anyhow::Result;
 use ckbadger_common::{
     format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
-    MEMORY_STATS_REDIS_KEY, SYNC_PROGRESS_REDIS_KEY, SYNC_STATUS_REDIS_KEY,
 };
-use ckbadger_store::MemoryProfile;
-use redis::AsyncCommands;
+use ckbadger_store::{CkbadgerStore, MemoryProfile};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -101,36 +99,6 @@ pub struct ChainInfoData {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct RedisServiceInfo {
-    pub enabled: bool,
-    pub reachable: bool,
-    pub latency_ms: Option<f64>,
-    pub db_keys_total: Option<u64>,
-    pub db_keys_expiring: Option<u64>,
-    pub db_keys_persistent: Option<u64>,
-    pub used_memory_bytes: Option<u64>,
-    pub used_memory_peak_bytes: Option<u64>,
-    pub used_memory_rss_bytes: Option<u64>,
-    pub mem_fragmentation_ratio: Option<f64>,
-    pub keyspace_hits: Option<u64>,
-    pub keyspace_misses: Option<u64>,
-    pub evicted_keys: Option<u64>,
-    pub sync_status_age_secs: Option<i64>,
-    pub sync_progress_age_secs: Option<i64>,
-    pub memory_stats_age_secs: Option<i64>,
-    pub sync_status_type: Option<String>,
-    pub sync_status_ttl_secs: Option<i64>,
-    pub sync_status_value_bytes: Option<u64>,
-    pub sync_progress_type: Option<String>,
-    pub sync_progress_ttl_secs: Option<i64>,
-    pub sync_progress_value_bytes: Option<u64>,
-    pub memory_stats_type: Option<String>,
-    pub memory_stats_ttl_secs: Option<i64>,
-    pub memory_stats_value_bytes: Option<u64>,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct ApiServiceInfo {
     pub reachable: bool,
     pub latency_ms: Option<f64>,
@@ -140,14 +108,6 @@ pub struct ApiServiceInfo {
     pub tps: Option<String>,
     pub avg_block_time: Option<String>,
     pub error: Option<String>,
-}
-
-fn age_since(unix_ts: i64, now: i64) -> Option<i64> {
-    if unix_ts <= 0 {
-        None
-    } else {
-        Some((now - unix_ts).max(0))
-    }
 }
 
 fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
@@ -164,50 +124,6 @@ fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
         avg_block_time: stats.avg_block_time.clone(),
         tps: stats.tps.clone(),
         tx_24h,
-    }
-}
-
-fn parse_info_map(info_text: &str) -> HashMap<String, String> {
-    info_text
-        .lines()
-        .filter_map(|line| {
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (k, v) = line.split_once(':')?;
-            Some((k.trim().to_string(), v.trim().to_string()))
-        })
-        .collect()
-}
-
-fn parse_keyspace_db0(keyspace_info: &str) -> (Option<u64>, Option<u64>) {
-    for line in keyspace_info.lines() {
-        if let Some((db, payload)) = line.split_once(':') {
-            if db.trim() != "db0" {
-                continue;
-            }
-            let mut keys = None;
-            let mut expires = None;
-            for part in payload.split(',') {
-                if let Some((name, value)) = part.split_once('=') {
-                    match name.trim() {
-                        "keys" => keys = value.trim().parse::<u64>().ok(),
-                        "expires" => expires = value.trim().parse::<u64>().ok(),
-                        _ => {}
-                    }
-                }
-            }
-            return (keys, expires);
-        }
-    }
-    (None, None)
-}
-
-fn ttl_or_none(ttl_secs: i64) -> Option<i64> {
-    if ttl_secs == -2 {
-        None
-    } else {
-        Some(ttl_secs)
     }
 }
 
@@ -263,7 +179,7 @@ fn response_indicates_derived_syncing(status_code: u16, body: &str) -> bool {
 }
 
 pub struct TuiDb {
-    redis: Option<redis::aio::MultiplexedConnection>,
+    store: Option<Arc<CkbadgerStore>>,
     api_url: String,
     http: reqwest::Client,
     memory_profile: MemoryProfile,
@@ -284,28 +200,21 @@ impl TuiDb {
         &self.append_only_data_path
     }
 
-    pub async fn new(
-        redis_url: Option<&str>,
-        api_url: &str,
-        domain_data_path: &str,
-        append_only_data_path: &str,
-    ) -> Self {
-        let redis = if let Some(url) = redis_url {
-            match redis::Client::open(url) {
-                Ok(client) => match client.get_multiplexed_async_connection().await {
-                    Ok(conn) => Some(conn),
-                    Err(e) => {
-                        eprintln!("Failed to connect to Redis: {e}");
-                        None
-                    }
-                },
-                Err(e) => {
-                    eprintln!("Failed to create Redis client: {e}");
-                    None
-                }
+    pub async fn new(api_url: &str, domain_data_path: &str, append_only_data_path: &str) -> Self {
+        // Try to open the domain store in secondary (read-only) mode
+        let secondary_path = format!("{}-tui-secondary", domain_data_path);
+        let store = match CkbadgerStore::open_domain_secondary(domain_data_path, &secondary_path) {
+            Ok(s) => {
+                eprintln!(
+                    "TUI: opened domain store (secondary) at {}",
+                    domain_data_path
+                );
+                Some(Arc::new(s))
             }
-        } else {
-            None
+            Err(e) => {
+                eprintln!("TUI: failed to open domain store: {e}");
+                None
+            }
         };
 
         let http = reqwest::Client::builder()
@@ -314,7 +223,7 @@ impl TuiDb {
             .unwrap_or_default();
 
         Self {
-            redis,
+            store,
             api_url: api_url.to_string(),
             http,
             memory_profile: MemoryProfile::for_secondary(),
@@ -323,10 +232,21 @@ impl TuiDb {
         }
     }
 
+    /// Refresh the secondary store to catch up with the primary.
+    fn refresh_store(&self) {
+        if let Some(ref store) = self.store {
+            if let Err(e) = store.refresh() {
+                eprintln!("TUI: store refresh failed: {e}");
+            }
+        }
+    }
+
     pub async fn get_sync_status(&self) -> Result<SyncStatusRow> {
-        let progress_data: Option<SyncProgressData> =
-            self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
-        let status_data: Option<SyncStatusData> = self.get_redis_key(SYNC_STATUS_REDIS_KEY).await;
+        // Refresh secondary to get latest data
+        self.refresh_store();
+
+        let progress_data: Option<SyncProgressData> = self.get_sync_progress_from_store();
+        let status_data: Option<SyncStatusData> = self.get_sync_status_from_store();
 
         if let Some(ref progress) = progress_data {
             return Ok(self.build_from_progress(progress, &status_data));
@@ -337,20 +257,41 @@ impl TuiDb {
         }
 
         Err(anyhow::anyhow!(
-            "sync status unavailable: missing redis keys '{}' and '{}'",
-            SYNC_PROGRESS_REDIS_KEY,
-            SYNC_STATUS_REDIS_KEY
+            "sync status unavailable: store not accessible or empty"
         ))
     }
 
-    async fn get_redis_key<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
-        let conn = self.redis.as_ref()?;
-        let mut conn = conn.clone();
-        let result: std::result::Result<Option<String>, _> = conn.get(key).await;
-        result
-            .ok()
-            .flatten()
-            .and_then(|json| serde_json::from_str(&json).ok())
+    fn get_sync_progress_from_store(&self) -> Option<SyncProgressData> {
+        let store = self.store.as_ref()?;
+        let bytes = store.get_sync_progress().ok()??;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    fn get_sync_status_from_store(&self) -> Option<SyncStatusData> {
+        let store = self.store.as_ref()?;
+        let sync = store.get_sync_status().ok()?;
+        let tip = sync.tip_block_number;
+        let total_tx = sync.total_transactions;
+        let total_cells = sync.total_cells_created;
+        let total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
+
+        Some(SyncStatusData {
+            tip_block_number: tip,
+            tip_block_hash: format!("0x{}", hex::encode(&sync.tip_block_hash)),
+            derived_tip_block_number: Some(sync.derived_tip_block_number),
+            total_transactions: total_tx,
+            total_cells,
+            total_live_cells,
+            total_addresses: 0,
+            last_synced_at: sync.last_synced_at,
+            derived_last_synced_at: Some(sync.derived_last_synced_at),
+            derived_sync_in_progress: sync.derived_sync_in_progress,
+            sync_started_at: None,
+            sync_started_block: 0,
+            sync_ema_rate: None,
+            bulk_sync_completed_at: None,
+            bulk_sync_completed_block: None,
+        })
     }
 
     fn build_from_progress(
@@ -480,24 +421,21 @@ impl TuiDb {
     }
 
     pub async fn get_memory_stats(&self) -> Option<MemoryStatsData> {
-        if let Some(mut mem) = self
-            .get_redis_key::<MemoryStatsData>(MEMORY_STATS_REDIS_KEY)
-            .await
-        {
-            if mem.total_transactions == 0 || mem.total_cells == 0 {
-                if let Some(sync) = self
-                    .get_redis_key::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
-                    .await
-                {
-                    mem.total_transactions = sync.total_transactions;
-                    mem.total_cells = sync.total_cells;
-                    mem.total_live_cells = sync.total_live_cells;
-                    mem.total_addresses = sync.total_addresses;
-                }
+        self.refresh_store();
+
+        let store = self.store.as_ref()?;
+        let bytes = store.get_memory_stats().ok()??;
+        let mut mem: MemoryStatsData = serde_json::from_slice(&bytes).ok()?;
+
+        if mem.total_transactions == 0 || mem.total_cells == 0 {
+            if let Ok(sync) = store.get_sync_status() {
+                mem.total_transactions = sync.total_transactions;
+                mem.total_cells = sync.total_cells_created;
+                mem.total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
+                mem.total_addresses = 0;
             }
-            return Some(mem);
         }
-        None
+        Some(mem)
     }
 
     pub async fn get_chain_info_and_api_service_info(
@@ -546,147 +484,13 @@ impl TuiDb {
             }
         }
     }
-
-    pub async fn get_redis_service_info(&self) -> RedisServiceInfo {
-        let now = chrono::Utc::now().timestamp();
-        let mut info = RedisServiceInfo {
-            enabled: self.redis.is_some(),
-            ..Default::default()
-        };
-
-        let Some(conn) = self.redis.as_ref() else {
-            info.error = Some("redis not configured".to_string());
-            return info;
-        };
-
-        let mut conn = conn.clone();
-        let started = Instant::now();
-        let ping_result: std::result::Result<String, _> =
-            redis::cmd("PING").query_async(&mut conn).await;
-        info.latency_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-
-        if let Err(e) = ping_result {
-            info.error = Some(format!("ping failed: {e}"));
-            return info;
-        }
-
-        info.reachable = true;
-
-        let dbsize_result: std::result::Result<u64, _> =
-            redis::cmd("DBSIZE").query_async(&mut conn).await;
-        info.db_keys_total = dbsize_result.ok();
-
-        let info_memory: std::result::Result<String, _> = redis::cmd("INFO")
-            .arg("memory")
-            .query_async(&mut conn)
-            .await;
-        if let Ok(text) = info_memory {
-            let map = parse_info_map(&text);
-            info.used_memory_bytes = map.get("used_memory").and_then(|v| v.parse::<u64>().ok());
-            info.used_memory_peak_bytes = map
-                .get("used_memory_peak")
-                .and_then(|v| v.parse::<u64>().ok());
-            info.used_memory_rss_bytes = map
-                .get("used_memory_rss")
-                .and_then(|v| v.parse::<u64>().ok());
-            info.mem_fragmentation_ratio = map
-                .get("mem_fragmentation_ratio")
-                .and_then(|v| v.parse::<f64>().ok());
-        }
-
-        let info_stats: std::result::Result<String, _> =
-            redis::cmd("INFO").arg("stats").query_async(&mut conn).await;
-        if let Ok(text) = info_stats {
-            let map = parse_info_map(&text);
-            info.keyspace_hits = map.get("keyspace_hits").and_then(|v| v.parse::<u64>().ok());
-            info.keyspace_misses = map
-                .get("keyspace_misses")
-                .and_then(|v| v.parse::<u64>().ok());
-            info.evicted_keys = map.get("evicted_keys").and_then(|v| v.parse::<u64>().ok());
-        }
-
-        let info_keyspace: std::result::Result<String, _> = redis::cmd("INFO")
-            .arg("keyspace")
-            .query_async(&mut conn)
-            .await;
-        if let Ok(text) = info_keyspace {
-            let (keys, expires) = parse_keyspace_db0(&text);
-            if keys.is_some() {
-                info.db_keys_total = keys;
-            }
-            info.db_keys_expiring = expires;
-            info.db_keys_persistent = match (info.db_keys_total, info.db_keys_expiring) {
-                (Some(total), Some(exp)) => Some(total.saturating_sub(exp)),
-                _ => None,
-            };
-        }
-
-        let sync_status_type: std::result::Result<String, _> = redis::cmd("TYPE")
-            .arg(SYNC_STATUS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.sync_status_type = sync_status_type.ok();
-        let sync_status_ttl: std::result::Result<i64, _> = redis::cmd("TTL")
-            .arg(SYNC_STATUS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.sync_status_ttl_secs = sync_status_ttl.ok().and_then(ttl_or_none);
-        let sync_status_strlen: std::result::Result<u64, _> = redis::cmd("STRLEN")
-            .arg(SYNC_STATUS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.sync_status_value_bytes = sync_status_strlen.ok();
-
-        let sync_progress_type: std::result::Result<String, _> = redis::cmd("TYPE")
-            .arg(SYNC_PROGRESS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.sync_progress_type = sync_progress_type.ok();
-        let sync_progress_ttl: std::result::Result<i64, _> = redis::cmd("TTL")
-            .arg(SYNC_PROGRESS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.sync_progress_ttl_secs = sync_progress_ttl.ok().and_then(ttl_or_none);
-        let sync_progress_strlen: std::result::Result<u64, _> = redis::cmd("STRLEN")
-            .arg(SYNC_PROGRESS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.sync_progress_value_bytes = sync_progress_strlen.ok();
-
-        let memory_stats_type: std::result::Result<String, _> = redis::cmd("TYPE")
-            .arg(MEMORY_STATS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.memory_stats_type = memory_stats_type.ok();
-        let memory_stats_ttl: std::result::Result<i64, _> = redis::cmd("TTL")
-            .arg(MEMORY_STATS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.memory_stats_ttl_secs = memory_stats_ttl.ok().and_then(ttl_or_none);
-        let memory_stats_strlen: std::result::Result<u64, _> = redis::cmd("STRLEN")
-            .arg(MEMORY_STATS_REDIS_KEY)
-            .query_async(&mut conn)
-            .await;
-        info.memory_stats_value_bytes = memory_stats_strlen.ok();
-
-        let status: Option<SyncStatusData> = self.get_redis_key(SYNC_STATUS_REDIS_KEY).await;
-        let progress: Option<SyncProgressData> = self.get_redis_key(SYNC_PROGRESS_REDIS_KEY).await;
-        let memory: Option<MemoryStatsData> = self.get_redis_key(MEMORY_STATS_REDIS_KEY).await;
-
-        info.sync_status_age_secs = status.and_then(|s| age_since(s.last_synced_at, now));
-        info.sync_progress_age_secs = progress.and_then(|p| age_since(p.updated_at, now));
-        info.memory_stats_age_secs = memory.and_then(|m| age_since(m.updated_at, now));
-
-        info
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        age_since, derive_sync_status_fields, parse_epoch_string, parse_info_map,
-        parse_keyspace_db0, response_indicates_derived_syncing, sync_modes_from_progress,
-        ttl_or_none, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
+        derive_sync_status_fields, parse_epoch_string, response_indicates_derived_syncing,
+        sync_modes_from_progress, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
     use std::path::Path;
@@ -736,40 +540,6 @@ mod tests {
     #[test]
     fn parse_epoch_invalid() {
         assert_eq!(parse_epoch_string("bad"), (0, 0, 1800));
-    }
-
-    #[test]
-    fn age_since_handles_zero_and_future() {
-        assert_eq!(age_since(0, 100), None);
-        assert_eq!(age_since(120, 100), Some(0));
-        assert_eq!(age_since(80, 100), Some(20));
-    }
-
-    #[test]
-    fn parse_info_map_works() {
-        let text = "# Memory\r\nused_memory:123\r\nmem_fragmentation_ratio:1.23\r\n";
-        let map = parse_info_map(text);
-        assert_eq!(map.get("used_memory"), Some(&"123".to_string()));
-        assert_eq!(
-            map.get("mem_fragmentation_ratio"),
-            Some(&"1.23".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_keyspace_db0_works() {
-        let text = "# Keyspace\r\ndb0:keys=10,expires=7,avg_ttl=123\r\n";
-        let (keys, expires) = parse_keyspace_db0(text);
-        assert_eq!(keys, Some(10));
-        assert_eq!(expires, Some(7));
-    }
-
-    #[test]
-    fn ttl_or_none_works() {
-        assert_eq!(ttl_or_none(-2), None);
-        assert_eq!(ttl_or_none(-1), Some(-1));
-        assert_eq!(ttl_or_none(0), Some(0));
-        assert_eq!(ttl_or_none(15), Some(15));
     }
 
     #[test]
@@ -845,14 +615,19 @@ mod tests {
     #[tokio::test]
     async fn tui_db_exposes_paths_and_profile_without_store() {
         let db = TuiDb::new(
-            None,
             "http://127.0.0.1:3001/api/v1",
-            "/tmp/domain-store",
-            "/tmp/append-store",
+            "/tmp/nonexistent-domain-store-test",
+            "/tmp/nonexistent-append-store-test",
         )
         .await;
-        assert_eq!(db.domain_data_path(), Path::new("/tmp/domain-store"));
-        assert_eq!(db.append_only_data_path(), Path::new("/tmp/append-store"));
+        assert_eq!(
+            db.domain_data_path(),
+            Path::new("/tmp/nonexistent-domain-store-test")
+        );
+        assert_eq!(
+            db.append_only_data_path(),
+            Path::new("/tmp/nonexistent-append-store-test")
+        );
         assert!(db.memory_profile().is_secondary);
     }
 }

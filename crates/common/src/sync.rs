@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-pub const SYNC_STATUS_REDIS_KEY: &str = "sync:status";
-pub const SYNC_PROGRESS_REDIS_KEY: &str = "sync:progress";
-pub const MEMORY_STATS_REDIS_KEY: &str = "memory:stats";
+/// Cache keys for sync data (used by the in-memory API cache).
+pub const SYNC_STATUS_CACHE_KEY: &str = "sync:status";
+pub const SYNC_PROGRESS_CACHE_KEY: &str = "sync:progress";
+pub const MEMORY_STATS_CACHE_KEY: &str = "memory:stats";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -228,7 +229,7 @@ pub fn format_duration_smart(total_secs: f64) -> String {
 }
 
 /// Memory statistics for key indexer components.
-/// Published to Redis for monitoring by TUI and other tools.
+/// Published to RocksDB domain store for monitoring by TUI and other tools.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryStatsData {

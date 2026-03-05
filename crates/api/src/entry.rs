@@ -19,7 +19,6 @@ pub struct ApiServiceConfig {
     pub rate_limit: u32,
     pub rate_limit_burst: u32,
     pub ckb_data_path: Option<String>,
-    pub redis_url: Option<String>,
     /// Directory containing static frontend assets (e.g., Next.js export).
     /// When set, the API server will serve these files for non-API routes.
     pub frontend_dir: Option<PathBuf>,
@@ -50,7 +49,6 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     let app_config = AppConfig {
         store,
         append_only_store,
-        redis_url: config.redis_url,
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         rate_limit_per_second: Some(config.rate_limit),
@@ -95,7 +93,6 @@ mod tests {
             rate_limit: 100,
             rate_limit_burst: 200,
             ckb_data_path: None,
-            redis_url: None,
             frontend_dir: Some(PathBuf::from("/frontend/out")),
         };
 
@@ -108,7 +105,6 @@ mod tests {
         assert_eq!(config.rate_limit, 100);
         assert_eq!(config.rate_limit_burst, 200);
         assert!(config.ckb_data_path.is_none());
-        assert!(config.redis_url.is_none());
         assert_eq!(
             config.frontend_dir.as_ref().unwrap(),
             &PathBuf::from("/frontend/out")

@@ -5,8 +5,8 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{
-    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY,
-    SYNC_STATUS_REDIS_KEY,
+    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_CACHE_KEY,
+    SYNC_STATUS_CACHE_KEY,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -2309,11 +2309,11 @@ async fn fetch_network_stats_from_db(
     let tps = tx_count_24h as f64 / 86400.0;
     let tx_per_minute = tps * 60.0;
 
-    // Get sync status from Redis cache or from store
-    let sync_status_from_redis: Option<SyncStatusData> =
-        state.cache.get(SYNC_STATUS_REDIS_KEY).await;
+    // Get sync status from cache or from store
+    let sync_status_from_cache: Option<SyncStatusData> =
+        state.cache.get(SYNC_STATUS_CACHE_KEY).await;
     let (synced_block, db_ema_rate, sync_started_at, bulk_sync_completed_at) =
-        sync_status_from_redis
+        sync_status_from_cache
             .as_ref()
             .map(|s| {
                 (
@@ -2382,7 +2382,7 @@ async fn fetch_network_stats_from_db(
         };
 
     let sync_progress_from_redis: Option<SyncProgressData> =
-        state.cache.get(SYNC_PROGRESS_REDIS_KEY).await;
+        state.cache.get(SYNC_PROGRESS_CACHE_KEY).await;
 
     let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
         if let Some(ref sp) = sync_progress_from_redis {

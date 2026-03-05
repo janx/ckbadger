@@ -17,9 +17,6 @@ struct Args {
     #[arg(long = "append-only-data-path", env = "CKBADGER_APPEND_ONLY_DATA_PATH")]
     append_only_data_path: Option<String>,
 
-    #[arg(long, env = "REDIS_URL")]
-    redis_url: Option<String>,
-
     #[arg(long, env = "CKB_RPC_URL", default_value = "http://127.0.0.1:8114")]
     ckb_rpc_url: String,
 
@@ -62,8 +59,6 @@ async fn main() -> Result<()> {
     let append_only_data_path =
         resolve_append_only_data_path(args.append_only_data_path.clone(), &domain_data_path);
 
-    let redis_url = args.redis_url.or_else(|| std::env::var("REDIS_URL").ok());
-
     let secondary_path = format!("{}-api-secondary", domain_data_path);
     info!(
         "Opening ckbadger domain store (secondary) at: {} -> {}",
@@ -86,7 +81,6 @@ async fn main() -> Result<()> {
     let config = AppConfig {
         store,
         append_only_store,
-        redis_url,
         ckb_rpc_url: args.ckb_rpc_url,
         ckb_network: args.ckb_network,
         rate_limit_per_second: Some(args.rate_limit),

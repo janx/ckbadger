@@ -7,7 +7,7 @@ use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
 use ckbadger_common::dao::{
     is_genesis_special_burn_cell, GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED,
 };
-use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_REDIS_KEY};
+use ckbadger_common::sync::{SyncStatusData, SYNC_STATUS_CACHE_KEY};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
@@ -162,7 +162,7 @@ async fn list_transactions(
     } else {
         match state
             .cache
-            .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+            .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
             .await
         {
             Some(status) => status.total_transactions,
@@ -665,7 +665,7 @@ async fn get_transaction_detail(
     // Get tip block for confirmations
     let tip_block = match state
         .cache
-        .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+        .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
         .await
     {
         Some(status) => status.tip_block_number,
@@ -1121,7 +1121,7 @@ async fn get_cycles_status(
                     status: CyclesStatus::Failed,
                     cycles: None,
                     error: Some(
-                        "Cycles task dispatch unavailable: Redis is not configured".to_string(),
+                        "Cycles task dispatch unavailable: worker not connected".to_string(),
                     ),
                 });
             }
@@ -1443,7 +1443,7 @@ async fn get_transaction_lifecycle(
     // Get sync tip
     let tip = match state
         .cache
-        .get::<SyncStatusData>(SYNC_STATUS_REDIS_KEY)
+        .get::<SyncStatusData>(SYNC_STATUS_CACHE_KEY)
         .await
     {
         Some(status) => status.tip_block_number,

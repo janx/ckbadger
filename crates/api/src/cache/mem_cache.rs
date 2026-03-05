@@ -40,6 +40,13 @@ impl InMemoryCache {
         serde_json::from_slice(&entry.data).ok()
     }
 
+    /// Delete a cached value (sync).
+    pub fn delete(&self, key: &str) {
+        if let Ok(mut map) = self.inner.write() {
+            map.remove(key);
+        }
+    }
+
     /// Set a cached value with TTL (sync).
     pub fn set<T: Serialize>(&self, key: &str, value: &T, ttl: Duration) {
         if let Ok(data) = serde_json::to_vec(value) {

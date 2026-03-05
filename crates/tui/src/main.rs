@@ -13,9 +13,6 @@ struct Args {
     #[arg(long = "append-only-data-path", env = "CKBADGER_APPEND_ONLY_DATA_PATH")]
     append_only_data_path: Option<String>,
 
-    #[arg(long, env = "REDIS_URL")]
-    redis_url: Option<String>,
-
     #[arg(long, env = "API_URL", default_value = "http://localhost:3001/api/v1")]
     api_url: String,
 
@@ -43,7 +40,6 @@ async fn main() -> Result<()> {
         append_only_data_path,
         api_url: args.api_url,
         refresh_ms: args.refresh_ms,
-        redis_url: args.redis_url,
     })
     .await
 }

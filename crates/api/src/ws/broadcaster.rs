@@ -1,6 +1,6 @@
 use ckbadger_common::sync::{
-    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_REDIS_KEY,
-    SYNC_STATUS_REDIS_KEY,
+    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_CACHE_KEY,
+    SYNC_STATUS_CACHE_KEY,
 };
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
@@ -234,9 +234,9 @@ async fn build_sync_status(
     cache: &CacheBackend,
     tip_block: i64,
 ) -> SyncStatus {
-    let sync_status_from_redis: Option<SyncStatusData> = cache.get(SYNC_STATUS_REDIS_KEY).await;
+    let sync_status_from_cache: Option<SyncStatusData> = cache.get(SYNC_STATUS_CACHE_KEY).await;
     let (synced_block, db_ema_rate, sync_started_at, bulk_sync_completed_at) =
-        match sync_status_from_redis.as_ref() {
+        match sync_status_from_cache.as_ref() {
             Some(s) => (
                 s.tip_block_number,
                 s.sync_ema_rate,
@@ -277,7 +277,7 @@ async fn build_sync_status(
         };
 
     let sync_progress_from_redis: Option<SyncProgressData> =
-        cache.get(SYNC_PROGRESS_REDIS_KEY).await;
+        cache.get(SYNC_PROGRESS_CACHE_KEY).await;
 
     let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
         if let Some(ref sp) = sync_progress_from_redis {

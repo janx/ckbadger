@@ -29,7 +29,6 @@ fn test_config_with_append_only(
     AppConfig {
         append_only_store,
         store,
-        redis_url: None,
         ckb_rpc_url: "http://localhost:8114".to_string(),
         ckb_network: "mainnet".to_string(),
         rate_limit_per_second: Some(1000),

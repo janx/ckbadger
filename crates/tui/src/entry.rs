@@ -18,13 +18,11 @@ pub struct TuiServiceConfig {
     pub append_only_data_path: String,
     pub api_url: String,
     pub refresh_ms: u64,
-    pub redis_url: Option<String>,
 }
 
 /// Run the TUI. Blocks until user exits.
 pub async fn run_tui(config: TuiServiceConfig) -> Result<()> {
     let db = TuiDb::new(
-        config.redis_url.as_deref(),
         &config.api_url,
         &config.domain_data_path,
         &config.append_only_data_path,
@@ -117,13 +115,11 @@ mod tests {
             append_only_data_path: "/data/append".to_string(),
             api_url: "http://localhost:3001/api/v1".to_string(),
             refresh_ms: 500,
-            redis_url: Some("redis://localhost".to_string()),
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");
         assert_eq!(config.append_only_data_path, "/data/append");
         assert_eq!(config.api_url, "http://localhost:3001/api/v1");
         assert_eq!(config.refresh_ms, 500);
-        assert_eq!(config.redis_url.as_deref(), Some("redis://localhost"));
     }
 }

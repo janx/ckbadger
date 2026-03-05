@@ -1,136 +1,81 @@
+use ckbadger_common::cycles_task::{normalize_tx_hash, CyclesTaskResult, CyclesTaskStatus};
 use ckbadger_store::CkbadgerStore;
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::warn;
+use tokio::sync::{mpsc, Mutex};
+use tracing::info;
 
-#[cfg(feature = "redis-cache")]
-use ckbadger_common::cycles_task::{
-    cycles_task_lock_key, cycles_task_result_key, normalize_tx_hash, CYCLES_TASK_QUEUE_KEY,
-    CYCLES_TASK_RESULT_TTL_SECS,
-};
-#[cfg(any(feature = "redis-cache", test))]
-use ckbadger_common::cycles_task::{CyclesTaskResult, CyclesTaskStatus};
-#[cfg(feature = "redis-cache")]
-use tracing::{error, info};
+/// In-memory store for cycles task results, shared between worker and API.
+#[derive(Clone)]
+pub struct CyclesResultStore {
+    results: Arc<Mutex<HashMap<String, CyclesTaskResult>>>,
+}
 
-#[cfg(feature = "redis-cache")]
-use redis::aio::ConnectionManager;
+impl CyclesResultStore {
+    pub fn new() -> Self {
+        Self {
+            results: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
 
+    pub async fn get(&self, tx_hash: &str) -> Option<CyclesTaskResult> {
+        let normalized = normalize_tx_hash(tx_hash);
+        let map = self.results.lock().await;
+        map.get(&normalized).cloned()
+    }
+
+    pub async fn insert(&self, tx_hash: &str, result: CyclesTaskResult) {
+        let normalized = normalize_tx_hash(tx_hash);
+        let mut map = self.results.lock().await;
+        map.insert(normalized, result);
+        // Evict old entries if the map grows too large
+        if map.len() > 10_000 {
+            let now = chrono::Utc::now().timestamp();
+            map.retain(|_, v| now - v.updated_at < 300);
+        }
+    }
+}
+
+impl Default for CyclesResultStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Spawn the cycles task worker that processes tasks from an mpsc channel.
+/// Returns the sender and result store for the API to use.
 pub fn spawn_cycles_task_worker(
     store: Arc<CkbadgerStore>,
     ckb_rpc_url: String,
-    redis_url: Option<String>,
-) {
-    #[cfg(feature = "redis-cache")]
-    {
-        let Some(redis_url) = redis_url else {
-            warn!("Cycles task worker disabled: REDIS_URL is not configured");
-            return;
-        };
+) -> (mpsc::Sender<String>, CyclesResultStore) {
+    let (tx, rx) = mpsc::channel::<String>(256);
+    let result_store = CyclesResultStore::new();
+    let worker_result_store = result_store.clone();
 
-        tokio::spawn(async move {
-            run_cycles_task_worker(store, ckb_rpc_url, redis_url).await;
-        });
-    }
+    tokio::spawn(async move {
+        run_cycles_task_worker(store, ckb_rpc_url, rx, worker_result_store).await;
+    });
 
-    #[cfg(not(feature = "redis-cache"))]
-    {
-        let _ = (store, ckb_rpc_url, redis_url);
-        warn!("Cycles task worker disabled: indexer built without redis-cache feature");
-    }
+    (tx, result_store)
 }
 
-#[cfg(feature = "redis-cache")]
-async fn run_cycles_task_worker(store: Arc<CkbadgerStore>, ckb_rpc_url: String, redis_url: String) {
-    let client = match redis::Client::open(redis_url.clone()) {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Cycles task worker failed to open Redis client: {}", e);
-            return;
-        }
-    };
-
-    let mut conn = match ConnectionManager::new(client).await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("Cycles task worker failed to connect Redis: {}", e);
-            return;
-        }
-    };
-
+async fn run_cycles_task_worker(
+    store: Arc<CkbadgerStore>,
+    ckb_rpc_url: String,
+    mut rx: mpsc::Receiver<String>,
+    result_store: CyclesResultStore,
+) {
     info!("Cycles task worker started");
 
-    loop {
-        let popped: Result<Option<(String, String)>, _> = redis::cmd("BRPOP")
-            .arg(CYCLES_TASK_QUEUE_KEY)
-            .arg(1)
-            .query_async(&mut conn)
-            .await;
-
-        let popped_item = match popped {
-            Ok(item) => item,
-            Err(e) => {
-                warn!("Cycles task worker BRPOP failed: {}", e);
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                continue;
-            }
-        };
-
-        let Some((_key, tx_hash)) = popped_item else {
-            continue;
-        };
-
+    while let Some(tx_hash) = rx.recv().await {
         let normalized = normalize_tx_hash(&tx_hash);
         let result = process_cycles_task(store.as_ref(), &ckb_rpc_url, &normalized).await;
-        if let Err(e) = publish_task_result(&mut conn, &normalized, &result).await {
-            warn!(
-                "Failed to publish cycles task result for {}: {}",
-                normalized, e
-            );
-        }
-
-        if let Err(e) = release_task_lock(&mut conn, &normalized).await {
-            warn!(
-                "Failed to release cycles task lock for {}: {}",
-                normalized, e
-            );
-        }
+        result_store.insert(&normalized, result).await;
     }
+
+    info!("Cycles task worker stopped (channel closed)");
 }
 
-#[cfg(feature = "redis-cache")]
-async fn release_task_lock(conn: &mut ConnectionManager, tx_hash: &str) -> Result<(), String> {
-    let lock_key = cycles_task_lock_key(tx_hash);
-    let _: () = redis::cmd("DEL")
-        .arg(lock_key)
-        .query_async(conn)
-        .await
-        .map_err(|e| format!("redis DEL lock failed: {}", e))?;
-    Ok(())
-}
-
-#[cfg(feature = "redis-cache")]
-async fn publish_task_result(
-    conn: &mut ConnectionManager,
-    tx_hash: &str,
-    result: &CyclesTaskResult,
-) -> Result<(), String> {
-    let result_key = cycles_task_result_key(tx_hash);
-    let payload = serde_json::to_string(result)
-        .map_err(|e| format!("serialize result payload failed: {}", e))?;
-
-    let _: () = redis::cmd("SET")
-        .arg(result_key)
-        .arg(payload)
-        .arg("EX")
-        .arg(CYCLES_TASK_RESULT_TTL_SECS)
-        .query_async(conn)
-        .await
-        .map_err(|e| format!("redis SET result failed: {}", e))?;
-
-    Ok(())
-}
-
-#[cfg(any(feature = "redis-cache", test))]
 async fn process_cycles_task(
     store: &CkbadgerStore,
     ckb_rpc_url: &str,
@@ -282,5 +227,27 @@ mod tests {
 
         let (_, _, updated) = store.get_tx_by_hash(&tx_hash).unwrap().unwrap();
         assert_eq!(updated.cycles, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_cycles_result_store_roundtrip() {
+        let store = CyclesResultStore::new();
+        let result = CyclesTaskResult {
+            status: CyclesTaskStatus::Done,
+            cycles: Some(100),
+            error: None,
+            updated_at: 1700000000,
+        };
+
+        store.insert("0xabc", result.clone()).await;
+        let retrieved = store.get("0xabc").await;
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().cycles, Some(100));
+    }
+
+    #[tokio::test]
+    async fn test_cycles_result_store_returns_none_for_missing() {
+        let store = CyclesResultStore::new();
+        assert!(store.get("0xmissing").await.is_none());
     }
 }

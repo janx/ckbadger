@@ -203,7 +203,7 @@ impl Indexer {
         append_only_store: Arc<CkbadgerStore>,
     ) -> Result<Self> {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
-        let cache_invalidator = CacheInvalidator::new(config.redis_url.as_deref()).await;
+        let cache_invalidator = CacheInvalidator::new(store.clone());
 
         let ckb_store = match config.ckb_data_path.as_deref() {
             Some(path) => {

@@ -55,16 +55,9 @@ ckb-types = { workspace = true }
 ckb-jsonrpc-types = { workspace = true }
 ckb-hash = { workspace = true }
 
-# Redis (optional, for cache invalidation)
-redis = { workspace = true, optional = true }
-
 # RocksDB for persistent live cell store
 rocksdb = { workspace = true }
 bincode = { workspace = true }
-
-[features]
-default = []
-redis-cache = ["redis"]
 
 [dev-dependencies]
 tokio-test = { workspace = true }

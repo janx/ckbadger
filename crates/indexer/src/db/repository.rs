@@ -36,7 +36,7 @@ impl Repository {
 
     pub async fn get_sync_tip(&self) -> Result<(i64, Option<Vec<u8>>)> {
         // Authoritative source for sync progression is the persisted block_headers CF.
-        // Cache/Redis can be stale and must never drive writer/fetcher start height.
+        // Cache can be stale and must never drive writer/fetcher start height.
         if let Some((num, header)) = self.store.get_sync_tip_block()? {
             return Ok((num, Some(header.hash)));
         }

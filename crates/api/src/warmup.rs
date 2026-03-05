@@ -614,7 +614,7 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
     info!("Starting cache warmup for charts...");
 
     // These chart caches used to be prefilled with placeholder payloads (often empty),
-    // which overrides real chart handlers after Redis flush/restart.
+    // which overrides real chart handlers after cache flush/restart.
     // Purge them on startup and let route handlers populate on first request.
     const STUB_CHART_KEYS: &[&str] = &[
         "chart:average-block-time",

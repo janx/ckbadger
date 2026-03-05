@@ -39,7 +39,6 @@ pub struct AppState {
 pub struct AppConfig {
     pub store: Arc<CkbadgerStore>,
     pub append_only_store: Arc<CkbadgerStore>,
-    pub redis_url: Option<String>,
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub rate_limit_per_second: Option<u32>,
@@ -52,39 +51,19 @@ pub struct AppConfig {
 pub async fn create_router(config: AppConfig) -> Router {
     let ws_manager = Arc::new(WsManager::new());
 
-    let cache = match config.redis_url {
-        #[cfg(feature = "redis-cache")]
-        Some(ref url) => match cache::RedisCache::new(url).await {
-            Ok(redis) => {
-                tracing::info!("Redis cache connected");
-                CacheBackend::Redis(Box::new(redis))
-            }
-            Err(e) => {
-                tracing::warn!("Failed to connect to Redis: {}, running without cache", e);
-                CacheBackend::None
-            }
-        },
-        #[cfg(not(feature = "redis-cache"))]
-        Some(_) => {
-            tracing::warn!("Redis URL provided but redis-cache feature not enabled");
-            CacheBackend::None
-        }
-        None => {
-            tracing::info!("No Redis URL configured, running without cache");
-            CacheBackend::None
-        }
-    };
+    let cache = CacheBackend::new();
+    tracing::info!("In-memory cache initialized");
 
     let broadcaster_store = config.store.clone();
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
     let broadcaster_cache = cache.clone();
 
-    let cycles_client = CyclesClient::new(config.redis_url.as_deref()).await;
+    let cycles_client = CyclesClient::disabled();
 
     let ckb_store = match config.ckb_data_path.as_deref() {
         Some(path) => {
             let reader = CkbChainReader::open(path)
-                .expect("Failed to open CKB RocksDB — check CKB_DATA_PATH");
+                .expect("Failed to open CKB RocksDB -- check CKB_DATA_PATH");
             tracing::info!("CKB direct RocksDB reader opened at {}", path);
             Some(Arc::new(reader))
         }
@@ -154,9 +133,6 @@ pub async fn create_router(config: AppConfig) -> Router {
     }
 
     // Spawn periodic store refresh for secondary instances.
-    // Uses spawn_blocking because try_catch_up_with_primary() is a synchronous
-    // RocksDB call that can block for extended periods during heavy indexer writes,
-    // which would starve the tokio async runtime if run on a worker thread.
     let refresh_store = state.store.clone();
     let refresh_append_only_store = state.append_only_store.clone();
     let refresh_ckb_store = state.ckb_store.clone();
