@@ -798,4 +798,57 @@ mod tests {
         let script = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(script.name.as_deref(), Some("Test Script"));
     }
+
+    #[test]
+    fn test_bundled_udt_labels_deserialize() {
+        let labels = super::bundled::udt_labels();
+        assert!(
+            labels.len() > 100,
+            "expected >100 bundled UDT labels, got {}",
+            labels.len()
+        );
+        // Every entry should be published (build.rs filters)
+        for label in &labels {
+            assert!(label.published, "unpublished label: {}", label.type_hash);
+        }
+    }
+
+    #[test]
+    fn test_bundled_script_labels_deserialize() {
+        let labels = super::bundled::script_labels();
+        assert!(
+            labels.len() > 10,
+            "expected >10 bundled script labels, got {}",
+            labels.len()
+        );
+        // Every label should have a non-empty name
+        for label in &labels {
+            assert!(!label.name.is_empty(), "empty script name found");
+        }
+    }
+
+    #[test]
+    fn test_bundled_script_overrides_deserialize() {
+        let overrides = super::bundled::script_overrides();
+        assert!(
+            !overrides.overrides.is_empty(),
+            "expected non-empty script name overrides"
+        );
+    }
+
+    #[test]
+    fn test_run_label_import_bundled_imports_labels() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+
+        let result = super::run_label_import_bundled(&store, None, "mainnet").unwrap();
+        assert!(
+            result.udt_labels_imported > 0,
+            "expected UDT labels imported, got 0"
+        );
+        assert!(
+            result.script_labels_imported > 0,
+            "expected script labels imported, got 0"
+        );
+    }
 }
