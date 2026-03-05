@@ -9,8 +9,10 @@ use anyhow::{Context, Result};
 use ckbadger_config::{CkbadgerConfig, WorkDir};
 use ckbadger_ipc::{IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus};
 use std::future::Future;
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::process::{Child, Command};
@@ -81,6 +83,12 @@ pub async fn run_supervisor(
             work_dir.run_dir.display()
         )
     })?;
+    std::fs::create_dir_all(&work_dir.log_dir).with_context(|| {
+        format!(
+            "failed to create log directory: {}",
+            work_dir.log_dir.display()
+        )
+    })?;
 
     // Write PID file
     let pid = std::process::id();
@@ -97,7 +105,7 @@ pub async fn run_supervisor(
 
     let mut children = Vec::new();
     for service in &services {
-        let child = spawn_service(&exe, &workdir_str, service)?;
+        let child = spawn_service(&exe, &workdir_str, service, &work_dir.log_dir)?;
         info!(service = %service, pid = child.pid(), "started service");
         children.push(child);
     }
@@ -127,6 +135,7 @@ pub async fn run_supervisor(
     let monitor_state = state.clone();
     let monitor_exe = exe.clone();
     let monitor_workdir = workdir_str.clone();
+    let monitor_log_dir = work_dir.log_dir.clone();
     let monitor_services = services.clone();
     let monitor_shutdown = shutdown_rx.clone();
     let monitor_handle = tokio::spawn(async move {
@@ -134,6 +143,7 @@ pub async fn run_supervisor(
             monitor_state,
             &monitor_exe,
             &monitor_workdir,
+            &monitor_log_dir,
             &monitor_services,
             monitor_shutdown,
         )
@@ -186,12 +196,38 @@ pub async fn run_supervisor(
 // Service spawning
 // ---------------------------------------------------------------------------
 
-fn spawn_service(exe: &PathBuf, workdir: &str, service: &str) -> Result<ManagedChild> {
+fn spawn_service(
+    exe: &PathBuf,
+    workdir: &str,
+    service: &str,
+    log_dir: &Path,
+) -> Result<ManagedChild> {
+    std::fs::create_dir_all(log_dir)
+        .with_context(|| format!("failed to create log directory: {}", log_dir.display()))?;
+
+    let log_file_path = log_dir.join(format!("{service}.log"));
+    let stdout_log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file_path)
+        .with_context(|| {
+            format!(
+                "failed to open service log file {}",
+                log_file_path.display()
+            )
+        })?;
+    let stderr_log = stdout_log
+        .try_clone()
+        .with_context(|| format!("failed to clone log handle for service {}", service))?;
+
     let child = Command::new(exe)
         .arg("internal")
         .arg(service)
         .arg("-C")
         .arg(workdir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("failed to spawn {} subprocess", service))?;
@@ -212,6 +248,7 @@ async fn monitor_children(
     state: Arc<Mutex<SupervisorState>>,
     exe: &PathBuf,
     workdir: &str,
+    log_dir: &Path,
     services: &[String],
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
@@ -284,7 +321,7 @@ async fn monitor_children(
 
                 // Respawn
                 let service_name = &services[i];
-                match spawn_service(exe, workdir, service_name) {
+                match spawn_service(exe, workdir, service_name, log_dir) {
                     Ok(mut new_child) => {
                         new_child.restart_count = restart_count + 1;
                         info!(
@@ -369,6 +406,7 @@ impl IpcHandler for SupervisorIpcHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_backoff_calculation() {
@@ -440,5 +478,26 @@ mod tests {
         // Verify the shutdown signal was sent
         assert!(shutdown_rx.changed().await.is_ok());
         assert!(*shutdown_rx.borrow());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_service_creates_log_file() {
+        let dir = TempDir::new().unwrap();
+        let workdir = dir.path();
+        let log_dir = workdir.join("run/logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let exe = std::env::current_exe().unwrap();
+        let mut child =
+            spawn_service(&exe, &workdir.to_string_lossy(), "indexer", &log_dir).unwrap();
+        let log_file = log_dir.join("indexer.log");
+
+        assert!(
+            log_file.exists(),
+            "service log file should be created at spawn time"
+        );
+
+        let _ = child.child.kill().await;
+        let _ = child.child.wait().await;
     }
 }
