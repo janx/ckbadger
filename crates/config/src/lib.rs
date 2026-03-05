@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,23 @@ pub struct IndexerConfig {
 #[serde(default)]
 pub struct LogConfig {
     pub level: String,
+}
+
+/// Labels configuration, parsed from labels.toml.
+///
+/// Provides script name overrides, NFT storage tier overrides,
+/// and a list of deprecated script code hashes.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LabelsConfig {
+    /// Map from original script name to display name override.
+    #[serde(default)]
+    pub script_name_overrides: HashMap<String, String>,
+    /// Map from NFT collection name to storage tier override.
+    #[serde(default)]
+    pub nft_storage_tier_overrides: HashMap<String, String>,
+    /// List of deprecated script code hashes.
+    #[serde(default)]
+    pub deprecated: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +241,31 @@ pub fn load_config(work_dir: &Path) -> Result<CkbadgerConfig> {
 /// Missing keys fall back to their default values via `#[serde(default)]`.
 pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
     toml::from_str(toml_str).context("failed to parse ckbadger.toml")
+}
+
+// ---------------------------------------------------------------------------
+// Labels config loading
+// ---------------------------------------------------------------------------
+
+/// Load labels config from the work directory's `labels.toml` (if it exists).
+///
+/// Returns the default (empty) config if the file does not exist.
+/// Returns an error only if the file exists but cannot be read or parsed.
+pub fn load_labels_config(work_dir: &Path) -> Result<LabelsConfig> {
+    let labels_path = work_dir.join("labels.toml");
+    if !labels_path.exists() {
+        return Ok(LabelsConfig::default());
+    }
+    let content = std::fs::read_to_string(&labels_path)
+        .with_context(|| format!("failed to read labels config: {}", labels_path.display()))?;
+    parse_labels_config(&content)
+}
+
+/// Parse a TOML string into `LabelsConfig`.
+///
+/// Missing keys fall back to their default values via `#[serde(default)]`.
+pub fn parse_labels_config(toml_str: &str) -> Result<LabelsConfig> {
+    toml::from_str(toml_str).context("failed to parse labels.toml")
 }
 
 // ---------------------------------------------------------------------------
@@ -665,5 +708,123 @@ network = "testnet"
         let wd = WorkDir::resolve(root);
         let result = resolve_token_labels_path(&wd, Some(&share_dir));
         assert!(result.is_none());
+    }
+
+    // -- LabelsConfig parsing --
+
+    #[test]
+    fn test_parse_labels_empty_string_returns_default() {
+        let cfg = parse_labels_config("").unwrap();
+        assert_eq!(cfg, LabelsConfig::default());
+        assert!(cfg.script_name_overrides.is_empty());
+        assert!(cfg.nft_storage_tier_overrides.is_empty());
+        assert!(cfg.deprecated.is_empty());
+    }
+
+    #[test]
+    fn test_parse_labels_full_example() {
+        let toml = r#"
+deprecated = [
+    "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
+    "0xd51e6eaf48124c601f41abe173f1da550b4cbca9c6a166781906a287abbb3d9a",
+    "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+    "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df",
+    "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7",
+]
+
+[script_name_overrides]
+"DAS Lock" = ".bit Lock"
+"DID Account" = ".bit Account"
+"DID Cell" = ".bit Cell"
+"Web5 DID" = "did:ckb"
+"SECP256K1/blake160" = "Default Lock"
+"SECP256k1/Multisig" = "Default Multisig"
+
+[nft_storage_tier_overrides]
+".bit" = "fully_onchain"
+"dotbit" = "fully_onchain"
+"did:ckb" = "fully_onchain"
+"did_ckb" = "fully_onchain"
+"#;
+        let cfg = parse_labels_config(toml).unwrap();
+
+        assert_eq!(cfg.script_name_overrides.len(), 6);
+        assert_eq!(
+            cfg.script_name_overrides.get("DAS Lock"),
+            Some(&".bit Lock".to_string())
+        );
+        assert_eq!(
+            cfg.script_name_overrides.get("SECP256K1/blake160"),
+            Some(&"Default Lock".to_string())
+        );
+
+        assert_eq!(cfg.nft_storage_tier_overrides.len(), 4);
+        assert_eq!(
+            cfg.nft_storage_tier_overrides.get(".bit"),
+            Some(&"fully_onchain".to_string())
+        );
+
+        assert_eq!(cfg.deprecated.len(), 5);
+        assert_eq!(
+            cfg.deprecated[0],
+            "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81"
+        );
+        assert_eq!(
+            cfg.deprecated[4],
+            "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7"
+        );
+    }
+
+    #[test]
+    fn test_parse_labels_partial_only_script_overrides() {
+        let toml = r#"
+[script_name_overrides]
+"DAS Lock" = ".bit Lock"
+"#;
+        let cfg = parse_labels_config(toml).unwrap();
+
+        assert_eq!(cfg.script_name_overrides.len(), 1);
+        assert_eq!(
+            cfg.script_name_overrides.get("DAS Lock"),
+            Some(&".bit Lock".to_string())
+        );
+        assert!(cfg.nft_storage_tier_overrides.is_empty());
+        assert!(cfg.deprecated.is_empty());
+    }
+
+    // -- load_labels_config --
+
+    #[test]
+    fn test_load_labels_config_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let labels_content = r#"
+deprecated = [
+    "0x24b04faf80ded836efc05247778eec4ec02548dab6e2012c0107374aa3f68b81",
+]
+
+[script_name_overrides]
+"DAS Lock" = ".bit Lock"
+
+[nft_storage_tier_overrides]
+".bit" = "fully_onchain"
+"#;
+        std::fs::write(dir.path().join("labels.toml"), labels_content).unwrap();
+
+        let cfg = load_labels_config(dir.path()).unwrap();
+        assert_eq!(cfg.script_name_overrides.len(), 1);
+        assert_eq!(
+            cfg.script_name_overrides.get("DAS Lock"),
+            Some(&".bit Lock".to_string())
+        );
+        assert_eq!(cfg.nft_storage_tier_overrides.len(), 1);
+        assert_eq!(cfg.deprecated.len(), 1);
+    }
+
+    #[test]
+    fn test_load_labels_config_file_missing_returns_default() {
+        let dir = TempDir::new().unwrap();
+        // No labels.toml created
+        let cfg = load_labels_config(dir.path()).unwrap();
+        assert_eq!(cfg, LabelsConfig::default());
     }
 }
