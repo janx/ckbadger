@@ -1,20 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io;
-use std::time::Duration;
 
-mod chart;
-mod db;
-mod ui;
-
-use db::TuiDb;
-use ui::App;
+use ckbadger_tui::entry::{self, TuiServiceConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "ckbadger-tui")]
@@ -51,87 +38,14 @@ async fn main() -> Result<()> {
         &domain_data_path,
     );
 
-    let db = TuiDb::new(
-        args.redis_url.as_deref(),
-        &args.api_url,
-        &domain_data_path,
-        &append_only_data_path,
-    )
-    .await;
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new(db);
-    let tick_rate = Duration::from_millis(args.refresh_ms);
-    let res = run_app(&mut terminal, &mut app, tick_rate).await;
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        eprintln!("Error: {err:?}");
-    }
-
-    Ok(())
-}
-
-async fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    app: &mut App,
-    refresh_interval: Duration,
-) -> Result<()> {
-    app.refresh().await;
-
-    loop {
-        terminal.draw(|f| ui::draw(f, app))?;
-
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    if app.is_help_visible() {
-                        match key.code {
-                            KeyCode::Char('q') => return Ok(()),
-                            KeyCode::Char('?') | KeyCode::Esc | KeyCode::Enter => {
-                                app.close_help();
-                            }
-                            _ => {}
-                        }
-                        continue;
-                    }
-
-                    match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('?') => app.toggle_help(),
-                        KeyCode::Char('j') | KeyCode::Down => app.scroll_log_up(),
-                        KeyCode::Char('k') | KeyCode::Up => app.scroll_log_down(),
-                        KeyCode::Char('g') | KeyCode::Home => app.scroll_log_to_top(),
-                        KeyCode::Char('G') | KeyCode::End => app.scroll_log_to_bottom(),
-                        KeyCode::Tab | KeyCode::Char('s') | KeyCode::Char('l') | KeyCode::Right => {
-                            app.next_tab()
-                        }
-                        KeyCode::Char('h') | KeyCode::Left => app.previous_tab(),
-                        KeyCode::Char('c') => app.toggle_compact_layout(),
-                        KeyCode::Char('v') => app.cycle_diagnostics_view_mode(),
-                        KeyCode::Char('R') => app.refresh().await,
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        if app.should_refresh(refresh_interval) {
-            app.refresh().await;
-        }
-    }
+    entry::run_tui(TuiServiceConfig {
+        domain_data_path,
+        append_only_data_path,
+        api_url: args.api_url,
+        refresh_ms: args.refresh_ms,
+        redis_url: args.redis_url,
+    })
+    .await
 }
 
 fn resolve_domain_data_path(explicit: Option<String>, domain_env: Option<String>) -> String {

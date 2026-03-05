@@ -2,6 +2,7 @@ pub mod cache;
 pub mod config;
 pub mod cycles_worker;
 pub mod db;
+pub mod entry;
 pub mod label_import;
 pub mod parser;
 pub mod rpc;

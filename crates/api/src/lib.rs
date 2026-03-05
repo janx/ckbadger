@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod cycles;
+pub mod entry;
 pub mod middleware;
 pub mod response;
 pub mod routes;
