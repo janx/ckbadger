@@ -1,0 +1,13 @@
+[package]
+name = "ckbadger-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+toml = "0.8"
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

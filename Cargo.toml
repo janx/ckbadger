@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/common",
+    "crates/config",
     "crates/ckb-store-reader",
     "crates/ckbadger-store",
     "crates/indexer",
