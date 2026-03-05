@@ -29,6 +29,9 @@ pub struct CkbadgerConfig {
 pub struct CkbConfig {
     pub rpc_url: String,
     pub network: String,
+    /// Path to CKB node's RocksDB data for direct reads (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -36,6 +39,8 @@ pub struct CkbConfig {
 pub struct ApiConfig {
     pub host: String,
     pub port: u16,
+    pub rate_limit: u32,
+    pub rate_limit_burst: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -70,6 +75,7 @@ impl Default for CkbConfig {
         Self {
             rpc_url: "http://127.0.0.1:8114".to_string(),
             network: "mainnet".to_string(),
+            data_path: None,
         }
     }
 }
@@ -79,6 +85,8 @@ impl Default for ApiConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 8101,
+            rate_limit: 100,
+            rate_limit_burst: 200,
         }
     }
 }
@@ -229,10 +237,13 @@ pub fn default_config_toml() -> String {
     r#"[ckb]
 rpc_url = "http://127.0.0.1:8114"
 network = "mainnet"               # mainnet | testnet
+# data_path = "/path/to/ckb/data" # CKB node RocksDB path for direct reads
 
 [api]
 host = "127.0.0.1"
 port = 8101
+rate_limit = 100
+rate_limit_burst = 200
 
 [frontend]
 port = 8100
@@ -340,9 +351,12 @@ mod tests {
 
         assert_eq!(cfg.ckb.rpc_url, "http://127.0.0.1:8114");
         assert_eq!(cfg.ckb.network, "mainnet");
+        assert_eq!(cfg.ckb.data_path, None);
 
         assert_eq!(cfg.api.host, "127.0.0.1");
         assert_eq!(cfg.api.port, 8101);
+        assert_eq!(cfg.api.rate_limit, 100);
+        assert_eq!(cfg.api.rate_limit_burst, 200);
 
         assert_eq!(cfg.frontend.port, 8100);
 
@@ -387,10 +401,13 @@ port = 9999
 [ckb]
 rpc_url = "http://10.0.0.1:8114"
 network = "testnet"
+data_path = "/data/ckb"
 
 [api]
 host = "0.0.0.0"
 port = 3001
+rate_limit = 50
+rate_limit_burst = 100
 
 [frontend]
 port = 3000
@@ -409,8 +426,11 @@ level = "debug"
         let cfg = parse_config(toml).unwrap();
         assert_eq!(cfg.ckb.rpc_url, "http://10.0.0.1:8114");
         assert_eq!(cfg.ckb.network, "testnet");
+        assert_eq!(cfg.ckb.data_path, Some("/data/ckb".to_string()));
         assert_eq!(cfg.api.host, "0.0.0.0");
         assert_eq!(cfg.api.port, 3001);
+        assert_eq!(cfg.api.rate_limit, 50);
+        assert_eq!(cfg.api.rate_limit_burst, 100);
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.batch_size, 5000);
         assert_eq!(cfg.indexer.parallel_fetch_size, 32);
