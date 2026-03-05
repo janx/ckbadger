@@ -1,0 +1,20 @@
+[package]
+name = "ckbadger"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ckbadger"
+path = "src/main.rs"
+
+[dependencies]
+ckbadger-config = { path = "../config" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
