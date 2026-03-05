@@ -32,7 +32,10 @@ import { formatTokenBalance } from '@/lib/format-asset';
 export default function AddressDetailPage() {
   const params = useParams();
   const addr = params.addr as string;
+  return <AddressDetailPageContent key={addr} addr={addr} />;
+}
 
+function AddressDetailPageContent({ addr }: { addr: string }) {
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
   const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');

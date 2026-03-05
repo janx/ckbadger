@@ -1657,7 +1657,7 @@ fn cell_info_to_response(
         } else {
             None
         },
-        udt_amount: None,
+        udt_amount: info.udt_amount.map(|amount| amount.to_string()),
     }
 }
 
@@ -3036,6 +3036,18 @@ mod tests {
         assert_eq!(resp.capacity, "10000000000");
         assert!(resp.cell_type.is_none());
         assert!(resp.virtual_occupied_capacity.is_none());
+        assert!(resp.udt_amount.is_none());
+    }
+
+    #[test]
+    fn test_cell_info_to_response_preserves_udt_amount() {
+        let info = LiveCellInfo {
+            udt_amount: Some(12_345),
+            ..make_info()
+        };
+        let tx_hash = vec![4u8; 32];
+        let resp = cell_info_to_response(&tx_hash, 1, &info);
+        assert_eq!(resp.udt_amount.as_deref(), Some("12345"));
     }
 
     #[test]

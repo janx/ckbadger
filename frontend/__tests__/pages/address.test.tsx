@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import AddressDetailPage from '@/app/address/[addr]/page';
 import { api } from '@/lib/api';
@@ -20,8 +20,10 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+let mockRouteAddr = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
+
 vi.mock('next/navigation', () => ({
-  useParams: () => ({ addr: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' }),
+  useParams: () => ({ addr: mockRouteAddr }),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -143,6 +145,7 @@ const emptyDaoDeposits = {
 describe('AddressDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRouteAddr = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
     vi.mocked(api.getAddressTokens).mockResolvedValue(emptyTokens);
     vi.mocked(api.getLiveCells).mockResolvedValue(emptyCells);
     vi.mocked(api.getAddressTransactions).mockResolvedValue(emptyTransactions);
@@ -321,6 +324,171 @@ describe('AddressDetailPage', () => {
         `/tokens/${typeScriptHash}`
       );
     });
+  });
+
+  it('resets activity filter and pagination cursors when route address changes', async () => {
+    const addrA = mockAddressWithLockScriptInfo.address!;
+    const lockA = mockAddressWithLockScriptInfo.lockScriptHash;
+    const addrB = 'ckb1qypqxpq9qcrsszg2pvxq6rs0zqg3yyc5d7y6v5';
+    const lockB = '0x4444444444444444444444444444444444444444444444444444444444444444';
+
+    vi.mocked(api.getAddress).mockImplementation(async (addr: string) => {
+      if (addr === addrA) {
+        return mockAddressWithLockScriptInfo;
+      }
+      if (addr === addrB) {
+        return {
+          ...mockAddressWithLockScriptInfo,
+          address: addrB,
+          lockScriptHash: lockB,
+          transactionsCount: 1,
+        };
+      }
+      throw new Error(`unexpected address request: ${addr}`);
+    });
+
+    vi.mocked(api.getAddressActivities).mockImplementation(
+      async (
+        _lockHash: string,
+        _params?: { limit?: number; cursor?: string; filter?: string }
+      ) => ({
+        data: [],
+        total: 0,
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
+
+    vi.mocked(api.getAddressTransactions).mockImplementation(
+      async (lockHash: string, params?: { limit?: number; cursor?: string }) => {
+        if (lockHash === lockA && !params?.cursor) {
+          return {
+            data: [
+              {
+                txHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                blockNumber: 200,
+                txType: 'received',
+                capacityChange: '100000000',
+                timestamp: '2026-02-20T00:00:00Z',
+                inputsCount: 1,
+                outputsCount: 2,
+                fee: '1000',
+                isCellbase: false,
+                txSize: 100,
+                cycles: 100000,
+                scriptLabels: [],
+              },
+            ],
+            total: 2,
+            limit: 20,
+            hasMore: true,
+            nextCursor: '100:0',
+          };
+        }
+        if (lockHash === lockA && params?.cursor === '100:0') {
+          return {
+            data: [
+              {
+                txHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                blockNumber: 100,
+                txType: 'sent',
+                capacityChange: '-100000000',
+                timestamp: '2026-02-19T00:00:00Z',
+                inputsCount: 2,
+                outputsCount: 1,
+                fee: '1200',
+                isCellbase: false,
+                txSize: 120,
+                cycles: 120000,
+                scriptLabels: [],
+              },
+            ],
+            total: 2,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          };
+        }
+        if (lockHash === lockB) {
+          return {
+            data: [
+              {
+                txHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                blockNumber: 300,
+                txType: 'received',
+                capacityChange: '50000000',
+                timestamp: '2026-02-21T00:00:00Z',
+                inputsCount: 1,
+                outputsCount: 1,
+                fee: '800',
+                isCellbase: false,
+                txSize: 90,
+                cycles: 90000,
+                scriptLabels: [],
+              },
+            ],
+            total: 1,
+            limit: 20,
+            hasMore: false,
+            nextCursor: null,
+          };
+        }
+        return emptyTransactions;
+      }
+    );
+
+    const { rerender } = render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Active')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'CKB' }));
+    await waitFor(() => {
+      expect(api.getAddressActivities).toHaveBeenCalledWith(
+        lockA,
+        expect.objectContaining({ filter: 'ckb' })
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Transactions/ }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => {
+      expect(api.getAddressTransactions).toHaveBeenCalledWith(
+        lockA,
+        expect.objectContaining({ cursor: '100:0' })
+      );
+    });
+
+    vi.mocked(api.getAddressActivities).mockClear();
+    vi.mocked(api.getAddressTransactions).mockClear();
+
+    mockRouteAddr = addrB;
+    rerender(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(api.getAddress).toHaveBeenCalledWith(addrB);
+    });
+    await waitFor(() => {
+      expect(api.getAddressActivities).toHaveBeenCalledWith(
+        lockB,
+        expect.objectContaining({ filter: 'all', cursor: undefined })
+      );
+    });
+    await waitFor(() => {
+      expect(api.getAddressTransactions).toHaveBeenCalledWith(
+        lockB,
+        expect.objectContaining({ cursor: undefined })
+      );
+    });
+    expect(api.getAddressTransactions).not.toHaveBeenCalledWith(
+      lockB,
+      expect.objectContaining({ cursor: '100:0' })
+    );
   });
 
   it('shows dotbit label in activities for nft changes', async () => {
