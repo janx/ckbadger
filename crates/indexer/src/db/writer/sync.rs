@@ -58,6 +58,9 @@ impl BatchWriter {
             status.last_synced_at = now;
             status.derived_last_synced_at = now;
             status.derived_sync_in_progress = false;
+            if let Some(rate) = ema_rate {
+                status.sync_ema_rate = Some(rate);
+            }
         })?;
 
         if refresh_dao_statistics {
@@ -264,7 +267,7 @@ impl BatchWriter {
                 None if tip_number == 0 => status.tip_block_hash.clear(),
                 None => {}
             }
-            status.derived_sync_in_progress = is_bulk_sync;
+            status.init_sync_start(start_block, is_bulk_sync);
         })?;
 
         if let Some(cache) = &self.cache_invalidator {
@@ -634,7 +637,24 @@ mod tests {
         assert_eq!(status.total_transactions, 13);
         assert_eq!(status.total_cells_created, 28);
         assert_eq!(status.total_cells_consumed, 6);
+        assert_eq!(status.sync_ema_rate, Some(123.0));
         assert!(status.last_synced_at > 0);
+    }
+
+    #[test]
+    fn test_init_sync_start_persists_bulk_sync_start_metadata() {
+        let (_dir, store, append_store, writer) = setup();
+
+        writer
+            .init_sync_start(append_store.as_ref(), 128, true)
+            .unwrap();
+
+        let status = store.get_sync_status().unwrap();
+        assert_eq!(status.sync_started_block, 128);
+        assert!(status.sync_started_at.is_some());
+        assert_eq!(status.bulk_sync_completed_at, None);
+        assert_eq!(status.bulk_sync_completed_block, None);
+        assert!(status.derived_sync_in_progress);
     }
 
     #[test]

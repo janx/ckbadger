@@ -24,6 +24,11 @@ fn test_sync_status_round_trip() {
         last_synced_at: 1700001000,
         derived_last_synced_at: 1700001000,
         derived_sync_in_progress: false,
+        sync_started_at: Some(1699999000),
+        sync_started_block: 1000,
+        sync_ema_rate: Some(88.8),
+        bulk_sync_completed_at: Some(1700000000),
+        bulk_sync_completed_block: Some(2000),
         deep_fork_detected: false,
         deep_fork_info: None,
     };
@@ -33,6 +38,7 @@ fn test_sync_status_round_trip() {
     let retrieved = store.get_sync_status().unwrap();
     assert_eq!(retrieved.tip_block_number, 2000);
     assert_eq!(retrieved.total_cells_created, 15_000);
+    assert_eq!(retrieved.sync_started_at, Some(1699999000));
     assert!(!retrieved.deep_fork_detected);
 }
 
@@ -52,6 +58,11 @@ fn test_update_sync_status_closure() {
         last_synced_at: 1700002000,
         derived_last_synced_at: 1700002000,
         derived_sync_in_progress: false,
+        sync_started_at: None,
+        sync_started_block: 0,
+        sync_ema_rate: None,
+        bulk_sync_completed_at: None,
+        bulk_sync_completed_block: None,
         deep_fork_detected: false,
         deep_fork_info: None,
     };

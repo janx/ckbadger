@@ -916,16 +916,22 @@ impl Indexer {
             });
             let sst_gb = stats.sst_files_size as f64 / (1024.0 * 1024.0 * 1024.0);
 
-            self.cache_invalidator
-                .update_sync_status(|status| {
-                    status.mark_bulk_sync_completed(chain_tip_i64);
-                })
-                .await;
+            if let Err(e) = self.writer.store().update_sync_status(|status| {
+                status.mark_bulk_sync_completed(chain_tip_i64);
+                status.derived_sync_in_progress = false;
+            }) {
+                warn!(
+                    error = %e,
+                    chain_tip = chain_tip_i64,
+                    "Failed to persist bulk sync completion marker in sync status"
+                );
+            }
 
             let elapsed = self
-                .cache_invalidator
+                .writer
+                .store()
                 .get_sync_status()
-                .await
+                .ok()
                 .and_then(|s| s.bulk_sync_total_seconds());
             let avg_bps = elapsed
                 .filter(|&e| e > 0)

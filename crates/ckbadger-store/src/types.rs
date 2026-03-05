@@ -668,8 +668,52 @@ pub struct SyncStatus {
     pub derived_last_synced_at: i64,
     #[serde(default)]
     pub derived_sync_in_progress: bool,
+    #[serde(default)]
+    pub sync_started_at: Option<i64>,
+    #[serde(default)]
+    pub sync_started_block: i64,
+    #[serde(default)]
+    pub sync_ema_rate: Option<f64>,
+    #[serde(default)]
+    pub bulk_sync_completed_at: Option<i64>,
+    #[serde(default)]
+    pub bulk_sync_completed_block: Option<i64>,
     pub deep_fork_detected: bool,
     pub deep_fork_info: Option<DeepForkInfo>,
+}
+
+impl SyncStatus {
+    pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
+        if is_bulk_sync {
+            let should_start_new_bulk_session = self.sync_started_at.is_none()
+                || self.bulk_sync_completed_at.is_some()
+                || start_block < self.sync_started_block;
+
+            if should_start_new_bulk_session {
+                self.sync_started_at = Some(chrono::Utc::now().timestamp());
+                self.sync_started_block = start_block;
+                self.bulk_sync_completed_at = None;
+                self.bulk_sync_completed_block = None;
+                self.derived_sync_in_progress = true;
+            }
+        } else {
+            self.sync_started_block = start_block;
+            self.derived_sync_in_progress = false;
+        }
+    }
+
+    pub fn mark_bulk_sync_completed(&mut self, chain_tip: i64) {
+        if self.bulk_sync_completed_at.is_none() {
+            self.bulk_sync_completed_at = Some(chrono::Utc::now().timestamp());
+            self.bulk_sync_completed_block = Some(chain_tip);
+        }
+    }
+
+    pub fn bulk_sync_total_seconds(&self) -> Option<i64> {
+        let started = self.sync_started_at?;
+        let completed = self.bulk_sync_completed_at?;
+        Some(completed - started)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

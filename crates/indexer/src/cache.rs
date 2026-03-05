@@ -62,11 +62,11 @@ impl CacheInvalidator {
             last_synced_at: sync.last_synced_at,
             derived_last_synced_at: Some(sync.derived_last_synced_at),
             derived_sync_in_progress: sync.derived_sync_in_progress,
-            sync_started_at: None,
-            sync_started_block: 0,
-            sync_ema_rate: None,
-            bulk_sync_completed_at: None,
-            bulk_sync_completed_block: None,
+            sync_started_at: sync.sync_started_at,
+            sync_started_block: sync.sync_started_block,
+            sync_ema_rate: sync.sync_ema_rate,
+            bulk_sync_completed_at: sync.bulk_sync_completed_at,
+            bulk_sync_completed_block: sync.bulk_sync_completed_block,
         })
     }
 
@@ -242,6 +242,11 @@ mod tests {
                 total_cells_created: 500,
                 total_cells_consumed: 200,
                 last_synced_at: 1700000000,
+                sync_started_at: Some(1699999000),
+                sync_started_block: 10000,
+                sync_ema_rate: Some(77.7),
+                bulk_sync_completed_at: Some(1700000100),
+                bulk_sync_completed_block: Some(12345),
                 ..Default::default()
             })
             .unwrap();
@@ -254,6 +259,9 @@ mod tests {
         assert_eq!(status.total_transactions, 1000);
         assert_eq!(status.total_cells, 500);
         assert_eq!(status.total_live_cells, 300);
+        assert_eq!(status.sync_started_at, Some(1699999000));
+        assert_eq!(status.sync_ema_rate, Some(77.7));
+        assert_eq!(status.bulk_sync_completed_block, Some(12345));
     }
 
     #[tokio::test]

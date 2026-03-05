@@ -286,11 +286,11 @@ impl TuiDb {
             last_synced_at: sync.last_synced_at,
             derived_last_synced_at: Some(sync.derived_last_synced_at),
             derived_sync_in_progress: sync.derived_sync_in_progress,
-            sync_started_at: None,
-            sync_started_block: 0,
-            sync_ema_rate: None,
-            bulk_sync_completed_at: None,
-            bulk_sync_completed_block: None,
+            sync_started_at: sync.sync_started_at,
+            sync_started_block: sync.sync_started_block,
+            sync_ema_rate: sync.sync_ema_rate,
+            bulk_sync_completed_at: sync.bulk_sync_completed_at,
+            bulk_sync_completed_block: sync.bulk_sync_completed_block,
         })
     }
 
@@ -493,6 +493,7 @@ mod tests {
         sync_modes_from_progress, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
+    use ckbadger_store::CkbadgerStore;
     use std::path::Path;
 
     fn sample_progress() -> SyncProgressData {
@@ -629,5 +630,62 @@ mod tests {
             Path::new("/tmp/nonexistent-append-store-test")
         );
         assert!(db.memory_profile().is_secondary);
+    }
+
+    #[tokio::test]
+    async fn tui_sync_status_progress_uses_persisted_elapsed_time() {
+        let test_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let domain_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-domain"));
+        let append_path = std::env::temp_dir().join(format!("ckbadger-tui-{test_id}-append"));
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+
+        let store = CkbadgerStore::open_domain(&domain_path).unwrap();
+
+        let progress = sample_progress();
+        let progress_bytes = serde_json::to_vec(&progress).unwrap();
+        store.put_sync_progress(&progress_bytes).unwrap();
+
+        store
+            .set_sync_status(&ckbadger_store::types::SyncStatus {
+                tip_block_number: progress.current_block as i64,
+                tip_block_hash: vec![0x11; 32],
+                derived_tip_block_number: progress.current_block as i64,
+                total_transactions: 1,
+                total_cells_created: 1,
+                total_cells_consumed: 0,
+                last_synced_at: 1_700_000_000,
+                derived_last_synced_at: 1_700_000_000,
+                derived_sync_in_progress: true,
+                sync_started_at: Some(1_700_000_000),
+                sync_started_block: 0,
+                sync_ema_rate: Some(95.0),
+                bulk_sync_completed_at: Some(1_700_000_090),
+                bulk_sync_completed_block: Some(progress.target_block as i64),
+                deep_fork_detected: false,
+                deep_fork_info: None,
+            })
+            .unwrap();
+
+        let db = TuiDb::new(
+            "http://127.0.0.1:3001/api/v1",
+            domain_path.to_str().unwrap(),
+            append_path.to_str().unwrap(),
+        )
+        .await;
+
+        let sync = db.get_sync_status().await.unwrap();
+        assert_eq!(sync.eta.as_deref(), Some("1m 30s"));
+        assert_eq!(sync.elapsed_time.as_deref(), Some("1m 30s"));
+
+        std::fs::remove_dir_all(domain_path).unwrap();
+        std::fs::remove_dir_all(append_path).unwrap();
     }
 }
