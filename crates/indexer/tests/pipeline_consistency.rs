@@ -39,17 +39,64 @@ fn setup_store() -> (Arc<CkbadgerStore>, BatchWriter) {
     (store, writer)
 }
 
+fn occupied_capacity_from_cell(cell: &ParsedCell) -> i64 {
+    let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+    let type_script_size = cell
+        .type_args
+        .as_ref()
+        .map(|args| 32 + 1 + args.len() as i64)
+        .unwrap_or(0);
+    (8 + lock_script_size + type_script_size + i64::from(cell.data_size)) * 100_000_000
+}
+
+fn precomputed_infos_for_insert(
+    cells: &[(&[u8], i16, &ParsedCell, i64)],
+) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
+    cells
+        .iter()
+        .map(|(tx_hash, output_index, cell, created_at_block)| {
+            (
+                ((*tx_hash).to_vec(), *output_index),
+                LiveCellInfo {
+                    capacity: cell.capacity,
+                    created_at_block: *created_at_block,
+                    lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_hash_type: cell.lock_hash_type,
+                    lock_args: cell.lock_args.clone(),
+                    type_script_hash: cell.type_script_hash.clone(),
+                    type_code_hash: cell.type_code_hash.clone(),
+                    type_args: cell.type_args.clone(),
+                    data_size: cell.data_size,
+                    occupied_capacity: occupied_capacity_from_cell(cell),
+                    udt_amount: None,
+                },
+            )
+        })
+        .collect()
+}
+
+fn insert_cells_for_test(
+    store: &Arc<CkbadgerStore>,
+    writer: &BatchWriter,
+    cells: &[(&[u8], i16, &ParsedCell, i64)],
+    skip_cell_indices: bool,
+) {
+    let precomputed = precomputed_infos_for_insert(cells);
+    let mut batch = StoreBatch::new(store);
+    writer
+        .insert_cells_batch(cells, &precomputed, &mut batch, skip_cell_indices)
+        .unwrap();
+    batch.commit().unwrap();
+}
+
 #[test]
 fn test_cell_info_lookup_returns_all_fields() {
     let (store, writer) = setup_store();
     let tx_hash = vec![0x01u8; 32];
     let cell = make_cell(100_00000000, 256, 0xAA);
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
     let result = writer
         .get_cells_info_batch(&[(&tx_hash, 0)], false)
@@ -77,19 +124,16 @@ fn test_cell_info_batch_lookup_multiple_cells() {
     let cell2 = make_cell(200_00000000, 200, 0xBB);
     let cell3 = make_cell(300_00000000, 300, 0xCC);
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(
-            &[
-                (&tx1, 0, &cell1, 1000),
-                (&tx2, 0, &cell2, 2000),
-                (&tx3, 0, &cell3, 3000),
-            ],
-            &mut batch,
-            false,
-        )
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(
+        &store,
+        &writer,
+        &[
+            (&tx1, 0, &cell1, 1000),
+            (&tx2, 0, &cell2, 2000),
+            (&tx3, 0, &cell3, 3000),
+        ],
+        false,
+    );
 
     let result = writer
         .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)], false)
@@ -132,11 +176,7 @@ fn test_full_cells_info_returns_lock_and_type() {
         data: vec![0u8; 100],
     };
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
     let result = writer
         .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
@@ -170,11 +210,7 @@ fn test_full_cells_info_no_type_script() {
         data: vec![0u8; 100],
     };
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
     let result = writer
         .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
@@ -255,11 +291,7 @@ fn test_same_batch_cell_consumption() {
     let cell = make_cell(100_00000000, 100, 0xAA);
 
     // Insert cell
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(&[(&creating_tx, 0, &cell, 1000)], &mut batch, false)
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(&store, &writer, &[(&creating_tx, 0, &cell, 1000)], false);
 
     // Consume cell
     let mut batch = StoreBatch::new(&store);
@@ -498,19 +530,16 @@ fn test_multiple_outputs_same_tx() {
     let cell1 = make_cell(200_00000000, 200, 0xBB);
     let cell2 = make_cell(300_00000000, 300, 0xCC);
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(
-            &[
-                (&tx_hash, 0, &cell0, 1000),
-                (&tx_hash, 1, &cell1, 1000),
-                (&tx_hash, 2, &cell2, 1000),
-            ],
-            &mut batch,
-            false,
-        )
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(
+        &store,
+        &writer,
+        &[
+            (&tx_hash, 0, &cell0, 1000),
+            (&tx_hash, 1, &cell1, 1000),
+            (&tx_hash, 2, &cell2, 1000),
+        ],
+        false,
+    );
 
     let result = writer
         .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)], false)
@@ -535,11 +564,7 @@ fn test_consumed_cell_not_in_live_cells() {
     let consuming_tx = vec![0x02u8; 32];
     let cell = make_cell(100_00000000, 100, 0xAA);
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, false)
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
     let mut batch = StoreBatch::new(&store);
     writer
@@ -562,15 +587,12 @@ fn test_cross_partition_cell_lookup() {
     let tx_p1 = vec![0x02u8; 32];
     let cell = make_cell(100_00000000, 100, 0xAA);
 
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(
-            &[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)],
-            &mut batch,
-            false,
-        )
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(
+        &store,
+        &writer,
+        &[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)],
+        false,
+    );
 
     let result = writer
         .get_cells_info_batch(&[(&tx_p0, 0), (&tx_p1, 0)], false)
@@ -594,11 +616,7 @@ fn test_skip_cell_indices_omits_index_entries() {
     let cell = make_cell(100_00000000, 256, 0xAA);
 
     // Insert with skip_cell_indices = true
-    let mut batch = StoreBatch::new(&store);
-    writer
-        .insert_cells_batch(&[(&tx_hash, 0, &cell, 1000)], &mut batch, true)
-        .unwrap();
-    batch.commit().unwrap();
+    insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], true);
 
     // Live cell itself should exist
     let live = store.get_cell(&tx_hash, 0).unwrap();

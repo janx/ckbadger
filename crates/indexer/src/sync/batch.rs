@@ -1156,54 +1156,25 @@ impl Indexer {
             }
         }
 
-        for tx_data in &all_tx_data {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                let output_index_i16 =
-                    checked_usize_to_i16(output_index, "sync batch output index for cache insert")?;
-                let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref() {
-                    if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                        cached.clone()
-                    } else {
-                        let looked_up = self
-                            .writer
-                            .store()
-                            .get_token(type_hash)
-                            .map(|info| info.map(|token| token.standard))?;
-                        udt_standard_hint_cache.insert(type_hash.clone(), looked_up.clone());
-                        looked_up
-                    }
-                } else {
-                    None
-                };
-                let udt_amount = parse_parsed_cell_udt_amount(
-                    cell,
-                    &tx_data.hash,
-                    output_index_i16,
-                    standard_hint.as_deref(),
-                )?;
-                let cell_occupied = occupied_capacity_shannons_i64(
-                    cell.lock_args.len(),
-                    cell.type_args.as_ref().map(|args| args.len()),
-                    cell.data_size,
-                );
-                self.cell_cache.insert(
-                    (tx_data.hash, output_index_i16),
-                    CachedCellInfo {
-                        capacity: cell.capacity,
-                        created_at_block: tx_data.block_number,
-                        lock_script_hash: cell.lock_script_hash.clone(),
-                        lock_code_hash: cell.lock_code_hash.clone(),
-                        lock_hash_type: cell.lock_hash_type,
-                        lock_args: cell.lock_args.clone(),
-                        type_script_hash: cell.type_script_hash.clone(),
-                        type_code_hash: cell.type_code_hash.clone(),
-                        type_args: cell.type_args.clone(),
-                        data_size: cell.data_size,
-                        occupied_capacity: cell_occupied,
-                        udt_amount,
-                    },
-                );
-            }
+        for ((tx_hash, output_index_i16), info) in &batch_cell_infos {
+            let tx_hash_arr = tx_hash_key32(tx_hash, "sync batch output cache insert")?;
+            self.cell_cache.insert(
+                (tx_hash_arr, *output_index_i16),
+                CachedCellInfo {
+                    capacity: info.capacity,
+                    created_at_block: info.created_at_block,
+                    lock_script_hash: info.lock_script_hash.clone(),
+                    lock_code_hash: info.lock_code_hash.clone(),
+                    lock_hash_type: info.lock_hash_type,
+                    lock_args: info.lock_args.clone(),
+                    type_script_hash: info.type_script_hash.clone(),
+                    type_code_hash: info.type_code_hash.clone(),
+                    type_args: info.type_args.clone(),
+                    data_size: info.data_size,
+                    occupied_capacity: info.occupied_capacity,
+                    udt_amount: info.udt_amount,
+                },
+            );
         }
         if self.cell_cache.len() > CELL_CACHE_CAPACITY * 2 {
             // In pipeline mode, the parser runs concurrently and may need
@@ -1257,7 +1228,7 @@ impl Indexer {
             }
             if !all_cells.is_empty() {
                 self.writer
-                    .insert_cells_batch(&all_cells, &mut batch, false)?;
+                    .insert_cells_batch(&all_cells, &batch_cell_infos, &mut batch, false)?;
             }
             let commit_started = Instant::now();
             batch.commit()?;
@@ -3446,7 +3417,12 @@ impl Indexer {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         if !all_cells.is_empty() {
-                            writer.insert_cells_batch(&all_cells, &mut batch, true)?;
+                            writer.insert_cells_batch(
+                                &all_cells,
+                                &batch_cell_infos,
+                                &mut batch,
+                                true,
+                            )?;
                         }
                         if !all_consumptions.is_empty() {
                             writer.consume_cells_batch_preloaded(
@@ -4569,8 +4545,12 @@ impl Indexer {
                     .insert_transactions_batch(&txs_for_batch, &mut data_batch)?;
             }
             if !all_cells.is_empty() {
-                self.writer
-                    .insert_cells_batch(&all_cells, &mut data_batch, false)?;
+                self.writer.insert_cells_batch(
+                    &all_cells,
+                    &batch_cell_infos,
+                    &mut data_batch,
+                    false,
+                )?;
             }
             if !all_consumptions.is_empty() {
                 self.writer.consume_cells_batch_preloaded(

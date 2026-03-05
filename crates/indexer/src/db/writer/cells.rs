@@ -6,7 +6,6 @@ use ckbadger_store::keys;
 use ckbadger_store::types::LiveCellInfo;
 
 use crate::parser::cell::ParsedCell;
-use crate::parser::UdtParser;
 
 use super::BatchWriter;
 
@@ -118,6 +117,7 @@ impl BatchWriter {
     pub fn insert_cells_batch(
         &self,
         cells: &[(&[u8], i16, &ParsedCell, i64)],
+        precomputed_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
         batch: &mut StoreBatch,
         skip_cell_indices: bool,
     ) -> Result<()> {
@@ -125,80 +125,42 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (tx_hash, output_index, cell, created_at_block) in cells {
-            // Compute occupied capacity:
-            // occupied = (8 + lock_script_size + type_script_size + data_size) * 100_000_000
-            // lock_script_size = 32 (code_hash) + 1 (hash_type) + lock_args.len()
-            // type_script_size = if type_script { 32 + 1 + type_args.len() } else { 0 }
-            let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
-            let type_script_size = cell
-                .type_args
-                .as_ref()
-                .map(|args| 32 + 1 + args.len() as i64)
-                .unwrap_or(0);
-            let occupied_capacity =
-                (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
-
-            let udt_amount = match (cell.type_code_hash.as_deref(), cell.type_hash_type) {
-                (Some(type_code_hash), Some(hash_type)) => {
-                    match UdtParser::is_udt_code_hash_bytes(type_code_hash, hash_type) {
-                        Some(crate::parser::UdtStandard::Xudt) => {
-                            // xUDT-compatible cells can be non-fungible metadata/owner cells.
-                            // Those cells intentionally carry no 16-byte token amount.
-                            UdtParser::parse_amount(&cell.data)
-                        }
-                        Some(crate::parser::UdtStandard::Sudt) => {
-                            let amount = UdtParser::parse_amount(&cell.data).ok_or_else(|| {
-                                anyhow!(
-                                    "failed to parse UDT amount from output cell data: outpoint=0x{}:{}, type_code_hash=0x{}",
-                                    hex::encode(tx_hash),
-                                    output_index,
-                                    hex::encode(type_code_hash)
-                                )
-                            })?;
-                            Some(amount)
-                        }
-                        None => None,
-                    }
-                }
-                _ => None,
-            };
-
-            let info = LiveCellInfo {
-                capacity: cell.capacity,
-                created_at_block: *created_at_block,
-                lock_script_hash: cell.lock_script_hash.clone(),
-                lock_code_hash: cell.lock_code_hash.clone(),
-                lock_hash_type: cell.lock_hash_type,
-                lock_args: cell.lock_args.clone(),
-                type_script_hash: cell.type_script_hash.clone(),
-                type_code_hash: cell.type_code_hash.clone(),
-                type_args: cell.type_args.clone(),
-                data_size: cell.data_size,
-                occupied_capacity,
-                udt_amount,
-            };
+        for (tx_hash, output_index, _cell, _created_at_block) in cells {
+            let key = (tx_hash.to_vec(), *output_index);
+            let info = precomputed_infos.get(&key).cloned().ok_or_else(|| {
+                anyhow!(
+                    "missing precomputed cell info for insert: outpoint=0x{}:{}, precomputed_size={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    precomputed_infos.len()
+                )
+            })?;
             batch.put_cell(tx_hash, *output_index, &info);
             if !skip_cell_indices {
                 batch.put_cell_by_lock(
-                    &cell.lock_script_hash,
-                    *created_at_block,
+                    &info.lock_script_hash,
+                    info.created_at_block,
                     tx_hash,
                     *output_index,
                 );
                 batch.put_cell_by_lock_code(
-                    &cell.lock_code_hash,
-                    *created_at_block,
+                    &info.lock_code_hash,
+                    info.created_at_block,
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = cell.type_script_hash {
-                    batch.put_cell_by_type(type_hash, *created_at_block, tx_hash, *output_index);
+                if let Some(ref type_hash) = info.type_script_hash {
+                    batch.put_cell_by_type(
+                        type_hash,
+                        info.created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
                 }
-                if let Some(ref type_code_hash) = cell.type_code_hash {
+                if let Some(ref type_code_hash) = info.type_code_hash {
                     batch.put_cell_by_type_code(
                         type_code_hash,
-                        *created_at_block,
+                        info.created_at_block,
                         tx_hash,
                         *output_index,
                     );
@@ -568,8 +530,44 @@ mod tests {
         }
     }
 
+    fn occupied_capacity_from_parsed_cell(cell: &ParsedCell) -> i64 {
+        let lock_script_size = 32 + 1 + cell.lock_args.len() as i64;
+        let type_script_size = cell
+            .type_args
+            .as_ref()
+            .map(|args| 32 + 1 + args.len() as i64)
+            .unwrap_or(0);
+        (8 + lock_script_size + type_script_size + i64::from(cell.data_size)) * 100_000_000
+    }
+
+    fn precomputed_info_map(
+        tx_hash: &[u8],
+        output_index: i16,
+        cell: &ParsedCell,
+        created_at_block: i64,
+        udt_amount: Option<u128>,
+    ) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
+        HashMap::from([(
+            (tx_hash.to_vec(), output_index),
+            LiveCellInfo {
+                capacity: cell.capacity,
+                created_at_block,
+                lock_script_hash: cell.lock_script_hash.clone(),
+                lock_code_hash: cell.lock_code_hash.clone(),
+                lock_hash_type: cell.lock_hash_type,
+                lock_args: cell.lock_args.clone(),
+                type_script_hash: cell.type_script_hash.clone(),
+                type_code_hash: cell.type_code_hash.clone(),
+                type_args: cell.type_args.clone(),
+                data_size: cell.data_size,
+                occupied_capacity: occupied_capacity_from_parsed_cell(cell),
+                udt_amount,
+            },
+        )])
+    }
+
     #[test]
-    fn test_insert_cells_batch_allows_xudt_cells_without_amount_payload() {
+    fn test_insert_cells_batch_persists_precomputed_xudt_without_amount_payload() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
@@ -579,10 +577,11 @@ mod tests {
         let cell = build_udt_cell(type_code_hash, vec![]);
         let tx_hash = vec![0xAA; 32];
         let all_cells = vec![(tx_hash.as_slice(), 0i16, &cell, 1i64)];
+        let precomputed = precomputed_info_map(&tx_hash, 0, &cell, 1, None);
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .insert_cells_batch(&all_cells, &mut batch, false)
+            .insert_cells_batch(&all_cells, &precomputed, &mut batch, false)
             .unwrap();
         batch.commit().unwrap();
 
@@ -591,21 +590,48 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_cells_batch_rejects_invalid_sudt_payload() {
+    fn test_insert_cells_batch_errors_when_precomputed_info_missing() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store);
 
-        let type_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let type_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
         let cell = build_udt_cell(type_code_hash, vec![]);
-        let tx_hash = vec![0xBB; 32];
-        let all_cells = vec![(tx_hash.as_slice(), 3i16, &cell, 1i64)];
+        let tx_hash = vec![0xAB; 32];
+        let all_cells = vec![(tx_hash.as_slice(), 1i16, &cell, 8i64)];
+        let precomputed = HashMap::new();
 
         let mut batch = StoreBatch::new(writer.store());
         let err = writer
-            .insert_cells_batch(&all_cells, &mut batch, false)
+            .insert_cells_batch(&all_cells, &precomputed, &mut batch, false)
             .unwrap_err();
-        assert!(err.to_string().contains("failed to parse UDT amount"));
+        assert!(err
+            .to_string()
+            .contains("missing precomputed cell info for insert"));
+    }
+
+    #[test]
+    fn test_insert_cells_batch_uses_precomputed_info_without_reparsing_amount() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone());
+
+        let type_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let cell = build_udt_cell(type_code_hash, vec![]); // invalid sUDT payload
+        let tx_hash = vec![0xBC; 32];
+        let output_index = 4i16;
+        let all_cells = vec![(tx_hash.as_slice(), output_index, &cell, 9i64)];
+        let precomputed = precomputed_info_map(&tx_hash, output_index, &cell, 9, Some(7));
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .insert_cells_batch(&all_cells, &precomputed, &mut batch, false)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stored = store.get_cell(&tx_hash, output_index).unwrap().unwrap();
+        assert_eq!(stored.udt_amount, Some(7));
     }
 
     #[test]

@@ -944,7 +944,7 @@ impl Indexer {
                         tx_data.timestamp.timestamp_millis(),
                     );
                     // cell_cache update
-                    for (output_index, cell) in tx_data.cells.iter().enumerate() {
+                    for (output_index, _cell) in tx_data.cells.iter().enumerate() {
                         let output_index_i16 = match checked_usize_to_i16(
                             output_index,
                             "pipeline parser cache update output index",
@@ -971,91 +971,43 @@ impl Indexer {
                                 return;
                             }
                         };
-                        let standard_hint = if let Some(type_hash) = cell.type_script_hash.as_ref()
-                        {
-                            if let Some(cached) = udt_standard_hint_cache.get(type_hash) {
-                                cached.clone()
-                            } else {
-                                let looked_up = match writer_for_parser.store().get_token(type_hash)
-                                {
-                                    Ok(token) => token.map(|info| info.standard),
-                                    Err(e) => {
-                                        error!(
-                                            block_number = tx_data.block_number,
-                                            tx_hash = %hex::encode(tx_data.hash),
-                                            output_index,
-                                            type_script_hash = %hex::encode(type_hash),
-                                            "Parser: token metadata lookup failed while updating UDT cache hint: {}",
-                                            e
-                                        );
-                                        record_worker_exit_reason(
-                                            &parser_exit_reason_for_parser,
-                                            format!(
-                                                "token metadata lookup failed while updating UDT cache hint: block={}, tx=0x{}, output_index={}, error={}",
-                                                tx_data.block_number,
-                                                hex::encode(tx_data.hash),
-                                                output_index,
-                                                e
-                                            ),
-                                        );
-                                        return;
-                                    }
-                                };
-                                udt_standard_hint_cache
-                                    .insert(type_hash.clone(), looked_up.clone());
-                                looked_up
-                            }
-                        } else {
-                            None
-                        };
-                        let udt_amount = match parse_parsed_cell_udt_amount(
-                            cell,
-                            &tx_data.hash,
-                            output_index_i16,
-                            standard_hint.as_deref(),
-                        ) {
-                            Ok(v) => v,
-                            Err(e) => {
+                        let key = (tx_data.hash.to_vec(), output_index_i16);
+                        let info = match batch_cell_infos.get(&key) {
+                            Some(info) => info,
+                            None => {
                                 error!(
                                     block_number = tx_data.block_number,
                                     tx_hash = %hex::encode(tx_data.hash),
                                     output_index,
-                                    "Parser: {}",
-                                    e
+                                    "Parser: missing precomputed cell info while updating parser cache"
                                 );
                                 record_worker_exit_reason(
                                     &parser_exit_reason_for_parser,
                                     format!(
-                                        "failed to parse UDT amount while updating parser cache: block={}, tx=0x{}, output_index={}, error={}",
+                                        "missing precomputed cell info while updating parser cache: block={}, tx=0x{}, output_index={}",
                                         tx_data.block_number,
                                         hex::encode(tx_data.hash),
-                                        output_index,
-                                        e
+                                        output_index
                                     ),
                                 );
                                 return;
                             }
                         };
-                        let cell_occupied = occupied_capacity_shannons_i64(
-                            cell.lock_args.len(),
-                            cell.type_args.as_ref().map(|args| args.len()),
-                            cell.data_size,
-                        );
                         cell_cache_for_parser.insert(
                             (tx_data.hash, output_index_i16),
                             CachedCellInfo {
-                                capacity: cell.capacity,
-                                created_at_block: tx_data.block_number,
-                                lock_script_hash: cell.lock_script_hash.clone(),
-                                lock_code_hash: cell.lock_code_hash.clone(),
-                                lock_hash_type: cell.lock_hash_type,
-                                lock_args: cell.lock_args.clone(),
-                                type_script_hash: cell.type_script_hash.clone(),
-                                type_code_hash: cell.type_code_hash.clone(),
-                                type_args: cell.type_args.clone(),
-                                data_size: cell.data_size,
-                                occupied_capacity: cell_occupied,
-                                udt_amount,
+                                capacity: info.capacity,
+                                created_at_block: info.created_at_block,
+                                lock_script_hash: info.lock_script_hash.clone(),
+                                lock_code_hash: info.lock_code_hash.clone(),
+                                lock_hash_type: info.lock_hash_type,
+                                lock_args: info.lock_args.clone(),
+                                type_script_hash: info.type_script_hash.clone(),
+                                type_code_hash: info.type_code_hash.clone(),
+                                type_args: info.type_args.clone(),
+                                data_size: info.data_size,
+                                occupied_capacity: info.occupied_capacity,
+                                udt_amount: info.udt_amount,
                             },
                         );
                     }
