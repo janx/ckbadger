@@ -4,10 +4,7 @@ use axum::{extract::State, routing::get, Router};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
-use ckbadger_common::sync::{
-    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_CACHE_KEY,
-    SYNC_STATUS_CACHE_KEY,
-};
+use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -2309,26 +2306,14 @@ async fn fetch_network_stats_from_db(
     let tps = tx_count_24h as f64 / 86400.0;
     let tx_per_minute = tps * 60.0;
 
-    // Get sync status from cache or from store
-    let sync_status_from_cache: Option<SyncStatusData> =
-        state.cache.get(SYNC_STATUS_CACHE_KEY).await;
-    let (synced_block, db_ema_rate, sync_started_at, bulk_sync_completed_at) =
-        sync_status_from_cache
-            .as_ref()
-            .map(|s| {
-                (
-                    s.tip_block_number,
-                    s.sync_ema_rate,
-                    s.sync_started_at,
-                    s.bulk_sync_completed_at,
-                )
-            })
-            .unwrap_or((latest_block, None, None, None));
-
-    // Get deep fork status from store
+    // Get sync status from store (single source of truth)
     let store_sync = store
         .get_sync_status()
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let synced_block = store_sync.tip_block_number;
+    let db_ema_rate = store_sync.sync_ema_rate;
+    let sync_started_at = store_sync.sync_started_at;
+    let bulk_sync_completed_at = store_sync.bulk_sync_completed_at;
 
     let (
         deep_fork_detected,
@@ -2381,11 +2366,14 @@ async fn fetch_network_stats_from_db(
             None
         };
 
-    let sync_progress_from_redis: Option<SyncProgressData> =
-        state.cache.get(SYNC_PROGRESS_CACHE_KEY).await;
+    let sync_progress_from_store: Option<SyncProgressData> = store
+        .get_sync_progress()
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
     let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
-        if let Some(ref sp) = sync_progress_from_redis {
+        if let Some(ref sp) = sync_progress_from_store {
             let stale = Utc::now().timestamp() - sp.updated_at > 60;
             if !stale && is_syncing {
                 (

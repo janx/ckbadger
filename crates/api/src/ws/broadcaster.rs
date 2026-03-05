@@ -1,14 +1,10 @@
-use ckbadger_common::sync::{
-    format_duration_smart, SyncProgressData, SyncStatusData, SYNC_PROGRESS_CACHE_KEY,
-    SYNC_STATUS_CACHE_KEY,
-};
+use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, SyncStatus, WsManager};
-use crate::cache::CacheBackend;
 use crate::utils::format_duration;
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
@@ -49,7 +45,6 @@ pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
-    cache: CacheBackend,
 ) {
     let mut last_block_number: Option<i64> = None;
     let mut ticker = interval(Duration::from_secs(2));
@@ -104,7 +99,7 @@ pub async fn start_block_broadcaster(
         let tx_count = header.transactions_count;
 
         if sync_mode == SyncMode::FastSync {
-            let sync_status = build_sync_status(&store, &cache, tip_block).await;
+            let sync_status = build_sync_status(&store, tip_block);
             let (avg_block_time, estimated_epoch_time) =
                 calculate_epoch_stats(&store, number, epoch_index, epoch_length);
 
@@ -145,7 +140,7 @@ pub async fn start_block_broadcaster(
             }
 
             for (num, hdr) in new_blocks {
-                let sync_status = build_sync_status(&store, &cache, tip_block).await;
+                let sync_status = build_sync_status(&store, tip_block);
                 let (avg_block_time, estimated_epoch_time) =
                     calculate_epoch_stats(&store, num, hdr.epoch_index, hdr.epoch_length);
 
@@ -229,25 +224,12 @@ fn calculate_epoch_stats(
     (avg_block_time, estimated_epoch_time)
 }
 
-async fn build_sync_status(
-    store: &CkbadgerStore,
-    cache: &CacheBackend,
-    tip_block: i64,
-) -> SyncStatus {
-    let sync_status_from_cache: Option<SyncStatusData> = cache.get(SYNC_STATUS_CACHE_KEY).await;
-    let (synced_block, db_ema_rate, sync_started_at, bulk_sync_completed_at) =
-        match sync_status_from_cache.as_ref() {
-            Some(s) => (
-                s.tip_block_number,
-                s.sync_ema_rate,
-                s.sync_started_at,
-                s.bulk_sync_completed_at,
-            ),
-            None => {
-                let tip = store.get_sync_tip().map(|(n, _)| n).unwrap_or(0);
-                (tip, None, None, None)
-            }
-        };
+fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
+    let store_sync = store.get_sync_status().unwrap_or_default();
+    let synced_block = store_sync.tip_block_number;
+    let db_ema_rate = store_sync.sync_ema_rate;
+    let sync_started_at = store_sync.sync_started_at;
+    let bulk_sync_completed_at = store_sync.bulk_sync_completed_at;
 
     let blocks_behind = tip_block - synced_block;
     let is_syncing = blocks_behind > 100;
@@ -276,11 +258,14 @@ async fn build_sync_status(
             None
         };
 
-    let sync_progress_from_redis: Option<SyncProgressData> =
-        cache.get(SYNC_PROGRESS_CACHE_KEY).await;
+    let sync_progress_from_store: Option<SyncProgressData> = store
+        .get_sync_progress()
+        .ok()
+        .flatten()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
 
     let (progress, estimated_time, blocks_per_second, ema_blocks_per_second) =
-        if let Some(ref sp) = sync_progress_from_redis {
+        if let Some(ref sp) = sync_progress_from_store {
             let stale = chrono::Utc::now().timestamp() - sp.updated_at > 60;
             if !stale && is_syncing {
                 (

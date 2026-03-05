@@ -57,7 +57,6 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let broadcaster_store = config.store.clone();
     let broadcaster_rpc_url = config.ckb_rpc_url.clone();
-    let broadcaster_cache = cache.clone();
 
     let cycles_client = CyclesClient::disabled();
 
@@ -112,13 +111,8 @@ pub async fn create_router(config: AppConfig) -> Router {
 
         let broadcaster_ws = state.ws_manager.clone();
         tokio::spawn(async move {
-            ws::start_block_broadcaster(
-                broadcaster_store,
-                broadcaster_ws,
-                broadcaster_rpc_url,
-                broadcaster_cache,
-            )
-            .await;
+            ws::start_block_broadcaster(broadcaster_store, broadcaster_ws, broadcaster_rpc_url)
+                .await;
         });
 
         let reorg_broadcaster_store = state.store.clone();

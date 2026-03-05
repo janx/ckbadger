@@ -52,7 +52,7 @@ run/
 *.db
 *.sqlite
 *.sqlite3
-data/
+temp/
 
 # Generated files
 .sqlx/
