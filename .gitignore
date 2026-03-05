@@ -43,8 +43,10 @@ test-results/
 .verify-cache/
 artifacts/
 
-# Docker data volumes
-docker-data/
+# CLI runtime
+run/
+*.sock
+*.pid
 
 # Database
 *.db

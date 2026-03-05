@@ -8,10 +8,6 @@ license.workspace = true
 name = "ckbadger_tui"
 path = "src/lib.rs"
 
-[[bin]]
-name = "ckbadger-tui"
-path = "src/main.rs"
-
 [dependencies]
 ckbadger-common = { path = "../common" }
 ckbadger-store = { path = "../ckbadger-store" }
