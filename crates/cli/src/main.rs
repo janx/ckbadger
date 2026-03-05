@@ -394,12 +394,10 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    if token_labels_path.is_empty() {
-        bail!(
-            "No token labels directory found. Place labels in {}/token-labels/ \
-             or install to share/token-labels/.",
-            work.root.display()
-        );
+    let use_bundled = token_labels_path.is_empty();
+
+    if use_bundled {
+        info!("No filesystem token-labels found, will use bundled data");
     }
 
     let import_config = LabelImportServiceConfig {
@@ -410,6 +408,7 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
         network: config.ckb.network.clone(),
         import_udt: true,
         import_scripts: true,
+        use_bundled,
     };
 
     run_label_import(import_config).await

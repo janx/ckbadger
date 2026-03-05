@@ -60,6 +60,7 @@ pub struct LabelImportServiceConfig {
     pub network: String,
     pub import_udt: bool,
     pub import_scripts: bool,
+    pub use_bundled: bool,
 }
 
 /// Run the indexer sync daemon from a service config. Blocks until shutdown signal or error.
@@ -576,18 +577,33 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         None => None,
     };
 
-    let base_config = LabelImportConfig {
-        token_labels_path: config.token_labels_path,
-        network: config.network,
-        import_udt: config.import_udt,
-        import_scripts: config.import_scripts,
-    };
+    let network = config.network.clone();
+    let use_bundled = config.use_bundled;
 
-    let result = tokio::task::spawn_blocking(move || {
-        run_label_import_staged(core_store.as_ref(), ckb_store.as_deref(), &base_config)
-    })
-    .await
-    .expect("label import task panicked")?;
+    let result = if use_bundled {
+        info!("Using bundled label data (no filesystem override found)");
+        tokio::task::spawn_blocking(move || {
+            crate::label_import::run_label_import_bundled(
+                core_store.as_ref(),
+                ckb_store.as_deref(),
+                &network,
+            )
+        })
+        .await
+        .expect("label import task panicked")?
+    } else {
+        let base_config = LabelImportConfig {
+            token_labels_path: config.token_labels_path,
+            network,
+            import_udt: config.import_udt,
+            import_scripts: config.import_scripts,
+        };
+        tokio::task::spawn_blocking(move || {
+            run_label_import_staged(core_store.as_ref(), ckb_store.as_deref(), &base_config)
+        })
+        .await
+        .expect("label import task panicked")?
+    };
 
     info!(
         "Label import completed: {} UDT, {} scripts, {} errors",

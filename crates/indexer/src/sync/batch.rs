@@ -1003,51 +1003,70 @@ impl Indexer {
     }
 
     pub(crate) fn maybe_start_label_import(&self) {
-        let token_labels_path = self.config.token_labels_path.clone();
-        if !std::path::Path::new(&token_labels_path)
-            .join("information")
-            .exists()
-        {
-            debug!(
-                "Token labels directory not found at {}, skipping label import",
-                token_labels_path
-            );
-            return;
-        }
-
         if self.label_import_started.swap(true, Ordering::SeqCst) {
             debug!("Label import already started in this process, skipping");
             return;
         }
 
-        let config = LabelImportConfig {
-            token_labels_path,
-            ..Default::default()
-        };
+        let token_labels_path = self.config.token_labels_path.clone();
+        let has_fs_labels = !token_labels_path.is_empty()
+            && std::path::Path::new(&token_labels_path)
+                .join("information")
+                .exists();
+
         let core_store = Arc::clone(self.writer.store());
         let ckb_store = self.ckb_store.clone();
 
-        tokio::spawn(async move {
-            let result = tokio::task::spawn_blocking(move || {
-                crate::label_import::run_label_import_staged(
-                    core_store.as_ref(),
-                    ckb_store.as_deref(),
-                    &config,
-                )
-            })
-            .await;
+        if has_fs_labels {
+            let config = LabelImportConfig {
+                token_labels_path,
+                ..Default::default()
+            };
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::label_import::run_label_import_staged(
+                        core_store.as_ref(),
+                        ckb_store.as_deref(),
+                        &config,
+                    )
+                })
+                .await;
 
-            match result {
-                Ok(Ok(summary)) => info!(
-                    "Background label import finished: {} UDT, {} scripts, {} errors",
-                    summary.udt_labels_imported,
-                    summary.script_labels_imported,
-                    summary.errors.len()
-                ),
-                Ok(Err(e)) => warn!("Background label import failed: {}", e),
-                Err(e) => warn!("Background label import task panicked: {}", e),
-            }
-        });
+                match result {
+                    Ok(Ok(summary)) => info!(
+                        "Background label import finished: {} UDT, {} scripts, {} errors",
+                        summary.udt_labels_imported,
+                        summary.script_labels_imported,
+                        summary.errors.len()
+                    ),
+                    Ok(Err(e)) => warn!("Background label import failed: {}", e),
+                    Err(e) => warn!("Background label import task panicked: {}", e),
+                }
+            });
+        } else {
+            info!("No filesystem token-labels found, using bundled label data");
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::label_import::run_label_import_bundled(
+                        core_store.as_ref(),
+                        ckb_store.as_deref(),
+                        "mainnet",
+                    )
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(summary)) => info!(
+                        "Background bundled label import finished: {} UDT, {} scripts, {} errors",
+                        summary.udt_labels_imported,
+                        summary.script_labels_imported,
+                        summary.errors.len()
+                    ),
+                    Ok(Err(e)) => warn!("Background bundled label import failed: {}", e),
+                    Err(e) => warn!("Background bundled label import task panicked: {}", e),
+                }
+            });
+        }
     }
 
     // === sync_blocks_batch (sequential path) ===
