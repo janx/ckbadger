@@ -82,6 +82,13 @@ impl Indexer {
 
         // Phase 2: Update holder count from address balance changes
         // Each entry: (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, occupied_delta)
+        // Batch-read all address balances in a single multi_get_cf call
+        let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
+        let balance_map = if lock_hash_refs.is_empty() {
+            HashMap::new()
+        } else {
+            self.writer.read_address_balances(&lock_hash_refs)?
+        };
         for (
             lock_hash,
             (
@@ -95,11 +102,8 @@ impl Indexer {
             ),
         ) in address_balance_changes
         {
-            let current_balance = store.get_addr_balance(lock_hash)?;
-            let post_live = current_balance
-                .as_ref()
-                .map(|b| b.live_cells_count)
-                .unwrap_or(0);
+            let current_balance = balance_map.get(lock_hash).and_then(|o| o.as_ref());
+            let post_live = current_balance.map(|b| b.live_cells_count).unwrap_or(0);
             let old_live = derive_pre_batch_live_cells(post_live, *live_delta)?;
             tracker.update_holder_count(old_live, post_live)?;
         }

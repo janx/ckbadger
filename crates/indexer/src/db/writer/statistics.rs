@@ -747,7 +747,7 @@ impl BatchWriter {
             Ok(())
         })?;
 
-        let latest_snapshot = self.store.list_dao_daily_snapshots()?.last().cloned();
+        let latest_snapshot = self.store.get_latest_dao_daily_snapshot()?;
         let estimated_apc = latest_snapshot
             .as_ref()
             .map(snapshot_estimated_apc)

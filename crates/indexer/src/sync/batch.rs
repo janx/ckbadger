@@ -544,10 +544,9 @@ where
 pub(super) fn load_latest_dao_daily_snapshot(
     store: &CkbadgerStore,
 ) -> Result<Option<DaoDailySnapshot>> {
-    let snapshots = store
-        .list_dao_daily_snapshots()
-        .context("failed to list dao daily snapshots while building cumulative snapshot")?;
-    Ok(snapshots.last().cloned())
+    store
+        .get_latest_dao_daily_snapshot()
+        .context("failed to get latest dao daily snapshot while building cumulative snapshot")
 }
 
 fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
@@ -3292,6 +3291,33 @@ impl Indexer {
                                     crate::parser::ParsedUdtCell,
                                 > = HashMap::new();
 
+                                // Pre-collect unique type hashes across all blocks for batch lookup
+                                let mut unique_type_hashes: HashSet<Vec<u8>> = HashSet::new();
+                                for block_response in blocks.iter() {
+                                    for tx in &block_response.block.transactions {
+                                        for output in &tx.outputs {
+                                            if let Some(type_script) = output.type_.as_ref() {
+                                                if let Ok(hash) =
+                                                    ScriptParser::compute_script_hash(type_script)
+                                                {
+                                                    unique_type_hashes.insert(hash);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                let type_hash_vec: Vec<Vec<u8>> =
+                                    unique_type_hashes.into_iter().collect();
+                                let token_standard_map: HashMap<Vec<u8>, Option<String>> = writer
+                                    .store()
+                                    .get_tokens_batch(&type_hash_vec)
+                                    .unwrap_or_else(|e| {
+                                        panic!("UDT batch token prefetch failed: {}", e)
+                                    })
+                                    .into_iter()
+                                    .map(|(hash, info)| (hash, info.map(|t| t.standard)))
+                                    .collect();
+
                                 let mut block_tx_idx = 0usize;
                                 for (block_idx, block_response) in blocks.iter().enumerate() {
                                     let parsed = &all_parsed_blocks[block_idx];
@@ -3306,8 +3332,9 @@ impl Indexer {
                                         let tx = &block_response.block.transactions[tx_idx];
                                         let mut output_udts: Vec<crate::parser::ParsedUdtCell> =
                                             Vec::new();
-                                        for (output_index, udt_cell) in self
-                                        .parse_udt_cells_with_store_fallback(tx)
+                                        for (output_index, udt_cell) in parse_udt_cells_with_store_fallback_inner(tx, |hash| {
+                                            Ok(token_standard_map.get(hash).and_then(|o| o.clone()))
+                                        })
                                         .unwrap_or_else(|e| {
                                             panic!(
                                                 "UDT prefetch parse failed: tx_hash=0x{}, block={}, error={}",
@@ -3540,12 +3567,11 @@ impl Indexer {
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     });
 
-                    // T2: Transactions + Address Balances + Script Usage + Addr TX index
-                    // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, REORG_UNDO_LOG_BY_BLOCK, ADDR_TX
+                    // T2: Transactions + Address Balances + Script Usage + Analytics + Addr TX index
+                    // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, STATS_SCRIPT, STATS_TOKEN, STATS_SPORE, STATS_NFT, REORG_UNDO_LOG_BY_BLOCK, ADDR_TX
                     let h2 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
-                        let mut domain_analytics_batch = StoreBatch::new(store);
                         let mut append_history_batch = StoreBatch::new(append_only_store);
                         let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                         if !all_tx_data.is_empty() {
@@ -3569,19 +3595,19 @@ impl Indexer {
                             writer.apply_script_usage_deltas(
                                 &prefetched_script_info,
                                 &script_usage_changes,
-                                &mut domain_analytics_batch,
+                                &mut batch,
                             )?;
                         }
                         if !script_daily_changes.is_empty() {
                             writer.update_script_daily_deltas_batch(
                                 &script_daily_changes,
-                                &mut domain_analytics_batch,
+                                &mut batch,
                             )?;
                         }
                         if !token_daily_changes.is_empty() {
                             writer.update_token_daily_deltas_batch(
                                 &token_daily_changes,
-                                &mut domain_analytics_batch,
+                                &mut batch,
                             )?;
                         }
                         if !spore_type_index_changes.is_empty() {
@@ -3593,7 +3619,7 @@ impl Indexer {
                         if !spore_daily_changes.is_empty() {
                             writer.update_spore_daily_deltas_batch(
                                 &spore_daily_changes,
-                                &mut domain_analytics_batch,
+                                &mut batch,
                             )?;
                         }
                         if !nft_type_index_changes.is_empty() {
@@ -3601,15 +3627,12 @@ impl Indexer {
                                 .update_nft_type_index_batch(&nft_type_index_changes, &mut batch)?;
                         }
                         if !nft_daily_changes.is_empty() {
-                            writer.update_nft_daily_deltas_batch(
-                                &nft_daily_changes,
-                                &mut domain_analytics_batch,
-                            )?;
+                            writer.update_nft_daily_deltas_batch(&nft_daily_changes, &mut batch)?;
                         }
                         if !cluster_daily_changes.is_empty() {
                             writer.update_cluster_daily_deltas_batch(
                                 &cluster_daily_changes,
-                                &mut domain_analytics_batch,
+                                &mut batch,
                             )?;
                         }
                         for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
@@ -3625,14 +3648,6 @@ impl Indexer {
                         }
                         let mut commit_ms =
                             commit_phase_no_wal("T2_txs_addr", first_block, last_block, batch)?;
-                        if !domain_analytics_batch.is_empty() {
-                            commit_ms += commit_phase_no_wal(
-                                "T2_domain_analytics",
-                                first_block,
-                                last_block,
-                                domain_analytics_batch,
-                            )?;
-                        }
                         if !append_history_batch.is_empty() {
                             commit_ms += commit_phase_no_wal(
                                 "T2_append_history",
@@ -6869,9 +6884,9 @@ mod tests {
         store.put_cf(store.cf_stats_dao(), &key, b"broken").unwrap();
 
         let err = load_latest_dao_daily_snapshot(&store).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to list dao daily snapshots while building cumulative snapshot"));
+        assert!(err.to_string().contains(
+            "failed to get latest dao daily snapshot while building cumulative snapshot"
+        ));
     }
 
     #[test]
