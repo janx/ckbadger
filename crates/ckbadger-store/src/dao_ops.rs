@@ -424,82 +424,158 @@ impl CkbadgerStore {
             );
         }
         let start_key = cursor_key_exclusive.unwrap_or(prefix.as_slice());
-        let snapshot = self.snapshot();
-        let iter = snapshot.iterator_cf(
-            self.cf_dao_by_status_block(),
-            IteratorMode::From(start_key, rocksdb::Direction::Forward),
-        );
 
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate dao_by_status_block in pagination: status={}, error={}",
-                    status,
-                    e
-                )
-            })?;
-            if !key.starts_with(&prefix) {
-                break;
-            }
-            anyhow::ensure!(
-                key.len() == keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
-                "invalid dao_by_status_block key length: expected {}, got {}",
-                keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
-                key.len()
+        if self.is_secondary() {
+            let iter = self.iterator_cf(
+                self.cf_dao_by_status_block(),
+                IteratorMode::From(start_key, rocksdb::Direction::Forward),
             );
-            if let Some(cursor_key) = cursor_key_exclusive {
-                if key.as_ref() == cursor_key {
-                    continue;
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate dao_by_status_block in pagination: status={}, error={}",
+                        status,
+                        e
+                    )
+                })?;
+                if !key.starts_with(&prefix) {
+                    break;
                 }
-            }
+                anyhow::ensure!(
+                    key.len() == keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                    "invalid dao_by_status_block key length: expected {}, got {}",
+                    keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                    key.len()
+                );
+                if let Some(cursor_key) = cursor_key_exclusive {
+                    if key.as_ref() == cursor_key {
+                        continue;
+                    }
+                }
 
-            let indexed_status = i16::from_be_bytes(
-                key[..2]
-                    .try_into()
-                    .expect("status key prefix should be exactly 2 bytes"),
-            );
-            let deposit_block = i64::MAX
-                - i64::from_be_bytes(
-                    key[2..10]
+                let indexed_status = i16::from_be_bytes(
+                    key[..2]
                         .try_into()
-                        .expect("status key block section should be exactly 8 bytes"),
+                        .expect("status key prefix should be exactly 2 bytes"),
+                );
+                let deposit_block = i64::MAX
+                    - i64::from_be_bytes(
+                        key[2..10]
+                            .try_into()
+                            .expect("status key block section should be exactly 8 bytes"),
+                    );
+
+                let outpoint_key = &key[DAO_BY_STATUS_OUTPOINT_OFFSET
+                    ..DAO_BY_STATUS_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
+                #[cfg(test)]
+                run_dao_status_pagination_hook(self, outpoint_key);
+                let entry =
+                    self.load_dao_entry_for_index(outpoint_key, "dao_by_status_block", &key)?;
+                anyhow::ensure!(
+                    indexed_status == status,
+                    "dao_by_status_block prefix mismatch: expected status={}, got status={}, index_key=0x{}",
+                    status,
+                    indexed_status,
+                    bytes_to_hex(&key)
+                );
+                anyhow::ensure!(
+                    entry.status == status,
+                    "dao_by_status_block stale status: expected={}, actual={}, outpoint_key=0x{}",
+                    status,
+                    entry.status,
+                    bytes_to_hex(outpoint_key)
+                );
+                anyhow::ensure!(
+                    entry.deposit_block_number == deposit_block,
+                    "dao_by_status_block stale block: index_block={}, entry_block={}, outpoint_key=0x{}",
+                    deposit_block,
+                    entry.deposit_block_number,
+                    bytes_to_hex(outpoint_key)
                 );
 
-            let outpoint_key = &key[DAO_BY_STATUS_OUTPOINT_OFFSET
-                ..DAO_BY_STATUS_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
-            #[cfg(test)]
-            run_dao_status_pagination_hook(self, outpoint_key);
-            let entry = self.load_dao_entry_for_index_from_snapshot(
-                &snapshot,
-                outpoint_key,
-                "dao_by_status_block",
-                &key,
-            )?;
-            anyhow::ensure!(
-                indexed_status == status,
-                "dao_by_status_block prefix mismatch: expected status={}, got status={}, index_key=0x{}",
-                status,
-                indexed_status,
-                bytes_to_hex(&key)
-            );
-            anyhow::ensure!(
-                entry.status == status,
-                "dao_by_status_block stale status: expected={}, actual={}, outpoint_key=0x{}",
-                status,
-                entry.status,
-                bytes_to_hex(outpoint_key)
-            );
-            anyhow::ensure!(
-                entry.deposit_block_number == deposit_block,
-                "dao_by_status_block stale block: index_block={}, entry_block={}, outpoint_key=0x{}",
-                deposit_block,
-                entry.deposit_block_number,
-                bytes_to_hex(outpoint_key)
+                rows.push((outpoint_key.to_vec(), entry));
+                if rows.len() >= limit {
+                    break;
+                }
+            }
+        } else {
+            let snapshot = self.snapshot();
+            let iter = snapshot.iterator_cf(
+                self.cf_dao_by_status_block(),
+                IteratorMode::From(start_key, rocksdb::Direction::Forward),
             );
 
-            rows.push((outpoint_key.to_vec(), entry));
-            if rows.len() >= limit {
-                break;
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate dao_by_status_block in pagination: status={}, error={}",
+                        status,
+                        e
+                    )
+                })?;
+                if !key.starts_with(&prefix) {
+                    break;
+                }
+                anyhow::ensure!(
+                    key.len() == keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                    "invalid dao_by_status_block key length: expected {}, got {}",
+                    keys::DAO_BY_STATUS_BLOCK_KEY_SIZE,
+                    key.len()
+                );
+                if let Some(cursor_key) = cursor_key_exclusive {
+                    if key.as_ref() == cursor_key {
+                        continue;
+                    }
+                }
+
+                let indexed_status = i16::from_be_bytes(
+                    key[..2]
+                        .try_into()
+                        .expect("status key prefix should be exactly 2 bytes"),
+                );
+                let deposit_block = i64::MAX
+                    - i64::from_be_bytes(
+                        key[2..10]
+                            .try_into()
+                            .expect("status key block section should be exactly 8 bytes"),
+                    );
+
+                let outpoint_key = &key[DAO_BY_STATUS_OUTPOINT_OFFSET
+                    ..DAO_BY_STATUS_OUTPOINT_OFFSET + keys::OUTPOINT_KEY_SIZE];
+                #[cfg(test)]
+                run_dao_status_pagination_hook(self, outpoint_key);
+                let entry = self.load_dao_entry_for_index_from_snapshot(
+                    &snapshot,
+                    outpoint_key,
+                    "dao_by_status_block",
+                    &key,
+                )?;
+                anyhow::ensure!(
+                    indexed_status == status,
+                    "dao_by_status_block prefix mismatch: expected status={}, got status={}, index_key=0x{}",
+                    status,
+                    indexed_status,
+                    bytes_to_hex(&key)
+                );
+                anyhow::ensure!(
+                    entry.status == status,
+                    "dao_by_status_block stale status: expected={}, actual={}, outpoint_key=0x{}",
+                    status,
+                    entry.status,
+                    bytes_to_hex(outpoint_key)
+                );
+                anyhow::ensure!(
+                    entry.deposit_block_number == deposit_block,
+                    "dao_by_status_block stale block: index_block={}, entry_block={}, outpoint_key=0x{}",
+                    deposit_block,
+                    entry.deposit_block_number,
+                    bytes_to_hex(outpoint_key)
+                );
+
+                rows.push((outpoint_key.to_vec(), entry));
+                if rows.len() >= limit {
+                    break;
+                }
             }
         }
 
@@ -722,6 +798,64 @@ mod tests {
             .list_dao_deposits_by_status_paginated(0, 2, Some(&cursor))
             .unwrap();
         assert!(second_page.is_empty());
+    }
+
+    #[test]
+    fn test_list_dao_deposits_by_status_paginated_works_in_secondary_mode() {
+        let primary_dir = TempDir::new().unwrap();
+        let secondary_dir = TempDir::new().unwrap();
+
+        let primary = CkbadgerStore::open_test_unified(primary_dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&primary);
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xA1; 32], 0),
+            &DaoDepositCacheEntry {
+                capacity: 100,
+                deposit_block_number: 30,
+                lock_script_hash: vec![0x11; 32],
+                deposit_ar: 1,
+                status: 0,
+                withdraw_request_tx: None,
+                withdraw_request_output_index: None,
+                withdraw_request_block: None,
+                withdraw_request_ar: None,
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.put_dao_deposit(
+            &keys::encode_outpoint(&[0xA2; 32], 0),
+            &DaoDepositCacheEntry {
+                capacity: 100,
+                deposit_block_number: 20,
+                lock_script_hash: vec![0x11; 32],
+                deposit_ar: 1,
+                status: 1,
+                withdraw_request_tx: Some(vec![0xBB; 32]),
+                withdraw_request_output_index: Some(0),
+                withdraw_request_block: Some(21),
+                withdraw_request_ar: Some(2),
+                withdraw_block: None,
+                withdraw_tx: None,
+                withdraw_to_output_index: None,
+                compensation: None,
+            },
+        );
+        batch.commit().unwrap();
+
+        let secondary =
+            CkbadgerStore::open_test_unified_secondary(primary_dir.path(), secondary_dir.path())
+                .unwrap();
+        secondary.refresh().unwrap();
+
+        let rows = secondary
+            .list_dao_deposits_by_status_paginated(0, 10, None)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1.status, 0);
+        assert_eq!(rows[0].1.deposit_block_number, 30);
     }
 
     #[test]
