@@ -10,7 +10,7 @@ use ckbadger_config::{
     default_config_toml, load_config, resolve_share_dir, resolve_token_labels_path, WorkDir,
 };
 
-use ckbadger_api::entry::{run_api, ApiServiceConfig};
+use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
 use ckbadger_indexer::entry::{
     run_indexer, run_label_import, IndexerServiceConfig, LabelImportServiceConfig,
 };
@@ -224,7 +224,6 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             run_indexer(indexer_config).await
         }
         InternalService::Api => {
-            let frontend_dir = resolve_frontend_dir(&work);
             let api_config = ApiServiceConfig {
                 domain_data_path: work.domain_data.to_string_lossy().to_string(),
                 append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
@@ -235,15 +234,17 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 rate_limit: config.api.rate_limit,
                 rate_limit_burst: config.api.rate_limit_burst,
                 ckb_data_path: config.ckb.data_path.clone(),
-                frontend_dir,
             };
             run_api(api_config).await
         }
         InternalService::FrontendServer => {
-            // Frontend serving is handled by the API crate when
-            // frontend_dir is provided. This subcommand is a placeholder
-            // for future standalone frontend server support.
-            bail!("standalone frontend-server not yet implemented; frontend is served by the API service")
+            let frontend_dir = resolve_frontend_dir(&work);
+            let frontend_config = FrontendServiceConfig {
+                host: config.frontend.host.clone(),
+                port: config.frontend.port,
+                frontend_dir,
+            };
+            run_frontend_server(frontend_config).await
         }
     }
 }
@@ -535,7 +536,11 @@ fn remove_dir_contents(dir: &std::path::Path) -> Result<()> {
 fn parse_only_flag(only: &Option<String>) -> Vec<String> {
     match only {
         Some(s) => s.split(',').map(|s| s.trim().to_string()).collect(),
-        None => vec!["indexer".to_string(), "api".to_string()],
+        None => vec![
+            "indexer".to_string(),
+            "api".to_string(),
+            "frontend-server".to_string(),
+        ],
     }
 }
 
@@ -823,6 +828,7 @@ mod tests {
         let services = parse_only_flag(&None);
         assert!(services.contains(&"indexer".to_string()));
         assert!(services.contains(&"api".to_string()));
+        assert!(services.contains(&"frontend-server".to_string()));
     }
 
     #[test]

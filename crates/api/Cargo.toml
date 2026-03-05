@@ -69,6 +69,10 @@ ckb-types = { workspace = true }
 # RocksDB (for iterator mode in direct store access)
 rocksdb = { workspace = true }
 
+# Embedded frontend assets
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
+
 [dev-dependencies]
 tokio-test = { workspace = true }
 wiremock = { workspace = true }

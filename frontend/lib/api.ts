@@ -1,7 +1,7 @@
 import { normalizeNftAssetId } from '@/lib/nft-collections';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 
-const DEFAULT_API_BASE = 'http://localhost:3001/api/v1';
+const DEFAULT_API_BASE = 'http://localhost:8101/api/v1';
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');

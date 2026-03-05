@@ -47,6 +47,7 @@ pub struct ApiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct FrontendConfig {
+    pub host: String,
     pub port: u16,
 }
 
@@ -111,7 +112,10 @@ impl Default for ApiConfig {
 
 impl Default for FrontendConfig {
     fn default() -> Self {
-        Self { port: 8100 }
+        Self {
+            host: "127.0.0.1".to_string(),
+            port: 8100,
+        }
     }
 }
 
@@ -289,6 +293,7 @@ rate_limit = 100
 rate_limit_burst = 200
 
 [frontend]
+host = "127.0.0.1"
 port = 8100
 
 [indexer]
@@ -401,6 +406,7 @@ mod tests {
         assert_eq!(cfg.api.rate_limit, 100);
         assert_eq!(cfg.api.rate_limit_burst, 200);
 
+        assert_eq!(cfg.frontend.host, "127.0.0.1");
         assert_eq!(cfg.frontend.port, 8100);
 
         assert_eq!(cfg.indexer.batch_size, 10000);
@@ -435,6 +441,7 @@ port = 9999
         assert_eq!(cfg.ckb.rpc_url, "http://127.0.0.1:8114"); // default
         assert_eq!(cfg.api.port, 9999);
         assert_eq!(cfg.api.host, "127.0.0.1"); // default
+        assert_eq!(cfg.frontend.host, "127.0.0.1"); // default
         assert_eq!(cfg.frontend.port, 8100); // default
     }
 
@@ -453,6 +460,7 @@ rate_limit = 50
 rate_limit_burst = 100
 
 [frontend]
+host = "0.0.0.0"
 port = 3000
 
 [indexer]
@@ -474,6 +482,7 @@ level = "debug"
         assert_eq!(cfg.api.port, 3001);
         assert_eq!(cfg.api.rate_limit, 50);
         assert_eq!(cfg.api.rate_limit_burst, 100);
+        assert_eq!(cfg.frontend.host, "0.0.0.0");
         assert_eq!(cfg.frontend.port, 3000);
         assert_eq!(cfg.indexer.batch_size, 5000);
         assert_eq!(cfg.indexer.parallel_fetch_size, 32);
