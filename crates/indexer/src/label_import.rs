@@ -6,6 +6,32 @@ use serde::Deserialize;
 use std::path::Path;
 use tracing::{debug, info};
 
+mod bundled {
+    use super::*;
+
+    const BUNDLED_UDT_LABELS: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/bundled_udt_labels.json"));
+    const BUNDLED_SCRIPT_LABELS: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/bundled_script_labels.json"));
+    const BUNDLED_SCRIPT_OVERRIDES: &[u8] =
+        include_bytes!(concat!(env!("OUT_DIR"), "/bundled_script_overrides.json"));
+
+    pub fn udt_labels() -> Vec<UdtLabelInfo> {
+        serde_json::from_slice(BUNDLED_UDT_LABELS)
+            .expect("bundled UDT labels JSON is invalid — build.rs bug")
+    }
+
+    pub fn script_labels() -> Vec<ScriptLabelInfo> {
+        serde_json::from_slice(BUNDLED_SCRIPT_LABELS)
+            .expect("bundled script labels JSON is invalid — build.rs bug")
+    }
+
+    pub fn script_overrides() -> ScriptNameOverrides {
+        serde_json::from_slice(BUNDLED_SCRIPT_OVERRIDES)
+            .expect("bundled script overrides JSON is invalid — build.rs bug")
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -174,6 +200,88 @@ pub fn run_label_import_staged(
     }
 
     Ok(summary)
+}
+
+/// Run label import using compile-time bundled data.
+/// Used as fallback when no filesystem token-labels directory is available.
+pub fn run_label_import_bundled(
+    store: &CkbadgerStore,
+    ckb_store: Option<&CkbChainReader>,
+    network: &str,
+) -> Result<LabelImportResult> {
+    info!(
+        "Starting label import from bundled data (network={})",
+        network
+    );
+
+    let mut result = LabelImportResult::default();
+
+    // UDT labels (already filtered to published in build.rs)
+    let udt_labels = bundled::udt_labels();
+    info!("Bundled UDT labels: {}", udt_labels.len());
+    for label in &udt_labels {
+        match upsert_token_label(store, label) {
+            Ok(updated) => {
+                if updated {
+                    result.udt_labels_imported += 1;
+                }
+            }
+            Err(e) => {
+                result
+                    .errors
+                    .push(format!("UDT {}: {}", label.type_hash, e));
+            }
+        }
+    }
+
+    // Script labels with overrides applied
+    let overrides = bundled::script_overrides();
+    let mut scripts = bundled::script_labels();
+    for script in &mut scripts {
+        if let Some(new_name) = overrides.overrides.get(&script.name) {
+            script.name = new_name.clone();
+        }
+        for deployment in &mut script.deployments.mainnet {
+            let code_hash_lower = deployment.code_hash.to_lowercase();
+            if overrides
+                .deprecated
+                .iter()
+                .any(|d| d.to_lowercase() == code_hash_lower)
+            {
+                deployment.deprecated = true;
+            }
+        }
+        for deployment in &mut script.deployments.testnet {
+            let code_hash_lower = deployment.code_hash.to_lowercase();
+            if overrides
+                .deprecated
+                .iter()
+                .any(|d| d.to_lowercase() == code_hash_lower)
+            {
+                deployment.deprecated = true;
+            }
+        }
+    }
+    info!("Bundled script labels: {}", scripts.len());
+    for script in &scripts {
+        match upsert_script_label(store, ckb_store, script, network) {
+            Ok(()) => {
+                result.script_labels_imported += 1;
+            }
+            Err(e) => {
+                result.errors.push(format!("Script {}: {}", script.name, e));
+            }
+        }
+    }
+
+    info!(
+        "Bundled label import completed: {} UDT, {} scripts, {} errors",
+        result.udt_labels_imported,
+        result.script_labels_imported,
+        result.errors.len()
+    );
+
+    Ok(result)
 }
 
 fn load_token_labels(base_path: &str) -> Result<Vec<UdtLabelInfo>> {
