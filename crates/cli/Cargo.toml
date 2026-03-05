@@ -10,6 +10,10 @@ path = "src/main.rs"
 
 [dependencies]
 ckbadger-config = { path = "../config" }
+ckbadger-indexer = { path = "../indexer" }
+ckbadger-api = { path = "../api" }
+ckbadger-tui = { path = "../tui" }
+ckbadger-store = { path = "../ckbadger-store" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

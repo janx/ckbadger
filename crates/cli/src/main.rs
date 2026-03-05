@@ -4,7 +4,17 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use tracing::info;
 
-use ckbadger_config::{default_config_toml, load_config, WorkDir};
+use ckbadger_config::{
+    default_config_toml, load_config, resolve_share_dir, resolve_token_labels_path, WorkDir,
+};
+
+use ckbadger_api::entry::{run_api, ApiServiceConfig};
+use ckbadger_indexer::entry::{
+    run_indexer, run_label_import, IndexerServiceConfig, LabelImportServiceConfig,
+};
+use ckbadger_indexer::verify as indexer_verify;
+use ckbadger_store::CkbadgerStore;
+use ckbadger_tui::entry::{run_tui, TuiServiceConfig};
 
 // ---------------------------------------------------------------------------
 // CLI definition
@@ -54,6 +64,10 @@ struct VerifyArgs {
     /// Verification depth
     #[arg(long, default_value = "fast")]
     depth: String,
+
+    /// List available checks and exit
+    #[arg(long)]
+    list_checks: bool,
 }
 
 #[derive(clap::Args)]
@@ -112,30 +126,26 @@ async fn main() -> Result<()> {
             init_tracing(&log_level);
             cmd_purge(&workdir, &args)
         }
-        Command::Run(_) => {
+        Command::Run(args) => {
             init_tracing_from_config(&workdir);
-            println!("run: not yet implemented");
-            Ok(())
+            cmd_run(&workdir, &args).await
         }
         Command::Tui => {
-            init_tracing_from_config(&workdir);
-            println!("tui: not yet implemented");
-            Ok(())
+            // TUI manages its own terminal; do not init tracing (it would
+            // write to stdout and corrupt the TUI display).
+            cmd_tui(&workdir).await
         }
         Command::Status => {
             init_tracing_from_config(&workdir);
-            println!("status: not yet implemented");
-            Ok(())
+            cmd_status(&workdir)
         }
-        Command::Verify(_) => {
+        Command::Verify(args) => {
             init_tracing_from_config(&workdir);
-            println!("verify: not yet implemented");
-            Ok(())
+            cmd_verify(&workdir, &args).await
         }
         Command::LabelImport(_) => {
             init_tracing_from_config(&workdir);
-            println!("label-import: not yet implemented");
-            Ok(())
+            cmd_label_import(&workdir).await
         }
         Command::Internal(_) => {
             init_tracing_from_config(&workdir);
@@ -161,6 +171,202 @@ fn init_tracing_from_config(workdir: &Path) {
         .map(|c| c.log.level)
         .unwrap_or_else(|_| "info".to_string());
     init_tracing(&log_level);
+}
+
+// ---------------------------------------------------------------------------
+// run command
+// ---------------------------------------------------------------------------
+
+async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
+    let config = load_config(workdir)?;
+    let work = WorkDir::resolve(workdir);
+
+    let services = parse_only_flag(&args.only);
+
+    let mut handles = vec![];
+
+    if services.contains(&"indexer".to_string()) {
+        let token_labels_path = resolve_token_labels_path(&work, resolve_share_dir().as_deref())
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let indexer_config = IndexerServiceConfig {
+            domain_data_path: work.domain_data.to_string_lossy().to_string(),
+            append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+            ckb_rpc_url: config.ckb.rpc_url.clone(),
+            ckb_data_path: config.ckb.data_path.clone(),
+            token_labels_path,
+            batch_size: config.indexer.batch_size,
+            poll_interval_ms: config.indexer.poll_interval_ms,
+            parallel_fetch_size: config.indexer.parallel_fetch_size,
+            pipeline_enabled: config.indexer.pipeline_enabled,
+            pipeline_buffer: config.indexer.pipeline_buffer,
+            bulk_sync_threshold: config.indexer.bulk_sync_threshold,
+            redis_url: None,
+        };
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = run_indexer(indexer_config).await {
+                tracing::error!("Indexer failed: {}", e);
+            }
+        }));
+    }
+
+    if services.contains(&"api".to_string()) {
+        let frontend_dir = resolve_frontend_dir(&work);
+        let api_config = ApiServiceConfig {
+            domain_data_path: work.domain_data.to_string_lossy().to_string(),
+            append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+            ckb_rpc_url: config.ckb.rpc_url.clone(),
+            ckb_network: config.ckb.network.clone(),
+            host: config.api.host.clone(),
+            port: config.api.port,
+            rate_limit: config.api.rate_limit,
+            rate_limit_burst: config.api.rate_limit_burst,
+            ckb_data_path: config.ckb.data_path.clone(),
+            redis_url: None,
+            frontend_dir,
+        };
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = run_api(api_config).await {
+                tracing::error!("API server failed: {}", e);
+            }
+        }));
+    }
+
+    if handles.is_empty() {
+        bail!("no services selected to run");
+    }
+
+    info!("Started services: {}", services.join(", "));
+
+    // Wait for ctrl+c
+    tokio::signal::ctrl_c().await?;
+    info!("Shutting down...");
+
+    // Drop handles to cancel tasks
+    drop(handles);
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// tui command
+// ---------------------------------------------------------------------------
+
+async fn cmd_tui(workdir: &Path) -> Result<()> {
+    let config = load_config(workdir)?;
+    let work = WorkDir::resolve(workdir);
+
+    let tui_config = TuiServiceConfig {
+        domain_data_path: work.domain_data.to_string_lossy().to_string(),
+        append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+        api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
+        refresh_ms: 1000,
+        redis_url: None,
+    };
+
+    run_tui(tui_config).await
+}
+
+// ---------------------------------------------------------------------------
+// status command
+// ---------------------------------------------------------------------------
+
+fn cmd_status(workdir: &Path) -> Result<()> {
+    let work = WorkDir::resolve(workdir);
+
+    let primary_path = work.domain_data.to_string_lossy().to_string();
+    let secondary_path = format!("{}-cli-secondary", primary_path);
+    match CkbadgerStore::open_domain_secondary(primary_path.as_str(), secondary_path.as_str()) {
+        Ok(store) => match store.get_sync_status() {
+            Ok(status) => {
+                println!("Sync tip block:        {}", status.tip_block_number);
+                println!("Derived tip block:     {}", status.derived_tip_block_number);
+                println!("Total transactions:    {}", status.total_transactions);
+                println!("Total cells created:   {}", status.total_cells_created);
+                println!("Total cells consumed:  {}", status.total_cells_consumed);
+                if status.deep_fork_detected {
+                    println!("WARNING: deep fork detected");
+                }
+            }
+            Err(e) => {
+                println!("Could not read sync status: {}", e);
+            }
+        },
+        Err(e) => {
+            println!("Could not open store: {} (has the indexer run yet?)", e);
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// verify command
+// ---------------------------------------------------------------------------
+
+async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
+    let config = load_config(workdir)?;
+
+    let depth = match args.depth.to_lowercase().as_str() {
+        "fast" => indexer_verify::checks::CheckTier::Fast,
+        "sampling" => indexer_verify::checks::CheckTier::Sampling,
+        _ => bail!("Invalid depth: {}. Use fast or sampling", args.depth),
+    };
+
+    let verify_args = indexer_verify::VerifyArgs {
+        api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
+        rpc_url: Some(config.ckb.rpc_url.clone()),
+        explorer_url: "https://mainnet-api.explorer.nervos.org".to_string(),
+        no_explorer: false,
+        depth,
+        sample_count: 1000,
+        seed: 42,
+        tolerance: 0.001,
+        format: indexer_verify::OutputFormat::Text,
+        checks: None,
+        list_checks: args.list_checks,
+        cache_dir: None,
+    };
+
+    tokio::task::spawn_blocking(move || indexer_verify::run(verify_args))
+        .await
+        .expect("verify task panicked")?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// label-import command
+// ---------------------------------------------------------------------------
+
+async fn cmd_label_import(workdir: &Path) -> Result<()> {
+    let config = load_config(workdir)?;
+    let work = WorkDir::resolve(workdir);
+
+    let token_labels_path = resolve_token_labels_path(&work, resolve_share_dir().as_deref())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    if token_labels_path.is_empty() {
+        bail!(
+            "No token labels directory found. Place labels in {}/token-labels/ \
+             or install to share/token-labels/.",
+            work.root.display()
+        );
+    }
+
+    let import_config = LabelImportServiceConfig {
+        domain_data_path: work.domain_data.to_string_lossy().to_string(),
+        append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+        ckb_data_path: config.ckb.data_path.clone(),
+        token_labels_path,
+        network: config.ckb.network.clone(),
+        import_udt: true,
+        import_scripts: true,
+    };
+
+    run_label_import(import_config).await
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +467,10 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 /// Remove all contents of a directory without removing the directory itself.
 fn remove_dir_contents(dir: &std::path::Path) -> Result<()> {
     for entry in std::fs::read_dir(dir)
@@ -277,6 +487,30 @@ fn remove_dir_contents(dir: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn parse_only_flag(only: &Option<String>) -> Vec<String> {
+    match only {
+        Some(s) => s.split(',').map(|s| s.trim().to_string()).collect(),
+        None => vec!["indexer".to_string(), "api".to_string()],
+    }
+}
+
+/// Resolve frontend assets directory.
+fn resolve_frontend_dir(work: &WorkDir) -> Option<PathBuf> {
+    // Check work_dir/frontend/ first
+    let work_frontend = work.root.join("frontend");
+    if work_frontend.is_dir() {
+        return Some(work_frontend);
+    }
+    // Check share/frontend/
+    if let Some(share) = resolve_share_dir() {
+        let share_frontend = share.join("frontend");
+        if share_frontend.is_dir() {
+            return Some(share_frontend);
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -537,5 +771,51 @@ mod tests {
         let dir = TempDir::new().unwrap();
         remove_dir_contents(dir.path()).unwrap();
         assert!(dir.path().exists());
+    }
+
+    // -- parse_only_flag --
+
+    #[test]
+    fn test_parse_only_flag_none_returns_default() {
+        let services = parse_only_flag(&None);
+        assert!(services.contains(&"indexer".to_string()));
+        assert!(services.contains(&"api".to_string()));
+    }
+
+    #[test]
+    fn test_parse_only_flag_single() {
+        let services = parse_only_flag(&Some("indexer".to_string()));
+        assert_eq!(services, vec!["indexer".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_only_flag_multiple() {
+        let services = parse_only_flag(&Some("indexer,api".to_string()));
+        assert_eq!(services, vec!["indexer".to_string(), "api".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_only_flag_with_spaces() {
+        let services = parse_only_flag(&Some(" indexer , api ".to_string()));
+        assert_eq!(services, vec!["indexer".to_string(), "api".to_string()]);
+    }
+
+    // -- resolve_frontend_dir --
+
+    #[test]
+    fn test_resolve_frontend_dir_none_when_not_present() {
+        let dir = TempDir::new().unwrap();
+        let work = WorkDir::resolve(dir.path());
+        assert!(resolve_frontend_dir(&work).is_none());
+    }
+
+    #[test]
+    fn test_resolve_frontend_dir_finds_workdir_frontend() {
+        let dir = TempDir::new().unwrap();
+        let frontend = dir.path().join("frontend");
+        std::fs::create_dir(&frontend).unwrap();
+
+        let work = WorkDir::resolve(dir.path());
+        assert_eq!(resolve_frontend_dir(&work), Some(frontend));
     }
 }
