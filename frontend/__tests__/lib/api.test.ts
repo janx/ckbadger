@@ -9,7 +9,7 @@ describe('api', () => {
       const base = resolveApiBase(
         {
           CKBADGER_SERVER_API_URL: 'http://api:3001/api/v1/',
-          NEXT_PUBLIC_API_URL: 'http://localhost:3001/api/v1',
+          NEXT_PUBLIC_API_URL: 'http://localhost:8101/api/v1',
         },
         'server'
       );
@@ -21,20 +21,20 @@ describe('api', () => {
       const base = resolveApiBase(
         {
           CKBADGER_SERVER_API_URL: 'http://api:3001/api/v1',
-          NEXT_PUBLIC_API_URL: 'http://localhost:3001/api/v1/',
+          NEXT_PUBLIC_API_URL: 'http://localhost:8101/api/v1/',
         },
         'client'
       );
 
-      expect(base).toBe('http://localhost:3001/api/v1');
+      expect(base).toBe('http://localhost:8101/api/v1');
     });
 
     it('falls back to default when both env vars are missing', () => {
       const serverBase = resolveApiBase({}, 'server');
       const clientBase = resolveApiBase({}, 'client');
 
-      expect(serverBase).toBe('http://localhost:3001/api/v1');
-      expect(clientBase).toBe('http://localhost:3001/api/v1');
+      expect(serverBase).toBe('http://localhost:8101/api/v1');
+      expect(clientBase).toBe('http://localhost:8101/api/v1');
     });
   });
 
