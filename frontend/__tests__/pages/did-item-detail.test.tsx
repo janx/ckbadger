@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
-import DidCkbItemDetailPage from '@/app/nfts/did/[nftId]/page';
+import DidCkbItemDetailPage from '@/app/nfts/did/[nftId]/client-page';
 import { api } from '@/lib/api';
 import { render } from '../utils/test-utils';
 

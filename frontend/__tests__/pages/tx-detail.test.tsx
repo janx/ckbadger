@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import TransactionDetailPage from '@/app/tx/[hash]/page';
+import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api } from '@/lib/api';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd85200994f99250ddc08e0f';

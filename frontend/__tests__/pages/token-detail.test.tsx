@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import TokenDetailPage from '@/app/tokens/[typeHash]/page';
+import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({

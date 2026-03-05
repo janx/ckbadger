@@ -1,21 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import ForkDetailPage from '@/app/forks/[id]/page';
+import ForkDetailPage from '@/app/forks/[id]/client-page';
 import { api } from '@/lib/api';
 
-vi.mock('react', async () => {
-  const actual = await vi.importActual<typeof import('react')>('react');
-  return {
-    ...actual,
-    use: (value: unknown) => {
-      if (value && typeof (value as Promise<unknown>).then === 'function') {
-        return { id: '1' };
-      }
-      return value;
-    },
-  };
-});
+vi.mock('next/navigation', () => ({
+  notFound: vi.fn(),
+  useParams: () => ({ id: '1' }),
+}));
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -25,10 +17,6 @@ vi.mock('@/lib/api', () => ({
 
 vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
-}));
-
-vi.mock('next/navigation', () => ({
-  notFound: vi.fn(),
 }));
 
 describe('ForkDetailPage', () => {
@@ -79,7 +67,7 @@ describe('ForkDetailPage', () => {
       ],
     });
 
-    render(<ForkDetailPage params={Promise.resolve({ id: '1' })} />);
+    render(<ForkDetailPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
 

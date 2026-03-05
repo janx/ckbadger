@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import CellDetailPage from '@/app/cell/[outpoint]/page';
+import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 
 const mockPush = vi.fn();
 

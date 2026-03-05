@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
-import DotbitItemDetailPage from '@/app/nfts/dotbit/[nftId]/page';
+import DotbitItemDetailPage from '@/app/nfts/dotbit/[nftId]/client-page';
 import { api } from '@/lib/api';
 import { render } from '../utils/test-utils';
 

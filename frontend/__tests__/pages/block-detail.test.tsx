@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import BlockDetailPage from '@/app/blocks/[id]/page';
+import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 
 const BLOCK_ID = '8775638';

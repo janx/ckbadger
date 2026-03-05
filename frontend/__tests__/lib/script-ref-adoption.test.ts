@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const TARGET_FILES = [
-  'app/script/[codeHash]/page.tsx',
-  'app/cell/[outpoint]/page.tsx',
+  'app/script/[codeHash]/client-page.tsx',
+  'app/cell/[outpoint]/client-page.tsx',
   'app/scripts/page.tsx',
-  'app/scripts/[name]/page.tsx',
-  'app/tx/[hash]/page.tsx',
+  'app/scripts/[name]/client-page.tsx',
+  'app/tx/[hash]/client-page.tsx',
   'components/ui/script-view.tsx',
 ];
 

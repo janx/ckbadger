@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import ClusterDetailPage from '@/app/clusters/[clusterId]/page';
+import ClusterDetailPage from '@/app/clusters/[clusterId]/client-page';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({

@@ -1,44 +1,25 @@
+'use client';
+
+import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { HomeContent } from '@/components/home-content';
 import { DeepForkAlert } from '@/components/deep-fork-alert';
-import { NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
+import { api } from '@/lib/api';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api/v1';
-
-async function fetchServerData<T>(endpoint: string): Promise<T | null> {
-  try {
-    const res = await fetch(`${API_BASE}${endpoint}`, {
-      next: { revalidate: 10 },
-    });
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
-}
-
-interface PaginatedResponse<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-}
-
-export default async function Home() {
-  const [stats, blocksRes, txRes, blockTimeChart, hashRateChart] = await Promise.all([
-    fetchServerData<NetworkStats>('/statistics/network'),
-    fetchServerData<PaginatedResponse<Block>>('/blocks?limit=10'),
-    fetchServerData<PaginatedResponse<Transaction>>('/transactions?limit=10'),
-    fetchServerData<ChartResponse>('/charts/average-block-time'),
-    fetchServerData<ChartResponse>('/charts/hash-rate'),
-  ]);
+export default function Home() {
+  const { data: stats } = useQuery({
+    queryKey: ['network-stats'],
+    queryFn: () => api.getNetworkStats(),
+    staleTime: 0,
+    refetchInterval: 10000,
+  });
 
   const initialData = {
-    stats,
-    blocks: blocksRes?.data ?? [],
-    transactions: txRes?.data ?? [],
-    blockTimeChart,
-    hashRateChart,
+    stats: stats ?? null,
+    blocks: [],
+    transactions: [],
+    blockTimeChart: null,
+    hashRateChart: null,
   };
 
   return (

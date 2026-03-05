@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import SporeDetailPage from '@/app/nfts/[sporeId]/page';
+import SporeDetailPage from '@/app/nfts/[sporeId]/client-page';
 import { api } from '@/lib/api';
 import { DID_CKB_COLLECTION_ID, DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 

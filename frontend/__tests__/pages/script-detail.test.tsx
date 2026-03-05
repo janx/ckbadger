@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import ScriptDetailPage from '@/app/scripts/[name]/page';
+import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
