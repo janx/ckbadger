@@ -36,28 +36,29 @@ The simplest and lowest-risk optimization. No partition changes needed.
 
 ### How
 
-`chattr +C` disables COW for new files created in a directory. Existing files are unaffected, so the cleanest approach is to clear and recreate:
+`chattr +C` disables COW for new files created in a directory. Existing files are unaffected, so the cleanest approach is to start from a fresh workdir and set `+C` on that workdir before any data directories are created:
 
 ```bash
 # 1. Stop ckbadger
 ckbadger stop
 
-# 2. Clear and recreate data directories
-rm -rf ./data/ckbadger-store ./data/ckbadger-store-append-only
-mkdir ./data/ckbadger-store ./data/ckbadger-store-append-only
+# 2. Create a fresh workdir
+mkdir ./workdir-nocow
 
-# 3. Disable COW
-chattr +C ./data/ckbadger-store
-chattr +C ./data/ckbadger-store-append-only
+# 3. Disable COW on the workdir before ckbadger creates any files under it
+chattr +C ./workdir-nocow
 
-# 4. Verify (should show 'C' attribute)
-lsattr ./data/
+# 4. Verify (should show 'C' on the workdir)
+lsattr -d ./workdir-nocow
 
-# 5. Re-sync from genesis
-ckbadger run
+# 5. Initialize and sync using the new workdir so data/ directories inherit No_COW
+ckbadger init --workdir ./workdir-nocow
+ckbadger run --workdir ./workdir-nocow
 ```
 
-Optionally apply the same to the CKB node's data directory to speed up Fetcher reads.
+Any data directories created later under `./workdir-nocow` inherit the No_COW behavior for newly created files, which is what RocksDB needs. Do not try to retrofit `+C` onto existing non-empty RocksDB files.
+
+Optionally use the same fresh-workdir pattern for the CKB node's data directory to speed up Fetcher reads.
 
 ### What You Lose (and Why It Doesn't Matter for ckbadger)
 
