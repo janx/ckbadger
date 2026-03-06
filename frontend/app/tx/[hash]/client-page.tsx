@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import dynamic from '@/lib/dynamic-client';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import {
@@ -18,7 +19,6 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Capacity } from '@/components/ui/capacity';
 import { Address } from '@/components/ui/address';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { CellGraph } from '@/components/cell-graph';
 import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
 import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
@@ -34,6 +34,14 @@ const SECTION_TAB_TITLES: Record<SectionTab, string> = {
   celldeps: 'Cell Deps',
   graph: 'Graph',
 };
+
+const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
+  loading: () => (
+    <div className="flex h-[240px] items-center justify-center rounded border border-slate-700/70 bg-slate-900/70">
+      <p className="text-sm text-slate-500">Loading graph section...</p>
+    </div>
+  ),
+});
 
 const WITNESS_BYTES_PER_ROW = 24;
 const EMPTY_WITNESSES: string[] = [];
@@ -692,7 +700,7 @@ export default function TransactionDetailPage() {
                       </div>
                     </div>
                   ) : graphData && graphData.nodes.length > 0 ? (
-                    <CellGraph
+                    <DeferredCellGraph
                       nodes={graphData.nodes}
                       links={graphData.links}
                       onNodeClick={handleGraphNodeClick}

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import dynamic from '@/lib/dynamic-client';
 import { useParams, useRouter } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import {
@@ -16,7 +17,6 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { Capacity } from '@/components/ui/capacity';
 import { ScriptView } from '@/components/ui/script-view';
-import { CellGraph } from '@/components/cell-graph';
 import { api, type GraphNode } from '@/lib/api';
 import {
   getScriptRefBadgeLabel,
@@ -112,6 +112,14 @@ const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
     legendValueText: 'text-fuchsia-200',
   },
 };
+
+const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
+  loading: () => (
+    <div className="flex h-[240px] items-center justify-center rounded border border-slate-700/70 bg-slate-900/70">
+      <p className="text-sm text-slate-500">Loading graph section...</p>
+    </div>
+  ),
+});
 
 function getDataSegmentTone(segmentIndex: number) {
   return DATA_SEGMENT_TONES[Math.abs(segmentIndex) % DATA_SEGMENT_TONES.length];
@@ -815,7 +823,7 @@ export default function CellDetailPage() {
                         Current cell node is highlighted.
                       </span>
                     </div>
-                    <CellGraph
+                    <DeferredCellGraph
                       nodes={graphData.nodes}
                       links={graphData.links}
                       onNodeClick={handleGraphNodeClick}

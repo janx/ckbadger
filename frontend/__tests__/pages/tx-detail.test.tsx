@@ -38,6 +38,7 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 vi.mock('@/components/cell-graph', () => ({
+  default: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
   CellGraph: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
 }));
 
@@ -222,10 +223,12 @@ describe('TransactionDetailPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Graph View' }));
 
+    expect(screen.getByText('Loading graph section...')).toBeInTheDocument();
+
     await waitFor(() => {
       expect(screen.queryByTestId('tx-relationship-flow')).not.toBeInTheDocument();
     });
-    expect(screen.getByTestId('mock-cell-graph')).toBeInTheDocument();
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
   });
 
   it('renders witness tab with deterministic decode and byte interaction', async () => {

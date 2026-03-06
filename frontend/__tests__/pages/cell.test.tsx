@@ -13,6 +13,11 @@ vi.mock('@/src/navigation', () => ({
   usePathname: () => '/cell/0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
 }));
 
+vi.mock('@/components/cell-graph', () => ({
+  default: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
+  CellGraph: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
+}));
+
 const mockCellWithDao = {
   txHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
   outputIndex: 0,
@@ -262,6 +267,36 @@ describe('CellDetailPage', () => {
     expect(screen.getByTestId('cell-relationship-lifecycle')).toBeInTheDocument();
     expect(screen.getByText('Current Status')).toBeInTheDocument();
     expect(screen.getByText('Upstream Inputs (0)')).toBeInTheDocument();
+  });
+
+  it('shows a graph section fallback before rendering the graph view', async () => {
+    mockGetCell.mockResolvedValue(mockCellWithDao);
+    vi.mocked(api.getCellGraph).mockResolvedValue({
+      nodes: [
+        {
+          id: `cell-${mockCellWithDao.txHash}-0`,
+          nodeType: 'cell',
+          label: 'Current Cell',
+          data: {
+            txHash: mockCellWithDao.txHash,
+            outputIndex: mockCellWithDao.outputIndex,
+            status: mockCellWithDao.status,
+            capacity: mockCellWithDao.capacity,
+          },
+        },
+      ],
+      links: [],
+    });
+
+    renderWithQueryClient(<CellDetailPage />);
+
+    expect((await screen.findAllByText('Nervos DAO')).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Lifecycle' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Graph' }));
+
+    expect(screen.getByText('Loading graph section...')).toBeInTheDocument();
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
   });
 
   it('renders inferred bytes segment with dedicated legend color', async () => {
