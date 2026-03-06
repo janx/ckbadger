@@ -160,7 +160,7 @@ crates/
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI library (sync/memory/throughput)
-frontend/         # Vite + React SPA + Next-compat wrappers during migration
+frontend/         # Vite + React SPA
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
@@ -314,7 +314,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | Hex parsing               | Use `parse_hex_to_bytes()`, `parse_capacity()` in `rpc/client.rs` |
 | Script hashing            | `ckb-hash::new_blake2b()` with CKB personalization                |
 | WebSocket Text (Axum 0.8) | Needs `Utf8Bytes` - use `.into()` from String                     |
-| react-force-graph-2d      | No SSR - `next/dynamic` with `ssr: false`                         |
+| react-force-graph-2d      | Use `frontend/lib/dynamic-client.tsx` for client-only graph loads |
 | API casing                | Backend `camelCase` via serde, frontend types match               |
 | Daily charts              | Exclude incomplete current day                                    |
 | Vite SPA deep links       | Rust frontend server must fall back to `index.html` for non-files |
@@ -351,4 +351,4 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 ## Dependencies
 
 **Rust**: axum 0.8, rocksdb, tokio 1.42, serde, ckb-types/ckb-hash 0.119, anyhow/thiserror
-**Frontend**: next 15.1, react 19, @tanstack/react-query 5, zustand 5, tailwindcss 3.4
+**Frontend**: vite 5, react 19, react-router-dom 7, @tanstack/react-query 5, zustand 5, tailwindcss 3.4

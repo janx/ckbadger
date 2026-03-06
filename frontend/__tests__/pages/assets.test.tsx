@@ -9,7 +9,7 @@ const mockReplace = vi.fn((href: string) => {
   window.history.replaceState(null, '', `${url.pathname}${url.search}`);
 });
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
   usePathname: () => '/assets',
   useRouter: () => ({ replace: mockReplace }),

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Vite, React 19, React Router, TanStack Query, Vitest, Axum, tower-http, rust-embed
 
+**Status (2026-03-06):** SPA shell migration and Next runtime removal are complete. `frontend` now builds and runs without `next` or `eslint-config-next`; remaining follow-up is bundle/route-structure cleanup rather than shell migration.
+
 ---
 
 ### Task 1: Stand up the Vite SPA shell without changing page business logic
