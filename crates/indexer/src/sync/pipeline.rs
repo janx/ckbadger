@@ -46,6 +46,25 @@ fn requires_direct_reads_for_fetch(
     bulk_sync_allowed && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+struct ParserPrecomputePhaseMetrics {
+    build_batch_cell_infos_ms: f64,
+    compute_fee_ms: f64,
+    cache_balance_and_script_ms: f64,
+    spore_precompute_ms: f64,
+    nft_precompute_ms: f64,
+}
+
+impl ParserPrecomputePhaseMetrics {
+    fn total_ms(&self) -> f64 {
+        self.build_batch_cell_infos_ms
+            + self.compute_fee_ms
+            + self.cache_balance_and_script_ms
+            + self.spore_precompute_ms
+            + self.nft_precompute_ms
+    }
+}
+
 impl Indexer {
     pub(super) async fn run_pipeline(&self) -> Result<()> {
         use tokio::sync::mpsc;
@@ -737,7 +756,10 @@ impl Indexer {
                 let t_precompute_parser = Instant::now();
                 let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
 
+                let mut precompute_phase_metrics = ParserPrecomputePhaseMetrics::default();
+
                 // Pass 1: Build batch_cell_infos
+                let build_batch_cell_infos_started = Instant::now();
                 let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
@@ -856,8 +878,11 @@ impl Indexer {
                         );
                     }
                 }
+                precompute_phase_metrics.build_batch_cell_infos_ms =
+                    build_batch_cell_infos_started.elapsed().as_secs_f64() * 1000.0;
 
                 // Pass 2: Compute input capacity + fee
+                let compute_fee_started = Instant::now();
                 let dao_code_hash =
                     crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
                 for tx_data in &mut all_tx_data {
@@ -918,8 +943,11 @@ impl Indexer {
                         };
                     }
                 }
+                precompute_phase_metrics.compute_fee_ms =
+                    compute_fee_started.elapsed().as_secs_f64() * 1000.0;
 
                 // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
+                let cache_balance_and_script_started = Instant::now();
                 let mut address_balance_changes: HashMap<
                     Vec<u8>,
                     (i128, i32, i32, i64, i64, Vec<u8>, i128),
@@ -1350,9 +1378,12 @@ impl Indexer {
                         committed_tip,
                     );
                 }
+                precompute_phase_metrics.cache_balance_and_script_ms =
+                    cache_balance_and_script_started.elapsed().as_secs_f64() * 1000.0;
 
                 // Spore precompute: parse all spores/clusters and compute media
                 // profiles in the parser stage to offload T6 writer thread.
+                let spore_precompute_started = Instant::now();
                 let pre_parsed_spore_data: PreParsedSporeData = {
                     // Pass 1: Parse all clusters and spores per-tx.
                     let mut per_tx: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)> =
@@ -1445,11 +1476,14 @@ impl Indexer {
 
                     per_tx
                 };
+                precompute_phase_metrics.spore_precompute_ms =
+                    spore_precompute_started.elapsed().as_secs_f64() * 1000.0;
 
                 // mNFT/DotBit precompute: parse all mNFT issuers/classes/tokens and DotBit
                 // accounts in the parser stage to offload t6b writer thread.
                 // Also pre-identify consumed DotBit inputs using input_cell_info
                 // type_code_hash (zero DB reads).
+                let nft_precompute_started = Instant::now();
                 let pre_parsed_nft_data: PreParsedNftData = {
                     let mut mnft_issuers: Vec<(usize, ParsedMnftIssuer)> = Vec::new();
                     let mut mnft_classes: Vec<(usize, usize, ParsedMnftClass)> = Vec::new();
@@ -1645,6 +1679,8 @@ impl Indexer {
                         dotbit_tx_actions,
                     }
                 };
+                precompute_phase_metrics.nft_precompute_ms =
+                    nft_precompute_started.elapsed().as_secs_f64() * 1000.0;
 
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
@@ -1671,6 +1707,17 @@ impl Indexer {
                     parse_ms = format!("{:.1}", t_parse_ms),
                     cell_lookup_ms = format!("{:.1}", cell_lookup_ms),
                     precompute_ms = format!("{:.1}", precompute_parser_ms),
+                    build_batch_cell_infos_ms =
+                        format!("{:.1}", precompute_phase_metrics.build_batch_cell_infos_ms),
+                    compute_fee_ms = format!("{:.1}", precompute_phase_metrics.compute_fee_ms),
+                    cache_balance_and_script_ms = format!(
+                        "{:.1}",
+                        precompute_phase_metrics.cache_balance_and_script_ms
+                    ),
+                    spore_precompute_ms =
+                        format!("{:.1}", precompute_phase_metrics.spore_precompute_ms),
+                    nft_precompute_ms =
+                        format!("{:.1}", precompute_phase_metrics.nft_precompute_ms),
                     total_ms = format!("{:.1}", total_parser_ms),
                     txs = tx_count,
                     cells = cell_count,
@@ -1681,6 +1728,8 @@ impl Indexer {
                     committed_tip,
                     cache_evicted,
                     cache_size = cell_cache_for_parser.len(),
+                    precompute_phase_total_ms =
+                        format!("{:.1}", precompute_phase_metrics.total_ms()),
                     queue_depth,
                     "Parser batch {}-{}",
                     start_block,
@@ -2406,5 +2455,18 @@ mod tests {
         assert!(!requires_direct_reads_for_fetch(false, 1001, 1000));
         assert!(!requires_direct_reads_for_fetch(true, 1000, 1000));
         assert!(!requires_direct_reads_for_fetch(true, 0, 1000));
+    }
+
+    #[test]
+    fn test_parser_precompute_phase_metrics_total_ms_sums_all_phases() {
+        let metrics = super::ParserPrecomputePhaseMetrics {
+            build_batch_cell_infos_ms: 10.0,
+            compute_fee_ms: 20.0,
+            cache_balance_and_script_ms: 30.0,
+            spore_precompute_ms: 40.0,
+            nft_precompute_ms: 50.0,
+        };
+
+        assert!((metrics.total_ms() - 150.0).abs() < f64::EPSILON);
     }
 }

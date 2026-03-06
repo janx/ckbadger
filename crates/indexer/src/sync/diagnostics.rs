@@ -519,7 +519,7 @@ mod tests {
         use super::super::adaptive::ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS;
         assert_eq!(
             parse_queue_capacity_txs(8, 40_000, ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS),
-            640_000
+            320_000
         );
     }
 

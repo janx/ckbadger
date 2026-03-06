@@ -547,6 +547,19 @@ pub(crate) fn plan_fetch_sub_batches(
     let mut sub_inputs = 0usize;
 
     for (&txs, &inputs) in tx_counts.iter().zip(input_counts.iter()) {
+        let next_sub_txs = sub_txs
+            .checked_add(txs)
+            .expect("sub-batch tx total overflow while planning fetch splits");
+        let next_sub_inputs = sub_inputs
+            .checked_add(inputs)
+            .expect("sub-batch input total overflow while planning fetch splits");
+        if sub_blocks > 0 && (next_sub_txs > tx_cap || next_sub_inputs > input_cap) {
+            plan.push((sub_blocks, sub_txs, sub_inputs));
+            sub_blocks = 0;
+            sub_txs = 0;
+            sub_inputs = 0;
+        }
+
         sub_blocks += 1;
         sub_txs = sub_txs
             .checked_add(txs)
@@ -573,9 +586,7 @@ pub(crate) fn plan_fetch_sub_batches(
 pub(crate) fn adaptive_sub_batch_tx_cap(target_batch_txs: u64, min_target_batch_txs: u64) -> usize {
     let min_target_batch_txs =
         min_target_batch_txs.clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS);
-    target_batch_txs
-        .saturating_mul(2)
-        .clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS) as usize
+    target_batch_txs.clamp(min_target_batch_txs, ADAPTIVE_BATCH_MAX_TXS) as usize
 }
 
 pub(crate) fn adaptive_sub_batch_input_cap(
@@ -1204,13 +1215,13 @@ mod tests {
     #[test]
     fn test_plan_fetch_sub_batches_with_tx_split() {
         let plan = plan_fetch_sub_batches(&[2, 2, 1, 5], &[1, 1, 1, 1], 3, 10);
-        assert_eq!(plan, vec![(2, 4, 2), (2, 6, 2)]);
+        assert_eq!(plan, vec![(1, 2, 1), (2, 3, 2), (1, 5, 1)]);
     }
 
     #[test]
     fn test_plan_fetch_sub_batches_with_input_split() {
         let plan = plan_fetch_sub_batches(&[2, 2, 1, 5], &[3, 3, 1, 1], 100, 5);
-        assert_eq!(plan, vec![(2, 4, 6), (2, 6, 2)]);
+        assert_eq!(plan, vec![(1, 2, 3), (3, 8, 5)]);
     }
 
     #[test]
@@ -1220,14 +1231,28 @@ mod tests {
     }
 
     #[test]
+    fn test_plan_fetch_sub_batches_flushes_before_overshoot() {
+        let plan = plan_fetch_sub_batches(&[25, 20, 10], &[10, 10, 10], 40, 100);
+        assert_eq!(plan, vec![(1, 25, 10), (2, 30, 20)]);
+    }
+
+    #[test]
+    fn test_adaptive_sub_batch_tx_cap_matches_target_when_within_bounds() {
+        assert_eq!(
+            adaptive_sub_batch_tx_cap(40_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
+            40_000
+        );
+    }
+
+    #[test]
     fn test_adaptive_sub_batch_tx_cap_scales_with_target() {
         assert_eq!(
             adaptive_sub_batch_tx_cap(10_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
-            20_000
+            10_000
         );
         assert_eq!(
             adaptive_sub_batch_tx_cap(40_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
-            80_000
+            40_000
         );
     }
 
@@ -1261,11 +1286,11 @@ mod tests {
     fn test_adaptive_sub_batch_input_cap_scales_from_tx_cap() {
         assert_eq!(
             adaptive_sub_batch_input_cap(10_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
-            25_000
+            12_500
         );
         assert_eq!(
             adaptive_sub_batch_input_cap(40_000, ADAPTIVE_BATCH_BASE_MIN_TXS),
-            100_000
+            50_000
         );
     }
 
