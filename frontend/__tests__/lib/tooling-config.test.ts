@@ -137,4 +137,12 @@ describe('tooling config', () => {
     expect(source).not.toContain("'next/navigation'");
     expect(source).not.toContain("'next/dynamic'");
   });
+
+  it('loads route modules through the local dynamic boundary instead of statically importing the app tree', () => {
+    const routerSource = readFileSync(join(process.cwd(), 'src/routes/router.tsx'), 'utf8');
+
+    expect(routerSource).toContain("from '@/lib/dynamic-client'");
+    expect(routerSource).toContain("import('@/app/");
+    expect(routerSource).not.toContain("from '@/app/");
+  });
 });

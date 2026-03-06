@@ -1,39 +1,15 @@
+import type { ComponentType } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { Outlet, useParams } from 'react-router-dom';
-import AddressDetailPage from '@/app/address/[addr]/page';
 import { SiteFooter } from '@/components/layout/site-footer';
-import AssetsPage from '@/app/assets/page';
-import BlockDetailPage from '@/app/blocks/[id]/page';
-import BlocksPage from '@/app/blocks/page';
-import CapacityTurnoverRatioPage from '@/app/charts/capacity-turnover-ratio/page';
-import CellAgeVsOccupiedCapacityPage from '@/app/charts/cell-age-vs-occupied-capacity/page';
-import ChartsPage from '@/app/charts/page';
-import CommonKnowledgeCompositionPage from '@/app/charts/common-knowledge-composition/page';
-import EpochTimeLengthPage from '@/app/charts/epoch-time-length/page';
-import HodlWavePage from '@/app/charts/hodl-wave/page';
-import KnowledgeSizePage from '@/app/charts/knowledge-size/page';
-import MostUtilizedAssetsPage from '@/app/charts/most-utilized-assets/page';
-import MostUtilizedScriptsPage from '@/app/charts/most-utilized-scripts/page';
-import SecondaryIssuancePage from '@/app/charts/secondary-issuance/page';
-import TotalSupplyPage from '@/app/charts/total-supply/page';
-import CellDetailPage from '@/app/cell/[outpoint]/page';
-import Home from '@/app/page';
-import DaoPage from '@/app/dao/page';
-import ForkDetailPage from '@/app/forks/[id]/page';
-import ForksPage from '@/app/forks/page';
-import HardforksPage from '@/app/hardforks/page';
-import ScriptByCodeHashPage from '@/app/script/[codeHash]/client-page';
-import ScriptDetailPage from '@/app/scripts/[name]/client-page';
-import ScriptsPage from '@/app/scripts/page';
-import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
-import ClusterDetailPage from '@/app/clusters/[clusterId]/client-page';
-import SporeDetailPage from '@/app/nfts/[sporeId]/client-page';
-import MnftItemDetailPage from '@/app/nfts/mnft/[nftId]/client-page';
-import DotbitItemDetailPage from '@/app/nfts/dotbit/[nftId]/client-page';
-import DidCkbItemDetailPage from '@/app/nfts/did/[nftId]/client-page';
-import TransactionsPage from '@/app/transactions/page';
-import TransactionDetailPage from '@/app/tx/[hash]/page';
 import { NotFoundPage } from '@/components/not-found-page';
+import dynamic from '@/lib/dynamic-client';
+
+type PageModule<TProps extends object = object> = {
+  default: ComponentType<TProps>;
+};
+
+type ParamRecord = Record<string, string | undefined>;
 
 function AppFrame() {
   return (
@@ -46,45 +22,103 @@ function AppFrame() {
   );
 }
 
-function ScriptByCodeHashRoute() {
-  const { codeHash = '' } = useParams();
-  return <ScriptByCodeHashPage codeHash={codeHash} />;
+function lazyPage<TProps extends object>(loader: () => Promise<PageModule<TProps>>) {
+  return dynamic(loader, {
+    loading: () => <div className="min-h-[240px]" />,
+  });
 }
 
-function ScriptDetailRoute() {
-  const { name = '' } = useParams();
-  return <ScriptDetailPage name={name} />;
+function lazyParamPage<TProps extends object>(
+  loader: () => Promise<PageModule<TProps>>,
+  mapParams: (params: ParamRecord) => TProps
+) {
+  const LazyPage = dynamic(loader, {
+    loading: () => <div className="min-h-[240px]" />,
+  });
+
+  return function ParamPage() {
+    return <LazyPage {...mapParams(useParams())} />;
+  };
 }
 
-function TokenDetailRoute() {
-  const { typeHash = '' } = useParams();
-  return <TokenDetailPage typeHash={typeHash} />;
-}
-
-function ClusterDetailRoute() {
-  const { clusterId = '' } = useParams();
-  return <ClusterDetailPage clusterId={clusterId} />;
-}
-
-function SporeDetailRoute() {
-  const { sporeId = '' } = useParams();
-  return <SporeDetailPage sporeId={sporeId} />;
-}
-
-function MnftItemDetailRoute() {
-  const { nftId = '' } = useParams();
-  return <MnftItemDetailPage nftId={nftId} />;
-}
-
-function DotbitItemDetailRoute() {
-  const { nftId = '' } = useParams();
-  return <DotbitItemDetailPage nftId={nftId} />;
-}
-
-function DidCkbItemDetailRoute() {
-  const { nftId = '' } = useParams();
-  return <DidCkbItemDetailPage nftId={nftId} />;
-}
+const HomePage = lazyPage(() => import('@/app/page'));
+const AssetsPage = lazyPage(() => import('@/app/assets/page'));
+const BlocksPage = lazyPage(() => import('@/app/blocks/page'));
+const BlockDetailPage = lazyPage(() => import('@/app/blocks/[id]/page'));
+const TransactionsPage = lazyPage(() => import('@/app/transactions/page'));
+const TransactionDetailPage = lazyPage(() => import('@/app/tx/[hash]/page'));
+const AddressDetailPage = lazyPage(() => import('@/app/address/[addr]/page'));
+const CellDetailPage = lazyPage(() => import('@/app/cell/[outpoint]/page'));
+const ScriptsPage = lazyPage(() => import('@/app/scripts/page'));
+const ForksPage = lazyPage(() => import('@/app/forks/page'));
+const ForkDetailPage = lazyPage(() => import('@/app/forks/[id]/page'));
+const ChartsPage = lazyPage(() => import('@/app/charts/page'));
+const MostUtilizedScriptsPage = lazyPage(() => import('@/app/charts/most-utilized-scripts/page'));
+const MostUtilizedAssetsPage = lazyPage(() => import('@/app/charts/most-utilized-assets/page'));
+const SecondaryIssuancePage = lazyPage(() => import('@/app/charts/secondary-issuance/page'));
+const TotalSupplyPage = lazyPage(() => import('@/app/charts/total-supply/page'));
+const KnowledgeSizePage = lazyPage(() => import('@/app/charts/knowledge-size/page'));
+const HodlWavePage = lazyPage(() => import('@/app/charts/hodl-wave/page'));
+const EpochTimeLengthPage = lazyPage(() => import('@/app/charts/epoch-time-length/page'));
+const CapacityTurnoverRatioPage = lazyPage(
+  () => import('@/app/charts/capacity-turnover-ratio/page')
+);
+const CellAgeVsOccupiedCapacityPage = lazyPage(
+  () => import('@/app/charts/cell-age-vs-occupied-capacity/page')
+);
+const CommonKnowledgeCompositionPage = lazyPage(
+  () => import('@/app/charts/common-knowledge-composition/page')
+);
+const DaoPage = lazyPage(() => import('@/app/dao/page'));
+const HardforksPage = lazyPage(() => import('@/app/hardforks/page'));
+const ScriptByCodeHashRoute = lazyParamPage(
+  () => import('@/app/script/[codeHash]/client-page'),
+  (params) => ({
+    codeHash: params.codeHash ?? '',
+  })
+);
+const ScriptDetailRoute = lazyParamPage(
+  () => import('@/app/scripts/[name]/client-page'),
+  (params) => ({
+    name: params.name ?? '',
+  })
+);
+const TokenDetailRoute = lazyParamPage(
+  () => import('@/app/tokens/[typeHash]/client-page'),
+  (params) => ({
+    typeHash: params.typeHash ?? '',
+  })
+);
+const ClusterDetailRoute = lazyParamPage(
+  () => import('@/app/clusters/[clusterId]/client-page'),
+  (params) => ({
+    clusterId: params.clusterId ?? '',
+  })
+);
+const SporeDetailRoute = lazyParamPage(
+  () => import('@/app/nfts/[sporeId]/client-page'),
+  (params) => ({
+    sporeId: params.sporeId ?? '',
+  })
+);
+const MnftItemDetailRoute = lazyParamPage(
+  () => import('@/app/nfts/mnft/[nftId]/client-page'),
+  (params) => ({
+    nftId: params.nftId ?? '',
+  })
+);
+const DotbitItemDetailRoute = lazyParamPage(
+  () => import('@/app/nfts/dotbit/[nftId]/client-page'),
+  (params) => ({
+    nftId: params.nftId ?? '',
+  })
+);
+const DidCkbItemDetailRoute = lazyParamPage(
+  () => import('@/app/nfts/did/[nftId]/client-page'),
+  (params) => ({
+    nftId: params.nftId ?? '',
+  })
+);
 
 export function createAppRouter(): RouteObject[] {
   return [
@@ -94,7 +128,7 @@ export function createAppRouter(): RouteObject[] {
       children: [
         {
           index: true,
-          element: <Home />,
+          element: <HomePage />,
         },
         {
           path: 'assets',
