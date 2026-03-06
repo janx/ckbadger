@@ -209,6 +209,16 @@ fn apply_nft_collection_activity_count_deltas(
     Ok(())
 }
 
+fn should_consume_grouped_mnft_token(
+    last_batch_output_tx_index: Option<usize>,
+    consume_tx_index: usize,
+) -> bool {
+    match last_batch_output_tx_index {
+        Some(last_output_tx_index) => last_output_tx_index < consume_tx_index,
+        None => true,
+    }
+}
+
 fn parse_udt_cells_with_store_fallback_inner<F>(
     tx: &crate::rpc::TransactionView,
     mut standard_lookup: F,
@@ -5225,6 +5235,7 @@ impl Indexer {
                 let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
                 let mut batch_mnft_token_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> =
                     HashMap::new();
+                let mut batch_mnft_last_output_tx_index: HashMap<Vec<u8>, usize> = HashMap::new();
                 let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
                 let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
                 let mut spore_state = self.writer.new_spore_batch_state();
@@ -5349,6 +5360,8 @@ impl Indexer {
                                 (tx_data.hash.to_vec(), output_index),
                                 token.token_id.clone(),
                             );
+                            batch_mnft_last_output_tx_index
+                                .insert(token.token_id.clone(), tx_global_index);
                             nft_activity_acc.record(
                                 &token.class_id,
                                 &tx_data.hash,
@@ -5407,8 +5420,8 @@ impl Indexer {
                 let bulk_sync_active = self.is_bulk_sync_active();
                 let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
                 let mut all_prev_indices: Vec<i16> = Vec::new();
-                // (block_number, consuming_tx_hash, dotbit_consume_order, tx_idx, ts_ms)
-                let mut outpoint_context: Vec<(i64, Vec<u8>, u64, i32, i64)> = Vec::new();
+                // (block_number, consuming_tx_hash, dotbit_consume_order, tx_idx, ts_ms, tx_global_index)
+                let mut outpoint_context: Vec<(i64, Vec<u8>, u64, i32, i64, usize)> = Vec::new();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -5444,6 +5457,7 @@ impl Indexer {
                                 dotbit_consume_order,
                                 checked_usize_to_i32(tx_idx, "tx_idx"),
                                 parsed.timestamp.timestamp_millis(),
+                                tx_global_index,
                             ));
                         }
                     }
@@ -5522,6 +5536,7 @@ impl Indexer {
                             dotbit_consume_order,
                             ctx_tx_idx,
                             ctx_ts_ms,
+                            consume_tx_global_index,
                         ),
                     ) in outpoint_context.iter().enumerate()
                     {
@@ -5549,22 +5564,30 @@ impl Indexer {
                                 }
                             }
                             if let Some(token_id) = mnft_map.get(&key) {
-                                if let Some(coll_id) = self.writer.consume_mnft_token_with_state(
-                                    token_id,
-                                    *block_number,
-                                    consuming_tx_hash,
-                                    &mut data_batch,
-                                    &mut mnft_state,
-                                )? {
-                                    nft_activity_acc.record(
-                                        &coll_id,
-                                        consuming_tx_hash,
-                                        token_id,
-                                        *block_number,
-                                        *ctx_tx_idx,
-                                        *ctx_ts_ms,
-                                        false,
-                                    );
+                                let should_consume = should_consume_grouped_mnft_token(
+                                    batch_mnft_last_output_tx_index.get(token_id).copied(),
+                                    *consume_tx_global_index,
+                                );
+                                if should_consume {
+                                    if let Some(coll_id) =
+                                        self.writer.consume_mnft_token_with_state(
+                                            token_id,
+                                            *block_number,
+                                            consuming_tx_hash,
+                                            &mut data_batch,
+                                            &mut mnft_state,
+                                        )?
+                                    {
+                                        nft_activity_acc.record(
+                                            &coll_id,
+                                            consuming_tx_hash,
+                                            token_id,
+                                            *block_number,
+                                            *ctx_tx_idx,
+                                            *ctx_ts_ms,
+                                            false,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -6962,5 +6985,16 @@ mod tests {
         assert_eq!(first, Some(7));
         assert_eq!(second, Some(7));
         assert_eq!(load_calls, 1);
+    }
+
+    #[test]
+    fn test_grouped_mnft_consume_skips_intermediate_transfer_but_keeps_final_burn() {
+        // Same-tx or later-tx re-creations are already reflected by batched output inserts.
+        assert!(!should_consume_grouped_mnft_token(Some(5), 4));
+        assert!(!should_consume_grouped_mnft_token(Some(5), 5));
+
+        // Once the last batch output for the token is behind us, a later consume is real burn.
+        assert!(should_consume_grouped_mnft_token(Some(5), 6));
+        assert!(should_consume_grouped_mnft_token(None, 6));
     }
 }
