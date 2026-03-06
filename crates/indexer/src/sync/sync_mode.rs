@@ -76,6 +76,15 @@ pub(crate) fn is_bulk_sync_batch(chain_tip: u64, batch_end: u64, bulk_sync_thres
     blocks_behind > bulk_sync_threshold
 }
 
+pub(crate) fn is_effective_bulk_sync_batch(
+    chain_tip: u64,
+    batch_end: u64,
+    bulk_sync_threshold: u64,
+    bulk_sync_allowed: bool,
+) -> bool {
+    bulk_sync_allowed && is_bulk_sync_batch(chain_tip, batch_end, bulk_sync_threshold)
+}
+
 pub(crate) fn should_run_reorg_handling(blocks_behind: u64, bulk_sync_threshold: u64) -> bool {
     blocks_behind <= bulk_sync_threshold
 }
@@ -168,6 +177,12 @@ mod tests {
     fn test_is_bulk_sync_batch_uses_tip_distance() {
         assert!(!is_bulk_sync_batch(10_000, 9_000, 1000));
         assert!(is_bulk_sync_batch(10_001, 9_000, 1000));
+    }
+
+    #[test]
+    fn test_is_effective_bulk_sync_batch_requires_bulk_sync_to_be_allowed() {
+        assert!(!is_effective_bulk_sync_batch(10_001, 9_000, 1000, false));
+        assert!(is_effective_bulk_sync_batch(10_001, 9_000, 1000, true));
     }
 
     #[test]

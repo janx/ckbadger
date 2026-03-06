@@ -443,6 +443,7 @@ impl Indexer {
         let pipeline_epoch_for_parser = Arc::clone(&self.pipeline_reset_epoch);
         let parser_exit_reason_for_parser = Arc::clone(&parser_exit_reason);
         let bulk_sync_threshold_for_parser = self.config.bulk_sync_threshold;
+        let bulk_sync_allowed_for_parser = self.bulk_sync_allowed.load(Ordering::SeqCst);
 
         let parse_tx_for_writer_depth = parse_tx.clone();
         let parser = tokio::spawn(async move {
@@ -608,10 +609,11 @@ impl Indexer {
                     let mut db_lookup_failed = false;
                     if !missing_outpoints.is_empty() {
                         db_lookups = missing_outpoints.len();
-                        let bulk_sync_mode = is_bulk_sync_batch(
+                        let bulk_sync_mode = is_effective_bulk_sync_batch(
                             chain_tip,
                             end_block,
                             bulk_sync_threshold_for_parser,
+                            bulk_sync_allowed_for_parser,
                         );
                         let wr = writer_for_parser.clone();
                         let missing_owned: Vec<(Vec<u8>, i16)> = missing_outpoints
@@ -2035,10 +2037,11 @@ impl Indexer {
                                 error = ?e,
                                 "Sync error while writing parsed batch"
                             );
-                            let bulk_sync_mode = is_bulk_sync_batch(
+                            let bulk_sync_mode = is_effective_bulk_sync_batch(
                                 chain_tip,
                                 end_block,
                                 self.config.bulk_sync_threshold,
+                                self.bulk_sync_allowed.load(Ordering::SeqCst),
                             );
                             if bulk_sync_mode {
                                 return Err(e).with_context(|| {

@@ -813,8 +813,12 @@ impl Indexer {
         let write_metrics = match self.sync_blocks_batch(&blocks, chain_tip).await {
             Ok(metrics) => metrics,
             Err(e) => {
-                let bulk_sync_mode =
-                    is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+                let bulk_sync_mode = is_effective_bulk_sync_batch(
+                    chain_tip,
+                    end_block,
+                    self.config.bulk_sync_threshold,
+                    self.bulk_sync_allowed.load(Ordering::SeqCst),
+                );
                 if bulk_sync_mode {
                     return Err(e).with_context(|| {
                         format!(
@@ -1100,8 +1104,12 @@ impl Indexer {
             .last()
             .map(|b| b.number as u64)
             .unwrap_or(0);
-        let bulk_sync_mode =
-            is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+        let bulk_sync_mode = is_effective_bulk_sync_batch(
+            chain_tip,
+            end_block,
+            self.config.bulk_sync_threshold,
+            self.bulk_sync_allowed.load(Ordering::SeqCst),
+        );
         let mut commit_ms = 0.0_f64;
         let mut udt_standard_hint_cache: HashMap<Vec<u8>, Option<String>> = HashMap::new();
 
@@ -2934,8 +2942,12 @@ impl Indexer {
         let first_block = all_parsed_blocks.first().map(|b| b.number).unwrap_or(0);
         let last_block = all_parsed_blocks.last().map(|b| b.number).unwrap_or(0);
         let end_block = last_block as u64;
-        let bulk_sync_mode =
-            is_bulk_sync_batch(chain_tip, end_block, self.config.bulk_sync_threshold);
+        let bulk_sync_mode = is_effective_bulk_sync_batch(
+            chain_tip,
+            end_block,
+            self.config.bulk_sync_threshold,
+            self.bulk_sync_allowed.load(Ordering::SeqCst),
+        );
 
         let all_input_outpoints: Vec<(Vec<u8>, i16)> = all_tx_data
             .iter()

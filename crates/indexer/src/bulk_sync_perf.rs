@@ -424,7 +424,7 @@ fn percentile(mut values: Vec<f64>, pct: usize) -> f64 {
         return 0.0;
     }
     values.sort_by(f64::total_cmp);
-    let index = ((pct * values.len()) + 99) / 100;
+    let index = (pct * values.len()).div_ceil(100);
     values[index.saturating_sub(1).min(values.len() - 1)]
 }
 
