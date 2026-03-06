@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { Header } from '@/components/layout/header';
@@ -44,13 +44,15 @@ function decodeTokenConfigure(configure: number): string {
   return flags.length > 0 ? flags.join(', ') : 'none';
 }
 
-export default function MnftItemDetailPage() {
-  const params = useParams();
+export interface MnftItemDetailPageProps {
+  nftId: string;
+}
+
+export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetailPageProps) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawNftId = params.nftId as string;
-  const nftId = normalizeNftId(rawNftId);
+  const nftId = normalizeNftId(routeNftId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );

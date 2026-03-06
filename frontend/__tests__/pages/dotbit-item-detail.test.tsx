@@ -62,7 +62,7 @@ describe('DotbitItemDetailPage', () => {
       outputIndex: 2,
     } as any);
 
-    render(<DotbitItemDetailPage />);
+    render(<DotbitItemDetailPage nftId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
@@ -85,7 +85,7 @@ describe('DotbitItemDetailPage', () => {
       outputIndex: null,
     } as any);
 
-    render(<DotbitItemDetailPage />);
+    render(<DotbitItemDetailPage nftId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe('DotbitItemDetailPage', () => {
       nextCursor: null,
     } as any);
 
-    render(<DotbitItemDetailPage />);
+    render(<DotbitItemDetailPage nftId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
@@ -189,7 +189,7 @@ describe('DotbitItemDetailPage', () => {
       } as any;
     });
 
-    render(<DotbitItemDetailPage />);
+    render(<DotbitItemDetailPage nftId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
@@ -227,7 +227,7 @@ describe('DotbitItemDetailPage', () => {
       outputIndex: 2,
     } as any);
 
-    render(<DotbitItemDetailPage />);
+    render(<DotbitItemDetailPage nftId="0xabc" />);
 
     await waitFor(() => {
       const links = screen.getAllByRole('link');
@@ -238,7 +238,7 @@ describe('DotbitItemDetailPage', () => {
   it('renders not found panel when item is missing', async () => {
     vi.mocked(api.getDotbitItemDetail).mockRejectedValue(new Error('API error: 404'));
 
-    render(<DotbitItemDetailPage />);
+    render(<DotbitItemDetailPage nftId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('.bit item not found')).toBeInTheDocument();

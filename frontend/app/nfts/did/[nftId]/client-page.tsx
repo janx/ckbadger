@@ -23,6 +23,10 @@ const didCkbConfig: IdentityNftItemDetailConfig = {
   },
 };
 
-export default function DidCkbItemDetailPage() {
-  return <IdentityNftItemDetail config={didCkbConfig} />;
+export interface DidCkbItemDetailPageProps {
+  nftId: string;
+}
+
+export default function DidCkbItemDetailPage({ nftId }: DidCkbItemDetailPageProps) {
+  return <IdentityNftItemDetail config={didCkbConfig} nftId={nftId} />;
 }

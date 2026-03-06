@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import { api } from '@/lib/api';
 import {
@@ -67,12 +67,14 @@ function getSortIndicator(direction: 'asc' | 'desc' | null): string {
   return '↕';
 }
 
-export default function ClusterDetailPage() {
+export interface ClusterDetailPageProps {
+  clusterId: string;
+}
+
+export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const params = useParams();
-  const clusterId = params.clusterId as string;
   const tabFromQuery = searchParams.get('tab');
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>

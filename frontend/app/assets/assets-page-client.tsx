@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
+import { AppLink } from '@/components/ui/app-link';
 import {
   TerminalPanel,
   TerminalPanelHeader,
@@ -19,7 +19,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, Asset } from '@/lib/api';
-import { toNftDetailSlug } from '@/lib/nft-collections';
+import { getClusterDetailHref, getNftDetailHref, getTokenDetailHref } from '@/lib/detail-routes';
 import { formatCkbCompact } from '@/lib/utils';
 
 type AssetTab = 'token' | 'nft';
@@ -190,11 +190,11 @@ function AssetTable({
   };
 
   const getAssetLink = (asset: Asset) => {
-    if (asset.assetType === 'token') return `/tokens/${asset.id}`;
+    if (asset.assetType === 'token') return getTokenDetailHref(asset.id);
     if (asset.standard === 'spore') {
-      return `/clusters/${asset.clusterId || asset.id}`;
+      return getClusterDetailHref(asset.clusterId || asset.id);
     }
-    return `/nfts/${toNftDetailSlug(asset.id, asset.standard)}`;
+    return getNftDetailHref(asset.id, asset.standard);
   };
 
   const getAssetName = (asset: Asset) => {
@@ -320,7 +320,7 @@ function AssetTable({
             <TerminalRow key={asset.id}>
               <div className="flex items-center">
                 <div className={nameColumnClass}>
-                  <Link href={getAssetLink(asset)} className="block">
+                  <AppLink href={getAssetLink(asset)} className="block">
                     <div className="flex items-center gap-2">
                       <span
                         data-testid="asset-icon-slot"
@@ -384,7 +384,7 @@ function AssetTable({
                         />
                       </div>
                     </div>
-                  </Link>
+                  </AppLink>
                 </div>
                 <div className={typeColumnClass}>
                   <div className="flex flex-wrap gap-1">

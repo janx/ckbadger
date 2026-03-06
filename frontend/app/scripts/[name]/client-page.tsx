@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import {
@@ -86,10 +86,13 @@ function deploymentReferenceHashes(
   return { typeRef, dataRef, dataRefType };
 }
 
-export default function ScriptDetailPage() {
-  const params = useParams();
+export interface ScriptDetailPageProps {
+  name: string;
+}
+
+export default function ScriptDetailPage({ name: routeName }: ScriptDetailPageProps) {
   const searchParams = useSearchParams();
-  const name = decodeURIComponent(params.name as string);
+  const name = decodeURIComponent(routeName);
   const selectedRefParam = searchParams.get('ref');
   const selectedRef =
     selectedRefParam && isHexScriptHash(selectedRefParam.trim())

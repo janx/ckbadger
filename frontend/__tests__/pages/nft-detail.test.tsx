@@ -195,7 +195,7 @@ describe('SporeDetailPage', () => {
   it('links back to NFT tab on assets page', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       const backLink = screen.getByText('← Back to NFTs');
@@ -207,7 +207,7 @@ describe('SporeDetailPage', () => {
   it('renders occupation history panel', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
@@ -217,7 +217,7 @@ describe('SporeDetailPage', () => {
   it('renders improved spore content panels', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
@@ -246,7 +246,7 @@ describe('SporeDetailPage', () => {
       },
     } as any);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Media Sources')).toBeInTheDocument();
@@ -258,7 +258,7 @@ describe('SporeDetailPage', () => {
   it('uses vertical layout for long identity fields', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Spore Details')).toBeInTheDocument();
@@ -275,7 +275,7 @@ describe('SporeDetailPage', () => {
   it('shows owner address resolved from lock hash', async () => {
     vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(api.getAddress).toHaveBeenCalledWith(mockSpore.ownerLockHash);
@@ -304,7 +304,7 @@ describe('SporeDetailPage', () => {
       issues: [],
     } as any);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Decoded Traits')).toBeInTheDocument();
@@ -338,7 +338,7 @@ describe('SporeDetailPage', () => {
       },
     } as any);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Payload Text View')).toBeInTheDocument();
@@ -376,7 +376,7 @@ describe('SporeDetailPage', () => {
       liveOccupiedCapacity: '0',
     } as any);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Cluster Context')).toBeInTheDocument();
@@ -416,7 +416,7 @@ describe('SporeDetailPage', () => {
       nextCursor: null,
     });
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Collection ID')).toBeInTheDocument();
@@ -449,7 +449,7 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
@@ -465,7 +465,7 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
@@ -476,7 +476,7 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
@@ -510,7 +510,7 @@ describe('SporeDetailPage', () => {
     mockParams = { sporeId: 'dotbit' };
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
@@ -557,7 +557,7 @@ describe('SporeDetailPage', () => {
       name: 'did:ckb',
     } as any);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
@@ -622,7 +622,7 @@ describe('SporeDetailPage', () => {
       nextCursor: null,
     });
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
@@ -645,7 +645,7 @@ describe('SporeDetailPage', () => {
     mockParams = { sporeId: 'dotbit' };
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(api.getNftCollection).toHaveBeenCalledWith(DOTBIT_COLLECTION_ID);
@@ -657,7 +657,7 @@ describe('SporeDetailPage', () => {
     mockParams = { sporeId: '.bit' };
     vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(api.getNftCollection).toHaveBeenCalledWith(DOTBIT_COLLECTION_ID);
@@ -674,7 +674,7 @@ describe('SporeDetailPage', () => {
       name: 'did:ckb',
     } as any);
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(api.getNftCollection).toHaveBeenCalledWith(DID_CKB_COLLECTION_ID);
@@ -702,7 +702,7 @@ describe('SporeDetailPage', () => {
       nextCursor: null,
     });
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
@@ -742,7 +742,7 @@ describe('SporeDetailPage', () => {
       nextCursor: null,
     });
 
-    render(<SporeDetailPage />);
+    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();

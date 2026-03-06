@@ -6,6 +6,12 @@ export async function generateStaticParams() {
   return [];
 }
 
-export default function Page() {
-  return <ClusterDetailPage />;
+interface PageProps {
+  params: {
+    clusterId: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <ClusterDetailPage clusterId={params.clusterId} />;
 }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import { api } from '@/lib/api';
@@ -55,11 +55,16 @@ function normalizeScriptKind(value: string | null | undefined): ScriptKind | nul
   return null;
 }
 
-export default function ScriptByCodeHashPage() {
-  const params = useParams();
+export interface ScriptByCodeHashPageProps {
+  codeHash: string;
+}
+
+export default function ScriptByCodeHashPage({
+  codeHash: routeCodeHash,
+}: ScriptByCodeHashPageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawIdentifier = decodeURIComponent((params.codeHash as string) || '');
+  const rawIdentifier = decodeURIComponent(routeCodeHash);
   const scriptIdentifier = rawIdentifier.trim();
   const isCodeHashIdentifier = isHexScriptHash(scriptIdentifier);
   const codeHash = isCodeHashIdentifier

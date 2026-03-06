@@ -579,13 +579,24 @@ fn parse_only_flag(only: &Option<String>) -> Vec<String> {
 
 /// Resolve frontend assets directory.
 fn resolve_frontend_dir(work: &WorkDir) -> Option<PathBuf> {
-    // Check work_dir/frontend/ first
+    // Check work_dir/frontend/dist first
+    let work_frontend_dist = work.root.join("frontend").join("dist");
+    if work_frontend_dist.is_dir() {
+        return Some(work_frontend_dist);
+    }
+
+    // Check work_dir/frontend/
     let work_frontend = work.root.join("frontend");
     if work_frontend.is_dir() {
         return Some(work_frontend);
     }
-    // Check share/frontend/
+
+    // Check share/frontend/dist and share/frontend/
     if let Some(share) = resolve_share_dir() {
+        let share_frontend_dist = share.join("frontend").join("dist");
+        if share_frontend_dist.is_dir() {
+            return Some(share_frontend_dist);
+        }
         let share_frontend = share.join("frontend");
         if share_frontend.is_dir() {
             return Some(share_frontend);
@@ -949,5 +960,16 @@ mod tests {
 
         let work = WorkDir::resolve(dir.path());
         assert_eq!(resolve_frontend_dir(&work), Some(frontend));
+    }
+
+    #[test]
+    fn test_resolve_frontend_dir_prefers_workdir_frontend_dist() {
+        let dir = TempDir::new().unwrap();
+        let frontend = dir.path().join("frontend");
+        let dist = frontend.join("dist");
+        std::fs::create_dir_all(&dist).unwrap();
+
+        let work = WorkDir::resolve(dir.path());
+        assert_eq!(resolve_frontend_dir(&work), Some(dist));
     }
 }

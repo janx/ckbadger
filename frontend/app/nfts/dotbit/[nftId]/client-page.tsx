@@ -23,6 +23,10 @@ const dotbitConfig: IdentityNftItemDetailConfig = {
   },
 };
 
-export default function DotbitItemDetailPage() {
-  return <IdentityNftItemDetail config={dotbitConfig} />;
+export interface DotbitItemDetailPageProps {
+  nftId: string;
+}
+
+export default function DotbitItemDetailPage({ nftId }: DotbitItemDetailPageProps) {
+  return <IdentityNftItemDetail config={dotbitConfig} nftId={nftId} />;
 }

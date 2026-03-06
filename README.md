@@ -100,7 +100,7 @@ on localhost deployments:
                     │       │   Unix Socket IPC      │          │
                     │       │          │             │          │
                     │  ┌────┴──────────┴────┐   ┌───┴───────┐ │
-                    │  │      RocksDB       │   │  Static   │ │
+                    │  │      RocksDB       │   │   SPA     │ │
                     │  │  Domain + Append   │   │  Assets   │ │
                     │  └────────────────────┘   └───────────┘ │
                     └──────────────────────────────────────────┘
@@ -117,7 +117,7 @@ on localhost deployments:
 | Layer             | Technology                                     | Purpose                         |
 | ----------------- | ---------------------------------------------- | ------------------------------- |
 | **CLI**           | Rust (Clap), single `ckbadger` binary          | All subcommands, supervisor     |
-| **Frontend**      | Next.js 15 (static export), TanStack Query     | Client-side SPA                 |
+| **Frontend**      | Vite, React 19, React Router, TanStack Query   | Local-first SPA shell           |
 | **UI**            | Tailwind CSS, Custom Components                | Responsive design               |
 | **Visualization** | react-force-graph-2d, D3.js                    | Cell relationship graphs        |
 | **API**           | Rust (Axum)                                    | High-performance REST/WebSocket |
@@ -568,7 +568,7 @@ ckbadger/
 │   ├── ckbadger-store/     # Embedded RocksDB storage engine (40 column families)
 │   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 │   └── tui/                # Terminal monitoring UI (library)
-├── frontend/               # Next.js static export (SPA)
+├── frontend/               # Vite + React SPA
 │   ├── app/                # App router pages (client components)
 │   ├── components/         # React components
 │   │   ├── ui/             # Reusable UI (Hash, Capacity, etc.)

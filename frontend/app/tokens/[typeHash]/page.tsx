@@ -6,6 +6,12 @@ export async function generateStaticParams() {
   return [];
 }
 
-export default function Page() {
-  return <TokenDetailPage />;
+interface PageProps {
+  params: {
+    typeHash: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <TokenDetailPage typeHash={params.typeHash} />;
 }

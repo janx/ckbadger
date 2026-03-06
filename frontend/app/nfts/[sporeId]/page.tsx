@@ -6,6 +6,12 @@ export async function generateStaticParams() {
   return [];
 }
 
-export default function Page() {
-  return <SporeDetailPage />;
+interface PageProps {
+  params: {
+    sporeId: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <SporeDetailPage sporeId={params.sporeId} />;
 }

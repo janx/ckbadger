@@ -171,7 +171,7 @@ describe('ScriptDetailPage', () => {
   });
 
   it('renders separate capacity and cells sections without occupation history section', async () => {
-    render(<ScriptDetailPage />);
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
       expect(screen.getAllByText('Capacity & Occupation').length).toBeGreaterThan(0);

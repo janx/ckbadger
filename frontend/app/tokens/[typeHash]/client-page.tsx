@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import {
   TerminalPanel,
@@ -31,9 +30,11 @@ function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
   return 'neutral';
 }
 
-export default function TokenDetailPage() {
-  const params = useParams();
-  const typeHash = params.typeHash as string;
+export interface TokenDetailPageProps {
+  typeHash: string;
+}
+
+export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
   const [activeTab, setActiveTab] = useState('activities');
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
 

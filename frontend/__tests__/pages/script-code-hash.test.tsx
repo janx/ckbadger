@@ -74,7 +74,7 @@ describe('ScriptByCodeHashPage', () => {
   });
 
   it('renders capacity utilization for the script code hash', async () => {
-    render(<ScriptByCodeHashPage />);
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
       expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
@@ -121,7 +121,7 @@ describe('ScriptByCodeHashPage', () => {
       },
     });
 
-    render(<ScriptByCodeHashPage />);
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalledWith(
@@ -133,7 +133,7 @@ describe('ScriptByCodeHashPage', () => {
   it('redirects /script/<name> alias to the named detail page', async () => {
     currentCodeHashParam = 'Default Lock';
 
-    render(<ScriptByCodeHashPage />);
+    render(<ScriptByCodeHashPage codeHash="Default Lock" />);
 
     await waitFor(() => {
       expect(replaceMock).toHaveBeenCalledWith(`/scripts/${encodeURIComponent('Default Lock')}`);

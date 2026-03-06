@@ -6,6 +6,12 @@ export async function generateStaticParams() {
   return [];
 }
 
-export default function Page() {
-  return <ScriptDetailPage />;
+interface PageProps {
+  params: {
+    name: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <ScriptDetailPage name={params.name} />;
 }

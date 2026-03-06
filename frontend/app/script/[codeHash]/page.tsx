@@ -6,6 +6,12 @@ export async function generateStaticParams() {
   return [];
 }
 
-export default function Page() {
-  return <ScriptByCodeHashPage />;
+interface PageProps {
+  params: {
+    codeHash: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <ScriptByCodeHashPage codeHash={params.codeHash} />;
 }

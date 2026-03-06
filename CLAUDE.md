@@ -121,7 +121,7 @@ cargo test -- --nocapture                # With stdout
 
 # Frontend development
 pnpm dev                                 # Dev server (:3000)
-pnpm build                               # Static export to out/
+pnpm build                               # Vite SPA build to dist/
 pnpm lint                                # ESLint
 cd frontend && pnpm type-check           # TypeScript (tsc --noEmit)
 cd frontend && pnpm test                 # Vitest
@@ -160,7 +160,7 @@ crates/
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI library (sync/memory/throughput)
-frontend/         # Next.js 15 static export (SPA) + React 19
+frontend/         # Vite + React SPA + Next-compat wrappers during migration
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
@@ -317,7 +317,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | react-force-graph-2d      | No SSR - `next/dynamic` with `ssr: false`                         |
 | API casing                | Backend `camelCase` via serde, frontend types match               |
 | Daily charts              | Exclude incomplete current day                                    |
-| Next.js static export     | Dynamic routes need `revalidate = 0` + `generateStaticParams`     |
+| Vite SPA deep links       | Rust frontend server must fall back to `index.html` for non-files |
 | Vitest globals            | Add `vitest/globals` to tsconfig types                            |
 | MSW handlers              | Must start server in setup.ts `beforeAll`                         |
 | RocksDB secondary mode    | API uses `open_secondary()` — read-only, no write locks           |

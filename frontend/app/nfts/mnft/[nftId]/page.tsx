@@ -6,6 +6,12 @@ export async function generateStaticParams() {
   return [];
 }
 
-export default function Page() {
-  return <MnftItemDetailPage />;
+interface PageProps {
+  params: {
+    nftId: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <MnftItemDetailPage nftId={params.nftId} />;
 }

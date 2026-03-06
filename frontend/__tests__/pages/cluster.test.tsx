@@ -121,7 +121,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
   });
@@ -130,7 +130,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockImplementation(() => new Promise(() => {}));
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     const skeletons = document.querySelectorAll('.animate-pulse');
     expect(skeletons.length).toBeGreaterThan(0);
@@ -140,7 +140,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Test Collection')).toBeInTheDocument();
@@ -152,7 +152,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Spore Cluster')).toBeInTheDocument();
@@ -163,7 +163,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
@@ -187,7 +187,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -221,7 +221,7 @@ describe('ClusterDetailPage', () => {
       nextCursor: null,
     });
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -239,7 +239,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
@@ -254,7 +254,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
@@ -267,7 +267,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
@@ -278,7 +278,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -296,7 +296,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockRejectedValue(new Error('Not found'));
     vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Spore Cluster not found')).toBeInTheDocument();
@@ -307,7 +307,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -324,7 +324,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       const backLink = screen.getByText('← Back to NFTs');
@@ -337,7 +337,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Cluster Info')).toBeInTheDocument();
@@ -358,7 +358,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Live Capacity')).toBeInTheDocument();
@@ -374,7 +374,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -400,7 +400,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -421,7 +421,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -447,7 +447,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -475,7 +475,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toHaveValue('text');
@@ -488,7 +488,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -507,7 +507,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -531,7 +531,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -567,7 +567,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -610,7 +610,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(jsonDescriptionCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('On-chain generative spores')).toBeInTheDocument();
@@ -640,7 +640,7 @@ describe('ClusterDetailPage', () => {
     });
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(api.getAddress).toHaveBeenCalledWith(mockCluster.ownerLockHash);
@@ -680,7 +680,7 @@ describe('ClusterDetailPage', () => {
       } as any;
     });
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -704,7 +704,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(unnamedCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByText('Unnamed Collection')).toBeInTheDocument();
@@ -715,7 +715,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -733,7 +733,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
@@ -750,7 +750,7 @@ describe('ClusterDetailPage', () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage />);
+    render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();

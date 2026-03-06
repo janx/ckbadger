@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import Link from 'next/link';
 import { Header } from '@/components/layout/header';
+import { AppLink } from '@/components/ui/app-link';
 import {
   TerminalPanel,
   TerminalPanelHeader,
@@ -15,6 +15,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, KnownScript } from '@/lib/api';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 import {
   getScriptRefBadgeLabel,
   getScriptRefVerboseLabel,
@@ -107,20 +108,13 @@ export default function ScriptsPage() {
     if (value === 'lock+type') return 'both';
     return undefined;
   };
-  const getScriptHref = (script: KnownScript): string => {
-    if (hasKnownScriptName(script.name)) {
-      return `/scripts/${encodeURIComponent(script.name!.trim())}`;
-    }
-
-    const query = new URLSearchParams();
-    const hashType = normalizeScriptRefHashType(script.hashType);
-    const kind = normalizeScriptKind(script.scriptKind);
-    if (hashType) query.set('hashType', hashType);
-    if (kind) query.set('kind', kind);
-
-    const suffix = query.toString();
-    return `/script/${encodeURIComponent(script.codeHash)}${suffix ? `?${suffix}` : ''}`;
-  };
+  const getScriptHref = (script: KnownScript): string =>
+    getScriptDetailHref({
+      name: script.name,
+      codeHash: script.codeHash,
+      hashType: normalizeScriptRefHashType(script.hashType),
+      scriptKind: normalizeScriptKind(script.scriptKind),
+    });
   return (
     <div className="min-h-screen bg-slate-950">
       <Header />
@@ -204,20 +198,20 @@ export default function ScriptsPage() {
                     <div className="flex items-center">
                       <div className="w-44">
                         {hasKnownScriptName(script.name) ? (
-                          <Link
+                          <AppLink
                             href={getScriptHref(script)}
                             className="text-terminal-green font-medium hover:underline"
                           >
                             {script.name!.trim()}
-                          </Link>
+                          </AppLink>
                         ) : (
-                          <Link
+                          <AppLink
                             href={getScriptHref(script)}
                             className="hover:text-terminal-green font-medium text-slate-300 hover:underline"
                             title={getScriptRefFull(script)}
                           >
                             {UNLABELED_SCRIPT_LABEL}
-                          </Link>
+                          </AppLink>
                         )}
                       </div>
                       <div className="w-16">

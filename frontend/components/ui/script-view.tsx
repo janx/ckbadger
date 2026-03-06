@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
+import { AppLink } from './app-link';
 import { Hash } from './hash';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 import { getScriptRefBadgeLabel } from '@/lib/script-ref';
 import { cn } from '@/lib/utils';
 import type { ScriptLookupInfo } from '@/lib/api';
@@ -43,8 +44,13 @@ export function ScriptView({
     <div className="flex items-center gap-2">
       <span className="font-mono text-sm font-medium text-slate-300">{label}</span>
       {scriptInfo && (
-        <Link
-          href={`/scripts/${encodeURIComponent(scriptInfo.name)}`}
+        <AppLink
+          href={getScriptDetailHref({
+            name: scriptInfo.name,
+            codeHash: scriptInfo.codeHash,
+            hashType: scriptInfo.hashType,
+            scriptKind: scriptInfo.scriptKind,
+          })}
           onClick={(e) => e.stopPropagation()}
           className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-slate-800"
         >
@@ -52,7 +58,7 @@ export function ScriptView({
           {scriptInfo.scriptKind && (
             <span className="text-slate-500">({scriptInfo.scriptKind})</span>
           )}
-        </Link>
+        </AppLink>
       )}
     </div>
   );

@@ -92,7 +92,9 @@ describe('TokenDetailPage', () => {
   it('renders cells count stat', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText('Cells')).toBeInTheDocument();
@@ -103,7 +105,9 @@ describe('TokenDetailPage', () => {
   it('renders cells capacity inside capacity utilization', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.queryByText('Capacity Snapshot')).not.toBeInTheDocument();
@@ -114,7 +118,9 @@ describe('TokenDetailPage', () => {
   it('renders capacity utilization bar', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
@@ -126,7 +132,9 @@ describe('TokenDetailPage', () => {
   it('renders occupied and unoccupied breakdown', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
@@ -137,7 +145,9 @@ describe('TokenDetailPage', () => {
   it('renders basic token info', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText('TEST')).toBeInTheDocument();
@@ -149,7 +159,9 @@ describe('TokenDetailPage', () => {
   it('renders circulation label and unknown max supply for xUDT without cap observation', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText('Total Circulation')).toBeInTheDocument();
@@ -165,7 +177,9 @@ describe('TokenDetailPage', () => {
       maximumSupplyStatus: 'unlimited',
     });
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText('Unlimited')).toBeInTheDocument();
@@ -175,7 +189,9 @@ describe('TokenDetailPage', () => {
   it('renders occupation history panel', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
@@ -185,7 +201,9 @@ describe('TokenDetailPage', () => {
   it('defaults to activities tab', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       const elements = screen.getAllByText('Activities');
@@ -230,7 +248,9 @@ describe('TokenDetailPage', () => {
       nextCursor: null,
     });
 
-    render(<TokenDetailPage />);
+    render(
+      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
+    );
 
     await waitFor(() => {
       expect(screen.getByText('mint')).toBeInTheDocument();

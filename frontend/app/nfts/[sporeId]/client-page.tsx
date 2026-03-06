@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import {
   api,
@@ -45,12 +45,15 @@ function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
 }
 
-export default function SporeDetailPage() {
+export interface SporeDetailPageProps {
+  sporeId: string;
+}
+
+export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const params = useParams();
-  const rawAssetId = params.sporeId as string;
+  const rawAssetId = sporeId;
   const tabFromQuery = searchParams.get('tab');
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
   const [searchInput, setSearchInput] = useState('');

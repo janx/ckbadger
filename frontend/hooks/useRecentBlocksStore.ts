@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { useEffect, useMemo } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api, RecentBlockItem } from '@/lib/api';
 import { useRealtimeStore } from './useRealtimeStore';
 
@@ -40,7 +40,6 @@ export const useRecentBlocksStore = create<RecentBlocksState>((set, get) => ({
 }));
 
 export function useRecentBlocks() {
-  const queryClient = useQueryClient();
   const { blocks, initialized, setBlocks, addBlock, pruneOldBlocks } = useRecentBlocksStore();
   const latestBlock = useRealtimeStore((state) => state.latestBlock);
 

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -55,16 +55,15 @@ export interface IdentityNftItemDetailConfig {
 
 interface Props {
   config: IdentityNftItemDetailConfig;
+  nftId: string;
 }
 
-export function IdentityNftItemDetail({ config }: Props) {
+export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
   const { labels, fetchDetail, fetchActivities } = config;
-  const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawNftId = params.nftId as string;
-  const nftId = normalizeNftId(rawNftId);
+  const nftId = normalizeNftId(routeNftId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );
