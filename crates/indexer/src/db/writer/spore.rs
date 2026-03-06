@@ -70,6 +70,15 @@ impl SporeBatchState {
         self.cluster_aggs.insert(cluster_id.to_vec(), agg);
     }
 
+    pub(crate) fn extend_pending_nft_collection_aggregates(
+        &self,
+        target: &mut HashMap<Vec<u8>, NftCollectionAggregate>,
+    ) {
+        if let Some(agg) = &self.did_collection_agg {
+            target.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), agg.clone());
+        }
+    }
+
     fn get_cluster_owner_count(
         &mut self,
         store: &CkbadgerStore,

@@ -217,6 +217,15 @@ impl DotbitBatchState {
         self.collection_agg_loaded = true;
     }
 
+    pub(crate) fn extend_pending_collection_aggregates(
+        &self,
+        target: &mut HashMap<Vec<u8>, NftCollectionAggregate>,
+    ) {
+        if let Some(agg) = &self.collection_agg {
+            target.insert(DOTBIT_SENTINEL_COLLECTION.to_vec(), agg.clone());
+        }
+    }
+
     fn get_collection_owner_count(
         &mut self,
         store: &CkbadgerStore,

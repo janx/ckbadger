@@ -59,6 +59,17 @@ impl MnftBatchState {
             .insert(collection_id.to_vec(), Some(agg));
     }
 
+    pub(crate) fn extend_pending_collection_aggregates(
+        &self,
+        target: &mut HashMap<Vec<u8>, NftCollectionAggregate>,
+    ) {
+        for (collection_id, agg) in &self.collection_aggs {
+            if let Some(agg) = agg {
+                target.insert(collection_id.clone(), agg.clone());
+            }
+        }
+    }
+
     fn get_collection_owner_count(
         &mut self,
         store: &CkbadgerStore,

@@ -149,10 +149,11 @@ fn build_activity_input_views(
         .collect()
 }
 
-fn apply_nft_collection_activity_count_deltas(
+fn apply_nft_collection_activity_count_deltas_with_pending(
     store: &CkbadgerStore,
     batch: &mut StoreBatch,
     deltas: HashMap<Vec<u8>, i64>,
+    pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::NftCollectionAggregate>,
 ) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
@@ -168,7 +169,12 @@ fn apply_nft_collection_activity_count_deltas(
         let agg = if let Some(cached) = aggregates.get_mut(&collection_id) {
             cached
         } else {
-            match store.get_nft_collection_aggregate(&collection_id)? {
+            let loaded = if let Some(pending) = pending_aggregates.get(&collection_id) {
+                Some(pending.clone())
+            } else {
+                store.get_nft_collection_aggregate(&collection_id)?
+            };
+            match loaded {
                 Some(loaded) => aggregates.entry(collection_id.clone()).or_insert(loaded),
                 None => {
                     if store.get_cluster_aggregate(&collection_id)?.is_some() {
@@ -2842,10 +2848,14 @@ impl Indexer {
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("nft activity delta overflow while writing batch"))?;
         }
-        apply_nft_collection_activity_count_deltas(
+        let mut pending_nft_collection_aggs = HashMap::new();
+        dotbit_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
+        spore_state.extend_pending_nft_collection_aggregates(&mut pending_nft_collection_aggs);
+        apply_nft_collection_activity_count_deltas_with_pending(
             self.writer.store(),
             &mut consume_batch,
             nft_activity_count_deltas,
+            &pending_nft_collection_aggs,
         )?;
         let commit_started = Instant::now();
         consume_batch.commit()?;
@@ -5230,6 +5240,8 @@ impl Indexer {
             let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
             let mut nft_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
+            let mut pending_nft_collection_aggs = HashMap::new();
+
             // Group C: NFT/Spore processing
             {
                 let mut batch_spore_ids: HashSet<Vec<u8>> = HashSet::new();
@@ -5684,11 +5696,17 @@ impl Indexer {
                         anyhow!("nft activity delta overflow while writing grouped batch")
                     })?;
                 }
+
+                mnft_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
+                dotbit_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
+                spore_state
+                    .extend_pending_nft_collection_aggregates(&mut pending_nft_collection_aggs);
             }
-            apply_nft_collection_activity_count_deltas(
+            apply_nft_collection_activity_count_deltas_with_pending(
                 self.writer.store(),
                 &mut data_batch,
                 nft_activity_count_deltas,
+                &pending_nft_collection_aggs,
             )?;
 
             // Activity writes (live sync)
@@ -6498,7 +6516,13 @@ mod tests {
         deltas.insert(cluster_id, 4);
 
         let mut batch = StoreBatch::new(&store);
-        apply_nft_collection_activity_count_deltas(&store, &mut batch, deltas).unwrap();
+        apply_nft_collection_activity_count_deltas_with_pending(
+            &store,
+            &mut batch,
+            deltas,
+            &HashMap::new(),
+        )
+        .unwrap();
         batch.commit().unwrap();
 
         let agg = store
@@ -6506,6 +6530,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(agg.activities_count, 5);
+    }
+
+    #[test]
+    fn test_apply_nft_collection_activity_count_deltas_uses_pending_batch_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let collection_id = vec![0x33; 32];
+        let pending_agg = ckbadger_store::types::NftCollectionAggregate {
+            standard: ckbadger_store::types::NftStandard::MnftClass,
+            name: Some("fresh collection".to_string()),
+            ..Default::default()
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_aggregate(&collection_id, &pending_agg);
+
+        let mut pending = HashMap::new();
+        pending.insert(collection_id.clone(), pending_agg);
+
+        let mut deltas = HashMap::new();
+        deltas.insert(collection_id.clone(), 1);
+
+        apply_nft_collection_activity_count_deltas_with_pending(
+            &store, &mut batch, deltas, &pending,
+        )
+        .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_nft_collection_aggregate(&collection_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.activities_count, 1);
+        assert_eq!(agg.name.as_deref(), Some("fresh collection"));
     }
 
     #[test]
