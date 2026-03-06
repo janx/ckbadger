@@ -2,6 +2,7 @@ import { MemoryRouter, useLocation, useRoutes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
+import { Link } from '@/components/ui/link';
 import { api, type KnownScript } from '@/lib/api';
 import { createAppRouter } from '@/src/routes/router';
 
@@ -81,6 +82,24 @@ describe('detail navigation', () => {
     );
 
     await user.click(await screen.findByRole('link', { name: 'SECP256K1_BLAKE160' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/SECP256K1_BLAKE160');
+      expect(screen.getByText('named script detail SECP256K1_BLAKE160')).toBeInTheDocument();
+    });
+  });
+
+  it('uses the canonical local Link component for client-side navigation', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={['/scripts']}>
+        <Link href="/scripts/SECP256K1_BLAKE160">Open detail</Link>
+        <RouterHarness />
+      </MemoryRouter>
+    );
+
+    await user.click(screen.getByRole('link', { name: 'Open detail' }));
 
     await waitFor(() => {
       expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/SECP256K1_BLAKE160');
