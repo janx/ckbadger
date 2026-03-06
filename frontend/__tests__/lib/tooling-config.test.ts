@@ -101,6 +101,21 @@ describe('tooling config', () => {
     }
   });
 
+  it('routes graph loading through the local dynamic client boundary', () => {
+    const dynamicClientSource = readFileSync(join(process.cwd(), 'lib/dynamic-client.tsx'), 'utf8');
+    const cellGraphSource = readFileSync(join(process.cwd(), 'components/cell-graph.tsx'), 'utf8');
+    const proposalGraphSource = readFileSync(
+      join(process.cwd(), 'components/proposal-graph.tsx'),
+      'utf8'
+    );
+
+    expect(dynamicClientSource).toContain('lazy');
+    expect(dynamicClientSource).toContain('Suspense');
+    expect(dynamicClientSource).not.toContain('next-compat/dynamic');
+    expect(cellGraphSource).toContain("from '@/lib/dynamic-client'");
+    expect(proposalGraphSource).toContain("from '@/lib/dynamic-client'");
+  });
+
   it('does not keep next aliases in vite config', () => {
     const source = readFileSync(join(process.cwd(), 'vite.config.ts'), 'utf8');
 
