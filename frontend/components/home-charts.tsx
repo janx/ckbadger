@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { api, ChartDataPoint, NetworkStats } from '@/lib/api';
 import { useMemo } from 'react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
 interface MiniChartProps {

@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { api, MempoolBlock, Block, BlockFeeStats, Transaction, PendingProposal } from '@/lib/api';
 import { resolveBubbleOverlaps } from '@/lib/pipeline-bubble-layout';

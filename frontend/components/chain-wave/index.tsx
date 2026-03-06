@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import {
   api,

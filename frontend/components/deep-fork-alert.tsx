@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { DeepForkStatus } from '@/lib/api';
 
 interface DeepForkAlertProps {

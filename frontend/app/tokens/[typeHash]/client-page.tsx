@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import {
   TerminalPanel,

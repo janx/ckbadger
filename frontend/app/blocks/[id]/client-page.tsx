@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
 import { useEffect } from 'react';
 import { Header } from '@/components/layout/header';

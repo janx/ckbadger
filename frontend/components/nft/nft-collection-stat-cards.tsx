@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { formatCkbCompact, formatNumber } from '@/lib/utils';

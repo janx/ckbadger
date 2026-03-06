@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { usePathname } from '@/src/navigation';
 import { useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';

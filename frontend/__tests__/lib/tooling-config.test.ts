@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 import pkg from '@/package.json';
-import * as navigation from '@/src/navigation';
 
 describe('tooling config', () => {
   it('uses vite for dev and build scripts', () => {
@@ -8,11 +9,67 @@ describe('tooling config', () => {
     expect(pkg.scripts.build).toMatch(/^vite build/);
   });
 
-  it('exposes a canonical local navigation module', () => {
+  it('exposes a canonical local navigation module', async () => {
+    const navigation = await vi.importActual<typeof import('@/src/navigation')>('@/src/navigation');
+
     expect(typeof navigation.useRouter).toBe('function');
     expect(typeof navigation.usePathname).toBe('function');
     expect(typeof navigation.useSearchParams).toBe('function');
     expect(typeof navigation.redirect).toBe('function');
     expect(typeof navigation.notFound).toBe('function');
+  });
+
+  it('does not keep runtime next/link imports in app-level code', () => {
+    const runtimeFiles = [
+      'components/not-found-page.tsx',
+      'components/nft/identity-nft-item-detail.tsx',
+      'components/nft/nft-activity-card.tsx',
+      'components/nft/nft-collection-stat-cards.tsx',
+      'components/home-charts.tsx',
+      'components/mempool-blocks.tsx',
+      'components/latest-transactions.tsx',
+      'components/latest-blocks.tsx',
+      'components/deep-fork-alert.tsx',
+      'components/ui/page-header.tsx',
+      'components/ui/address.tsx',
+      'components/ui/chart-card.tsx',
+      'components/chain-wave/packed-container.tsx',
+      'components/chain-wave/index.tsx',
+      'components/layout/site-footer.tsx',
+      'components/layout/logo.tsx',
+      'components/layout/header.tsx',
+      'components/charts/chart-page.tsx',
+      'app/transactions/page.tsx',
+      'app/forks/page.tsx',
+      'app/blocks/page.tsx',
+      'app/forks/[id]/client-page.tsx',
+      'app/blocks/[id]/client-page.tsx',
+      'app/address/[addr]/client-page.tsx',
+      'app/tx/[hash]/client-page.tsx',
+      'app/cell/[outpoint]/client-page.tsx',
+      'app/tokens/[typeHash]/client-page.tsx',
+      'app/scripts/[name]/client-page.tsx',
+      'app/nfts/[sporeId]/client-page.tsx',
+      'app/dao/page.tsx',
+      'app/nfts/mnft/[nftId]/client-page.tsx',
+      'app/clusters/[clusterId]/client-page.tsx',
+      'app/script/[codeHash]/client-page.tsx',
+      'app/charts/cell-count/page.tsx',
+      'app/charts/knowledge-size/page.tsx',
+      'app/charts/total-supply/page.tsx',
+      'app/hardforks/page.tsx',
+      'app/charts/miner-address-distribution/page.tsx',
+      'app/charts/hodl-wave/page.tsx',
+      'app/charts/common-knowledge-composition/page.tsx',
+      'app/charts/cell-age-vs-occupied-capacity/page.tsx',
+      'app/charts/secondary-issuance/page.tsx',
+      'app/charts/most-utilized-assets/page.tsx',
+      'app/charts/most-utilized-scripts/page.tsx',
+    ];
+
+    for (const relativePath of runtimeFiles) {
+      const source = readFileSync(join(process.cwd(), relativePath), 'utf8');
+      expect(source).not.toContain("from 'next/link'");
+    }
   });
 });

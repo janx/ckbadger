@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
 
 export type TxCategory = 'normal' | 'cellbase' | 'dao';

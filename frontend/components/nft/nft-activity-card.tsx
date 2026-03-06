@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import Link from '@/components/ui/link';
 
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Badge } from '@/components/ui/page-header';
