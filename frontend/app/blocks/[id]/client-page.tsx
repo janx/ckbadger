@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter } from '@/src/navigation';
 import { useEffect } from 'react';
 import { Header } from '@/components/layout/header';
 import { Hash } from '@/components/ui/hash';

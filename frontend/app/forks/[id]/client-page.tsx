@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useParams, notFound } from 'next/navigation';
+import { notFound, useParams } from '@/src/navigation';
 import { api } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import { formatTimeAgo } from '@/lib/utils';

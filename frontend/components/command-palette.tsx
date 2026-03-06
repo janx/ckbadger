@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter } from '@/src/navigation';
 import { focusGlobalSearchInput, isEditableElement } from '@/lib/search-focus';
 import { resolveSearchRoute } from '@/lib/search-routing';
 

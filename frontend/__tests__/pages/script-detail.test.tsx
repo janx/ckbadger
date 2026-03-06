@@ -19,7 +19,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ name: 'SECP256K1_BLAKE160' }),
   useSearchParams: () => new URLSearchParams(),
 }));

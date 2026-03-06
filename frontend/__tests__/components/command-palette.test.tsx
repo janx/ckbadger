@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useRouter: () => ({
     push: pushMock,
     replace: vi.fn(),

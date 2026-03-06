@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 
 import { Header } from '@/components/layout/header';

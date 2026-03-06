@@ -4,7 +4,6 @@ import { useState, useMemo } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from 'next/link';
 import Image from 'next/image';
-import { useParams } from 'next/navigation';
 import { Header } from '@/components/layout/header';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import {
@@ -26,6 +25,7 @@ import {
   type Activity,
   type ActivityAssetChange,
 } from '@/lib/api';
+import { useParams } from '@/src/navigation';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
 

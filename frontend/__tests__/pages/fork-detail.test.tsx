@@ -4,7 +4,7 @@ import { render } from '../utils/test-utils';
 import ForkDetailPage from '@/app/forks/[id]/client-page';
 import { api } from '@/lib/api';
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   notFound: vi.fn(),
   useParams: () => ({ id: '1' }),
 }));

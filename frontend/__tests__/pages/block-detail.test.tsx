@@ -23,7 +23,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ id: paramsIdRef.current }),
   useRouter: () => ({
     push: pushMock,

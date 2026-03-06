@@ -6,7 +6,7 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useRouter: () => ({
     push: vi.fn(),
     replace: vi.fn(),

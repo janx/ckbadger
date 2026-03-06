@@ -4,7 +4,7 @@ import { api } from '@/lib/api';
 
 const pushMock = vi.hoisted(() => vi.fn());
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useRouter: () => ({
     push: pushMock,
     replace: vi.fn(),

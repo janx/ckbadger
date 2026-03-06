@@ -9,7 +9,7 @@ const searchBarMock = vi.fn(({ variant }: { variant?: 'default' | 'compact' | 'h
   </div>
 ));
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   usePathname: () => usePathnameMock(),
 }));
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from '@/src/navigation';
 import Link from 'next/link';
 import { Header } from '@/components/layout/header';
 import { api } from '@/lib/api';

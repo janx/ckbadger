@@ -32,7 +32,7 @@ let mockParams = {
 let mockSearchParamsString = '';
 const mockReplace = vi.fn();
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => mockParams,
   usePathname: () => `/nfts/${mockParams.sporeId}`,
   useSearchParams: () => new URLSearchParams(mockSearchParamsString),

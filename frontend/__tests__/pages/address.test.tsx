@@ -22,7 +22,7 @@ vi.mock('@/components/layout/header', () => ({
 
 let mockRouteAddr = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ addr: mockRouteAddr }),
   useRouter: () => ({ push: vi.fn() }),
 }));

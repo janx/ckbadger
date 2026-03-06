@@ -5,7 +5,7 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 
 const mockPush = vi.fn();
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({
     outpoint: '0xabc123def456789012345678901234567890123456789012345678901234abcd-0',
   }),

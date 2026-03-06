@@ -41,7 +41,7 @@ vi.mock('@/components/cell-graph', () => ({
   CellGraph: () => <div data-testid="mock-cell-graph">Graph Mock</div>,
 }));
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ hash: TX_HASH }),
   usePathname: () => `/tx/${TX_HASH}`,
   useSearchParams: () => mockSearchParams,

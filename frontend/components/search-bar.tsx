@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { api, type SearchResult } from '@/lib/api';
 import { normalizeHash32 } from '@/lib/search-intent';

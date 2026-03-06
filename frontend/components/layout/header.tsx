@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname } from '@/src/navigation';
 import { useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';

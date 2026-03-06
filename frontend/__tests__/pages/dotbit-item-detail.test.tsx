@@ -20,7 +20,7 @@ vi.mock('@/components/layout/header', () => ({
 const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ nftId: '0xabc' }),
   usePathname: () => '/nfts/dotbit/0xabc',
   useRouter: () => ({ replace: mockReplace }),

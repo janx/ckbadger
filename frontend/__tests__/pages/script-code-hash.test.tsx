@@ -22,7 +22,7 @@ const mockDataHash = '0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 let currentCodeHashParam = mockCodeHash;
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ codeHash: currentCodeHashParam }),
   useSearchParams: () => new URLSearchParams(),
   useRouter: () => ({ replace: replaceMock }),

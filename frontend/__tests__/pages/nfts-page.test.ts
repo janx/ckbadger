@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { redirect } from 'next/navigation';
+import { redirect } from '@/src/navigation';
 import NftsPage from '@/app/nfts/page';
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   redirect: vi.fn(),
 }));
 

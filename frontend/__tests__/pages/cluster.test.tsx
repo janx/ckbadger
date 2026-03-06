@@ -23,7 +23,7 @@ const mockClusterId = '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1
 let mockSearchParamsString = '';
 const mockReplace = vi.fn();
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/src/navigation', () => ({
   useParams: () => ({ clusterId: mockClusterId }),
   useRouter: () => ({ push: vi.fn(), replace: mockReplace }),
   usePathname: () => `/clusters/${mockClusterId}`,
