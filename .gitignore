@@ -68,4 +68,5 @@ frontend/tsconfig.tsbuildinfo
 # vibe coding generated
 .sisyphus
 .claude
+.worktrees/
 docs/plans
