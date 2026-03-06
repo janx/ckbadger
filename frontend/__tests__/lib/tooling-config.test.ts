@@ -72,4 +72,27 @@ describe('tooling config', () => {
       expect(source).not.toContain("from 'next/link'");
     }
   });
+
+  it('does not keep runtime next/image imports in app-level code', () => {
+    const runtimeFiles = [
+      'components/layout/logo.tsx',
+      'app/address/[addr]/client-page.tsx',
+      'app/assets/assets-page-client.tsx',
+      'app/nfts/[sporeId]/client-page.tsx',
+    ];
+
+    for (const relativePath of runtimeFiles) {
+      const source = readFileSync(join(process.cwd(), relativePath), 'utf8');
+      expect(source).not.toContain("from 'next/image'");
+    }
+  });
+
+  it('does not keep runtime next/dynamic imports in graph components', () => {
+    const runtimeFiles = ['components/proposal-graph.tsx', 'components/cell-graph.tsx'];
+
+    for (const relativePath of runtimeFiles) {
+      const source = readFileSync(join(process.cwd(), relativePath), 'utf8');
+      expect(source).not.toContain("from 'next/dynamic'");
+    }
+  });
 });

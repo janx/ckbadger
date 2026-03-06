@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import Image from 'next/image';
+import Image from '@/components/ui/image';
 import { Header } from '@/components/layout/header';
 import { PageHeader, Badge } from '@/components/ui/page-header';
 import {

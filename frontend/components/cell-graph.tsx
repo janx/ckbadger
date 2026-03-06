@@ -1,6 +1,6 @@
 'use client';
 
-import dynamic from 'next/dynamic';
+import dynamic from '@/lib/dynamic-client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GraphNode, GraphLink } from '@/lib/api';
 import type { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
