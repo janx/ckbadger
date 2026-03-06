@@ -8,6 +8,22 @@
 
 **Tech Stack:** Vite 5, React 19, React Router, Suspense/lazy, Vitest
 
+## Execution Result
+
+- Completed on 2026-03-06.
+- Commits:
+  - `ae82cbc` `test: add bundle split regression coverage`
+  - `d7b1e32` `perf: lazy load graph components`
+  - `52ea7b0` `perf: defer graph sections on detail pages`
+  - `e295e8b` `perf: lazy load explorer route modules`
+- Final bundle result:
+  - main entry chunk reduced from `813.28 kB` to `398.15 kB`
+  - Vite oversized-chunk warning no longer appears
+- Final conclusion:
+  - graph-level splitting alone was not enough
+  - the main bundle size was primarily driven by `frontend/src/routes/router.tsx` statically importing the entire page tree
+  - router-level lazy route modules fixed the actual bottleneck
+
 ---
 
 ### Task 1: Capture the current bundle baseline and add a regression check
