@@ -38,6 +38,17 @@ function sampleDynamicPath(routePath: string): string {
     .replace('[id]', routePath.startsWith('/forks/') ? '1' : '123');
 }
 
+function collectMarkdownRoutes(): string[] {
+  const appDir = path.join(process.cwd(), 'app');
+  return walk(appDir)
+    .filter((file) => file.endsWith('/page.tsx'))
+    .filter((file) => !file.includes('/ai-md/'))
+    .filter((file) => !file.includes('/ai-raw/'))
+    .filter((file) => !/\/\[\[?\.\.\.[^/]+\]\]?\//.test(file))
+    .map((file) => routeFromPageFile(file))
+    .sort();
+}
+
 describe('parseMarkdownSourcePath', () => {
   it('parses representative routes', () => {
     expect(parseMarkdownSourcePath('/').kind).toBe('home');
@@ -52,18 +63,16 @@ describe('parseMarkdownSourcePath', () => {
   });
 
   it('covers every app page route', () => {
-    const appDir = path.join(process.cwd(), 'app');
-    const pageFiles = walk(appDir).filter((file) => file.endsWith('/page.tsx'));
-    const routes = pageFiles
-      .filter((file) => !file.includes('/ai-md/'))
-      .filter((file) => !file.includes('/ai-raw/'))
-      .map((file) => routeFromPageFile(file))
-      .sort();
+    const routes = collectMarkdownRoutes();
 
     for (const route of routes) {
       const sample = sampleDynamicPath(route);
       const parsed = parseMarkdownSourcePath(sample);
       expect(parsed.kind, `route not parsed: ${route} -> ${sample}`).not.toBe('unknown');
     }
+  });
+
+  it('does not treat the catch-all not-found page as a markdown route', () => {
+    expect(collectMarkdownRoutes()).not.toContain('/[...slug]');
   });
 });
