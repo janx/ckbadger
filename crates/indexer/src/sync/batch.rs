@@ -15,7 +15,9 @@ use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{DaoDailySnapshot, LiveCellInfo, NftTypeIndex, SporeTypeIndex};
+use ckbadger_store::types::{
+    CellIndexTag, DaoDailySnapshot, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+};
 use ckbadger_store::CkbadgerStore;
 
 use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
@@ -1328,6 +1330,7 @@ impl Indexer {
         let t_headers = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
+            let mut cell_append_batch = StoreBatch::new(&self.append_only_store);
             let mut tx_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
             if !all_tx_data.is_empty() {
                 put_tx_context_undo_entries(&mut batch, &mut tx_undo_seq_by_block, &all_tx_data)?;
@@ -1337,10 +1340,18 @@ impl Indexer {
                     .insert_transactions_batch(&txs_for_batch, &mut batch)?;
             }
             if !all_cells.is_empty() {
-                self.writer
-                    .insert_cells_batch(&all_cells, &batch_cell_infos, &mut batch, false)?;
+                self.writer.insert_cells_batch(
+                    &all_cells,
+                    &batch_cell_infos,
+                    &mut batch,
+                    &mut cell_append_batch,
+                    false,
+                )?;
             }
             let commit_started = Instant::now();
+            if !cell_append_batch.is_empty() {
+                cell_append_batch.commit()?;
+            }
             batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
@@ -3059,88 +3070,54 @@ impl Indexer {
             }
         }
 
-        // Pre-compute cell index keys for T1b (parallel cell index writes).
-        // Each op holds the 74-byte encoded keys so T1b can write them without
-        // re-encoding or needing access to ParsedCell / LiveCellInfo.
+        // Pre-compute unified cell index writes for T1b.
         struct CellIndexOp {
-            lock_hash_key: Vec<u8>,
-            lock_code_hash_key: Vec<u8>,
-            type_hash_key: Option<Vec<u8>>,
-            type_code_hash_key: Option<Vec<u8>>,
+            tag: CellIndexTag,
+            script_hash: Vec<u8>,
+            block_number: i64,
+            tx_hash: Vec<u8>,
+            output_index: i16,
         }
 
-        let cell_index_puts: Vec<CellIndexOp> =
-            all_cells
-                .iter()
-                .map(|(tx_hash, output_index, cell, block_number)| CellIndexOp {
-                    lock_hash_key: keys::encode_cell_index_key(
-                        &cell.lock_script_hash,
-                        *block_number,
-                        tx_hash,
-                        *output_index,
-                    ),
-                    lock_code_hash_key: keys::encode_cell_index_key(
-                        &cell.lock_code_hash,
-                        *block_number,
-                        tx_hash,
-                        *output_index,
-                    ),
-                    type_hash_key: cell.type_script_hash.as_ref().map(|h| {
-                        keys::encode_cell_index_key(h, *block_number, tx_hash, *output_index)
-                    }),
-                    type_code_hash_key: cell.type_code_hash.as_ref().map(|h| {
-                        keys::encode_cell_index_key(h, *block_number, tx_hash, *output_index)
-                    }),
-                })
-                .collect();
-
-        let cell_index_deletes: Vec<CellIndexOp> = all_consumptions
+        let cell_index_puts: Vec<CellIndexOp> = all_cells
             .iter()
-            .filter_map(
-                |(
-                    tx_hash,
-                    output_index,
-                    _created_at_block,
-                    _consumed_by_tx,
-                    _consumed_at_block,
-                    _input_index,
-                )| {
-                    let key = (tx_hash.to_vec(), *output_index);
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    info.map(|info| CellIndexOp {
-                        lock_hash_key: keys::encode_cell_index_key(
-                            &info.lock_script_hash,
-                            info.created_at_block,
-                            tx_hash,
-                            *output_index,
-                        ),
-                        lock_code_hash_key: keys::encode_cell_index_key(
-                            &info.lock_code_hash,
-                            info.created_at_block,
-                            tx_hash,
-                            *output_index,
-                        ),
-                        type_hash_key: info.type_script_hash.as_ref().map(|h| {
-                            keys::encode_cell_index_key(
-                                h,
-                                info.created_at_block,
-                                tx_hash,
-                                *output_index,
-                            )
-                        }),
-                        type_code_hash_key: info.type_code_hash.as_ref().map(|h| {
-                            keys::encode_cell_index_key(
-                                h,
-                                info.created_at_block,
-                                tx_hash,
-                                *output_index,
-                            )
-                        }),
-                    })
-                },
-            )
+            .flat_map(|(tx_hash, output_index, cell, block_number)| {
+                let mut ops = vec![
+                    CellIndexOp {
+                        tag: CellIndexTag::Lock,
+                        script_hash: cell.lock_script_hash.clone(),
+                        block_number: *block_number,
+                        tx_hash: tx_hash.to_vec(),
+                        output_index: *output_index,
+                    },
+                    CellIndexOp {
+                        tag: CellIndexTag::LockCode,
+                        script_hash: cell.lock_code_hash.clone(),
+                        block_number: *block_number,
+                        tx_hash: tx_hash.to_vec(),
+                        output_index: *output_index,
+                    },
+                ];
+                if let Some(type_hash) = cell.type_script_hash.as_ref() {
+                    ops.push(CellIndexOp {
+                        tag: CellIndexTag::Type,
+                        script_hash: type_hash.clone(),
+                        block_number: *block_number,
+                        tx_hash: tx_hash.to_vec(),
+                        output_index: *output_index,
+                    });
+                }
+                if let Some(type_code_hash) = cell.type_code_hash.as_ref() {
+                    ops.push(CellIndexOp {
+                        tag: CellIndexTag::TypeCode,
+                        script_hash: type_code_hash.clone(),
+                        block_number: *block_number,
+                        tx_hash: tx_hash.to_vec(),
+                        output_index: *output_index,
+                    });
+                }
+                ops
+            })
             .collect();
 
         // Compute per-tx address entries for addr_txs index
@@ -3578,11 +3555,13 @@ impl Indexer {
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
+                        let mut cell_append_batch = StoreBatch::new(append_only_store);
                         if !all_cells.is_empty() {
                             writer.insert_cells_batch(
                                 &all_cells,
                                 &batch_cell_infos,
                                 &mut batch,
+                                &mut cell_append_batch,
                                 true,
                             )?;
                         }
@@ -3596,27 +3575,25 @@ impl Indexer {
                             )?;
                         }
                         for op in &cell_index_puts {
-                            batch.put_cell_by_lock_raw(&op.lock_hash_key);
-                            batch.put_cell_by_lock_code_raw(&op.lock_code_hash_key);
-                            if let Some(ref k) = op.type_hash_key {
-                                batch.put_cell_by_type_raw(k);
-                            }
-                            if let Some(ref k) = op.type_code_hash_key {
-                                batch.put_cell_by_type_code_raw(k);
-                            }
+                            cell_append_batch.put_cell_index(
+                                op.tag,
+                                &op.script_hash,
+                                op.block_number,
+                                &op.tx_hash,
+                                op.output_index,
+                            );
                         }
-                        for op in &cell_index_deletes {
-                            batch.delete_cell_by_lock_raw(&op.lock_hash_key);
-                            batch.delete_cell_by_lock_code_raw(&op.lock_code_hash_key);
-                            if let Some(ref k) = op.type_hash_key {
-                                batch.delete_cell_by_type_raw(k);
-                            }
-                            if let Some(ref k) = op.type_code_hash_key {
-                                batch.delete_cell_by_type_code_raw(k);
-                            }
+                        let mut commit_ms = 0.0;
+                        if !cell_append_batch.is_empty() {
+                            commit_ms += commit_phase_no_wal(
+                                "T1_cells_append",
+                                first_block,
+                                last_block,
+                                cell_append_batch,
+                            )?;
                         }
-                        let commit_ms =
-                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
+                        commit_ms +=
+                            commit_phase_no_wal("T1_cells_domain", first_block, last_block, batch)?;
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     });
 
@@ -4566,12 +4543,12 @@ impl Indexer {
                 });
 
                     // T_ACT: Activity builder
-                    // CFs: REORG_UNDO_LOG_BY_BLOCK, ACTIVITIES
+                    // CFs: REORG_UNDO_LOG_BY_BLOCK, ACTIVITY_TX_ENVELOPES, ACTIVITY_BY_OWNER
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                             let t = Instant::now();
                             let mut domain_batch = StoreBatch::new(store);
-                            let mut activity_batch = StoreBatch::new(store);
+                            let mut activity_batch = StoreBatch::new(append_only_store);
                             let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                             let token_info_cache = load_activity_token_info_cache(
                                 store,
@@ -4618,15 +4595,16 @@ impl Indexer {
                                         &tx_views,
                                         &token_info_cache,
                                     );
-                                for (lock_hash, entry) in activities {
+                                let normalized_activities =
+                                    crate::db::writer::activities::normalize_activities_for_storage(
+                                        &activities,
+                                    )?;
+                                for normalized_activity in normalized_activities {
                                     put_activity_with_undo_log(
                                         &mut domain_batch,
                                         &mut activity_batch,
                                         &mut append_undo_seq_by_block,
-                                        &lock_hash,
-                                        entry.block_number,
-                                        entry.tx_index,
-                                        &entry,
+                                        &normalized_activity,
                                     );
                                 }
                             }
@@ -4682,6 +4660,7 @@ impl Indexer {
         } else {
             // Live sync: serial writes in a single batch
             let mut data_batch = StoreBatch::new(self.writer.store());
+            let mut cell_append_batch = StoreBatch::new(&self.append_only_store);
             let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
             if !all_tx_data.is_empty() {
                 put_tx_context_undo_entries(
@@ -4699,6 +4678,7 @@ impl Indexer {
                     &all_cells,
                     &batch_cell_infos,
                     &mut data_batch,
+                    &mut cell_append_batch,
                     false,
                 )?;
             }
@@ -5702,7 +5682,7 @@ impl Indexer {
             )?;
 
             // Activity writes (live sync)
-            let mut activity_batch = StoreBatch::new(self.writer.store());
+            let mut activity_batch = StoreBatch::new(&self.append_only_store);
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),
@@ -5743,21 +5723,32 @@ impl Indexer {
                         &tx_views,
                         &token_info_cache,
                     );
-                    for (lock_hash, entry) in activities {
+                    let normalized_activities =
+                        crate::db::writer::activities::normalize_activities_for_storage(
+                            &activities,
+                        )?;
+                    for normalized_activity in normalized_activities {
                         put_activity_with_undo_log(
                             &mut data_batch,
                             &mut activity_batch,
                             &mut append_undo_seq_by_block,
-                            &lock_hash,
-                            entry.block_number,
-                            entry.tx_index,
-                            &entry,
+                            &normalized_activity,
                         );
                     }
                 }
             }
 
             // Commit all data writes in a single batch
+            if !cell_append_batch.is_empty() {
+                let cell_append_commit_started = Instant::now();
+                cell_append_batch.commit()?;
+                write_commit_ms += cell_append_commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            if !activity_batch.is_empty() {
+                let activity_commit_started = Instant::now();
+                activity_batch.commit()?;
+                write_commit_ms += activity_commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
             let data_commit_started = Instant::now();
             data_batch.commit()?;
             write_commit_ms += data_commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -5775,11 +5766,6 @@ impl Indexer {
                 let append_commit_started = Instant::now();
                 append_history_batch.commit()?;
                 write_commit_ms += append_commit_started.elapsed().as_secs_f64() * 1000.0;
-            }
-            if !activity_batch.is_empty() {
-                let activity_commit_started = Instant::now();
-                activity_batch.commit()?;
-                write_commit_ms += activity_commit_started.elapsed().as_secs_f64() * 1000.0;
             }
 
             // Stats accumulation for live sync (serial — before finalize)

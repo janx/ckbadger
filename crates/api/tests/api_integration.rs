@@ -10,12 +10,12 @@ use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, DobEntry, DobExtra,
-    DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats, NftCollectionActivityEntry,
-    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ReorgEvent,
-    ScriptDailyDelta, ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
-    TxIndexEntry,
+    ActivityEntry, ActivityTxEnvelope, AssetAction, CachedBlockHeader, ClusterAggregate,
+    ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, DobEntry,
+    DobExtra, DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats,
+    NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra,
+    NftStandard, OwnerActivityViewStored, ReorgEvent, ScriptDailyDelta, ScriptInfo,
+    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -54,6 +54,35 @@ fn test_config_with_append_only(
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
+}
+
+fn put_normalized_activity(batch: &mut StoreBatch<'_>, lock_hash: &[u8], entry: &ActivityEntry) {
+    let envelope = ActivityTxEnvelope {
+        tx_hash: entry.tx_hash.clone(),
+        block_number: entry.block_number,
+        tx_index: entry.tx_index,
+        timestamp: entry.timestamp,
+        is_cellbase: entry.is_cellbase,
+        participants: vec![lock_hash.to_vec()],
+        owner_views: vec![OwnerActivityViewStored {
+            ckb_delta: entry.ckb_delta,
+            occupied_delta: entry.occupied_delta,
+            asset_changes: entry.asset_changes.clone(),
+        }],
+    };
+    batch.put_activity_tx_envelope(
+        entry.block_number,
+        entry.tx_index,
+        &entry.tx_hash,
+        &envelope,
+    );
+    batch.put_activity_owner_ref(
+        lock_hash,
+        entry.block_number,
+        entry.tx_index,
+        &entry.tx_hash,
+        0,
+    );
 }
 
 #[tokio::test]
@@ -6265,6 +6294,123 @@ async fn test_assets_nft_item_activities_mnft() {
 }
 
 #[tokio::test]
+async fn test_assets_nft_item_activities_mnft_reads_consumed_meta_from_append_only_payload_store() {
+    let store = test_store();
+    let append_only_store = test_store();
+    let class_id = [0x31u8; 24];
+    let token_id = [0x41u8; 28];
+    let owner_lock_hash = vec![0x77u8; 32];
+    let previous_owner_lock_hash = vec![0x66u8; 32];
+    let mint_tx = vec![0x93; 32];
+    let transfer_tx = vec![0x91; 32];
+
+    let mut domain_batch = StoreBatch::new(store.as_ref());
+    domain_batch.put_nft(
+        &token_id,
+        &NftEntry {
+            standard: NftStandard::MnftToken,
+            collection_id: Some(class_id.to_vec()),
+            token_id: Some(token_id.to_vec()),
+            owner_lock_hash: Some(owner_lock_hash),
+            name: None,
+            is_live: true,
+            created_at_block: 120,
+            extra: NftExtra::MnftToken {
+                token_index: 128,
+                characteristic: vec![0xaa; 8],
+                configure: 5,
+                state: 2,
+            },
+        },
+    );
+    domain_batch.put_mnft_token_outpoint(&mint_tx, 0, &token_id);
+    domain_batch.put_mnft_token_outpoint(&transfer_tx, 0, &token_id);
+    domain_batch.put_consumed_cell_with_consumer(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: previous_owner_lock_hash,
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: Some(vec![0x44; 32]),
+            type_code_hash: Some(vec![0x55; 32]),
+            type_args: Some(token_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+        300,
+        Some(&transfer_tx),
+    );
+    domain_batch.put_tx_hash_map(&mint_tx, 100, 0);
+    domain_batch.put_tx_index(
+        100,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_100,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    domain_batch.put_tx_hash_map(&transfer_tx, 300, 0);
+    domain_batch.put_tx_index(
+        300,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_300,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 220,
+            cycles: None,
+        },
+    );
+    domain_batch.commit().unwrap();
+
+    let mut append_batch = StoreBatch::new(append_only_store.as_ref());
+    append_batch.put_cell(
+        &mint_tx,
+        0,
+        &LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 100,
+            lock_script_hash: vec![0x66u8; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: Some(vec![0x44; 32]),
+            type_code_hash: Some(vec![0x55; 32]),
+            type_args: Some(token_id.to_vec()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        },
+    );
+    append_batch.commit().unwrap();
+
+    let config = test_config_with_append_only(store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/items/0x{}/activities?limit=20",
+            hex::encode(token_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_assets_nft_item_activities_dotbit() {
     let store = test_store();
     let account_id = [0x11u8; 20];
@@ -6702,7 +6848,6 @@ async fn test_address_activities_reads_from_derived_store() {
     };
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_activity(&lock_hash, 10, 0, &activity);
     core_batch.put_tx_hash_map(&activity.tx_hash, 10, 0);
     core_batch.put_tx_index(
         10,
@@ -6741,7 +6886,7 @@ async fn test_address_activities_reads_from_derived_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
     let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
-    derived_batch.put_activity(&lock_hash, 10, 0, &activity);
+    put_normalized_activity(&mut derived_batch, &lock_hash, &activity);
     derived_batch.commit().unwrap();
 
     let request = Request::builder()

@@ -3,7 +3,7 @@
 use rocksdb::IteratorMode;
 
 use crate::keys;
-use crate::store::{CkbadgerStore, CF_ADDR_TXS};
+use crate::store::{CkbadgerStore, CF_ADDR_TXS, CF_CELL_PAYLOADS};
 use crate::types::{AddressBalance, LiveCellInfo};
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -120,7 +120,7 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// Rebuild addr_balance from live_cells.
+    /// Rebuild addr_balance from canonical live cell state.
     ///
     /// This heals historical drift caused by previously skipped input-cell consumption.
     /// Uses live_cells as the source of truth for:
@@ -134,7 +134,7 @@ impl CkbadgerStore {
         self.rebuild_addr_balances_from_live_cells_with_tx_index_store(None)
     }
 
-    /// Rebuild addr_balance from live_cells and optionally source `txs_count`
+    /// Rebuild addr_balance from canonical live cell state and optionally source `txs_count`
     /// from another store's `addr_txs` index.
     ///
     /// This is used by domain-store rollback paths, where `addr_txs` lives in
@@ -144,6 +144,22 @@ impl CkbadgerStore {
         tx_index_store: Option<&CkbadgerStore>,
     ) -> anyhow::Result<usize> {
         use std::collections::HashMap;
+
+        let payload_store = if self.has_cf(CF_CELL_PAYLOADS) {
+            self
+        } else {
+            let store = tx_index_store.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rebuild_addr_balances_from_live_cells requires append-only payload store when cell_payloads CF is absent"
+                )
+            })?;
+            if !store.has_cf(CF_CELL_PAYLOADS) {
+                anyhow::bail!(
+                    "tx_index_store does not expose cell_payloads CF while rebuilding addr balances"
+                );
+            }
+            store
+        };
 
         struct Agg {
             balance: i128,
@@ -159,30 +175,37 @@ impl CkbadgerStore {
         }
 
         let mut agg_by_lock: HashMap<Vec<u8>, Agg> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_cell_state(), rocksdb::IteratorMode::Start);
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate live_cells in rebuild_addr_balances_from_live_cells: {}",
+                    "failed to iterate cell_state in rebuild_addr_balances_from_live_cells: {}",
                     e
                 )
             })?;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = self
-                .get_cell_by_outpoint_key(&key)
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to load canonical cell during addr balance rebuild: outpoint=0x{}, error={}",
-                        bytes_to_hex(&key),
-                        e
-                    )
-                })?
+            let Some(state) = self.get_cell_state_by_outpoint_key(&key)? else {
+                continue;
+            };
+            if !state.is_live() {
+                continue;
+            }
+            let info: LiveCellInfo = payload_store
+                .get_cell_payload_by_key(&state.payload_key)?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "missing canonical cell for live marker during addr balance rebuild: outpoint=0x{}",
-                        bytes_to_hex(&key)
+                        "missing canonical cell payload in rebuild_addr_balances_from_live_cells: outpoint=0x{}, payload_key=0x{}",
+                        bytes_to_hex(&key),
+                        bytes_to_hex(&state.payload_key)
+                    )
+                })
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to load canonical live cell during addr balance rebuild: outpoint=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
                     )
                 })?;
             let tx_hash = key[..32].to_vec();
@@ -454,19 +477,25 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_addr_balances_domain_store_skips_missing_addr_txs_cf() {
+    fn test_rebuild_addr_balances_domain_store_requires_append_store_for_payloads() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let lock_a = vec![0xAA; 32];
+        let outpoint = keys::encode_outpoint(&[0x01; 32], 0);
+        let payload_key = keys::encode_cell_payload_key(10, &[0x01; 32], 0);
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
-        batch.commit().unwrap();
+        store
+            .put_cf(
+                store.cf_cell_state(),
+                &outpoint,
+                &bincode::serialize(&crate::types::CellState::live(10, payload_key.to_vec()))
+                    .unwrap(),
+            )
+            .unwrap();
 
-        let rebuilt = store.rebuild_addr_balances_from_live_cells().unwrap();
-        assert_eq!(rebuilt, 1);
-        let a = store.get_addr_balance(&lock_a).unwrap().unwrap();
-        assert_eq!(a.txs_count, 0);
+        let err = store.rebuild_addr_balances_from_live_cells().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("requires append-only payload store when cell_payloads CF is absent"));
     }
 
     #[test]
@@ -476,12 +505,19 @@ mod tests {
         let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
         let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
         let lock_a = vec![0xAA; 32];
+        let tx_hash = [0x01; 32];
+        let payload_key = keys::encode_cell_payload_key(10, &tx_hash, 0);
 
         let mut domain_batch = StoreBatch::new(&domain);
-        domain_batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
+        domain_batch.put_cell_state(
+            &tx_hash,
+            0,
+            &crate::types::CellState::live(10, payload_key.to_vec()),
+        );
         domain_batch.commit().unwrap();
 
         let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell_payload(10, &tx_hash, 0, &make_cell(lock_a.clone(), 10, 100, 120));
         append_batch.put_addr_tx(&lock_a, 10, 0, &[0x11; 32]);
         append_batch.put_addr_tx(&lock_a, 11, 1, &[0x22; 32]);
         append_batch.commit().unwrap();
@@ -513,12 +549,22 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let outpoint = keys::encode_outpoint(&[0x11; 32], 0);
-        store.put_cf(store.cf_live_cells(), &outpoint, b"").unwrap();
+        store
+            .put_cf(
+                store.cf_cell_state(),
+                &outpoint,
+                &bincode::serialize(&crate::types::CellState::live(
+                    123,
+                    b"missing-payload".to_vec(),
+                ))
+                .unwrap(),
+            )
+            .unwrap();
 
         let err = store.rebuild_addr_balances_from_live_cells().unwrap_err();
         assert!(err
             .to_string()
-            .contains("missing canonical cell for live marker during addr balance rebuild"));
+            .contains("missing canonical cell payload in rebuild_addr_balances_from_live_cells"));
     }
 
     #[test]

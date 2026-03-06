@@ -236,15 +236,19 @@ pub fn format_duration_smart(total_secs: f64) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryStatsData {
-    /// Number of live (unspent) cells in RocksDB
+    /// Exact number of live (unspent) cells from sync status.
     pub live_cells_count: u64,
-    /// Number of consumed cells retained for reorg support
+    /// Exact number of consumed cells from sync status.
     pub consumed_cells_count: u64,
-    /// Estimated storage bytes used by consumed_cells column family
-    pub consumed_cells_bytes: u64,
-    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none
+    /// Estimated number of rows in canonical `cell_state`.
     #[serde(default)]
-    pub consumed_cells_bytes_source: String,
+    pub cell_state_count: u64,
+    /// Estimated storage bytes used by `cell_state` column family.
+    #[serde(default)]
+    pub cell_state_bytes: u64,
+    /// Source used to estimate cell_state_bytes: live/sst/mem/none.
+    #[serde(default)]
+    pub cell_state_bytes_source: String,
 
     /// RocksDB memtable (write buffer) memory usage
     pub rocksdb_memtable_bytes: u64,
@@ -258,8 +262,6 @@ pub struct MemoryStatsData {
     /// Number of block headers cached
     pub block_headers_count: u64,
 
-    /// Whether bulk sync cell cache is enabled (retains all consumed cells)
-    pub bulk_sync_cell_cache_enabled: bool,
     /// Whether currently in bulk sync mode (>1000 blocks behind)
     pub bulk_sync_mode: bool,
 
@@ -461,14 +463,14 @@ mod tests {
         let stats = MemoryStatsData {
             live_cells_count: 45_000_000,
             consumed_cells_count: 12_000_000,
-            consumed_cells_bytes: 14_000_000_000,
-            consumed_cells_bytes_source: "live".to_string(),
+            cell_state_count: 57_000_000,
+            cell_state_bytes: 14_000_000_000,
+            cell_state_bytes_source: "live".to_string(),
             rocksdb_memtable_bytes: 1_000_000_000,
             rocksdb_block_cache_bytes: 512_000_000,
             rocksdb_table_readers_bytes: 100_000_000,
             rocksdb_total_bytes: 1_612_000_000,
             block_headers_count: 6_000_000,
-            bulk_sync_cell_cache_enabled: true,
             bulk_sync_mode: true,
             compaction_pending_bytes: 500_000,
             num_running_compactions: 2,
@@ -497,7 +499,7 @@ mod tests {
         assert_eq!(parsed.rocksdb_total_bytes, stats.rocksdb_total_bytes);
         assert_eq!(parsed.bulk_sync_mode, stats.bulk_sync_mode);
         assert_eq!(parsed.sst_files_size, stats.sst_files_size);
-        assert_eq!(parsed.consumed_cells_bytes_source, "live");
+        assert_eq!(parsed.cell_state_bytes_source, "live");
         assert_eq!(parsed.top_cf_sizes.len(), 2);
         assert_eq!(parsed.total_transactions, 50_000_000);
     }
@@ -507,12 +509,12 @@ mod tests {
         let mut value = serde_json::to_value(MemoryStatsData::default()).unwrap();
         value["liveCellsCount"] = serde_json::json!(1);
         value["consumedCellsCount"] = serde_json::json!(2);
-        value["consumedCellsBytes"] = serde_json::json!(3);
+        value["cellStateBytes"] = serde_json::json!(3);
         if let Some(obj) = value.as_object_mut() {
-            obj.remove("consumedCellsBytesSource");
+            obj.remove("cellStateBytesSource");
         }
         let parsed: MemoryStatsData = serde_json::from_value(value).unwrap();
-        assert_eq!(parsed.consumed_cells_bytes_source, "");
+        assert_eq!(parsed.cell_state_bytes_source, "");
     }
 
     #[test]

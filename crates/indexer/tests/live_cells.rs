@@ -5,13 +5,14 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
+use ckbadger_store::CellIndexTag;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::LiveCellInfo;
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap());
     std::mem::forget(dir);
     store
 }
@@ -49,15 +50,18 @@ fn test_insert_cell_visible_in_live_cells() {
     batch.put_cell(&tx_hash, 0, &cell);
     batch.commit().unwrap();
 
-    // Verify live marker + canonical payload.
+    // Verify canonical state + payload.
     let key = keys::encode_outpoint(&tx_hash, 0);
-    let marker = store.get_cf(store.cf_live_cells(), &key).unwrap();
+    let state = store.get_cf(store.cf_cell_state(), &key).unwrap();
+    assert!(state.is_some(), "cell should be present in cell_state CF");
+    let payload_key = keys::encode_cell_payload_key(cell.created_at_block, &tx_hash, 0);
+    let raw = store
+        .get_cf(store.cf_cell_payloads(), &payload_key)
+        .unwrap();
     assert!(
-        marker.is_some(),
-        "cell should be present in live_cells marker CF"
+        raw.is_some(),
+        "cell payload should be present in cell_payloads CF"
     );
-    let raw = store.get_cf(store.cf_cells(), &key).unwrap();
-    assert!(raw.is_some(), "cell payload should be present in cells CF");
 
     let decoded: LiveCellInfo = bincode::deserialize(&raw.unwrap()).unwrap();
     assert_eq!(decoded.capacity, 100_00000000);
@@ -215,8 +219,13 @@ fn test_list_cells_by_lock_cursor_pagination() {
 
     // Build cursor from last result of page 1
     let (ref last_tx, last_idx, ref last_info) = page1[1];
-    let cursor_key =
-        keys::encode_cell_index_key(&lock_hash, last_info.created_at_block, last_tx, last_idx);
+    let cursor_key = keys::encode_cell_index_entry_key(
+        CellIndexTag::Lock,
+        &lock_hash,
+        last_info.created_at_block,
+        last_tx,
+        last_idx,
+    );
 
     // Page 2: should continue from after cursor
     let page2 = store
@@ -226,8 +235,13 @@ fn test_list_cells_by_lock_cursor_pagination() {
 
     // Page 3: should have the remaining 1 cell
     let (ref last_tx2, last_idx2, ref last_info2) = page2[1];
-    let cursor_key2 =
-        keys::encode_cell_index_key(&lock_hash, last_info2.created_at_block, last_tx2, last_idx2);
+    let cursor_key2 = keys::encode_cell_index_entry_key(
+        CellIndexTag::Lock,
+        &lock_hash,
+        last_info2.created_at_block,
+        last_tx2,
+        last_idx2,
+    );
     let page3 = store
         .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key2))
         .unwrap();

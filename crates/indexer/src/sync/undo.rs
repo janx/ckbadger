@@ -47,25 +47,6 @@ pub(crate) fn put_append_delete_undo_entry(
     );
 }
 
-pub(crate) fn put_domain_delete_undo_entry(
-    domain_batch: &mut StoreBatch<'_>,
-    undo_seq_by_block: &mut HashMap<i64, u64>,
-    scope: UndoSeqScope,
-    block_num: i64,
-    cf_name: &str,
-    key: &[u8],
-) {
-    put_delete_undo_entry(
-        domain_batch,
-        undo_seq_by_block,
-        ckbadger_store::types::UndoLogStoreTarget::Domain,
-        scope,
-        block_num,
-        cf_name,
-        key,
-    );
-}
-
 fn put_delete_undo_entry(
     domain_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -167,21 +148,50 @@ pub(crate) fn put_activity_with_undo_log(
     domain_batch: &mut StoreBatch<'_>,
     activity_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
-    lock_hash: &[u8],
-    block_num: i64,
-    tx_idx: i32,
-    entry: &ckbadger_store::types::ActivityEntry,
+    activity: &crate::db::writer::activities::NormalizedActivityTx,
 ) {
-    let domain_key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
-    activity_batch.put_activity(lock_hash, block_num, tx_idx, entry);
-    put_domain_delete_undo_entry(
+    let envelope_key = keys::encode_activity_tx_envelope_key(
+        activity.block_number,
+        activity.tx_index,
+        &activity.tx_hash,
+    );
+    activity_batch.put_activity_tx_envelope(
+        activity.block_number,
+        activity.tx_index,
+        &activity.tx_hash,
+        &activity.envelope,
+    );
+    put_append_delete_undo_entry(
         domain_batch,
         undo_seq_by_block,
         UndoSeqScope::AppendActivity,
-        block_num,
-        ckbadger_store::CF_ACTIVITIES,
-        &domain_key,
+        activity.block_number,
+        ckbadger_store::CF_ACTIVITY_TX_ENVELOPES,
+        &envelope_key,
     );
+    for (lock_hash, owner_slot) in &activity.owner_refs {
+        let owner_key = keys::encode_activity_owner_key(
+            lock_hash,
+            activity.block_number,
+            activity.tx_index,
+            &activity.tx_hash,
+        );
+        activity_batch.put_activity_owner_ref(
+            lock_hash,
+            activity.block_number,
+            activity.tx_index,
+            &activity.tx_hash,
+            *owner_slot,
+        );
+        put_append_delete_undo_entry(
+            domain_batch,
+            undo_seq_by_block,
+            UndoSeqScope::AppendActivity,
+            activity.block_number,
+            ckbadger_store::CF_ACTIVITY_BY_OWNER,
+            &owner_key,
+        );
+    }
 }
 
 pub(crate) fn rollback_undo_log_after_batch_cleanup(
@@ -304,13 +314,37 @@ mod tests {
             .put_cf(append_store.cf_addr_txs(), &addr_drop, &[0x02])
             .unwrap();
 
-        let act_keep = keys::encode_activity_key(&lock_hash, 11, 0);
-        let act_drop = keys::encode_activity_key(&lock_hash, 21, 0);
-        domain_store
-            .put_cf(domain_store.cf_activities(), &act_keep, &[0x03])
+        let act_env_keep = keys::encode_activity_tx_envelope_key(11, 0, &[0x31; 32]);
+        let act_env_drop = keys::encode_activity_tx_envelope_key(21, 0, &[0x32; 32]);
+        let act_ref_keep = keys::encode_activity_owner_key(&lock_hash, 11, 0, &[0x31; 32]);
+        let act_ref_drop = keys::encode_activity_owner_key(&lock_hash, 21, 0, &[0x32; 32]);
+        append_store
+            .put_cf(
+                append_store.cf_activity_tx_envelopes(),
+                &act_env_keep,
+                &[0x03],
+            )
             .unwrap();
-        domain_store
-            .put_cf(domain_store.cf_activities(), &act_drop, &[0x04])
+        append_store
+            .put_cf(
+                append_store.cf_activity_tx_envelopes(),
+                &act_env_drop,
+                &[0x04],
+            )
+            .unwrap();
+        append_store
+            .put_cf(
+                append_store.cf_activity_by_owner(),
+                &act_ref_keep,
+                &0u16.to_be_bytes(),
+            )
+            .unwrap();
+        append_store
+            .put_cf(
+                append_store.cf_activity_by_owner(),
+                &act_ref_drop,
+                &0u16.to_be_bytes(),
+            )
             .unwrap();
 
         let nft_keep = keys::encode_nft_collection_activity_key(&collection_id, 12, 0);
@@ -340,13 +374,21 @@ mod tests {
             ckbadger_store::CF_ADDR_TXS,
             &addr_drop,
         );
-        put_domain_delete_undo_entry(
+        put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
             UndoSeqScope::AppendActivity,
             21,
-            ckbadger_store::CF_ACTIVITIES,
-            &act_drop,
+            ckbadger_store::CF_ACTIVITY_TX_ENVELOPES,
+            &act_env_drop,
+        );
+        put_append_delete_undo_entry(
+            &mut domain_batch,
+            &mut undo_seq_by_block,
+            UndoSeqScope::AppendActivity,
+            21,
+            ckbadger_store::CF_ACTIVITY_BY_OWNER,
+            &act_ref_drop,
         );
         put_append_delete_undo_entry(
             &mut domain_batch,
@@ -370,14 +412,22 @@ mod tests {
             .get_cf(append_store.cf_addr_txs(), &addr_drop)
             .unwrap()
             .is_some());
-        assert!(domain_store
-            .get_cf(domain_store.cf_activities(), &act_keep)
+        assert!(append_store
+            .get_cf(append_store.cf_activity_tx_envelopes(), &act_env_keep)
             .unwrap()
             .is_some());
-        assert!(domain_store
-            .get_cf(domain_store.cf_activities(), &act_drop)
+        assert!(append_store
+            .get_cf(append_store.cf_activity_tx_envelopes(), &act_env_drop)
             .unwrap()
-            .is_none());
+            .is_some());
+        assert!(append_store
+            .get_cf(append_store.cf_activity_by_owner(), &act_ref_keep)
+            .unwrap()
+            .is_some());
+        assert!(append_store
+            .get_cf(append_store.cf_activity_by_owner(), &act_ref_drop)
+            .unwrap()
+            .is_some());
         assert!(append_store
             .get_cf(append_store.cf_nft_collection_activities(), &nft_keep)
             .unwrap()
@@ -389,42 +439,63 @@ mod tests {
     }
 
     #[test]
-    fn test_put_activity_with_undo_log_records_domain_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let domain_store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let lock_hash = [0x44; 32];
-        let entry = ckbadger_store::types::ActivityEntry {
-            tx_hash: vec![0xAB; 32],
+    fn test_put_activity_with_undo_log_records_append_only_targets() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+
+        let normalized = crate::db::writer::activities::NormalizedActivityTx {
             block_number: 42,
             tx_index: 3,
-            timestamp: 1_700_000_000,
-            ckb_delta: 0,
-            occupied_delta: 0,
-            is_cellbase: false,
-            asset_changes: vec![],
-            peers: vec![],
+            tx_hash: vec![0xAB; 32],
+            envelope: ckbadger_store::types::ActivityTxEnvelope {
+                tx_hash: vec![0xAB; 32],
+                block_number: 42,
+                tx_index: 3,
+                timestamp: 1_700_000_000,
+                is_cellbase: false,
+                participants: vec![vec![0x44; 32], vec![0x55; 32]],
+                owner_views: vec![
+                    ckbadger_store::types::OwnerActivityViewStored {
+                        ckb_delta: 1,
+                        occupied_delta: 2,
+                        asset_changes: vec![],
+                    },
+                    ckbadger_store::types::OwnerActivityViewStored {
+                        ckb_delta: -1,
+                        occupied_delta: -2,
+                        asset_changes: vec![],
+                    },
+                ],
+            },
+            owner_refs: vec![(vec![0x44; 32], 0), (vec![0x55; 32], 1)],
         };
 
         let mut domain_batch = StoreBatch::new(&domain_store);
-        let mut activity_batch = StoreBatch::new(&domain_store);
+        let mut activity_batch = StoreBatch::new(&append_store);
         let mut undo_seq_by_block = HashMap::new();
         put_activity_with_undo_log(
             &mut domain_batch,
             &mut activity_batch,
             &mut undo_seq_by_block,
-            &lock_hash,
-            42,
-            3,
-            &entry,
+            &normalized,
         );
         domain_batch.commit().unwrap();
         activity_batch.commit().unwrap();
+
+        let envelope_key = keys::encode_activity_tx_envelope_key(42, 3, &[0xAB; 32]);
+        assert!(append_store
+            .get_cf(append_store.cf_activity_tx_envelopes(), &envelope_key)
+            .unwrap()
+            .is_some());
 
         let iter = domain_store.iterator_cf(
             domain_store.cf_reorg_undo_log_by_block(),
             rocksdb::IteratorMode::Start,
         );
-        let mut found = false;
+        let mut found_envelope = false;
+        let mut found_owner_refs = 0usize;
         for item in iter {
             let (_key, value) = item.unwrap();
             let decoded: ckbadger_store::types::UndoLogEntry =
@@ -435,16 +506,27 @@ mod tests {
                 ..
             } = decoded
             {
-                if cf_name == ckbadger_store::CF_ACTIVITIES {
+                if cf_name == ckbadger_store::CF_ACTIVITY_TX_ENVELOPES {
                     assert_eq!(
                         target_store,
-                        ckbadger_store::types::UndoLogStoreTarget::Domain
+                        ckbadger_store::types::UndoLogStoreTarget::AppendOnly
                     );
-                    found = true;
+                    found_envelope = true;
+                }
+                if cf_name == ckbadger_store::CF_ACTIVITY_BY_OWNER {
+                    assert_eq!(
+                        target_store,
+                        ckbadger_store::types::UndoLogStoreTarget::AppendOnly
+                    );
+                    found_owner_refs += 1;
                 }
             }
         }
-        assert!(found, "expected activities key mutation undo entry");
+        assert!(found_envelope, "expected activity envelope undo entry");
+        assert_eq!(
+            found_owner_refs, 2,
+            "expected two activity owner ref undo entries"
+        );
     }
 
     #[test]

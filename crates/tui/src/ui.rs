@@ -2266,11 +2266,9 @@ fn draw_memory_stats(f: &mut Frame, app: &App, area: Rect) {
 fn storage_runtime_columns(
     mem: &MemoryStatsData,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>, Vec<Line<'static>>) {
-    let live_delta = runtime_live_delta(mem.live_cells_count, mem.total_live_cells);
-
     let left = vec![
         metric_line(
-            "Live (cache)",
+            "Live Cells",
             format_num_u64(mem.live_cells_count),
             TERMINAL_GREEN,
         ),
@@ -2280,17 +2278,15 @@ fn storage_runtime_columns(
             FOREGROUND,
         ),
         Line::from(vec![
-            metric_label_span("Consumed Sz"),
+            metric_label_span("State Sz"),
             Span::styled(
-                format_bytes(mem.consumed_cells_bytes),
+                format_bytes(mem.cell_state_bytes),
                 Style::default().fg(FOREGROUND),
             ),
             Span::styled("  src ", Style::default().fg(SLATE_500)),
             Span::styled(
-                consumed_cells_source_label(&mem.consumed_cells_bytes_source),
-                Style::default().fg(consumed_cells_source_color(
-                    &mem.consumed_cells_bytes_source,
-                )),
+                storage_bytes_source_label(&mem.cell_state_bytes_source),
+                Style::default().fg(storage_bytes_source_color(&mem.cell_state_bytes_source)),
             ),
         ]),
         metric_line(
@@ -2330,18 +2326,11 @@ fn storage_runtime_columns(
             TERMINAL_GREEN,
         ),
         metric_line("Chain Cells", format_num(mem.total_cells), FOREGROUND),
-        Line::from(vec![
-            metric_label_span("Live (sync)"),
-            Span::styled(
-                format_num(mem.total_live_cells),
-                Style::default().fg(FOREGROUND),
-            ),
-            Span::styled("  Δcache ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                format_signed_num_i128(live_delta),
-                Style::default().fg(live_delta_color(live_delta)),
-            ),
-        ]),
+        metric_line(
+            "State Rows",
+            format_num_u64(mem.cell_state_count),
+            FOREGROUND,
+        ),
         Line::from(vec![
             metric_label_span("Chain Addrs"),
             Span::styled(
@@ -2357,26 +2346,13 @@ fn storage_runtime_columns(
                     TERMINAL_GREEN
                 }),
             ),
-            Span::styled("  cache ", Style::default().fg(SLATE_500)),
-            Span::styled(
-                if mem.bulk_sync_cell_cache_enabled {
-                    "on"
-                } else {
-                    "off"
-                },
-                Style::default().fg(if mem.bulk_sync_cell_cache_enabled {
-                    TERMINAL_GREEN
-                } else {
-                    AMBER
-                }),
-            ),
         ]),
     ];
 
     (left, mid, right)
 }
 
-fn consumed_cells_source_label(source: &str) -> &'static str {
+fn storage_bytes_source_label(source: &str) -> &'static str {
     match source {
         "live" => "live",
         "sst" => "sst",
@@ -2386,7 +2362,7 @@ fn consumed_cells_source_label(source: &str) -> &'static str {
     }
 }
 
-fn consumed_cells_source_color(source: &str) -> Color {
+fn storage_bytes_source_color(source: &str) -> Color {
     match source {
         "live" => TERMINAL_GREEN,
         "sst" | "mem" => AMBER,
@@ -2404,47 +2380,6 @@ fn metric_line(label: &str, value: String, value_color: Color) -> Line<'static> 
         metric_label_span(label),
         Span::styled(value, Style::default().fg(value_color)),
     ])
-}
-
-fn runtime_live_delta(cache_live_cells: u64, sync_live_cells: i64) -> i128 {
-    i128::from(cache_live_cells) - i128::from(sync_live_cells)
-}
-
-fn live_delta_color(delta: i128) -> Color {
-    if delta == 0 {
-        TERMINAL_GREEN
-    } else if delta.abs() <= 100 {
-        AMBER
-    } else {
-        ERROR_RED
-    }
-}
-
-fn format_signed_num_i128(value: i128) -> String {
-    if value > 0 {
-        format!("+{}", format_num_i128(value))
-    } else {
-        format_num_i128(value)
-    }
-}
-
-fn format_num_i128(value: i128) -> String {
-    if value < 0 {
-        return format!("-{}", format_num_commas_u128(value.unsigned_abs()));
-    }
-    format_num_commas_u128(value as u128)
-}
-
-fn format_num_commas_u128(value: u128) -> String {
-    let s = value.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out.chars().rev().collect()
 }
 
 fn draw_storage_health(f: &mut Frame, app: &App, area: Rect) {
@@ -3920,20 +3855,19 @@ fn draw_system_params_compact(
 mod tests {
     use super::{
         adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
-        compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
-        consumed_cells_source_label, dense_right_lines, derived_status_line, detail_right_lines,
-        diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
-        footer_status_message, format_age_secs, format_num, format_num_commas, format_rate_pair,
-        format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
+        compact_overview_layout, compact_sync_layout, dense_right_lines, derived_status_line,
+        detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
+        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
+        format_rate_pair, format_stage_commit_gap_ms, header_right_line, header_title_line,
         heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
         overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
-        pipeline_reset_line, rate_jitter, runtime_health_state, runtime_live_delta,
-        service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs, stale_status,
-        startup_phase_label, storage_runtime_columns, supervisor_services_line, sync_bottleneck,
-        sync_chart_specs, sync_timing_lines, system_kv_line, trend_delta, trim_for_panel,
-        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS,
-        TERMINAL_DIM,
+        pipeline_reset_line, rate_jitter, runtime_health_state, service_log_tails_line, sparkline,
+        stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,
+        storage_bytes_source_color, storage_bytes_source_label, storage_runtime_columns,
+        supervisor_services_line, sync_bottleneck, sync_chart_specs, sync_timing_lines,
+        system_kv_line, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
+        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -4501,13 +4435,13 @@ mod tests {
     }
 
     #[test]
-    fn test_consumed_cells_source_helpers() {
-        assert_eq!(consumed_cells_source_label("live"), "live");
-        assert_eq!(consumed_cells_source_label("sst"), "sst");
-        assert_eq!(consumed_cells_source_label("foo"), "unknown");
-        assert_eq!(consumed_cells_source_color("live"), Color::Rgb(0, 255, 65));
+    fn test_storage_bytes_source_helpers() {
+        assert_eq!(storage_bytes_source_label("live"), "live");
+        assert_eq!(storage_bytes_source_label("sst"), "sst");
+        assert_eq!(storage_bytes_source_label("foo"), "unknown");
+        assert_eq!(storage_bytes_source_color("live"), Color::Rgb(0, 255, 65));
         assert_eq!(
-            consumed_cells_source_color("none"),
+            storage_bytes_source_color("none"),
             Color::Rgb(160, 174, 192)
         );
     }
@@ -4600,20 +4534,13 @@ mod tests {
     }
 
     #[test]
-    fn test_runtime_live_delta_signed_format() {
-        assert_eq!(runtime_live_delta(1_005, 1_000), 5);
-        assert_eq!(runtime_live_delta(995, 1_000), -5);
-        assert_eq!(format_signed_num_i128(5), "+5");
-        assert_eq!(format_signed_num_i128(-5), "-5");
-    }
-
-    #[test]
-    fn test_storage_runtime_columns_live_sync_line() {
+    fn test_storage_runtime_columns_show_state_rows_line() {
         let mem = MemoryStatsData {
-            live_cells_count: 1_428_835,
+            live_cells_count: 1_428_846,
             consumed_cells_count: 93_659_951,
-            consumed_cells_bytes: 7_860_000_000,
-            consumed_cells_bytes_source: "live".to_string(),
+            cell_state_count: 95_088_797,
+            cell_state_bytes: 7_860_000_000,
+            cell_state_bytes_source: "live".to_string(),
             rocksdb_memtable_bytes: 48_060_000,
             rocksdb_block_cache_bytes: 7_990_000_000,
             rocksdb_table_readers_bytes: 4_920_000,
@@ -4621,25 +4548,22 @@ mod tests {
             block_headers_count: 18_663_072,
             total_transactions: 48_551_716,
             total_cells: 95_088_803,
-            total_live_cells: 1_428_846,
             total_addresses: 0,
             ..Default::default()
         };
 
         let (_, _, right) = storage_runtime_columns(&mem);
-        let live_line = line_text(&right[2]);
-        assert!(live_line.contains("Live (sync)"));
-        assert!(live_line.contains("1,428,846"));
-        assert!(live_line.contains("Δcache -11"));
+        let state_rows_line = line_text(&right[2]);
+        assert!(state_rows_line.contains("State Rows"));
+        assert!(state_rows_line.contains("95,088,797"));
     }
 
     #[test]
-    fn test_storage_runtime_columns_mode_and_consumed_source() {
+    fn test_storage_runtime_columns_mode_and_state_source() {
         let mem = MemoryStatsData {
-            consumed_cells_bytes: 1_024,
-            consumed_cells_bytes_source: "sst".to_string(),
+            cell_state_bytes: 1_024,
+            cell_state_bytes_source: "sst".to_string(),
             bulk_sync_mode: true,
-            bulk_sync_cell_cache_enabled: false,
             total_addresses: 123,
             ..Default::default()
         };
@@ -4647,7 +4571,7 @@ mod tests {
         let (left, _, right) = storage_runtime_columns(&mem);
         assert!(line_text(&left[2]).contains("src sst"));
         assert!(line_text(&right[3]).contains("mode bulk"));
-        assert!(line_text(&right[3]).contains("cache off"));
+        assert!(!line_text(&right[3]).contains("cache"));
     }
 
     #[test]

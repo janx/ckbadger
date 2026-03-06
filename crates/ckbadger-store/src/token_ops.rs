@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use rocksdb::{IteratorMode, WriteBatch};
 
 use crate::keys;
-use crate::store::CkbadgerStore;
+use crate::store::{CkbadgerStore, CF_CELL_PAYLOADS};
 use crate::types::{
     AssetAction, LiveCellInfo, TokenActivityEntry, TokenActivityTransfer, TokenDailyDelta,
     TokenInfo, TokenTransferRecord,
@@ -824,10 +824,32 @@ impl CkbadgerStore {
     /// Rebuild token state after rollback.
     ///
     /// Sources of truth:
-    /// - `live_cells` for holder balances and outstanding total supply
+    /// - canonical live `cell_state` + `cell_payloads` for holder balances and outstanding total supply
     /// - `token_transfers` for transfer counters/hourly buckets
     pub fn rebuild_token_state_from_transfers(&self) -> anyhow::Result<TokenStateRebuildResult> {
+        self.rebuild_token_state_from_transfers_with_payload_store(None)
+    }
+
+    pub fn rebuild_token_state_from_transfers_with_payload_store(
+        &self,
+        payload_store: Option<&CkbadgerStore>,
+    ) -> anyhow::Result<TokenStateRebuildResult> {
         let mut result = TokenStateRebuildResult::default();
+        let payload_store = if self.has_cf(CF_CELL_PAYLOADS) {
+            self
+        } else {
+            let store = payload_store.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rebuild_token_state_from_transfers requires append-only payload store when cell_payloads CF is absent"
+                )
+            })?;
+            if !store.has_cf(CF_CELL_PAYLOADS) {
+                anyhow::bail!(
+                    "payload_store does not expose cell_payloads CF while rebuilding token state"
+                );
+            }
+            store
+        };
 
         let mut existing_tokens: HashMap<Vec<u8>, TokenInfo> = HashMap::new();
         let iter = self.iterator_cf(self.cf_tokens(), IteratorMode::Start);
@@ -848,25 +870,34 @@ impl CkbadgerStore {
             existing_tokens.insert(key.to_vec(), info);
         }
 
-        // 1) Aggregate live UDT balances and current total supply from live_cells.
+        // 1) Aggregate live UDT balances and current total supply from canonical live cell state.
         let mut live_aggs: HashMap<Vec<u8>, LiveTokenAgg> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_cell_state(), IteratorMode::Start);
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate live_cells in rebuild_token_state_from_transfers: {}",
+                    "failed to iterate cell_state in rebuild_token_state_from_transfers: {}",
                     e
                 )
             })?;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
                 continue;
             }
-            let info: LiveCellInfo = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing canonical cell for live marker during token rebuild: outpoint=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
+            let Some(state) = self.get_cell_state_by_outpoint_key(&key)? else {
+                continue;
+            };
+            if !state.is_live() {
+                continue;
+            }
+            let info: LiveCellInfo = payload_store
+                .get_cell_payload_by_key(&state.payload_key)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing canonical cell payload in rebuild_token_state_from_transfers: outpoint=0x{}, payload_key=0x{}",
+                        bytes_to_hex(&key),
+                        bytes_to_hex(&state.payload_key)
+                    )
+                })?;
             let Some(type_hash) = info.type_script_hash.as_ref() else {
                 continue;
             };

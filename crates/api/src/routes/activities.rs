@@ -313,7 +313,7 @@ async fn get_address_activities(
 mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::TxIndexEntry;
+    use ckbadger_store::types::{ActivityTxEnvelope, OwnerActivityViewStored, TxIndexEntry};
 
     fn make_activity(tx_hash: &[u8], block_number: i64, tx_index: i32) -> ActivityEntry {
         ActivityEntry {
@@ -347,28 +347,43 @@ mod tests {
     fn test_list_canonical_activities_page_filters_orphaned_entries() {
         let root = tempfile::tempdir().unwrap();
         let domain_path = root.path().join("domain");
+        let append_path = root.path().join("append");
         let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append = CkbadgerStore::open_append_only(&append_path).unwrap();
 
         let lock_hash = [0xAA; 32];
         let stale_tx = vec![0x30; 32];
         let canonical_tx_new = vec![0x20; 32];
         let canonical_tx_old = vec![0x10; 32];
 
-        let mut domain_activity_batch = StoreBatch::new(&domain);
-        domain_activity_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
-        domain_activity_batch.put_activity(
-            &lock_hash,
-            20,
-            0,
-            &make_activity(&canonical_tx_new, 20, 0),
-        );
-        domain_activity_batch.put_activity(
-            &lock_hash,
-            10,
-            0,
-            &make_activity(&canonical_tx_old, 10, 0),
-        );
-        domain_activity_batch.commit().unwrap();
+        let mut append_activity_batch = StoreBatch::new(&append);
+        for (tx_hash, block, tx_idx) in [
+            (&stale_tx, 30_i64, 0_i32),
+            (&canonical_tx_new, 20_i64, 0_i32),
+            (&canonical_tx_old, 10_i64, 0_i32),
+        ] {
+            let entry = make_activity(tx_hash, block, tx_idx);
+            append_activity_batch.put_activity_tx_envelope(
+                block,
+                tx_idx,
+                tx_hash,
+                &ActivityTxEnvelope {
+                    tx_hash: tx_hash.clone(),
+                    block_number: block,
+                    tx_index: tx_idx,
+                    timestamp: entry.timestamp,
+                    is_cellbase: entry.is_cellbase,
+                    participants: vec![lock_hash.to_vec()],
+                    owner_views: vec![OwnerActivityViewStored {
+                        ckb_delta: entry.ckb_delta,
+                        occupied_delta: entry.occupied_delta,
+                        asset_changes: entry.asset_changes.clone(),
+                    }],
+                },
+            );
+            append_activity_batch.put_activity_owner_ref(&lock_hash, block, tx_idx, tx_hash, 0);
+        }
+        append_activity_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -390,7 +405,7 @@ mod tests {
         domain_batch.commit().unwrap();
 
         let rows =
-            list_canonical_activities_page(&domain, &domain, &lock_hash, 3, None, None).unwrap();
+            list_canonical_activities_page(&append, &domain, &lock_hash, 3, None, None).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, 20);
         assert_eq!(rows[1].0, 10);

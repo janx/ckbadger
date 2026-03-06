@@ -532,6 +532,9 @@ impl TuiDb {
                 mem.total_transactions = sync.total_transactions;
                 mem.total_cells = sync.total_cells_created;
                 mem.total_live_cells = sync.total_cells_created - sync.total_cells_consumed;
+                mem.live_cells_count =
+                    u64::try_from(sync.total_cells_created - sync.total_cells_consumed).ok()?;
+                mem.consumed_cells_count = u64::try_from(sync.total_cells_consumed).ok()?;
                 mem.total_addresses = 0;
             }
         }

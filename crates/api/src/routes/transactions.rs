@@ -679,6 +679,7 @@ async fn get_transaction_detail(
                     &tx_view,
                     ckb_store,
                     &state.store,
+                    &state.append_only_store,
                     &state.store,
                     &state.ckb_network,
                     block_number,
@@ -744,6 +745,7 @@ fn build_inputs_outputs_from_ckb(
     tx_view: &ckb_types::core::TransactionView,
     ckb_store: &ckb_store_reader::CkbChainReader,
     core_store: &ckbadger_store::CkbadgerStore,
+    append_only_store: &ckbadger_store::CkbadgerStore,
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
@@ -791,12 +793,20 @@ fn build_inputs_outputs_from_ckb(
             let (capacity, lock, type_script, address) = {
                 // Try live cells first, then consumed cells in our store
                 let cell_info = core_store
-                    .get_cell(&prev_tx_hash_bytes, prev_index as i16)
+                    .get_cell_with_payload_store(
+                        append_only_store,
+                        &prev_tx_hash_bytes,
+                        prev_index as i16,
+                    )
                     .ok()
                     .flatten()
                     .or_else(|| {
                         core_store
-                            .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16)
+                            .get_consumed_cell_with_payload_store(
+                                append_only_store,
+                                &prev_tx_hash_bytes,
+                                prev_index as i16,
+                            )
                             .ok()
                             .flatten()
                     });

@@ -2,7 +2,6 @@ use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys;
 use ckbadger_store::types::LiveCellInfo;
 
 use crate::parser::cell::ParsedCell;
@@ -118,7 +117,8 @@ impl BatchWriter {
         &self,
         cells: &[(&[u8], i16, &ParsedCell, i64)],
         precomputed_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        batch: &mut StoreBatch,
+        domain_batch: &mut StoreBatch,
+        append_batch: &mut StoreBatch,
         skip_cell_indices: bool,
     ) -> Result<()> {
         if cells.is_empty() {
@@ -135,22 +135,23 @@ impl BatchWriter {
                     precomputed_infos.len()
                 )
             })?;
-            batch.put_cell(tx_hash, *output_index, &info);
+            domain_batch.put_cell(tx_hash, *output_index, &info);
+            append_batch.put_cell(tx_hash, *output_index, &info);
             if !skip_cell_indices {
-                batch.put_cell_by_lock(
+                append_batch.put_cell_by_lock(
                     &info.lock_script_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
                 );
-                batch.put_cell_by_lock_code(
+                append_batch.put_cell_by_lock_code(
                     &info.lock_code_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
                 );
                 if let Some(ref type_hash) = info.type_script_hash {
-                    batch.put_cell_by_type(
+                    append_batch.put_cell_by_type(
                         type_hash,
                         info.created_at_block,
                         tx_hash,
@@ -158,7 +159,7 @@ impl BatchWriter {
                     );
                 }
                 if let Some(ref type_code_hash) = info.type_code_hash {
-                    batch.put_cell_by_type_code(
+                    append_batch.put_cell_by_type_code(
                         type_code_hash,
                         info.created_at_block,
                         tx_hash,
@@ -180,69 +181,19 @@ impl BatchWriter {
             return Ok(());
         }
 
-        // Collect all outpoint keys and probe live marker set.
-        let encoded_keys: Vec<_> = consumptions
+        let outpoints: Vec<(&[u8], i16)> = consumptions
             .iter()
-            .map(|(tx_hash, output_index, ..)| keys::encode_outpoint(tx_hash, *output_index))
+            .map(|(tx_hash, output_index, ..)| (*tx_hash, *output_index))
             .collect();
-
-        let marker_refs: Vec<_> = encoded_keys
-            .iter()
-            .map(|k| (self.store.cf_live_cells(), k.as_slice()))
-            .collect();
-        let marker_results = self.store.multi_get_cf(marker_refs);
-
-        let mut present_positions = Vec::new();
-        let mut cell_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
-        for (idx, marker) in marker_results.into_iter().enumerate() {
-            if matches!(marker, Ok(Some(_))) {
-                present_positions.push(idx);
-                cell_refs.push((self.store.cf_cells(), encoded_keys[idx].as_slice()));
-            }
-        }
-        let cell_results = self.store.multi_get_cf(cell_refs);
-        let mut infos_by_pos: HashMap<usize, LiveCellInfo> = HashMap::new();
-        for (batch_idx, res) in cell_results.into_iter().enumerate() {
-            let outpoint_idx = present_positions[batch_idx];
-            let (tx_hash, output_index, ..) = consumptions[outpoint_idx];
-            match res {
-                Ok(Some(value)) => {
-                    let info =
-                        bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
-                            anyhow!(
-                                "failed to deserialize live cell info during consumption: outpoint=0x{}:{}, error={}",
-                                hex::encode(tx_hash),
-                                output_index,
-                                e
-                            )
-                        })?;
-                    infos_by_pos.insert(outpoint_idx, info);
-                }
-                Ok(None) => {
-                    bail!(
-                        "live cell marker present but canonical cell data missing: outpoint=0x{}:{}",
-                        hex::encode(tx_hash),
-                        output_index
-                    );
-                }
-                Err(e) => {
-                    bail!(
-                        "failed to read canonical cell info during consumption: outpoint=0x{}:{}, error={}",
-                        hex::encode(tx_hash),
-                        output_index,
-                        e
-                    );
-                }
-            }
-        }
+        let infos_by_key = self
+            .store
+            .get_cells_batch_with_payload_store(&self.cell_payload_store, &outpoints)?;
 
         // Zip results with consumptions and process writes
-        for (
-            idx,
-            (tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _),
-        ) in consumptions.iter().enumerate()
+        for &(tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _) in
+            consumptions
         {
-            let Some(info) = infos_by_pos.get(&idx) else {
+            let Some(info) = infos_by_key.get(&(tx_hash.to_vec(), output_index)) else {
                 bail!(
                     "missing live cell info during consumption: outpoint=0x{}:{}, consumed_by_tx=0x{}, consumed_at_block={}",
                     hex::encode(tx_hash),
@@ -254,35 +205,35 @@ impl BatchWriter {
             // Move to consumed cells
             batch.put_consumed_cell_with_consumer(
                 tx_hash,
-                *output_index,
+                output_index,
                 info,
-                *consumed_at_block,
-                Some(*consumed_by_tx),
+                consumed_at_block,
+                Some(consumed_by_tx),
             );
             // Remove from live cells
-            batch.delete_cell(tx_hash, *output_index);
+            batch.delete_cell(tx_hash, output_index);
             // Remove cell indexes
             batch.delete_cell_by_lock(
                 &info.lock_script_hash,
                 info.created_at_block,
                 tx_hash,
-                *output_index,
+                output_index,
             );
             batch.delete_cell_by_lock_code(
                 &info.lock_code_hash,
                 info.created_at_block,
                 tx_hash,
-                *output_index,
+                output_index,
             );
             if let Some(ref type_hash) = info.type_script_hash {
-                batch.delete_cell_by_type(type_hash, info.created_at_block, tx_hash, *output_index);
+                batch.delete_cell_by_type(type_hash, info.created_at_block, tx_hash, output_index);
             }
             if let Some(ref type_code_hash) = info.type_code_hash {
                 batch.delete_cell_by_type_code(
                     type_code_hash,
                     info.created_at_block,
                     tx_hash,
-                    *output_index,
+                    output_index,
                 );
             }
         }
@@ -301,7 +252,9 @@ impl BatchWriter {
 
         let mut result = HashMap::with_capacity(outpoints.len());
 
-        let live_cells = self.store.get_cells_batch(outpoints)?;
+        let live_cells = self
+            .store
+            .get_cells_batch_with_payload_store(&self.cell_payload_store, outpoints)?;
         for ((tx_hash, output_index), info) in live_cells {
             result.insert(
                 (tx_hash, output_index),
@@ -345,67 +298,11 @@ impl BatchWriter {
             return Ok(HashMap::new());
         }
 
-        let mut result = HashMap::with_capacity(outpoints.len());
-
-        // Batch read live markers, then load canonical cell payloads for present outpoints.
-        let encoded_outpoints: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
-            .iter()
-            .map(|(h, i)| keys::encode_outpoint(h, *i))
-            .collect();
-        let marker_refs: Vec<_> = encoded_outpoints
-            .iter()
-            .map(|k| (self.store.cf_live_cells(), k.as_slice()))
-            .collect();
-        let marker_results = self.store.multi_get_cf(marker_refs);
-
-        let mut present_positions = Vec::new();
-        let mut cell_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
-        for (idx, marker) in marker_results.into_iter().enumerate() {
-            match marker {
-                Ok(Some(_)) => {
-                    present_positions.push(idx);
-                    cell_refs.push((self.store.cf_cells(), encoded_outpoints[idx].as_slice()));
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    let (tx_hash, output_index) = outpoints[idx];
-                    bail!(
-                        "failed to read live marker: outpoint=0x{}:{}, error={}",
-                        hex::encode(tx_hash),
-                        output_index,
-                        e
-                    );
-                }
-            }
-        }
-
-        let cell_results = self.store.multi_get_cf(cell_refs);
-        for (batch_idx, res) in cell_results.into_iter().enumerate() {
-            let outpoint_idx = present_positions[batch_idx];
-            let (tx_hash, output_index) = outpoints[outpoint_idx];
-            match res {
-                Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
-                        anyhow!(
-                            "failed to decode live cell info: outpoint=0x{}:{}, error={}",
-                            hex::encode(tx_hash),
-                            output_index,
-                            e
-                        )
-                    })?;
-                    validate_input_cell_occupied_capacity(&info, tx_hash, output_index, "live")?;
-                    result.insert((tx_hash.to_vec(), output_index), info);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    bail!(
-                        "failed to read canonical cell info: outpoint=0x{}:{}, error={}",
-                        hex::encode(tx_hash),
-                        output_index,
-                        e
-                    );
-                }
-            }
+        let mut result = self
+            .store
+            .get_cells_batch_with_payload_store(&self.cell_payload_store, outpoints)?;
+        for ((tx_hash, output_index), info) in &result {
+            validate_input_cell_occupied_capacity(info, tx_hash.as_slice(), *output_index, "live")?;
         }
 
         // Check consumed cells for missing entries
@@ -416,7 +313,9 @@ impl BatchWriter {
             .collect();
 
         if !missing.is_empty() {
-            let consumed = self.store.get_consumed_cells_batch(&missing)?;
+            let consumed = self
+                .store
+                .get_consumed_cells_batch_with_payload_store(&self.cell_payload_store, &missing)?;
             for ((tx_hash, output_index), live) in consumed {
                 validate_input_cell_occupied_capacity(
                     &live,
@@ -569,7 +468,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_persists_precomputed_xudt_without_amount_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_code_hash =
@@ -579,11 +478,19 @@ mod tests {
         let all_cells = vec![(tx_hash.as_slice(), 0i16, &cell, 1i64)];
         let precomputed = precomputed_info_map(&tx_hash, 0, &cell, 1, None);
 
-        let mut batch = StoreBatch::new(&store);
+        let mut domain_batch = StoreBatch::new(&store);
+        let mut append_batch = StoreBatch::new(&store);
         writer
-            .insert_cells_batch(&all_cells, &precomputed, &mut batch, false)
+            .insert_cells_batch(
+                &all_cells,
+                &precomputed,
+                &mut domain_batch,
+                &mut append_batch,
+                false,
+            )
             .unwrap();
-        batch.commit().unwrap();
+        append_batch.commit().unwrap();
+        domain_batch.commit().unwrap();
 
         let stored = store.get_cell(&tx_hash, 0).unwrap().unwrap();
         assert_eq!(stored.udt_amount, None);
@@ -592,7 +499,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_errors_when_precomputed_info_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store);
 
         let type_code_hash =
@@ -602,9 +509,16 @@ mod tests {
         let all_cells = vec![(tx_hash.as_slice(), 1i16, &cell, 8i64)];
         let precomputed = HashMap::new();
 
-        let mut batch = StoreBatch::new(writer.store());
+        let mut domain_batch = StoreBatch::new(writer.store());
+        let mut append_batch = StoreBatch::new(writer.cell_payload_store());
         let err = writer
-            .insert_cells_batch(&all_cells, &precomputed, &mut batch, false)
+            .insert_cells_batch(
+                &all_cells,
+                &precomputed,
+                &mut domain_batch,
+                &mut append_batch,
+                false,
+            )
             .unwrap_err();
         assert!(err
             .to_string()
@@ -614,7 +528,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_uses_precomputed_info_without_reparsing_amount() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
@@ -624,11 +538,19 @@ mod tests {
         let all_cells = vec![(tx_hash.as_slice(), output_index, &cell, 9i64)];
         let precomputed = precomputed_info_map(&tx_hash, output_index, &cell, 9, Some(7));
 
-        let mut batch = StoreBatch::new(&store);
+        let mut domain_batch = StoreBatch::new(&store);
+        let mut append_batch = StoreBatch::new(&store);
         writer
-            .insert_cells_batch(&all_cells, &precomputed, &mut batch, false)
+            .insert_cells_batch(
+                &all_cells,
+                &precomputed,
+                &mut domain_batch,
+                &mut append_batch,
+                false,
+            )
             .unwrap();
-        batch.commit().unwrap();
+        append_batch.commit().unwrap();
+        domain_batch.commit().unwrap();
 
         let stored = store.get_cell(&tx_hash, output_index).unwrap().unwrap();
         assert_eq!(stored.udt_amount, Some(7));
@@ -637,18 +559,23 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_errors_on_corrupt_cell_data() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xCC; 32];
         let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+        let payload_key = ckbadger_store::keys::encode_cell_payload_key(1, &tx_hash, 0);
 
-        // Write a live marker and corrupt canonical data
         store
-            .put_cf(store.cf_live_cells(), &outpoint_key, &[1])
+            .put_cf(
+                store.cf_cell_state(),
+                &outpoint_key,
+                &bincode::serialize(&ckbadger_store::CellState::live(1, payload_key.to_vec()))
+                    .unwrap(),
+            )
             .unwrap();
         store
-            .put_cf(store.cf_cells(), &outpoint_key, &[0xFF, 0xAA, 0x10])
+            .put_cf(store.cf_cell_payloads(), &payload_key, &[0xFF, 0xAA, 0x10])
             .unwrap();
 
         let consumed_by = [0xDD_u8; 32];
@@ -661,7 +588,7 @@ mod tests {
             .unwrap_err();
         assert!(
             err.to_string()
-                .contains("failed to deserialize live cell info"),
+                .contains("failed to deserialize canonical cell payload"),
             "expected deserialization error, got: {}",
             err
         );
@@ -670,7 +597,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_errors_on_missing_live_cell_info() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xEE; 32];
@@ -724,15 +651,26 @@ mod tests {
     #[test]
     fn test_get_full_cells_info_batch_uses_consumed_batch_lookup() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xAC; 32];
         let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+        let payload_key = ckbadger_store::keys::encode_cell_payload_key(1, &tx_hash, 0);
 
-        // Invalid payload forces decode path; this assertion verifies batch lookup branch.
         store
-            .put_cf(store.cf_consumed_cells(), &outpoint_key, &[0xFF])
+            .put_cf(
+                store.cf_cell_state(),
+                &outpoint_key,
+                &bincode::serialize(
+                    &ckbadger_store::CellState::live(1, payload_key.to_vec())
+                        .into_consumed(2, vec![0xDD; 32]),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        store
+            .put_cf(store.cf_cell_payloads(), &payload_key, &[0xFF])
             .unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), 0i16)];
@@ -740,8 +678,9 @@ mod tests {
             .get_full_cells_info_batch(&outpoints, false)
             .unwrap_err();
         assert!(
-            err.to_string()
-                .contains("failed to decode consumed cell meta in get_consumed_cells_batch"),
+            err.to_string().contains(
+                "failed to deserialize canonical cell payload in get_consumed_cells_batch"
+            ),
             "expected consumed batch lookup error context, got: {}",
             err
         );

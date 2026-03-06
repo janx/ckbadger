@@ -187,13 +187,17 @@ async fn get_cell_graph(
     let output_idx = output_index as i16;
     let live_cell = state
         .store
-        .get_cell(&hash_bytes, output_idx)
+        .get_cell_with_payload_store(state.append_only_store.as_ref(), &hash_bytes, output_idx)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let consumed_cell = if live_cell.is_none() {
         state
             .store
-            .get_consumed_cell_info(&hash_bytes, output_idx)
+            .get_consumed_cell_info_with_payload_store(
+                state.append_only_store.as_ref(),
+                &hash_bytes,
+                output_idx,
+            )
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         None
@@ -254,7 +258,10 @@ async fn get_cell_graph(
                     inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
                 let cell_map = state
                     .store
-                    .get_cells_batch(&outpoints)
+                    .get_cells_batch_with_payload_store(
+                        state.append_only_store.as_ref(),
+                        &outpoints,
+                    )
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in &inputs {
@@ -267,7 +274,11 @@ async fn get_cell_graph(
                             // Try consumed cells
                             state
                                 .store
-                                .get_consumed_cell(prev_tx_hash, *prev_idx)
+                                .get_consumed_cell_with_payload_store(
+                                    state.append_only_store.as_ref(),
+                                    prev_tx_hash,
+                                    *prev_idx,
+                                )
                                 .ok()
                                 .flatten()
                                 .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
@@ -356,11 +367,17 @@ async fn get_tx_graph(
 
                 let live_map = state
                     .store
-                    .get_cells_batch(&outpoints)
+                    .get_cells_batch_with_payload_store(
+                        state.append_only_store.as_ref(),
+                        &outpoints,
+                    )
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 let consumed_map = state
                     .store
-                    .get_consumed_cells_batch(&outpoints)
+                    .get_consumed_cells_batch_with_payload_store(
+                        state.append_only_store.as_ref(),
+                        &outpoints,
+                    )
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in inputs {
@@ -405,7 +422,11 @@ async fn get_tx_graph(
             // Check if cell is live or dead
             let is_live = state
                 .store
-                .get_cell(&hash_bytes, output_index)
+                .get_cell_with_payload_store(
+                    state.append_only_store.as_ref(),
+                    &hash_bytes,
+                    output_index,
+                )
                 .ok()
                 .flatten()
                 .is_some();
@@ -431,25 +452,13 @@ async fn get_tx_graph(
     } else {
         // Fallback: look up live cells created by this tx from the store.
         // This won't show consumed outputs.
-        let iter = state.store.iterator_cf(
-            state.store.cf_live_cells(),
-            rocksdb::IteratorMode::From(&hash_bytes, rocksdb::Direction::Forward),
-        );
-
-        for item in iter.flatten() {
-            let (key, _) = item;
-            // cf_live_cells key layout is tx_hash(32) + output_index(2).
-            if !live_cell_key_matches_tx_hash(&key, &hash_bytes) {
-                break;
-            }
-            let output_index = i16::from_be_bytes([key[32], key[33]]);
-            let Some(info) = state
-                .store
-                .get_cell_by_outpoint_key(&key)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-            else {
-                continue;
-            };
+        for (output_index, info) in load_live_cells_created_by_tx(
+            state.store.as_ref(),
+            state.append_only_store.as_ref(),
+            &hash_bytes,
+        )
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        {
             let output_cell_id = format!("cell-{}-{}", hash, output_index);
             let capacity_str = info.capacity.to_string();
 
@@ -478,6 +487,33 @@ async fn get_tx_graph(
 
 fn live_cell_key_matches_tx_hash(key: &[u8], tx_hash: &[u8]) -> bool {
     key.len() >= 34 && tx_hash.len() == 32 && &key[..32] == tx_hash
+}
+
+fn load_live_cells_created_by_tx(
+    store: &ckbadger_store::CkbadgerStore,
+    payload_store: &ckbadger_store::CkbadgerStore,
+    tx_hash: &[u8],
+) -> anyhow::Result<Vec<(i16, ckbadger_store::LiveCellInfo)>> {
+    let iter = store.iterator_cf(
+        store.cf_cell_state(),
+        rocksdb::IteratorMode::From(tx_hash, rocksdb::Direction::Forward),
+    );
+
+    let mut rows = Vec::new();
+    for item in iter {
+        let (key, _) = item.map_err(|e| anyhow::anyhow!("failed to iterate cell_state: {}", e))?;
+        if !live_cell_key_matches_tx_hash(&key, tx_hash) {
+            break;
+        }
+        let output_index = i16::from_be_bytes([key[32], key[33]]);
+        let Some(info) =
+            store.get_live_cell_by_outpoint_key_with_payload_store(payload_store, &key)?
+        else {
+            continue;
+        };
+        rows.push((output_index, info));
+    }
+    Ok(rows)
 }
 
 fn parse_capacity(capacity: &str) -> String {
@@ -712,6 +748,60 @@ mod tests {
         assert!(live_cell_key_matches_tx_hash(&key, &tx_hash));
         assert!(!live_cell_key_matches_tx_hash(&key[..33], &tx_hash));
         assert!(!live_cell_key_matches_tx_hash(&key, &[0x22; 32]));
+    }
+
+    #[test]
+    fn test_load_live_cells_created_by_tx_reads_split_domain_append_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let domain =
+            ckbadger_store::CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append =
+            ckbadger_store::CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let tx_hash = [0x33; 32];
+
+        let live_cell = ckbadger_store::LiveCellInfo {
+            capacity: 111_00000000,
+            created_at_block: 10,
+            lock_script_hash: vec![0x01; 32],
+            lock_code_hash: vec![0x02; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x03; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+        let consumed_cell = ckbadger_store::LiveCellInfo {
+            capacity: 222_00000000,
+            created_at_block: 10,
+            lock_script_hash: vec![0x04; 32],
+            lock_code_hash: vec![0x05; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x06; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+
+        let mut domain_batch = ckbadger_store::batch::StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_hash, 0, &live_cell);
+        domain_batch.put_consumed_cell(&tx_hash, 1, &consumed_cell, 99);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = ckbadger_store::batch::StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, 0, &live_cell);
+        append_batch.put_cell(&tx_hash, 1, &consumed_cell);
+        append_batch.commit().unwrap();
+
+        let rows = load_live_cells_created_by_tx(&domain, &append, &tx_hash).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, 0);
+        assert_eq!(rows[0].1.capacity, live_cell.capacity);
     }
 
     #[test]

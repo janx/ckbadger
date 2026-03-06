@@ -4,7 +4,9 @@ use rocksdb::{ColumnFamily, WriteBatch};
 use std::collections::HashMap;
 
 use crate::keys;
-use crate::store::{CkbadgerStore, StoreWriteIntent};
+use crate::store::{
+    CkbadgerStore, StoreWriteIntent, CF_CELL_INDEX, CF_CELL_PAYLOADS, CF_CELL_STATE,
+};
 use crate::types::*;
 
 #[derive(Debug)]
@@ -173,16 +175,22 @@ impl<'a> StoreBatch<'a> {
     // ---- Live cells ----
 
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
-        let key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
-        self.put_cf(self.store.cf_cells(), key, &value);
-        self.put_cf(self.store.cf_live_cells(), key, []);
+        let payload_key =
+            keys::encode_cell_payload_key(info.created_at_block, tx_hash, output_index);
+        if self.store.has_cf(CF_CELL_PAYLOADS) {
+            self.put_cell_payload(info.created_at_block, tx_hash, output_index, info);
+        }
+        if self.store.has_cf(CF_CELL_STATE) {
+            self.put_cell_state(
+                tx_hash,
+                output_index,
+                &CellState::live(info.created_at_block, payload_key.to_vec()),
+            );
+        }
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
-        let key = keys::encode_outpoint(tx_hash, output_index);
-        self.delete_cf(self.store.cf_live_cells(), key);
+        let _ = (tx_hash, output_index);
     }
 
     pub fn put_consumed_cell(
@@ -203,16 +211,21 @@ impl<'a> StoreBatch<'a> {
         consumed_at_block: i64,
         consumed_by_tx: Option<&[u8]>,
     ) {
-        let key = keys::encode_outpoint(tx_hash, output_index);
-        // Ensure canonical payload exists even when callers only write consumed entries.
-        let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.put_cf(self.store.cf_cells(), key, &cell_value);
-        let consumed = ConsumedCellMeta {
-            consumed_at_block,
-            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
-        };
-        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
-        self.put_cf(self.store.cf_consumed_cells(), key, &value);
+        let payload_key =
+            keys::encode_cell_payload_key(info.created_at_block, tx_hash, output_index);
+        if self.store.has_cf(CF_CELL_PAYLOADS) {
+            self.put_cell_payload(info.created_at_block, tx_hash, output_index, info);
+        }
+        if self.store.has_cf(CF_CELL_STATE) {
+            self.put_cell_state(
+                tx_hash,
+                output_index,
+                &CellState::live(info.created_at_block, payload_key.to_vec()).into_consumed(
+                    consumed_at_block,
+                    consumed_by_tx.map(|tx| tx.to_vec()).unwrap_or_default(),
+                ),
+            );
+        }
     }
 
     // ---- Cell indexes ----
@@ -224,8 +237,16 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_hash, block_num, tx_hash, output_index);
-        self.put_cf(self.store.cf_cell_by_lock(), key, []);
+        if !self.store.has_cf(CF_CELL_INDEX) {
+            return;
+        }
+        self.put_cell_index(
+            CellIndexTag::Lock,
+            lock_hash,
+            block_num,
+            tx_hash,
+            output_index,
+        );
     }
 
     pub fn delete_cell_by_lock(
@@ -235,8 +256,7 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_hash, block_num, tx_hash, output_index);
-        self.delete_cf(self.store.cf_cell_by_lock(), &key);
+        let _ = (lock_hash, block_num, tx_hash, output_index);
     }
 
     pub fn put_cell_by_type(
@@ -246,8 +266,16 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_hash, block_num, tx_hash, output_index);
-        self.put_cf(self.store.cf_cell_by_type(), key, []);
+        if !self.store.has_cf(CF_CELL_INDEX) {
+            return;
+        }
+        self.put_cell_index(
+            CellIndexTag::Type,
+            type_hash,
+            block_num,
+            tx_hash,
+            output_index,
+        );
     }
 
     pub fn delete_cell_by_type(
@@ -257,8 +285,7 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_hash, block_num, tx_hash, output_index);
-        self.delete_cf(self.store.cf_cell_by_type(), &key);
+        let _ = (type_hash, block_num, tx_hash, output_index);
     }
 
     pub fn put_cell_by_lock_code(
@@ -268,8 +295,16 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
-        self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
+        if !self.store.has_cf(CF_CELL_INDEX) {
+            return;
+        }
+        self.put_cell_index(
+            CellIndexTag::LockCode,
+            lock_code_hash,
+            block_num,
+            tx_hash,
+            output_index,
+        );
     }
 
     pub fn delete_cell_by_lock_code(
@@ -279,8 +314,7 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(lock_code_hash, block_num, tx_hash, output_index);
-        self.delete_cf(self.store.cf_cell_by_lock_code(), &key);
+        let _ = (lock_code_hash, block_num, tx_hash, output_index);
     }
 
     pub fn put_cell_by_type_code(
@@ -290,8 +324,16 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
-        self.put_cf(self.store.cf_cell_by_type_code(), key, []);
+        if !self.store.has_cf(CF_CELL_INDEX) {
+            return;
+        }
+        self.put_cell_index(
+            CellIndexTag::TypeCode,
+            type_code_hash,
+            block_num,
+            tx_hash,
+            output_index,
+        );
     }
 
     pub fn delete_cell_by_type_code(
@@ -301,42 +343,7 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
     ) {
-        let key = keys::encode_cell_index_key(type_code_hash, block_num, tx_hash, output_index);
-        self.delete_cf(self.store.cf_cell_by_type_code(), &key);
-    }
-
-    // ---- Cell index (raw pre-computed key) ----
-
-    pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_lock(), key, []);
-    }
-
-    pub fn delete_cell_by_lock_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_lock(), key);
-    }
-
-    pub fn put_cell_by_type_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_type(), key, []);
-    }
-
-    pub fn delete_cell_by_type_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_type(), key);
-    }
-
-    pub fn put_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_lock_code(), key, []);
-    }
-
-    pub fn delete_cell_by_lock_code_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_lock_code(), key);
-    }
-
-    pub fn put_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.put_cf(self.store.cf_cell_by_type_code(), key, []);
-    }
-
-    pub fn delete_cell_by_type_code_raw(&mut self, key: &[u8]) {
-        self.delete_cf(self.store.cf_cell_by_type_code(), key);
+        let _ = (type_code_hash, block_num, tx_hash, output_index);
     }
 
     // ---- Block headers ----
@@ -383,6 +390,39 @@ impl<'a> StoreBatch<'a> {
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
         self.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
+    }
+
+    // ---- New cell schema ----
+
+    pub fn put_cell_payload(
+        &mut self,
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+        info: &LiveCellInfo,
+    ) {
+        let key = keys::encode_cell_payload_key(block_num, tx_hash, output_index);
+        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        self.put_cf(self.store.cf_cell_payloads(), key, &value);
+    }
+
+    pub fn put_cell_state(&mut self, tx_hash: &[u8], output_index: i16, state: &CellState) {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        let value = bincode::serialize(state).expect("serialize CellState");
+        self.put_cf(self.store.cf_cell_state(), key, &value);
+    }
+
+    pub fn put_cell_index(
+        &mut self,
+        tag: CellIndexTag,
+        script_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key =
+            keys::encode_cell_index_entry_key(tag, script_hash, block_num, tx_hash, output_index);
+        self.put_cf(self.store.cf_cell_index(), key, []);
     }
 
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
@@ -672,16 +712,32 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Activities ----
 
-    pub fn put_activity(
+    pub fn put_activity_tx_envelope(
+        &mut self,
+        block_num: i64,
+        tx_idx: i32,
+        tx_hash: &[u8],
+        envelope: &ActivityTxEnvelope,
+    ) {
+        let key = keys::encode_activity_tx_envelope_key(block_num, tx_idx, tx_hash);
+        let value = bincode::serialize(envelope).expect("serialize ActivityTxEnvelope");
+        self.put_cf(self.store.cf_activity_tx_envelopes(), key, &value);
+    }
+
+    pub fn put_activity_owner_ref(
         &mut self,
         lock_hash: &[u8],
         block_num: i64,
         tx_idx: i32,
-        entry: &ActivityEntry,
+        tx_hash: &[u8],
+        owner_slot: u16,
     ) {
-        let key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
-        let value = bincode::serialize(entry).expect("serialize ActivityEntry");
-        self.put_cf(self.store.cf_activities(), key, &value);
+        let key = keys::encode_activity_owner_key(lock_hash, block_num, tx_idx, tx_hash);
+        self.put_cf(
+            self.store.cf_activity_by_owner(),
+            key,
+            owner_slot.to_be_bytes(),
+        );
     }
 
     // ---- NFT collection activities ----
@@ -788,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cell_write_and_delete() {
+    fn test_cell_write_and_delete_updates_canonical_state_only() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
@@ -812,14 +868,34 @@ mod tests {
         batch.put_cell(&tx_hash, 0, &info);
         batch.commit().unwrap();
 
-        let key = keys::encode_outpoint(&tx_hash, 0);
-        assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_some());
+        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        let payload_key = keys::encode_cell_payload_key(info.created_at_block, &tx_hash, 0);
+        let state: CellState = bincode::deserialize(
+            &store
+                .get_cf(store.cf_cell_state(), &outpoint_key)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(state.is_live());
+        assert_eq!(state.payload_key, payload_key.to_vec());
+        assert!(store
+            .get_cf(store.cf_cell_payloads(), &payload_key)
+            .unwrap()
+            .is_some());
 
         let mut batch = StoreBatch::new(&store);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
-        assert!(store.get_cf(store.cf_live_cells(), &key).unwrap().is_none());
+        let state_after_delete: CellState = bincode::deserialize(
+            &store
+                .get_cf(store.cf_cell_state(), &outpoint_key)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(state_after_delete.is_live());
     }
 
     #[test]
@@ -844,17 +920,48 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, 0, &info);
         batch.put_consumed_cell_with_consumer(&tx_hash, 0, &info, 22, Some(&[0x44; 32]));
         batch.commit().unwrap();
 
-        let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
-        let meta = store
-            .get_cf(store.cf_consumed_cells(), &outpoint_key)
-            .unwrap()
-            .unwrap();
-        let decoded: ConsumedCellMeta = bincode::deserialize(&meta).unwrap();
-        assert_eq!(decoded.consumed_at_block, 22);
-        assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
+        let consumed = store.get_consumed_cell_info(&tx_hash, 0).unwrap().unwrap();
+        assert_eq!(consumed.consumed_at_block, 22);
+        assert_eq!(consumed.consumed_by_tx, Some(vec![0x44; 32]));
+        assert!(store.get_cell(&tx_hash, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_consumed_cell_helper_persists_payload_in_unified_layout() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let tx_hash = [0x71u8; 32];
+        let info = LiveCellInfo {
+            capacity: 42_00000000,
+            created_at_block: 88,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: Some(vec![4u8; 32]),
+            type_code_hash: Some(vec![5u8; 32]),
+            type_args: Some(vec![6u8; 20]),
+            data_size: 12,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell_with_consumer(&tx_hash, 2, &info, 99, Some(&[0x81; 32]));
+        batch.commit().unwrap();
+
+        let payload_key = keys::encode_cell_payload_key(info.created_at_block, &tx_hash, 2);
+        assert!(
+            store
+                .get_cf(store.cf_cell_payloads(), &payload_key)
+                .unwrap()
+                .is_some(),
+            "put_consumed_cell_with_consumer must persist canonical payload in unified layout"
+        );
     }
 
     #[test]
@@ -933,6 +1040,125 @@ mod tests {
         }
     }
 
+    fn sample_live_cell_info() -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 123,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: Some(vec![4u8; 32]),
+            type_code_hash: Some(vec![5u8; 32]),
+            type_args: Some(vec![6u8; 20]),
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        }
+    }
+
+    fn sample_envelope() -> ActivityTxEnvelope {
+        ActivityTxEnvelope {
+            tx_hash: vec![0x55; 32],
+            block_number: 100,
+            tx_index: 1,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            participants: vec![vec![0x66; 32], vec![0x77; 32]],
+            owner_views: vec![OwnerActivityViewStored {
+                ckb_delta: 42,
+                occupied_delta: 0,
+                asset_changes: vec![AssetChange::DaoDeposit { capacity: 1000 }],
+            }],
+        }
+    }
+
+    fn put_normalized_activity(
+        batch: &mut StoreBatch<'_>,
+        lock_hash: &[u8],
+        entry: &ActivityEntry,
+    ) {
+        let envelope = ActivityTxEnvelope {
+            tx_hash: entry.tx_hash.clone(),
+            block_number: entry.block_number,
+            tx_index: entry.tx_index,
+            timestamp: entry.timestamp,
+            is_cellbase: entry.is_cellbase,
+            participants: vec![lock_hash.to_vec()],
+            owner_views: vec![OwnerActivityViewStored {
+                ckb_delta: entry.ckb_delta,
+                occupied_delta: entry.occupied_delta,
+                asset_changes: entry.asset_changes.clone(),
+            }],
+        };
+        batch.put_activity_tx_envelope(
+            entry.block_number,
+            entry.tx_index,
+            &entry.tx_hash,
+            &envelope,
+        );
+        batch.put_activity_owner_ref(
+            lock_hash,
+            entry.block_number,
+            entry.tx_index,
+            &entry.tx_hash,
+            0,
+        );
+    }
+
+    #[test]
+    fn test_batch_puts_new_cell_payload_state_and_index() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_payload(123, &[0x11; 32], 0, &sample_live_cell_info());
+        batch.put_cell_state(&[0x11; 32], 0, &CellState::live(123, b"p".to_vec()));
+        batch.put_cell_index(CellIndexTag::Lock, &[0x22; 32], 123, &[0x11; 32], 0);
+        batch.commit().unwrap();
+
+        let payload_key = keys::encode_cell_payload_key(123, &[0x11; 32], 0);
+        assert!(store
+            .get_cf(store.cf_cell_payloads(), &payload_key)
+            .unwrap()
+            .is_some());
+
+        let outpoint_key = keys::encode_outpoint(&[0x11; 32], 0);
+        assert!(store
+            .get_cf(store.cf_cell_state(), &outpoint_key)
+            .unwrap()
+            .is_some());
+
+        let index_key =
+            keys::encode_cell_index_entry_key(CellIndexTag::Lock, &[0x22; 32], 123, &[0x11; 32], 0);
+        assert!(store
+            .get_cf(store.cf_cell_index(), &index_key)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn test_batch_puts_activity_envelope_and_owner_ref() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity_tx_envelope(100, 1, &[0x55; 32], &sample_envelope());
+        batch.put_activity_owner_ref(&[0x66; 32], 100, 1, &[0x55; 32], 0);
+        batch.commit().unwrap();
+
+        let envelope_key = keys::encode_activity_tx_envelope_key(100, 1, &[0x55; 32]);
+        assert!(store
+            .get_cf(store.cf_activity_tx_envelopes(), &envelope_key)
+            .unwrap()
+            .is_some());
+
+        let owner_key = keys::encode_activity_owner_key(&[0x66; 32], 100, 1, &[0x55; 32]);
+        let owner_ref = store
+            .get_cf(store.cf_activity_by_owner(), &owner_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(u16::from_be_bytes(owner_ref[..2].try_into().unwrap()), 0);
+    }
+
     #[test]
     fn test_put_and_list_activities() {
         let dir = TempDir::new().unwrap();
@@ -940,9 +1166,9 @@ mod tests {
         let lock = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 500));
-        batch.put_activity(&lock, 200, 0, &make_activity(200, 0, -300));
-        batch.put_activity(&lock, 300, 1, &make_activity(300, 1, 1000));
+        put_normalized_activity(&mut batch, &lock, &make_activity(100, 0, 500));
+        put_normalized_activity(&mut batch, &lock, &make_activity(200, 0, -300));
+        put_normalized_activity(&mut batch, &lock, &make_activity(300, 1, 1000));
         batch.commit().unwrap();
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
@@ -964,7 +1190,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         for i in 1..=5 {
-            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+            put_normalized_activity(&mut batch, &lock, &make_activity(i * 100, 0, i as i128));
         }
         batch.commit().unwrap();
 
@@ -982,7 +1208,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         for i in 1..=5 {
-            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+            put_normalized_activity(&mut batch, &lock, &make_activity(i * 100, 0, i as i128));
         }
         batch.commit().unwrap();
 
@@ -1014,9 +1240,9 @@ mod tests {
         let lock_b = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock_a, 100, 0, &make_activity(100, 0, 10));
-        batch.put_activity(&lock_a, 200, 0, &make_activity(200, 0, 20));
-        batch.put_activity(&lock_b, 100, 0, &make_activity(100, 0, 30));
+        put_normalized_activity(&mut batch, &lock_a, &make_activity(100, 0, 10));
+        put_normalized_activity(&mut batch, &lock_a, &make_activity(200, 0, 20));
+        put_normalized_activity(&mut batch, &lock_b, &make_activity(100, 1, 30));
         batch.commit().unwrap();
 
         let a = store.list_activities(&lock_a, 100, None, None).unwrap();
@@ -1057,7 +1283,7 @@ mod tests {
         let lock = [0xABu8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 1));
+        put_normalized_activity(&mut batch, &lock, &make_activity(100, 0, 1));
         batch.commit().unwrap();
 
         let results = store

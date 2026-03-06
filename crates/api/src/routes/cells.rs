@@ -28,7 +28,7 @@ use crate::warmup::{
     CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
-use ckbadger_store::{keys, CkbadgerStore};
+use ckbadger_store::{keys, types::CellIndexTag, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
 const UNKNOWN_SCRIPT_NAME: &str = "unknown";
@@ -1690,12 +1690,13 @@ fn decode_cell_cursor(cursor: &str) -> Option<Vec<u8>> {
 
 /// Encode a cell cursor from the last result's components.
 fn encode_cell_cursor(
+    tag: CellIndexTag,
     script_hash: &[u8],
     block_num: i64,
     tx_hash: &[u8],
     output_index: i16,
 ) -> String {
-    let key = keys::encode_cell_index_key(script_hash, block_num, tx_hash, output_index);
+    let key = keys::encode_cell_index_entry_key(tag, script_hash, block_num, tx_hash, output_index);
     hex::encode(key)
 }
 
@@ -1706,6 +1707,13 @@ async fn list_live_cells(
     let limit = params.limit.clamp(1, 100) as usize;
 
     let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
+    let cursor_tag = after_key
+        .as_deref()
+        .and_then(keys::decode_cell_index_entry_key)
+        .map(|decoded| decoded.tag);
+    if after_key.is_some() && cursor_tag.is_none() {
+        return Err(ApiError::bad_request("Invalid cell cursor"));
+    }
 
     let lock_hash_bytes = if let Some(ref lock_hash) = params.lock_script_hash {
         Some(if is_ckb_address(lock_hash) {
@@ -1738,6 +1746,18 @@ async fn list_live_cells(
     };
 
     let after_key_ref = after_key.as_deref();
+    let index_tag = match (&lock_hash_bytes, &type_hash_bytes) {
+        (Some(_), _) => Some(CellIndexTag::Lock),
+        (None, Some(_)) => Some(CellIndexTag::Type),
+        (None, None) => None,
+    };
+    if let (Some(expected_tag), Some(actual_tag)) = (index_tag, cursor_tag) {
+        if actual_tag != expected_tag {
+            return Err(ApiError::bad_request(
+                "Cell cursor does not match the requested index",
+            ));
+        }
+    }
 
     // Fetch cells from the store based on available filters.
     // The store supports listing by lock hash or type hash via prefix scans.
@@ -1747,7 +1767,12 @@ async fn list_live_cells(
                 // Filter by lock first (usually more selective), then post-filter by type
                 let all = state
                     .store
-                    .list_cells_by_lock(lock_bytes, limit * 10 + 1, after_key_ref)
+                    .list_cells_by_lock_with_history_store(
+                        state.append_only_store.as_ref(),
+                        lock_bytes,
+                        limit * 10 + 1,
+                        after_key_ref,
+                    )
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 all.into_iter()
                     .filter(|(_, _, info)| {
@@ -1764,7 +1789,12 @@ async fn list_live_cells(
                 if let Some(ref tch) = _type_code_hash_bytes {
                     let all = state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit * 10 + 1, after_key_ref)
+                        .list_cells_by_lock_with_history_store(
+                            state.append_only_store.as_ref(),
+                            lock_bytes,
+                            limit * 10 + 1,
+                            after_key_ref,
+                        )
                         .map_err(|e| ApiError::internal(e.to_string()))?;
                     all.into_iter()
                         .filter(|(_, _, info)| {
@@ -1778,13 +1808,23 @@ async fn list_live_cells(
                 } else {
                     state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit + 1, after_key_ref)
+                        .list_cells_by_lock_with_history_store(
+                            state.append_only_store.as_ref(),
+                            lock_bytes,
+                            limit + 1,
+                            after_key_ref,
+                        )
                         .map_err(|e| ApiError::internal(e.to_string()))?
                 }
             }
             (None, Some(type_bytes)) => state
                 .store
-                .list_cells_by_type(type_bytes, limit + 1, after_key_ref)
+                .list_cells_by_type_with_history_store(
+                    state.append_only_store.as_ref(),
+                    type_bytes,
+                    limit + 1,
+                    after_key_ref,
+                )
                 .map_err(|e| ApiError::internal(e.to_string()))?,
             (None, None) => {
                 // No filter: not practical for RocksDB full scan, return empty.
@@ -1802,7 +1842,11 @@ async fn list_live_cells(
 
     let next_cursor = if has_more {
         raw_cells.last().and_then(|(tx_hash, output_index, info)| {
-            index_hash.map(|h| encode_cell_cursor(h, info.created_at_block, tx_hash, *output_index))
+            index_hash.and_then(|h| {
+                index_tag.map(|tag| {
+                    encode_cell_cursor(tag, h, info.created_at_block, tx_hash, *output_index)
+                })
+            })
         })
     } else {
         None
@@ -1898,40 +1942,119 @@ async fn list_cells_by_script(
 
     // Parse cursor for pagination
     let after_key = params.cursor.as_deref().and_then(decode_cell_cursor);
+    let cursor_tag = after_key
+        .as_deref()
+        .and_then(keys::decode_cell_index_entry_key)
+        .map(|decoded| decoded.tag);
+    if after_key.is_some() && cursor_tag.is_none() {
+        return Err(ApiError::bad_request("Invalid cell cursor"));
+    }
     let after_key_ref = after_key.as_deref();
 
     // Fetch limit+1 to detect has_more
     let fetch_limit = limit + 1;
 
     // Use code_hash indexes for efficient prefix scans
-    let results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind {
-        "lock" => state
-            .store
-            .list_cells_by_lock_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-        "type" => state
-            .store
-            .list_cells_by_type_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
-            .map_err(|e| ApiError::internal(e.to_string()))?,
-        _ => {
-            // "both": merge results from lock and type indexes
-            let mut merged = state
-                .store
-                .list_cells_by_lock_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            let type_results = state
-                .store
-                .list_cells_by_type_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-            for r in type_results {
-                if merged.len() >= fetch_limit {
-                    break;
-                }
-                // Deduplicate: a cell could match both lock and type
-                if !merged.iter().any(|(h, i, _)| h == &r.0 && *i == r.1) {
-                    merged.push(r);
+    let results: Vec<(CellIndexTag, Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind
+    {
+        "lock" => {
+            if let Some(tag) = cursor_tag {
+                if tag != CellIndexTag::LockCode {
+                    return Err(ApiError::bad_request(
+                        "Cell cursor does not match the requested lock code index",
+                    ));
                 }
             }
+            state
+                .store
+                .list_cells_by_lock_code_hash_with_history_store(
+                    state.append_only_store.as_ref(),
+                    &resolved_code_hash,
+                    fetch_limit,
+                    after_key_ref,
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .into_iter()
+                .map(|(tx_hash, output_index, info)| {
+                    (CellIndexTag::LockCode, tx_hash, output_index, info)
+                })
+                .collect()
+        }
+        "type" => {
+            if let Some(tag) = cursor_tag {
+                if tag != CellIndexTag::TypeCode {
+                    return Err(ApiError::bad_request(
+                        "Cell cursor does not match the requested type code index",
+                    ));
+                }
+            }
+            state
+                .store
+                .list_cells_by_type_code_hash_with_history_store(
+                    state.append_only_store.as_ref(),
+                    &resolved_code_hash,
+                    fetch_limit,
+                    after_key_ref,
+                )
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .into_iter()
+                .map(|(tx_hash, output_index, info)| {
+                    (CellIndexTag::TypeCode, tx_hash, output_index, info)
+                })
+                .collect()
+        }
+        _ => {
+            if let Some(tag) = cursor_tag {
+                if tag != CellIndexTag::LockCode && tag != CellIndexTag::TypeCode {
+                    return Err(ApiError::bad_request(
+                        "Cell cursor does not match the requested code hash index",
+                    ));
+                }
+            }
+
+            // Deterministic order for "both": all lock-code matches first, then type-code
+            // matches that do not also match the lock-code side.
+            let mut merged = Vec::with_capacity(fetch_limit);
+
+            if cursor_tag != Some(CellIndexTag::TypeCode) {
+                let lock_rows = state
+                    .store
+                    .list_cells_by_lock_code_hash_with_history_store(
+                        state.append_only_store.as_ref(),
+                        &resolved_code_hash,
+                        fetch_limit,
+                        after_key_ref.filter(|_| cursor_tag == Some(CellIndexTag::LockCode)),
+                    )
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                for (tx_hash, output_index, info) in lock_rows {
+                    if merged.len() >= fetch_limit {
+                        break;
+                    }
+                    merged.push((CellIndexTag::LockCode, tx_hash, output_index, info));
+                }
+            }
+
+            if merged.len() < fetch_limit {
+                let type_rows = state
+                    .store
+                    .list_cells_by_type_code_hash_with_history_store(
+                        state.append_only_store.as_ref(),
+                        &resolved_code_hash,
+                        fetch_limit,
+                        after_key_ref.filter(|_| cursor_tag == Some(CellIndexTag::TypeCode)),
+                    )
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+                for (tx_hash, output_index, info) in type_rows {
+                    if merged.len() >= fetch_limit {
+                        break;
+                    }
+                    if info.lock_code_hash == resolved_code_hash {
+                        continue;
+                    }
+                    merged.push((CellIndexTag::TypeCode, tx_hash, output_index, info));
+                }
+            }
+
             merged
         }
     };
@@ -1940,8 +2063,9 @@ async fn list_cells_by_script(
     let results: Vec<_> = results.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        results.last().map(|(tx_hash, output_index, info)| {
+        results.last().map(|(tag, tx_hash, output_index, info)| {
             encode_cell_cursor(
+                *tag,
                 &resolved_code_hash,
                 info.created_at_block,
                 tx_hash,
@@ -1954,7 +2078,7 @@ async fn list_cells_by_script(
 
     let cells: Vec<CellResponse> = results
         .iter()
-        .map(|(tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
+        .map(|(_, tx_hash, output_index, info)| cell_info_to_response(tx_hash, *output_index, info))
         .collect();
 
     ok(CursorPaginatedResponse::new(
@@ -2006,7 +2130,12 @@ async fn get_address(
     // Try to find a cell for this lock hash to get the lock script details
     let cells_for_script = state
         .store
-        .list_cells_by_lock(&lock_hash, 1, None)
+        .list_cells_by_lock_with_history_store(
+            state.append_only_store.as_ref(),
+            &lock_hash,
+            1,
+            None,
+        )
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (lock_script, lock_script_info, address) =
@@ -2253,14 +2382,18 @@ async fn get_cell(
     // Try live cells first
     let live_cell = state
         .store
-        .get_cell(&hash_bytes, output_idx)
+        .get_cell_with_payload_store(state.append_only_store.as_ref(), &hash_bytes, output_idx)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Try consumed cells if not found in live
     let consumed_cell = if live_cell.is_none() {
         state
             .store
-            .get_consumed_cell_info(&hash_bytes, output_idx)
+            .get_consumed_cell_info_with_payload_store(
+                state.append_only_store.as_ref(),
+                &hash_bytes,
+                output_idx,
+            )
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         None
@@ -2559,6 +2692,7 @@ fn list_canonical_addr_txs_page(
 
 fn load_cells_preferring_consumed(
     store: &CkbadgerStore,
+    payload_store: &CkbadgerStore,
     outpoints: &[(&[u8], i16)],
 ) -> Result<
     HashMap<(Vec<u8>, i16), ckbadger_store::LiveCellInfo>,
@@ -2569,10 +2703,10 @@ fn load_cells_preferring_consumed(
     }
 
     let mut cells = store
-        .get_cells_batch(outpoints)
+        .get_cells_batch_with_payload_store(payload_store, outpoints)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let consumed_cells = store
-        .get_consumed_cells_batch(outpoints)
+        .get_consumed_cells_batch_with_payload_store(payload_store, outpoints)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     for (outpoint, cell) in consumed_cells {
         cells.insert(outpoint, cell);
@@ -2659,7 +2793,11 @@ async fn get_address_transactions(
             let output_outpoints: Vec<(&[u8], i16)> = (0..outputs_count)
                 .map(|output_index| (tx_hash.as_slice(), output_index))
                 .collect();
-            let output_cells = load_cells_preferring_consumed(state.store.as_ref(), &output_outpoints)?;
+            let output_cells = load_cells_preferring_consumed(
+                state.store.as_ref(),
+                state.append_only_store.as_ref(),
+                &output_outpoints,
+            )?;
             for cell in output_cells.values() {
                 if let Some(ref tch) = cell.type_code_hash {
                     script_code_hashes.insert(tch.clone());
@@ -2701,8 +2839,11 @@ async fn get_address_transactions(
                                 .iter()
                                 .map(|(prev_hash, prev_index)| (prev_hash.as_slice(), *prev_index))
                                 .collect();
-                            let input_cells =
-                                load_cells_preferring_consumed(state.store.as_ref(), &input_refs)?;
+                            let input_cells = load_cells_preferring_consumed(
+                                state.store.as_ref(),
+                                state.append_only_store.as_ref(),
+                                &input_refs,
+                            )?;
 
                             for (prev_hash, prev_index) in input_outpoints {
                                 // Check if this input is a DAO withdrawal request
@@ -3673,8 +3814,9 @@ mod tests {
 
     #[test]
     fn test_load_cells_preferring_consumed_merges_live_and_consumed_cells() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
         let tx_live = [0x11u8; 32];
         let tx_consumed = [0x22u8; 32];
 
@@ -3687,15 +3829,18 @@ mod tests {
             ..make_info()
         };
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_live, 0, &live_cell);
-        batch.put_cell(&tx_consumed, 0, &consumed_cell);
-        batch.put_consumed_cell_with_consumer(&tx_consumed, 0, &consumed_cell, 123, None);
-        batch.delete_cell(&tx_consumed, 0);
-        batch.commit().unwrap();
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_live, 0, &live_cell);
+        domain_batch.put_consumed_cell_with_consumer(&tx_consumed, 0, &consumed_cell, 123, None);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_live, 0, &live_cell);
+        append_batch.put_cell(&tx_consumed, 0, &consumed_cell);
+        append_batch.commit().unwrap();
 
         let outpoints: Vec<(&[u8], i16)> = vec![(&tx_live, 0), (&tx_consumed, 0)];
-        let cells = load_cells_preferring_consumed(&store, &outpoints).unwrap();
+        let cells = load_cells_preferring_consumed(&domain, &append, &outpoints).unwrap();
         assert_eq!(cells.len(), 2);
         assert_eq!(
             cells.get(&(tx_live.to_vec(), 0)).map(|c| c.capacity),

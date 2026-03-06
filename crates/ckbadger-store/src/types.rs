@@ -41,6 +41,76 @@ pub struct ConsumedCellMeta {
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum CellIndexTag {
+    Lock = 0,
+    Type = 1,
+    LockCode = 2,
+    TypeCode = 3,
+}
+
+impl CellIndexTag {
+    pub const fn as_byte(self) -> u8 {
+        self as u8
+    }
+
+    pub const fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Lock),
+            1 => Some(Self::Type),
+            2 => Some(Self::LockCode),
+            3 => Some(Self::TypeCode),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CellStateKind {
+    Live,
+    Consumed {
+        consumed_at_block: i64,
+        consumed_by_tx: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CellState {
+    pub created_at_block: i64,
+    pub payload_key: Vec<u8>,
+    pub state: CellStateKind,
+}
+
+impl CellState {
+    pub fn live(created_at_block: i64, payload_key: Vec<u8>) -> Self {
+        Self {
+            created_at_block,
+            payload_key,
+            state: CellStateKind::Live,
+        }
+    }
+
+    pub fn into_consumed(self, consumed_at_block: i64, consumed_by_tx: Vec<u8>) -> Self {
+        Self {
+            created_at_block: self.created_at_block,
+            payload_key: self.payload_key,
+            state: CellStateKind::Consumed {
+                consumed_at_block,
+                consumed_by_tx,
+            },
+        }
+    }
+
+    pub fn is_live(&self) -> bool {
+        matches!(self.state, CellStateKind::Live)
+    }
+
+    pub fn is_consumed(&self) -> bool {
+        matches!(self.state, CellStateKind::Consumed { .. })
+    }
+}
+
 impl ConsumedCellInfo {
     pub fn from_live_cell_info(info: &LiveCellInfo, consumed_at_block: i64) -> Self {
         Self::from_live_cell_info_with_consumer(info, consumed_at_block, None)
@@ -807,20 +877,16 @@ pub enum UndoLogEntry {
 /// Memory/storage statistics for monitoring.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStats {
-    /// Estimated number of live cells (from RocksDB estimate-num-keys on live_cells CF).
-    pub live_cells_count: usize,
-    /// Estimated number of consumed cells (from consumed_cells CF).
-    pub consumed_cells_count: usize,
-    /// Estimated bytes used by consumed_cells CF (live-data estimate with SST fallback).
-    pub consumed_cells_bytes: usize,
-    /// Source used to estimate consumed_cells_bytes: live/sst/mem/none.
-    pub consumed_cells_bytes_source: &'static str,
+    /// Estimated number of rows in canonical `cell_state`.
+    pub cell_state_count: usize,
+    /// Estimated bytes used by `cell_state` (live-data estimate with SST fallback).
+    pub cell_state_bytes: usize,
+    /// Source used to estimate cell_state_bytes: live/sst/mem/none.
+    pub cell_state_bytes_source: &'static str,
     /// Estimated number of cached block headers.
     pub block_headers_count: usize,
     /// Estimated number of address entries in addr_balance column family.
     pub addr_balance_count: usize,
-    /// Estimated number of canonical cells in `cells` column family.
-    pub cells_count: usize,
     pub memory_bytes: usize,
     pub memtable_bytes: usize,
     pub block_cache_bytes: usize,
@@ -867,7 +933,25 @@ pub struct ActivityEntry {
     pub peers: Vec<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OwnerActivityViewStored {
+    pub ckb_delta: i128,
+    pub occupied_delta: i64,
+    pub asset_changes: Vec<AssetChange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivityTxEnvelope {
+    pub tx_hash: Vec<u8>,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: i64,
+    pub is_cellbase: bool,
+    pub participants: Vec<Vec<u8>>,
+    pub owner_views: Vec<OwnerActivityViewStored>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AssetChange {
     Token {
         type_script_hash: Vec<u8>,
@@ -898,7 +982,7 @@ pub enum AssetChange {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AssetAction {
     Mint,
     Transfer,
@@ -1309,6 +1393,19 @@ mod tests {
         assert_eq!(decoded.ckb_delta, 0);
         assert!(decoded.asset_changes.is_empty());
         assert!(decoded.peers.is_empty());
+    }
+
+    #[test]
+    fn test_cell_state_serializes_live_and_consumed_forms() {
+        let live = CellState::live(123, b"payload-key".to_vec());
+        let bytes = bincode::serialize(&live).unwrap();
+        let decoded: CellState = bincode::deserialize(&bytes).unwrap();
+        assert!(decoded.is_live());
+
+        let consumed = live.into_consumed(200, vec![0x44; 32]);
+        let bytes = bincode::serialize(&consumed).unwrap();
+        let decoded: CellState = bincode::deserialize(&bytes).unwrap();
+        assert!(decoded.is_consumed());
     }
 
     // ---- DobStandard ----
