@@ -15,7 +15,10 @@ use ckbadger_indexer::entry::{
     run_indexer, run_label_import, IndexerServiceConfig, LabelImportServiceConfig,
 };
 use ckbadger_indexer::verify as indexer_verify;
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{
+    known_append_only_secondary_store_paths, known_domain_secondary_store_paths,
+    secondary_store_path, CkbadgerStore, SecondaryStoreOwner,
+};
 use ckbadger_tui::entry::{run_tui, TuiServiceConfig};
 
 // ---------------------------------------------------------------------------
@@ -321,9 +324,8 @@ async fn cmd_status(workdir: &Path) -> Result<()> {
     }
 
     // 2. Always show sync status from RocksDB
-    let primary_path = work.domain_data.to_string_lossy().to_string();
-    let secondary_path = format!("{}-cli-secondary", primary_path);
-    match CkbadgerStore::open_domain_secondary(primary_path.as_str(), secondary_path.as_str()) {
+    let secondary_path = secondary_store_path(&work.domain_data, SecondaryStoreOwner::Cli);
+    match CkbadgerStore::open_domain_secondary(&work.domain_data, &secondary_path) {
         Ok(store) => match store.get_sync_status() {
             Ok(status) => {
                 println!("Sync status:");
@@ -494,6 +496,22 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         deleted.push(format!("  {}/", work.run_dir.display()));
     }
 
+    for secondary_path in known_domain_secondary_store_paths(&work.domain_data) {
+        if remove_dir_if_exists(&secondary_path)
+            .with_context(|| format!("failed to purge {}", secondary_path.display()))?
+        {
+            deleted.push(format!("  {}/", secondary_path.display()));
+        }
+    }
+
+    for secondary_path in known_append_only_secondary_store_paths(&work.append_only_data) {
+        if remove_dir_if_exists(&secondary_path)
+            .with_context(|| format!("failed to purge {}", secondary_path.display()))?
+        {
+            deleted.push(format!("  {}/", secondary_path.display()));
+        }
+    }
+
     if deleted.is_empty() {
         println!("Nothing to purge.");
     } else {
@@ -536,6 +554,16 @@ fn remove_dir_contents(dir: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn remove_dir_if_exists(path: &std::path::Path) -> Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    std::fs::remove_dir_all(path)
+        .with_context(|| format!("failed to remove {}", path.display()))?;
+    Ok(true)
 }
 
 fn parse_only_flag(only: &Option<String>) -> Vec<String> {
@@ -814,6 +842,37 @@ mod tests {
             root.join("data/domain").exists(),
             "top-level dir should remain"
         );
+    }
+
+    #[test]
+    fn test_purge_deletes_secondary_store_directories() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        cmd_init(&root).unwrap();
+
+        let secondary_dirs = [
+            root.join("data/domain-api-secondary"),
+            root.join("data/domain-tui-secondary"),
+            root.join("data/domain-cli-secondary"),
+            root.join("data/append-only-api-secondary"),
+        ];
+
+        for path in &secondary_dirs {
+            std::fs::create_dir_all(path.join("nested")).unwrap();
+            std::fs::write(path.join("nested/LOCK"), "secondary state").unwrap();
+        }
+
+        let args = PurgeArgs { confirm: true };
+        cmd_purge(&root, &args).unwrap();
+
+        for path in &secondary_dirs {
+            assert!(
+                !path.exists(),
+                "secondary store dir should be deleted: {}",
+                path.display()
+            );
+        }
     }
 
     // -- remove_dir_contents --

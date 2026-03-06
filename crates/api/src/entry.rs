@@ -1,10 +1,10 @@
 use anyhow::{bail, Result};
 use axum::Router;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
 
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{secondary_store_path, CkbadgerStore, SecondaryStoreOwner};
 
 use crate::embedded_frontend;
 use crate::{create_router, AppConfig};
@@ -34,24 +34,27 @@ pub struct FrontendServiceConfig {
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
-    let secondary_path = format!("{}-api-secondary", config.domain_data_path);
+    let secondary_path = secondary_store_path(&config.domain_data_path, SecondaryStoreOwner::Api);
     info!(
         "Opening ckbadger domain store (secondary) at: {} -> {}",
-        config.domain_data_path, secondary_path
+        config.domain_data_path,
+        secondary_path.display()
     );
     let store = Arc::new(CkbadgerStore::open_domain_secondary(
-        &config.domain_data_path,
-        &secondary_path,
+        Path::new(&config.domain_data_path),
+        secondary_path.as_path(),
     )?);
 
-    let append_only_secondary_path = format!("{}-api-secondary", config.append_only_data_path);
+    let append_only_secondary_path =
+        secondary_store_path(&config.append_only_data_path, SecondaryStoreOwner::Api);
     info!(
         "Opening ckbadger append-only store (secondary) at: {} -> {}",
-        config.append_only_data_path, append_only_secondary_path
+        config.append_only_data_path,
+        append_only_secondary_path.display()
     );
     let append_only_store = Arc::new(CkbadgerStore::open_append_only_secondary(
-        &config.append_only_data_path,
-        &append_only_secondary_path,
+        Path::new(&config.append_only_data_path),
+        append_only_secondary_path.as_path(),
     )?);
 
     let app_config = AppConfig {

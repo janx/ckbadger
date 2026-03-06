@@ -2,7 +2,7 @@ use anyhow::Result;
 use ckbadger_common::{
     format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
 };
-use ckbadger_store::{CkbadgerStore, MemoryProfile};
+use ckbadger_store::{secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -251,8 +251,11 @@ impl TuiDb {
         service_log_dir: Option<&str>,
     ) -> Self {
         // Try to open the domain store in secondary (read-only) mode
-        let secondary_path = format!("{}-tui-secondary", domain_data_path);
-        let store = match CkbadgerStore::open_domain_secondary(domain_data_path, &secondary_path) {
+        let secondary_path = secondary_store_path(domain_data_path, SecondaryStoreOwner::Tui);
+        let store = match CkbadgerStore::open_domain_secondary(
+            Path::new(domain_data_path),
+            secondary_path.as_path(),
+        ) {
             Ok(s) => {
                 eprintln!(
                     "TUI: opened domain store (secondary) at {}",

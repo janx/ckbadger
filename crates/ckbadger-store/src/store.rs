@@ -19,6 +19,45 @@ pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
 const GB: u64 = 1024 * 1024 * 1024;
 const MB: u64 = 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecondaryStoreOwner {
+    Api,
+    Tui,
+    Cli,
+}
+
+impl SecondaryStoreOwner {
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            Self::Api => "api-secondary",
+            Self::Tui => "tui-secondary",
+            Self::Cli => "cli-secondary",
+        }
+    }
+}
+
+pub fn secondary_store_path<P: AsRef<Path>>(
+    primary_path: P,
+    owner: SecondaryStoreOwner,
+) -> PathBuf {
+    let mut path = primary_path.as_ref().as_os_str().to_os_string();
+    path.push(format!("-{}", owner.suffix()));
+    PathBuf::from(path)
+}
+
+pub fn known_domain_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 3] {
+    let primary_path = primary_path.as_ref();
+    [
+        secondary_store_path(primary_path, SecondaryStoreOwner::Api),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Tui),
+        secondary_store_path(primary_path, SecondaryStoreOwner::Cli),
+    ]
+}
+
+pub fn known_append_only_secondary_store_paths<P: AsRef<Path>>(primary_path: P) -> [PathBuf; 1] {
+    [secondary_store_path(primary_path, SecondaryStoreOwner::Api)]
+}
+
 /// Scales `base` by `scale` factor then clamps to `[min, max]`.
 fn scale_clamp(base: u64, scale: f64, min: u64, max: u64) -> usize {
     let value = (base as f64 * scale).round() as u64;
@@ -2276,6 +2315,22 @@ mod tests {
     fn test_memory_profile_secondary_cap() {
         let profile = MemoryProfile::compute(128 * GB, 24, true);
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
+    }
+
+    #[test]
+    fn test_secondary_store_path_uses_owner_suffix() {
+        assert_eq!(
+            secondary_store_path("/tmp/domain", SecondaryStoreOwner::Api),
+            PathBuf::from("/tmp/domain-api-secondary")
+        );
+        assert_eq!(
+            secondary_store_path("/tmp/domain", SecondaryStoreOwner::Tui),
+            PathBuf::from("/tmp/domain-tui-secondary")
+        );
+        assert_eq!(
+            secondary_store_path("/tmp/domain", SecondaryStoreOwner::Cli),
+            PathBuf::from("/tmp/domain-cli-secondary")
+        );
     }
 
     #[test]

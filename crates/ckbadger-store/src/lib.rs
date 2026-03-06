@@ -46,7 +46,10 @@ mod undo_log_ops;
 pub use batch::StoreBatch;
 pub use cell_ops::TokenCellStats;
 pub use reorg_ops::RollbackResult;
-pub use store::{CkbadgerStore, MemoryProfile, ALL_CFS};
+pub use store::{
+    known_append_only_secondary_store_paths, known_domain_secondary_store_paths,
+    secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, ALL_CFS,
+};
 pub use store::{
     APPEND_CFS, CF_ACTIVITIES, CF_ADDR_BALANCE, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
     CF_CELLS, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE,
