@@ -20,6 +20,9 @@ async fn frontend_server_falls_back_to_index_html_for_spa_route() {
     let router = build_frontend_router(FrontendServiceConfig {
         host: "127.0.0.1".to_string(),
         port: 8100,
+        api_port: 8101,
+        ckb_network: "mainnet".to_string(),
+        ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
         frontend_dir: Some(PathBuf::from(dir.path())),
     })
     .unwrap();

@@ -10,6 +10,7 @@ import type {
 } from '@/lib/api';
 import { api } from '@/lib/api';
 import type { ParsedRawPage } from '@/lib/ai/raw-route';
+import { resolveCkbNetwork, resolveCkbRpcUrl } from '@/lib/runtime-config';
 import {
   analyzeWitness,
   buildScriptGroupLens,
@@ -22,7 +23,6 @@ import {
 const RAW_SCHEMA_VERSION = '1.1.0';
 const RAW_FORMAT = 'raw';
 const DEFAULT_PROFILE = 'default';
-const DEFAULT_CKB_RPC_URL = 'http://127.0.0.1:8114';
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
 
@@ -332,7 +332,7 @@ function buildMeta(
     format: RAW_FORMAT,
     profile,
     schemaVersion: RAW_SCHEMA_VERSION,
-    network: process.env.CKB_NETWORK || process.env.NEXT_PUBLIC_CKB_NETWORK || 'mainnet',
+    network: resolveCkbNetwork(),
     path: pathname,
     canonical: `${origin}${pathname}`,
     pageType,
@@ -375,7 +375,7 @@ function buildErrorBody(meta: RawMeta, error: RawRenderError): RenderRawOutput['
 }
 
 function getCkbRpcUrl(): string {
-  return process.env.CKB_RPC_URL || process.env.NEXT_PUBLIC_CKB_RPC_URL || DEFAULT_CKB_RPC_URL;
+  return resolveCkbRpcUrl();
 }
 
 function normalizeHex(hex: string): string {

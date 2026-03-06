@@ -20,15 +20,11 @@ use checks::{execute_check, Check, CheckContext, CheckTier, CompletedCheck, Prog
 #[derive(clap::Args, Debug)]
 pub struct VerifyArgs {
     /// ckbadger API base URL.
-    #[arg(
-        long,
-        env = "CKBADGER_API_URL",
-        default_value = "http://localhost:3001/api/v1"
-    )]
+    #[arg(long, default_value = "http://localhost:3001/api/v1")]
     pub api_url: String,
 
     /// CKB RPC URL for spot-checks.
-    #[arg(long, env = "VERIFY_CKB_RPC_URL")]
+    #[arg(long)]
     pub rpc_url: Option<String>,
 
     /// Official explorer API URL.

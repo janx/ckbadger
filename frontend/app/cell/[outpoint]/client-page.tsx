@@ -1367,8 +1367,8 @@ export default function CellDetailPage() {
                   if (!rawData) {
                     return (
                       <div className="text-slate-500">
-                        Raw bytes unavailable from node store. Configure `CKB_DATA_PATH` on API to
-                        enable payload preview.
+                        Raw bytes unavailable from node store. Set `[ckb].data_path` in
+                        `ckbadger.toml` to enable payload preview.
                       </div>
                     );
                   }

@@ -41,7 +41,6 @@ async-trait = { workspace = true }
 
 # Configuration
 config = { workspace = true }
-dotenvy = { workspace = true }
 
 # CLI
 clap = { workspace = true }

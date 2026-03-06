@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use ckbadger_store::StoreRuntimeConfig;
 use serde::Deserialize;
 
 /// Maximum reorg depth before triggering deep fork handling.
@@ -42,6 +43,8 @@ pub struct Config {
     /// Used after unclean shutdowns to reconcile append-only aggregates.
     #[serde(default = "default_force_startup_cleanup")]
     pub force_startup_cleanup: bool,
+    #[serde(default)]
+    pub store_runtime_config: StoreRuntimeConfig,
 }
 
 fn default_batch_size() -> usize {
@@ -90,6 +93,9 @@ impl Config {
         }
         if self.parallel_fetch_size == 0 {
             bail!("config: parallel_fetch_size must be > 0");
+        }
+        if self.store_runtime_config.memory_budget_gb == Some(0) {
+            bail!("config: store.memory_budget_gb must be > 0 when set");
         }
         Ok(())
     }
@@ -158,6 +164,7 @@ mod tests {
             ckb_data_path: None,
             token_labels_path: "docs/token-labels".to_string(),
             force_startup_cleanup: false,
+            store_runtime_config: StoreRuntimeConfig::default(),
         }
     }
 
@@ -188,5 +195,15 @@ mod tests {
         config.parallel_fetch_size = 0;
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("parallel_fetch_size must be > 0"));
+    }
+
+    #[test]
+    fn test_validate_rejects_zero_store_memory_budget_override() {
+        let mut config = make_valid_config();
+        config.store_runtime_config.memory_budget_gb = Some(0);
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("store.memory_budget_gb must be > 0"));
     }
 }

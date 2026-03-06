@@ -2,8 +2,8 @@
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`CKBADGER_DOMAIN_DATA_PATH`) — mutable canonical/query state
-- **Append-only store** (`CKBADGER_APPEND_ONLY_DATA_PATH`) — immutable history/index archives
+- **Domain store** (`[store].domain_data_path`) — mutable canonical/query state
+- **Append-only store** (`[store].append_only_data_path`) — immutable history/index archives
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode.
 
@@ -70,19 +70,15 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | >= 32GB     | ~22GB peak     |
 | < 32GB      | ~8GB peak      |
 
-## Environment Variables
+## Config Keys
 
-| Parameter                        | Default                             | Description                        |
-| -------------------------------- | ----------------------------------- | ---------------------------------- |
-| `CKBADGER_DOMAIN_DATA_PATH`      | `./data/ckbadger-store`             | Domain RocksDB data directory      |
-| `CKBADGER_APPEND_ONLY_DATA_PATH` | `./data/ckbadger-store-append-only` | Append-only RocksDB data directory |
+| Parameter                       | Default            | Description                        |
+| ------------------------------- | ------------------ | ---------------------------------- |
+| `[store].domain_data_path`      | `data/domain`      | Domain RocksDB data directory      |
+| `[store].append_only_data_path` | `data/append-only` | Append-only RocksDB data directory |
 
 ```bash
-# Default: uses ./data/ckbadger-store
-cargo run -p ckbadger-indexer
-
-# Custom paths
-CKBADGER_DOMAIN_DATA_PATH=/ssd/ckbadger-store \
-CKBADGER_APPEND_ONLY_DATA_PATH=/ssd/ckbadger-store-append-only \
-cargo run -p ckbadger-indexer
+[store]
+domain_data_path = "/ssd/ckbadger-store"
+append_only_data_path = "/ssd/ckbadger-store-append-only"
 ```

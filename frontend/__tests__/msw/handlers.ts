@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
+import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8101/api/v1';
+const API_BASE = DEFAULT_API_BASE;
 
 export const handlers = [
   http.get(`${API_BASE}/blocks`, ({ request }) => {

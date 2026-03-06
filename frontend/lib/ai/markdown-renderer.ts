@@ -778,7 +778,7 @@ export async function renderMarkdownPage(
         '## Witnesses',
         '',
         tx.witnessesAvailable === false
-          ? 'Witness bytes unavailable (configure `CKB_DATA_PATH` or verify RPC connectivity).'
+          ? 'Witness bytes unavailable (set `[ckb].data_path` in `ckbadger.toml` or verify RPC connectivity).'
           : witnessRows.length === 0
             ? 'No witness entries.'
             : markdownTable(

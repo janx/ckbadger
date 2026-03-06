@@ -1,4 +1,5 @@
 use anyhow::Result;
+use ckbadger_store::StoreRuntimeConfig;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -20,6 +21,7 @@ pub struct TuiServiceConfig {
     pub refresh_ms: u64,
     pub supervisor_socket_path: Option<String>,
     pub service_log_dir: Option<String>,
+    pub store_runtime_config: StoreRuntimeConfig,
 }
 
 /// Run the TUI. Blocks until user exits.
@@ -30,6 +32,7 @@ pub async fn run_tui(config: TuiServiceConfig) -> Result<()> {
         &config.append_only_data_path,
         config.supervisor_socket_path.as_deref(),
         config.service_log_dir.as_deref(),
+        config.store_runtime_config,
     )
     .await;
 
@@ -121,6 +124,7 @@ mod tests {
             refresh_ms: 500,
             supervisor_socket_path: Some("/run/indexer.sock".to_string()),
             service_log_dir: Some("/run/logs".to_string()),
+            store_runtime_config: StoreRuntimeConfig::default(),
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");
@@ -132,5 +136,6 @@ mod tests {
             Some("/run/indexer.sock")
         );
         assert_eq!(config.service_log_dir.as_deref(), Some("/run/logs"));
+        assert_eq!(config.store_runtime_config, StoreRuntimeConfig::default());
     }
 }

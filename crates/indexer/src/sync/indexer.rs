@@ -823,7 +823,7 @@ impl Indexer {
                 run_id = %self.run_id,
                 blocks_behind,
                 threshold = self.config.bulk_sync_threshold,
-                "CKB_DATA_PATH is not configured; bulk sync is disabled and indexer will run live catch-up via JSON-RPC"
+                "[ckb].data_path is not configured in ckbadger.toml; bulk sync is disabled and indexer will run live catch-up via JSON-RPC"
             );
         } else if !fresh_sync_tip
             && is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold)

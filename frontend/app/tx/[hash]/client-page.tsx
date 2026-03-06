@@ -1054,8 +1054,8 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     return (
       <div className="p-4" data-testid="tx-witness-tab">
         <div className="rounded border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
-          Witness bytes are unavailable in current API mode. Configure `CKB_DATA_PATH` for API to
-          enable witness inspection.
+          Witness bytes are unavailable in current API mode. Set `[ckb].data_path` in
+          `ckbadger.toml` to enable witness inspection.
         </div>
       </div>
     );

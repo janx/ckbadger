@@ -181,12 +181,14 @@ All configuration lives in a single `ckbadger.toml` file. Priority: **CLI args >
 [ckb]
 rpc_url = "http://127.0.0.1:8114"
 network = "mainnet"               # mainnet | testnet
+# data_path = "/var/lib/ckb/data/db" # Optional: CKB node RocksDB path for bulk sync + direct reads
 
 [api]
 host = "127.0.0.1"
 port = 8101
 
 [frontend]
+host = "127.0.0.1"
 port = 8100                       # Static file HTTP server
 
 [indexer]
@@ -195,9 +197,17 @@ parallel_fetch_size = 64
 pipeline_buffer = 8
 bulk_sync_threshold = 1000
 
+[store]
+domain_data_path = "data/domain"
+append_only_data_path = "data/append-only"
+# memory_budget_gb = 32            # Optional RocksDB RAM budget override
+direct_io_reads = true
+
 [log]
 level = "info"
 ```
+
+`[ckb].data_path` is optional, but recommended when you want direct CKB RocksDB reads for bulk sync and raw witness/payload inspection.
 
 ### Work Directory Structure
 
@@ -498,7 +508,7 @@ Download the ckbadger package for your platform, extract it, and add `bin/` to y
 ```bash
 mkdir my-explorer && cd my-explorer
 ckbadger init
-# Edit ckbadger.toml to point to your CKB node
+# Edit ckbadger.toml to set [ckb].rpc_url and, if available, [ckb].data_path
 ckbadger run
 ```
 
@@ -623,9 +633,6 @@ cd frontend && pnpm install && pnpm dev
 ```bash
 # Manual trigger (imports UDT + script labels)
 ckbadger label-import
-
-# With custom token-labels path
-ckbadger label-import --token-labels-path /path/to/token-labels
 ```
 
 Token labels lookup order:

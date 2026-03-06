@@ -7,7 +7,8 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 use ckbadger_config::{
-    default_config_toml, load_config, resolve_share_dir, resolve_token_labels_path, WorkDir,
+    default_config_toml, load_config, resolve_share_dir, resolve_store_paths,
+    resolve_token_labels_path, CkbadgerConfig, StoreConfig, WorkDir,
 };
 
 use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
@@ -17,7 +18,7 @@ use ckbadger_indexer::entry::{
 use ckbadger_indexer::verify as indexer_verify;
 use ckbadger_store::{
     known_append_only_secondary_store_paths, known_domain_secondary_store_paths,
-    secondary_store_path, CkbadgerStore, SecondaryStoreOwner,
+    secondary_store_path, CkbadgerStore, SecondaryStoreOwner, StoreRuntimeConfig,
 };
 use ckbadger_tui::entry::{run_tui, TuiServiceConfig};
 
@@ -177,6 +178,13 @@ fn init_tracing_from_config(workdir: &Path) {
     init_tracing(&log_level);
 }
 
+fn store_runtime_config(store: &StoreConfig) -> StoreRuntimeConfig {
+    StoreRuntimeConfig {
+        memory_budget_gb: store.memory_budget_gb,
+        direct_io_reads: store.direct_io_reads,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // run command
 // ---------------------------------------------------------------------------
@@ -203,6 +211,8 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
 async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
+    let store_paths = resolve_store_paths(workdir, &config.store);
+    let store_runtime_config = store_runtime_config(&config.store);
 
     match args.service {
         InternalService::Indexer => {
@@ -212,8 +222,8 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                     .unwrap_or_default();
 
             let indexer_config = IndexerServiceConfig {
-                domain_data_path: work.domain_data.to_string_lossy().to_string(),
-                append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+                domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
+                append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
                 bulk_sync_perf_output_root: work.bulk_sync_perf_dir.to_string_lossy().to_string(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
                 ckb_data_path: config.ckb.data_path.clone(),
@@ -224,13 +234,14 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 pipeline_enabled: config.indexer.pipeline_enabled,
                 pipeline_buffer: config.indexer.pipeline_buffer,
                 bulk_sync_threshold: config.indexer.bulk_sync_threshold,
+                store_runtime_config,
             };
             run_indexer(indexer_config).await
         }
         InternalService::Api => {
             let api_config = ApiServiceConfig {
-                domain_data_path: work.domain_data.to_string_lossy().to_string(),
-                append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+                domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
+                append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
                 ckb_network: config.ckb.network.clone(),
                 host: config.api.host.clone(),
@@ -238,6 +249,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 rate_limit: config.api.rate_limit,
                 rate_limit_burst: config.api.rate_limit_burst,
                 ckb_data_path: config.ckb.data_path.clone(),
+                store_runtime_config,
             };
             run_api(api_config).await
         }
@@ -246,6 +258,9 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             let frontend_config = FrontendServiceConfig {
                 host: config.frontend.host.clone(),
                 port: config.frontend.port,
+                api_port: config.api.port,
+                ckb_network: config.ckb.network.clone(),
+                ckb_rpc_url: config.ckb.rpc_url.clone(),
                 frontend_dir,
             };
             run_frontend_server(frontend_config).await
@@ -260,14 +275,16 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
 async fn cmd_tui(workdir: &Path) -> Result<()> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     let tui_config = TuiServiceConfig {
-        domain_data_path: work.domain_data.to_string_lossy().to_string(),
-        append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+        domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
+        append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         refresh_ms: 1000,
         supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),
         service_log_dir: Some(work.log_dir.to_string_lossy().to_string()),
+        store_runtime_config: store_runtime_config(&config.store),
     };
 
     run_tui(tui_config).await
@@ -278,7 +295,9 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_status(workdir: &Path) -> Result<()> {
+    let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     // 1. Try IPC to get service status from the supervisor
     if work.indexer_sock.exists() {
@@ -324,8 +343,12 @@ async fn cmd_status(workdir: &Path) -> Result<()> {
     }
 
     // 2. Always show sync status from RocksDB
-    let secondary_path = secondary_store_path(&work.domain_data, SecondaryStoreOwner::Cli);
-    match CkbadgerStore::open_domain_secondary(&work.domain_data, &secondary_path) {
+    let secondary_path = secondary_store_path(&store_paths.domain_data, SecondaryStoreOwner::Cli);
+    match CkbadgerStore::open_domain_secondary_with_runtime(
+        &store_paths.domain_data,
+        &secondary_path,
+        store_runtime_config(&config.store),
+    ) {
         Ok(store) => match store.get_sync_status() {
             Ok(status) => {
                 println!("Sync status:");
@@ -392,6 +415,7 @@ async fn cmd_verify(workdir: &Path, args: &VerifyArgs) -> Result<()> {
 async fn cmd_label_import(workdir: &Path) -> Result<()> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     let token_labels_path = resolve_token_labels_path(&work, resolve_share_dir().as_deref())
         .map(|p| p.to_string_lossy().to_string())
@@ -404,14 +428,15 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
     }
 
     let import_config = LabelImportServiceConfig {
-        domain_data_path: work.domain_data.to_string_lossy().to_string(),
-        append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+        domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
+        append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
         ckb_data_path: config.ckb.data_path.clone(),
         token_labels_path,
         network: config.ckb.network.clone(),
         import_udt: true,
         import_scripts: true,
         use_bundled,
+        store_runtime_config: store_runtime_config(&config.store),
     };
 
     run_label_import(import_config).await
@@ -423,6 +448,8 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
 
 fn cmd_init(workdir: &Path) -> Result<()> {
     let work = WorkDir::resolve(workdir);
+    let default_config = CkbadgerConfig::default();
+    let store_paths = resolve_store_paths(workdir, &default_config.store);
 
     if work.is_initialized() {
         println!("Already initialized: {}", work.config_path.display());
@@ -430,10 +457,14 @@ fn cmd_init(workdir: &Path) -> Result<()> {
     }
 
     // Create directory structure
-    std::fs::create_dir_all(&work.domain_data)
-        .with_context(|| format!("failed to create {}", work.domain_data.display()))?;
-    std::fs::create_dir_all(&work.append_only_data)
-        .with_context(|| format!("failed to create {}", work.append_only_data.display()))?;
+    std::fs::create_dir_all(&store_paths.domain_data)
+        .with_context(|| format!("failed to create {}", store_paths.domain_data.display()))?;
+    std::fs::create_dir_all(&store_paths.append_only_data).with_context(|| {
+        format!(
+            "failed to create {}",
+            store_paths.append_only_data.display()
+        )
+    })?;
     std::fs::create_dir_all(&work.log_dir)
         .with_context(|| format!("failed to create {}", work.log_dir.display()))?;
     std::fs::create_dir_all(&work.perf_dir)
@@ -447,8 +478,8 @@ fn cmd_init(workdir: &Path) -> Result<()> {
     info!(path = %work.root.display(), "work directory initialized");
     println!("Initialized work directory: {}", work.root.display());
     println!("  config:      {}", work.config_path.display());
-    println!("  domain data: {}", work.domain_data.display());
-    println!("  append-only: {}", work.append_only_data.display());
+    println!("  domain data: {}", store_paths.domain_data.display());
+    println!("  append-only: {}", store_paths.append_only_data.display());
     println!("  logs:        {}", work.log_dir.display());
     println!("  perf:        {}", work.perf_dir.display());
 
@@ -460,7 +491,9 @@ fn cmd_init(workdir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
+    let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     if !work.is_initialized() {
         bail!(
@@ -476,17 +509,18 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
     let mut deleted = Vec::new();
 
     // Delete domain data contents
-    if work.domain_data.exists() {
-        remove_dir_contents(&work.domain_data)
-            .with_context(|| format!("failed to purge {}", work.domain_data.display()))?;
-        deleted.push(format!("  {}/", work.domain_data.display()));
+    if store_paths.domain_data.exists() {
+        remove_dir_contents(&store_paths.domain_data)
+            .with_context(|| format!("failed to purge {}", store_paths.domain_data.display()))?;
+        deleted.push(format!("  {}/", store_paths.domain_data.display()));
     }
 
     // Delete append-only data contents
-    if work.append_only_data.exists() {
-        remove_dir_contents(&work.append_only_data)
-            .with_context(|| format!("failed to purge {}", work.append_only_data.display()))?;
-        deleted.push(format!("  {}/", work.append_only_data.display()));
+    if store_paths.append_only_data.exists() {
+        remove_dir_contents(&store_paths.append_only_data).with_context(|| {
+            format!("failed to purge {}", store_paths.append_only_data.display())
+        })?;
+        deleted.push(format!("  {}/", store_paths.append_only_data.display()));
     }
 
     // Delete run directory contents
@@ -496,7 +530,7 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         deleted.push(format!("  {}/", work.run_dir.display()));
     }
 
-    for secondary_path in known_domain_secondary_store_paths(&work.domain_data) {
+    for secondary_path in known_domain_secondary_store_paths(&store_paths.domain_data) {
         if remove_dir_if_exists(&secondary_path)
             .with_context(|| format!("failed to purge {}", secondary_path.display()))?
         {
@@ -504,7 +538,7 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
         }
     }
 
-    for secondary_path in known_append_only_secondary_store_paths(&work.append_only_data) {
+    for secondary_path in known_append_only_secondary_store_paths(&store_paths.append_only_data) {
         if remove_dir_if_exists(&secondary_path)
             .with_context(|| format!("failed to purge {}", secondary_path.display()))?
         {
@@ -884,6 +918,53 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn test_purge_respects_store_paths_from_config() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        cmd_init(&root).unwrap();
+
+        let config_path = root.join("ckbadger.toml");
+        let custom_config = std::fs::read_to_string(&config_path)
+            .unwrap()
+            .replace(
+                r#"domain_data_path = "data/domain""#,
+                r#"domain_data_path = "custom/domain""#,
+            )
+            .replace(
+                r#"append_only_data_path = "data/append-only""#,
+                r#"append_only_data_path = "custom/append-only""#,
+            );
+        std::fs::write(&config_path, custom_config).unwrap();
+
+        let config = load_config(&root).unwrap();
+        let store_paths = resolve_store_paths(&root, &config.store);
+        std::fs::create_dir_all(&store_paths.domain_data).unwrap();
+        std::fs::create_dir_all(&store_paths.append_only_data).unwrap();
+        std::fs::write(store_paths.domain_data.join("custom.db"), "domain").unwrap();
+        std::fs::write(store_paths.append_only_data.join("custom.db"), "append").unwrap();
+
+        cmd_purge(&root, &PurgeArgs { confirm: true }).unwrap();
+
+        assert!(
+            store_paths.domain_data.exists(),
+            "custom domain dir should remain"
+        );
+        assert!(
+            store_paths.append_only_data.exists(),
+            "custom append dir should remain"
+        );
+        assert!(
+            !store_paths.domain_data.join("custom.db").exists(),
+            "custom domain contents should be purged"
+        );
+        assert!(
+            !store_paths.append_only_data.join("custom.db").exists(),
+            "custom append-only contents should be purged"
+        );
     }
 
     // -- remove_dir_contents --

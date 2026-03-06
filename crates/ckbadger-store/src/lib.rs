@@ -48,7 +48,8 @@ pub use cell_ops::TokenCellStats;
 pub use reorg_ops::RollbackResult;
 pub use store::{
     known_append_only_secondary_store_paths, known_domain_secondary_store_paths,
-    secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, ALL_CFS,
+    secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig,
+    ALL_CFS,
 };
 pub use store::{
     APPEND_CFS, CF_ACTIVITIES, CF_ADDR_BALANCE, CF_ADDR_TXS, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,

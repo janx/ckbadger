@@ -1,30 +1,7 @@
 import { normalizeNftAssetId } from '@/lib/nft-collections';
+import { resolveApiBase } from '@/lib/runtime-config';
 import type { ScriptRefHashType } from '@/lib/script-ref';
-
-const DEFAULT_API_BASE = 'http://localhost:8101/api/v1';
-
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/, '');
-}
-
-export function resolveApiBase(
-  env: {
-    [key: string]: string | undefined;
-    CKBADGER_SERVER_API_URL?: string;
-    NEXT_PUBLIC_API_URL?: string;
-  } = process.env,
-  runtime: 'server' | 'client' = typeof window === 'undefined' ? 'server' : 'client'
-): string {
-  const serverApiUrl = env.CKBADGER_SERVER_API_URL?.trim();
-  const publicApiUrl = env.NEXT_PUBLIC_API_URL?.trim();
-
-  const base =
-    runtime === 'server'
-      ? (serverApiUrl ?? publicApiUrl ?? DEFAULT_API_BASE)
-      : (publicApiUrl ?? serverApiUrl ?? DEFAULT_API_BASE);
-
-  return trimTrailingSlash(base);
-}
+export { resolveApiBase } from '@/lib/runtime-config';
 
 const API_BASE = resolveApiBase();
 

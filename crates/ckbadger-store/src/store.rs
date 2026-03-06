@@ -9,6 +9,7 @@ use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBCompressionType, IteratorMode,
     Options, UniversalCompactOptions, WriteBatch, WriteBufferManager, DB,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::keys;
 use crate::types::MemoryStats;
@@ -18,6 +19,21 @@ pub type KvResult = Result<(Box<[u8]>, Box<[u8]>), rocksdb::Error>;
 
 const GB: u64 = 1024 * 1024 * 1024;
 const MB: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoreRuntimeConfig {
+    pub memory_budget_gb: Option<u64>,
+    pub direct_io_reads: bool,
+}
+
+impl Default for StoreRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            memory_budget_gb: None,
+            direct_io_reads: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecondaryStoreOwner {
@@ -94,12 +110,20 @@ pub struct MemoryProfile {
 
 impl MemoryProfile {
     pub fn for_primary() -> Self {
-        let (ram, cpus) = detect_system_resources();
+        Self::for_primary_with_config(StoreRuntimeConfig::default())
+    }
+
+    pub fn for_primary_with_config(runtime_config: StoreRuntimeConfig) -> Self {
+        let (ram, cpus) = detect_system_resources(runtime_config);
         Self::compute(ram, cpus, false)
     }
 
     pub fn for_secondary() -> Self {
-        let (ram, cpus) = detect_system_resources();
+        Self::for_secondary_with_config(StoreRuntimeConfig::default())
+    }
+
+    pub fn for_secondary_with_config(runtime_config: StoreRuntimeConfig) -> Self {
+        let (ram, cpus) = detect_system_resources(runtime_config);
         Self::compute(ram, cpus, true)
     }
 
@@ -205,16 +229,13 @@ fn read_cgroup_memory_limit() -> Option<u64> {
     None
 }
 
-fn detect_system_resources() -> (u64, usize) {
-    let ram = if let Ok(val) = std::env::var("CKBADGER_MEMORY_BUDGET_GB") {
-        if let Ok(gb) = val.parse::<u64>() {
-            info!(gb, "Using CKBADGER_MEMORY_BUDGET_GB override");
+fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize) {
+    let ram = if let Some(gb) = runtime_config.memory_budget_gb {
+        if gb > 0 {
+            info!(gb, "Using explicit RocksDB memory_budget_gb override");
             gb * GB
         } else {
-            warn!(
-                val,
-                "Invalid CKBADGER_MEMORY_BUDGET_GB, falling back to detection"
-            );
+            warn!("Ignoring zero memory_budget_gb override, falling back to detection");
             read_proc_meminfo()
                 .or_else(read_cgroup_memory_limit)
                 .unwrap_or(32 * GB)
@@ -381,10 +402,26 @@ pub const DOMAIN_CFS: &[&str] = &[
 pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
-    if let Ok(path) = std::env::var("CKBADGER_APPEND_ONLY_DATA_PATH") {
-        return PathBuf::from(path);
+    if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
+        return domain_path.with_file_name("append-only");
     }
     PathBuf::from(format!("{}-append-only", domain_path.display()))
+}
+
+fn domain_path_from_append(append_path: &Path) -> PathBuf {
+    if append_path.file_name().and_then(|name| name.to_str()) == Some("append-only") {
+        return append_path.with_file_name("domain");
+    }
+
+    let mut stripped = append_path.to_path_buf();
+    if let Some(name) = append_path.file_name().and_then(|name| name.to_str()) {
+        if let Some(base_name) = name.strip_suffix("-append-only") {
+            stripped.set_file_name(base_name);
+            return stripped;
+        }
+    }
+
+    append_path.to_path_buf()
 }
 
 fn consumed_cf_storage_bytes(
@@ -436,6 +473,7 @@ pub struct CkbadgerStore {
     bulk_sync_mode: AtomicBool,
     is_secondary: bool,
     memory_profile: MemoryProfile,
+    runtime_config: StoreRuntimeConfig,
 }
 
 impl CkbadgerStore {
@@ -528,7 +566,11 @@ impl CkbadgerStore {
         );
     }
 
-    fn open_with_class<P: AsRef<Path>>(path: P, store_class: StoreClass) -> anyhow::Result<Self> {
+    fn open_with_class<P: AsRef<Path>>(
+        path: P,
+        store_class: StoreClass,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
         let db_path = path.as_ref().to_path_buf();
         let (domain_path, append_path) = match store_class {
             StoreClass::Domain => {
@@ -538,17 +580,7 @@ impl CkbadgerStore {
             }
             StoreClass::AppendOnly => {
                 let append = db_path.clone();
-                let domain = std::env::var("CKBADGER_DOMAIN_DATA_PATH")
-                    .ok()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        let s = append.display().to_string();
-                        if let Some(stripped) = s.strip_suffix("-append-only") {
-                            PathBuf::from(stripped)
-                        } else {
-                            append.clone()
-                        }
-                    });
+                let domain = domain_path_from_append(&append);
                 (domain, append)
             }
             StoreClass::TestUnified => {
@@ -558,8 +590,9 @@ impl CkbadgerStore {
             }
         };
 
-        let memory_profile = MemoryProfile::for_primary();
-        let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
+        let memory_profile = MemoryProfile::for_primary_with_config(runtime_config);
+        let (opts, block_cache, write_buffer_manager) =
+            Self::configured_options(&memory_profile, runtime_config);
 
         let existing_cfs = match DB::list_cf(&opts, &path) {
             Ok(cfs) => cfs,
@@ -619,6 +652,7 @@ impl CkbadgerStore {
             bulk_sync_mode: AtomicBool::new(false),
             is_secondary: false,
             memory_profile,
+            runtime_config,
         })
     }
 
@@ -626,6 +660,7 @@ impl CkbadgerStore {
         primary_path: P,
         secondary_path: P,
         store_class: StoreClass,
+        runtime_config: StoreRuntimeConfig,
     ) -> anyhow::Result<Self> {
         let db_path = primary_path.as_ref().to_path_buf();
         let (domain_path, append_path) = match store_class {
@@ -636,17 +671,7 @@ impl CkbadgerStore {
             }
             StoreClass::AppendOnly => {
                 let append = db_path.clone();
-                let domain = std::env::var("CKBADGER_DOMAIN_DATA_PATH")
-                    .ok()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| {
-                        let s = append.display().to_string();
-                        if let Some(stripped) = s.strip_suffix("-append-only") {
-                            PathBuf::from(stripped)
-                        } else {
-                            append.clone()
-                        }
-                    });
+                let domain = domain_path_from_append(&append);
                 (domain, append)
             }
             StoreClass::TestUnified => {
@@ -655,8 +680,9 @@ impl CkbadgerStore {
                 (domain, append)
             }
         };
-        let memory_profile = MemoryProfile::for_secondary();
-        let (opts, block_cache, write_buffer_manager) = Self::configured_options(&memory_profile);
+        let memory_profile = MemoryProfile::for_secondary_with_config(runtime_config);
+        let (opts, block_cache, write_buffer_manager) =
+            Self::configured_options(&memory_profile, runtime_config);
         let existing_cfs = match DB::list_cf(&opts, &primary_path) {
             Ok(cfs) => cfs,
             Err(_err) if !db_path.join("CURRENT").exists() => Vec::new(),
@@ -705,40 +731,94 @@ impl CkbadgerStore {
             bulk_sync_mode: AtomicBool::new(false),
             is_secondary: true,
             memory_profile,
+            runtime_config,
         })
     }
 
     pub fn open_domain<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        Self::open_with_class(path, StoreClass::Domain)
+        Self::open_domain_with_runtime(path, StoreRuntimeConfig::default())
+    }
+
+    pub fn open_domain_with_runtime<P: AsRef<Path>>(
+        path: P,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::Domain, runtime_config)
     }
 
     pub fn open_append_only<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        Self::open_with_class(path, StoreClass::AppendOnly)
+        Self::open_append_only_with_runtime(path, StoreRuntimeConfig::default())
+    }
+
+    pub fn open_append_only_with_runtime<P: AsRef<Path>>(
+        path: P,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_with_class(path, StoreClass::AppendOnly, runtime_config)
     }
 
     pub fn open_test_unified<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        Self::open_with_class(path, StoreClass::TestUnified)
+        Self::open_with_class(path, StoreClass::TestUnified, StoreRuntimeConfig::default())
     }
 
     pub fn open_domain_secondary<P: AsRef<Path>>(
         primary_path: P,
         secondary_path: P,
     ) -> anyhow::Result<Self> {
-        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::Domain)
+        Self::open_domain_secondary_with_runtime(
+            primary_path,
+            secondary_path,
+            StoreRuntimeConfig::default(),
+        )
+    }
+
+    pub fn open_domain_secondary_with_runtime<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(
+            primary_path,
+            secondary_path,
+            StoreClass::Domain,
+            runtime_config,
+        )
     }
 
     pub fn open_append_only_secondary<P: AsRef<Path>>(
         primary_path: P,
         secondary_path: P,
     ) -> anyhow::Result<Self> {
-        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::AppendOnly)
+        Self::open_append_only_secondary_with_runtime(
+            primary_path,
+            secondary_path,
+            StoreRuntimeConfig::default(),
+        )
+    }
+
+    pub fn open_append_only_secondary_with_runtime<P: AsRef<Path>>(
+        primary_path: P,
+        secondary_path: P,
+        runtime_config: StoreRuntimeConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_secondary_with_class(
+            primary_path,
+            secondary_path,
+            StoreClass::AppendOnly,
+            runtime_config,
+        )
     }
 
     pub fn open_test_unified_secondary<P: AsRef<Path>>(
         primary_path: P,
         secondary_path: P,
     ) -> anyhow::Result<Self> {
-        Self::open_secondary_with_class(primary_path, secondary_path, StoreClass::TestUnified)
+        Self::open_secondary_with_class(
+            primary_path,
+            secondary_path,
+            StoreClass::TestUnified,
+            StoreRuntimeConfig::default(),
+        )
     }
 
     /// Catch up with primary instance writes (secondary only).
@@ -824,6 +904,7 @@ impl CkbadgerStore {
 
     fn configured_options(
         profile: &MemoryProfile,
+        runtime_config: StoreRuntimeConfig,
     ) -> (Options, rocksdb::Cache, WriteBufferManager) {
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -832,11 +913,7 @@ impl CkbadgerStore {
         // Bypass OS page cache for reads: block cache already handles hot data,
         // and bulk sync reads (live cell lookups) are not reused — caching them
         // in the page cache wastes RAM and adds syscall overhead.
-        // Set CKBADGER_DIRECT_IO_READS=false to disable for A/B testing.
-        let direct_io_reads = std::env::var("CKBADGER_DIRECT_IO_READS")
-            .map(|v| v != "0" && v.to_lowercase() != "false")
-            .unwrap_or(true);
-        opts.set_use_direct_reads(direct_io_reads);
+        opts.set_use_direct_reads(runtime_config.direct_io_reads);
 
         // Favor throughput during bulk sync while still smoothing fsync pressure.
         opts.set_bytes_per_sync(4 * 1024 * 1024);
@@ -1320,9 +1397,7 @@ impl CkbadgerStore {
             wbm_normal_mb = p.wbm_normal_bytes / (1024 * 1024),
             wbm_bulk_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
             unordered_write = true,
-            direct_io_reads = std::env::var("CKBADGER_DIRECT_IO_READS")
-                .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true),
+            direct_io_reads = self.runtime_config.direct_io_reads,
             direct_io_compaction = true,
             bytes_per_sync_mb = 4,
             dynamic_level_bytes = true,
@@ -1351,6 +1426,10 @@ impl CkbadgerStore {
 
     pub fn append_path(&self) -> &Path {
         &self.append_path
+    }
+
+    pub fn runtime_config(&self) -> StoreRuntimeConfig {
+        self.runtime_config
     }
 
     /// Set relaxed L0 thresholds and larger write buffers for bulk sync.
@@ -2032,6 +2111,44 @@ mod tests {
         let cf = secondary.cf_sync_meta();
         let val = secondary.get_cf(cf, b"key").unwrap();
         assert_eq!(val.as_deref(), Some(b"value".as_slice()));
+    }
+
+    #[test]
+    fn test_append_path_from_domain_uses_workdir_layout() {
+        assert_eq!(
+            append_path_from_domain(Path::new("/tmp/work/data/domain")),
+            PathBuf::from("/tmp/work/data/append-only")
+        );
+        assert_eq!(
+            append_path_from_domain(Path::new("/tmp/custom-domain")),
+            PathBuf::from("/tmp/custom-domain-append-only")
+        );
+    }
+
+    #[test]
+    fn test_domain_path_from_append_uses_workdir_layout() {
+        assert_eq!(
+            domain_path_from_append(Path::new("/tmp/work/data/append-only")),
+            PathBuf::from("/tmp/work/data/domain")
+        );
+        assert_eq!(
+            domain_path_from_append(Path::new("/tmp/custom-domain-append-only")),
+            PathBuf::from("/tmp/custom-domain")
+        );
+    }
+
+    #[test]
+    fn test_open_domain_with_runtime_uses_explicit_store_runtime_config() {
+        let dir = TempDir::new().unwrap();
+        let runtime_config = StoreRuntimeConfig {
+            memory_budget_gb: Some(12),
+            direct_io_reads: false,
+        };
+
+        let store = CkbadgerStore::open_domain_with_runtime(dir.path(), runtime_config).unwrap();
+
+        assert_eq!(store.runtime_config(), runtime_config);
+        assert_eq!(store.memory_profile().system_ram_bytes, 12 * GB);
     }
 
     #[test]

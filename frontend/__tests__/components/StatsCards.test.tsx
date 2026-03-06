@@ -2,10 +2,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StatsCards } from '@/components/stats-cards';
+import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8101/api/v1';
+const API_BASE = DEFAULT_API_BASE;
 
 function createWrapper() {
   const queryClient = new QueryClient({

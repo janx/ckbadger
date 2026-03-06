@@ -3555,10 +3555,7 @@ fn system_kv_line(label: &str, value: String, value_color: Color) -> Line<'stati
     ])
 }
 
-fn direct_io_reads_label() -> &'static str {
-    let enabled = std::env::var("CKBADGER_DIRECT_IO_READS")
-        .map(|v| v != "0" && v.to_lowercase() != "false")
-        .unwrap_or(true);
+fn direct_io_reads_label(enabled: bool) -> &'static str {
     if enabled {
         "reads + flush/compact"
     } else {
@@ -3597,9 +3594,9 @@ fn draw_system_content(f: &mut Frame, app: &App, area: Rect) {
 
     // -- Section 3: RocksDB Parameters --
     if compact {
-        draw_system_params_compact(f, p, chunks[2]);
+        draw_system_params_compact(f, p, db.direct_io_reads_enabled(), chunks[2]);
     } else {
-        draw_system_params_wide(f, p, chunks[2]);
+        draw_system_params_wide(f, p, db.direct_io_reads_enabled(), chunks[2]);
     }
 }
 
@@ -3810,14 +3807,21 @@ fn system_bulk_sync_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static
     ]
 }
 
-fn system_fixed_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static>> {
+fn system_fixed_lines(
+    p: &ckbadger_store::MemoryProfile,
+    direct_io_reads: bool,
+) -> Vec<Line<'static>> {
     vec![
         Line::from(Span::styled(
             "  Fixed Constants",
             Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
         )),
         system_kv_line("Compression", "LZ4 (append: None)".to_string(), SLATE_500),
-        system_kv_line("Direct I/O", direct_io_reads_label().to_string(), SLATE_500),
+        system_kv_line(
+            "Direct I/O",
+            direct_io_reads_label(direct_io_reads).to_string(),
+            SLATE_500,
+        ),
         system_kv_line("Unordered write", "true".to_string(), SLATE_500),
         system_kv_line("Block size", "16 KB".to_string(), SLATE_500),
         system_kv_line("Bloom filter", "10 bits".to_string(), SLATE_500),
@@ -3854,7 +3858,12 @@ fn system_fixed_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static>> {
     ]
 }
 
-fn draw_system_params_wide(f: &mut Frame, p: &ckbadger_store::MemoryProfile, area: Rect) {
+fn draw_system_params_wide(
+    f: &mut Frame,
+    p: &ckbadger_store::MemoryProfile,
+    direct_io_reads: bool,
+    area: Rect,
+) {
     let block = Block::default()
         .title(Span::styled(
             " RocksDB Parameters (TUI Secondary) ",
@@ -3876,10 +3885,18 @@ fn draw_system_params_wide(f: &mut Frame, p: &ckbadger_store::MemoryProfile, are
 
     f.render_widget(Paragraph::new(system_normal_mode_lines(p)), col_chunks[0]);
     f.render_widget(Paragraph::new(system_bulk_sync_lines(p)), col_chunks[1]);
-    f.render_widget(Paragraph::new(system_fixed_lines(p)), col_chunks[2]);
+    f.render_widget(
+        Paragraph::new(system_fixed_lines(p, direct_io_reads)),
+        col_chunks[2],
+    );
 }
 
-fn draw_system_params_compact(f: &mut Frame, p: &ckbadger_store::MemoryProfile, area: Rect) {
+fn draw_system_params_compact(
+    f: &mut Frame,
+    p: &ckbadger_store::MemoryProfile,
+    direct_io_reads: bool,
+    area: Rect,
+) {
     let block = Block::default()
         .title(Span::styled(
             " RocksDB Parameters (TUI Secondary) ",
@@ -3894,7 +3911,7 @@ fn draw_system_params_compact(f: &mut Frame, p: &ckbadger_store::MemoryProfile, 
     lines.push(Line::from(""));
     lines.extend(system_bulk_sync_lines(p));
     lines.push(Line::from(""));
-    lines.extend(system_fixed_lines(p));
+    lines.extend(system_fixed_lines(p, direct_io_reads));
 
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -4645,12 +4662,8 @@ mod tests {
 
     #[test]
     fn test_direct_io_reads_label() {
-        // Default (no env var set) should include reads
-        let label = direct_io_reads_label();
-        assert!(
-            label == "reads + flush/compact" || label == "flush/compact only",
-            "unexpected label: {label}"
-        );
+        assert_eq!(direct_io_reads_label(true), "reads + flush/compact");
+        assert_eq!(direct_io_reads_label(false), "flush/compact only");
     }
 
     #[test]

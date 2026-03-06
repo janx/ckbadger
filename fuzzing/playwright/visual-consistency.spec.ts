@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 
-const BASE_URL = process.env.CKBADGER_FRONTEND_URL || 'http://localhost:3000';
+const BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = 'http://localhost:3001/api/v1';
 
 interface ScrapedData {
   displayedCounts: Record<string, number>;
@@ -61,9 +62,7 @@ test.describe('Block Page Visual Consistency', () => {
 
 test.describe('Transaction Page Visual Consistency', () => {
   test('inputs/outputs count matches displayed items', async ({ page }) => {
-    const txsResponse = await fetch(
-      `${process.env.CKBADGER_API_URL || 'http://localhost:3001/api/v1'}/transactions?limit=1`
-    );
+    const txsResponse = await fetch(`${API_BASE_URL}/transactions?limit=1`);
     const txsData = await txsResponse.json();
     const sampleTxHash = txsData.data?.[0]?.hash;
 
@@ -94,9 +93,7 @@ test.describe('Transaction Page Visual Consistency', () => {
 
 test.describe('Address Page Visual Consistency', () => {
   test('live cells count matches tab label', async ({ page }) => {
-    const addressesResponse = await fetch(
-      `${process.env.CKBADGER_API_URL || 'http://localhost:3001/api/v1'}/addresses/top?limit=1`
-    );
+    const addressesResponse = await fetch(`${API_BASE_URL}/addresses/top?limit=1`);
     const addressesData = await addressesResponse.json();
     const sampleAddress = addressesData?.[0]?.address;
 
@@ -131,9 +128,7 @@ test.describe('Address Page Visual Consistency', () => {
 
 test.describe('Token Page Visual Consistency', () => {
   test('holders count matches displayed stat', async ({ page }) => {
-    const tokensResponse = await fetch(
-      `${process.env.CKBADGER_API_URL || 'http://localhost:3001/api/v1'}/tokens?limit=1`
-    );
+    const tokensResponse = await fetch(`${API_BASE_URL}/tokens?limit=1`);
     const tokensData = await tokensResponse.json();
     const sampleToken = tokensData.data?.[0];
 

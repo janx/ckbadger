@@ -43,10 +43,6 @@ Options:
   --stop-on-error     Stop on first error (default: continue)
   -h, --help          Show this help message
 
-Environment Variables:
-  CKBADGER_API_URL    Ckbadger API URL (default: http://localhost:3001/api/v1)
-  OFFICIAL_EXPLORER_URL  Official explorer URL (default: https://explorer.nervos.org/api/v1)
-
 Examples:
   # Quick test with 10 samples each
   npx tsx fuzzing/src/index.ts --mode=page -b 10 -t 10 -a 5

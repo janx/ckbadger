@@ -1,40 +1,25 @@
 import { api, resolveApiBase } from '@/lib/api';
 import { DID_CKB_COLLECTION_ID, DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
+import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 
 describe('api', () => {
   describe('resolveApiBase', () => {
-    it('prefers CKBADGER_SERVER_API_URL for server runtime', () => {
-      const base = resolveApiBase(
-        {
-          CKBADGER_SERVER_API_URL: 'http://api:3001/api/v1/',
-          NEXT_PUBLIC_API_URL: 'http://localhost:8101/api/v1',
-        },
-        'server'
-      );
+    it('uses runtime config apiBase when present', () => {
+      const base = resolveApiBase({
+        apiBase: 'http://127.0.0.1:9101/api/v1/',
+      });
 
-      expect(base).toBe('http://api:3001/api/v1');
+      expect(base).toBe('http://127.0.0.1:9101/api/v1');
     });
 
-    it('prefers NEXT_PUBLIC_API_URL for client runtime', () => {
-      const base = resolveApiBase(
-        {
-          CKBADGER_SERVER_API_URL: 'http://api:3001/api/v1',
-          NEXT_PUBLIC_API_URL: 'http://localhost:8101/api/v1/',
-        },
-        'client'
-      );
-
-      expect(base).toBe('http://localhost:8101/api/v1');
+    it('falls back to default when runtime config apiBase is blank', () => {
+      expect(resolveApiBase({ apiBase: '   ' })).toBe(DEFAULT_API_BASE);
     });
 
-    it('falls back to default when both env vars are missing', () => {
-      const serverBase = resolveApiBase({}, 'server');
-      const clientBase = resolveApiBase({}, 'client');
-
-      expect(serverBase).toBe('http://localhost:8101/api/v1');
-      expect(clientBase).toBe('http://localhost:8101/api/v1');
+    it('falls back to default when runtime config is missing', () => {
+      expect(resolveApiBase({})).toBe(DEFAULT_API_BASE);
     });
   });
 

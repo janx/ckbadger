@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { resolveWsUrl } from '@/lib/runtime-config';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useCallback } from 'react';
 
@@ -79,7 +80,7 @@ const messageHandlers = new Set<MessageHandler>();
 function connectWebSocket() {
   if (wsInstance?.readyState === WebSocket.OPEN) return;
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8101/ws';
+  const wsUrl = resolveWsUrl();
 
   try {
     wsInstance = new WebSocket(wsUrl);

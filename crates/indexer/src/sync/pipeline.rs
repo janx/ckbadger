@@ -295,13 +295,13 @@ impl Indexer {
                         record_worker_exit_reason(
                             &fetcher_exit_reason_for_fetcher,
                             format!(
-                                "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set: range={}-{}, chain_tip={}",
+                                "bulk sync requires direct RocksDB reads but [ckb].data_path is not configured: range={}-{}, chain_tip={}",
                                 start_block, end_block, chain_tip
                             ),
                         );
                         error!(
-                            "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set \
-                             (blocks {}-{}). Set CKB_DATA_PATH to the CKB node data directory",
+                            "bulk sync requires direct RocksDB reads but [ckb].data_path is not configured \
+                             (blocks {}-{}). Set [ckb].data_path in ckbadger.toml to the CKB node data directory",
                             start_block, end_block
                         );
                         break;
@@ -2446,8 +2446,8 @@ impl Indexer {
                 .map_err(|e| anyhow::anyhow!("Block fetch task panicked: {}", e))?
         } else if self.is_bulk_sync_active() {
             bail!(
-                "bulk sync requires direct RocksDB reads but CKB_DATA_PATH is not set \
-                 (blocks {}-{}). Set CKB_DATA_PATH to the CKB node data directory",
+                "bulk sync requires direct RocksDB reads but [ckb].data_path is not configured \
+                 (blocks {}-{}). Set [ckb].data_path in ckbadger.toml to the CKB node data directory",
                 start,
                 end
             )

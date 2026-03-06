@@ -5,7 +5,7 @@ use tracing::{info, warn};
 
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::LabelImportConfig;
-use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus};
+use ckbadger_store::{types::SyncStatus, CkbadgerStore, RuntimeStatus, StoreRuntimeConfig};
 
 use crate::cycles_worker::spawn_cycles_task_worker;
 use crate::db::Repository;
@@ -29,6 +29,7 @@ pub struct IndexerServiceConfig {
     pub pipeline_enabled: bool,
     pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
+    pub store_runtime_config: StoreRuntimeConfig,
 }
 
 impl From<IndexerServiceConfig> for Config {
@@ -49,6 +50,7 @@ impl From<IndexerServiceConfig> for Config {
             ckb_data_path: svc.ckb_data_path,
             token_labels_path: svc.token_labels_path,
             force_startup_cleanup: false,
+            store_runtime_config: svc.store_runtime_config,
         }
     }
 }
@@ -63,6 +65,7 @@ pub struct LabelImportServiceConfig {
     pub import_udt: bool,
     pub import_scripts: bool,
     pub use_bundled: bool,
+    pub store_runtime_config: StoreRuntimeConfig,
 }
 
 /// Run the indexer sync daemon from a service config. Blocks until shutdown signal or error.
@@ -80,13 +83,17 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         "Opening ckbadger domain store at: {}",
         config.domain_data_path
     );
-    let store = Arc::new(CkbadgerStore::open_domain(&config.domain_data_path)?);
+    let store = Arc::new(CkbadgerStore::open_domain_with_runtime(
+        &config.domain_data_path,
+        config.store_runtime_config,
+    )?);
     info!(
         "Opening ckbadger append-only store at: {}",
         config.append_only_data_path
     );
-    let append_only_store = Arc::new(CkbadgerStore::open_append_only(
+    let append_only_store = Arc::new(CkbadgerStore::open_append_only_with_runtime(
         &config.append_only_data_path,
+        config.store_runtime_config,
     )?);
     store.log_config();
 
@@ -580,7 +587,10 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         "Opening ckbadger domain store at: {}",
         config.domain_data_path
     );
-    let core_store = Arc::new(CkbadgerStore::open_domain(&config.domain_data_path)?);
+    let core_store = Arc::new(CkbadgerStore::open_domain_with_runtime(
+        &config.domain_data_path,
+        config.store_runtime_config,
+    )?);
 
     let ckb_store = match config.ckb_data_path.as_deref() {
         Some(path) => {
@@ -1213,6 +1223,10 @@ mod tests {
             pipeline_enabled: false,
             pipeline_buffer: 4,
             bulk_sync_threshold: 100,
+            store_runtime_config: StoreRuntimeConfig {
+                memory_budget_gb: Some(24),
+                direct_io_reads: false,
+            },
         };
 
         let config: Config = svc.into();
@@ -1231,5 +1245,7 @@ mod tests {
         assert!(config.fast_sync_mode);
         assert!(!config.force_startup_cleanup);
         assert!(config.start_block.is_none());
+        assert_eq!(config.store_runtime_config.memory_budget_gb, Some(24));
+        assert!(!config.store_runtime_config.direct_io_reads);
     }
 }

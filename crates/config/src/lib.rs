@@ -22,6 +22,7 @@ pub struct CkbadgerConfig {
     pub api: ApiConfig,
     pub frontend: FrontendConfig,
     pub indexer: IndexerConfig,
+    pub store: StoreConfig,
     pub log: LogConfig,
 }
 
@@ -60,6 +61,16 @@ pub struct IndexerConfig {
     pub bulk_sync_threshold: u64,
     pub poll_interval_ms: u64,
     pub pipeline_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct StoreConfig {
+    pub domain_data_path: String,
+    pub append_only_data_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_budget_gb: Option<u64>,
+    pub direct_io_reads: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -128,6 +139,17 @@ impl Default for IndexerConfig {
             bulk_sync_threshold: 1000,
             poll_interval_ms: 1000,
             pipeline_enabled: true,
+        }
+    }
+}
+
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            domain_data_path: "data/domain".to_string(),
+            append_only_data_path: "data/append-only".to_string(),
+            memory_budget_gb: None,
+            direct_io_reads: true,
         }
     }
 }
@@ -312,10 +334,38 @@ bulk_sync_threshold = 1000
 poll_interval_ms = 1000
 pipeline_enabled = true
 
+[store]
+domain_data_path = "data/domain"
+append_only_data_path = "data/append-only"
+# memory_budget_gb = 32           # Optional RocksDB RAM budget override
+direct_io_reads = true
+
 [log]
 level = "info"
 "#
     .to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStorePaths {
+    pub domain_data: PathBuf,
+    pub append_only_data: PathBuf,
+}
+
+pub fn resolve_workdir_path(work_dir: &Path, configured_path: &str) -> PathBuf {
+    let configured = PathBuf::from(configured_path);
+    if configured.is_absolute() {
+        configured
+    } else {
+        work_dir.join(configured)
+    }
+}
+
+pub fn resolve_store_paths(work_dir: &Path, store: &StoreConfig) -> ResolvedStorePaths {
+    ResolvedStorePaths {
+        domain_data: resolve_workdir_path(work_dir, &store.domain_data_path),
+        append_only_data: resolve_workdir_path(work_dir, &store.append_only_data_path),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -424,6 +474,11 @@ mod tests {
         assert_eq!(cfg.indexer.poll_interval_ms, 1000);
         assert!(cfg.indexer.pipeline_enabled);
 
+        assert_eq!(cfg.store.domain_data_path, "data/domain");
+        assert_eq!(cfg.store.append_only_data_path, "data/append-only");
+        assert_eq!(cfg.store.memory_budget_gb, None);
+        assert!(cfg.store.direct_io_reads);
+
         assert_eq!(cfg.log.level, "info");
     }
 
@@ -479,6 +534,12 @@ bulk_sync_threshold = 500
 poll_interval_ms = 2000
 pipeline_enabled = false
 
+[store]
+domain_data_path = "/data/domain"
+append_only_data_path = "/data/append"
+memory_budget_gb = 48
+direct_io_reads = false
+
 [log]
 level = "debug"
 "#;
@@ -498,6 +559,10 @@ level = "debug"
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
         assert_eq!(cfg.indexer.poll_interval_ms, 2000);
         assert!(!cfg.indexer.pipeline_enabled);
+        assert_eq!(cfg.store.domain_data_path, "/data/domain");
+        assert_eq!(cfg.store.append_only_data_path, "/data/append");
+        assert_eq!(cfg.store.memory_budget_gb, Some(48));
+        assert!(!cfg.store.direct_io_reads);
         assert_eq!(cfg.log.level, "debug");
     }
 
@@ -533,7 +598,44 @@ port = "not_a_number"
         assert!(toml_str.contains("[api]"));
         assert!(toml_str.contains("[frontend]"));
         assert!(toml_str.contains("[indexer]"));
+        assert!(toml_str.contains("[store]"));
         assert!(toml_str.contains("[log]"));
+    }
+
+    #[test]
+    fn test_resolve_workdir_path_keeps_absolute_paths() {
+        let root = Path::new("/tmp/ckbadger");
+        assert_eq!(
+            resolve_workdir_path(root, "/var/lib/ckbadger/domain"),
+            PathBuf::from("/var/lib/ckbadger/domain")
+        );
+    }
+
+    #[test]
+    fn test_resolve_workdir_path_resolves_relative_paths() {
+        let root = Path::new("/tmp/ckbadger");
+        assert_eq!(
+            resolve_workdir_path(root, "data/domain"),
+            PathBuf::from("/tmp/ckbadger/data/domain")
+        );
+    }
+
+    #[test]
+    fn test_resolve_store_paths_uses_store_config() {
+        let root = Path::new("/tmp/ckbadger");
+        let store = StoreConfig {
+            domain_data_path: "custom/domain".to_string(),
+            append_only_data_path: "/ssd/append-only".to_string(),
+            memory_budget_gb: Some(32),
+            direct_io_reads: false,
+        };
+
+        let resolved = resolve_store_paths(root, &store);
+        assert_eq!(
+            resolved.domain_data,
+            PathBuf::from("/tmp/ckbadger/custom/domain")
+        );
+        assert_eq!(resolved.append_only_data, PathBuf::from("/ssd/append-only"));
     }
 
     // -- load_config --

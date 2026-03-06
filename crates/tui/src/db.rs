@@ -2,7 +2,9 @@ use anyhow::Result;
 use ckbadger_common::{
     format_duration_smart, MemoryStatsData, PipelineProgressData, SyncProgressData, SyncStatusData,
 };
-use ckbadger_store::{secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner};
+use ckbadger_store::{
+    secondary_store_path, CkbadgerStore, MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig,
+};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -207,6 +209,7 @@ pub struct TuiDb {
     memory_profile: MemoryProfile,
     domain_data_path: PathBuf,
     append_only_data_path: PathBuf,
+    store_runtime_config: StoreRuntimeConfig,
 }
 
 impl TuiDb {
@@ -222,9 +225,20 @@ impl TuiDb {
         &self.append_only_data_path
     }
 
+    pub fn direct_io_reads_enabled(&self) -> bool {
+        self.store_runtime_config.direct_io_reads
+    }
+
     pub async fn new(api_url: &str, domain_data_path: &str, append_only_data_path: &str) -> Self {
-        Self::new_with_monitoring(api_url, domain_data_path, append_only_data_path, None, None)
-            .await
+        Self::new_with_monitoring(
+            api_url,
+            domain_data_path,
+            append_only_data_path,
+            None,
+            None,
+            StoreRuntimeConfig::default(),
+        )
+        .await
     }
 
     pub async fn new_with_supervisor_socket(
@@ -239,6 +253,7 @@ impl TuiDb {
             append_only_data_path,
             supervisor_socket_path,
             None,
+            StoreRuntimeConfig::default(),
         )
         .await
     }
@@ -249,12 +264,14 @@ impl TuiDb {
         append_only_data_path: &str,
         supervisor_socket_path: Option<&str>,
         service_log_dir: Option<&str>,
+        store_runtime_config: StoreRuntimeConfig,
     ) -> Self {
         // Try to open the domain store in secondary (read-only) mode
         let secondary_path = secondary_store_path(domain_data_path, SecondaryStoreOwner::Tui);
-        let store = match CkbadgerStore::open_domain_secondary(
+        let store = match CkbadgerStore::open_domain_secondary_with_runtime(
             Path::new(domain_data_path),
             secondary_path.as_path(),
+            store_runtime_config,
         ) {
             Ok(s) => {
                 eprintln!(
@@ -280,9 +297,10 @@ impl TuiDb {
             supervisor_socket_path: supervisor_socket_path.map(PathBuf::from),
             service_log_dir: service_log_dir.map(PathBuf::from),
             http,
-            memory_profile: MemoryProfile::for_secondary(),
+            memory_profile: MemoryProfile::for_secondary_with_config(store_runtime_config),
             domain_data_path: PathBuf::from(domain_data_path),
             append_only_data_path: PathBuf::from(append_only_data_path),
+            store_runtime_config,
         }
     }
 
@@ -671,7 +689,7 @@ mod tests {
     use ckbadger_ipc::{
         IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus,
     };
-    use ckbadger_store::{CkbadgerStore, RuntimeStatus};
+    use ckbadger_store::{CkbadgerStore, RuntimeStatus, StoreRuntimeConfig};
     use std::future::Future;
     use std::path::Path;
     use std::pin::Pin;
@@ -1118,6 +1136,7 @@ mod tests {
             append_path.to_str().unwrap(),
             None,
             Some(log_dir.to_str().unwrap()),
+            StoreRuntimeConfig::default(),
         )
         .await;
 

@@ -63,7 +63,7 @@ pub async fn create_router(config: AppConfig) -> Router {
     let ckb_store = match config.ckb_data_path.as_deref() {
         Some(path) => {
             let reader = CkbChainReader::open(path)
-                .expect("Failed to open CKB RocksDB -- check CKB_DATA_PATH");
+                .expect("Failed to open CKB RocksDB -- check [ckb].data_path in ckbadger.toml");
             tracing::info!("CKB direct RocksDB reader opened at {}", path);
             Some(Arc::new(reader))
         }

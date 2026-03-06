@@ -4,17 +4,21 @@
 
 import type { FuzzerOptions, SamplingStrategy } from './types';
 
+const DEFAULT_API_URL = 'http://localhost:3001/api/v1';
+const DEFAULT_OFFICIAL_EXPLORER_URL = 'https://explorer.nervos.org/api/v1';
+const DEFAULT_CKBADGER_FRONTEND_URL = 'http://localhost:3000';
+
 export const config = {
   // API endpoints
   ckbadger: {
-    baseUrl: process.env.CKBADGER_API_URL || 'http://localhost:3001/api/v1',
+    baseUrl: DEFAULT_API_URL,
   },
   official: {
     // CKB Explorer API (mainnet)
-    baseUrl: process.env.OFFICIAL_EXPLORER_URL || 'https://explorer.nervos.org/api/v1',
+    baseUrl: DEFAULT_OFFICIAL_EXPLORER_URL,
   },
   frontend: {
-    baseUrl: process.env.CKBADGER_FRONTEND_URL || 'http://localhost:3000',
+    baseUrl: DEFAULT_CKBADGER_FRONTEND_URL,
   },
 
   // Sampling configuration
@@ -52,7 +56,7 @@ export const config = {
   // Output settings
   output: {
     reportsDir: './fuzzing/reports',
-    verbose: process.env.FUZZING_VERBOSE === 'true',
+    verbose: false,
   },
 };
 

@@ -67,8 +67,8 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Indexer owns all RocksDB writes**: any operation that creates/updates/deletes persistent DB state must be executed by `ckbadger-indexer`.
 - **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
 - If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
-- **Domain store responsibility**: domain store (`CKBADGER_DOMAIN_DATA_PATH`) is the mutable canonical/query state and may perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
-- **Append-only store responsibility**: append-only store (`CKBADGER_APPEND_ONLY_DATA_PATH`) is immutable history/log storage. It may only append new records. Update/delete/overwrite of existing append-only records is forbidden.
+- **Domain store responsibility**: domain store (`[store].domain_data_path`) is the mutable canonical/query state and may perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
+- **Append-only store responsibility**: append-only store (`[store].append_only_data_path`) is immutable history/log storage. It may only append new records. Update/delete/overwrite of existing append-only records is forbidden.
 - **Append-only correction policy**: if append-only data is wrong, fix indexer logic and rebuild from genesis; do not patch history with in-place update/delete.
 
 ## Store Boundary Check Rules (MANDATORY)
@@ -184,11 +184,11 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## Label Import
 
-`label_import` auto-runs on indexer start if `$TOKEN_LABELS_PATH/information/` exists (default: `docs/token-labels`). Manual: `ckbadger label-import`. Flags: `--token-labels-path`, `--network`, `--import-udt`, `--import-scripts`.
+`label_import` auto-runs on indexer start if `token-labels/information/` exists in the workdir, or bundled/share token labels are available. Manual: `ckbadger label-import`.
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Two logical RocksDB stores: domain (`CKBADGER_DOMAIN_DATA_PATH`, default `./data/ckbadger-store`) and append-only (`CKBADGER_APPEND_ONLY_DATA_PATH`, default `./data/ckbadger-store-append-only`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (40 CFs, including split stats CFs).
+Two logical RocksDB stores: domain (`[store].domain_data_path`, default `data/domain`) and append-only (`[store].append_only_data_path`, default `data/append-only`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (40 CFs, including split stats CFs).
 
 Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 

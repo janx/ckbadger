@@ -31,22 +31,6 @@ pnpm fuzz:visual
 
 ## Configuration
 
-### Environment Variables
-
-```bash
-# Ckbadger API (required for all modes)
-CKBADGER_API_URL=http://localhost:3001/api/v1
-
-# Official Explorer API (required for API mode)
-OFFICIAL_EXPLORER_URL=https://explorer.nervos.org/api/v1
-
-# Frontend URL (required for visual mode)
-CKBADGER_FRONTEND_URL=http://localhost:3000
-
-# Enable verbose logging
-FUZZING_VERBOSE=true
-```
-
 ### CLI Options
 
 ```
@@ -165,8 +149,6 @@ This ensures both current data accuracy and historical data integrity.
 # Example GitHub Actions workflow
 - name: Run Fuzzing Tests
   run: pnpm fuzz:quick
-  env:
-    CKBADGER_API_URL: http://localhost:3001/api/v1
 ```
 
 For production CI, use `pnpm fuzz:quick` with minimal samples to avoid rate limiting.

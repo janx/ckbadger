@@ -31,7 +31,7 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 **Responsibilities**:
 
 - Query chain tip (from CKB RocksDB directly, or CKB RPC as fallback)
-- Read blocks from CKB's RocksDB (~0.1ms per block) when `CKB_DATA_PATH` is set, or fetch via JSON-RPC
+- Read blocks from CKB's RocksDB (~0.1ms per block) when `[ckb].data_path` is configured in `ckbadger.toml`, or fetch via JSON-RPC
 - Send raw blocks to parser channel
 
 **Key behaviors**:
@@ -136,13 +136,16 @@ Block N arrives
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
 | `ckb_data_path`       | -       | Path to CKB node's RocksDB data dir for direct reads     |
 
-### Environment Variables
+### Relevant Config
 
 ```bash
-CKBADGER_DOMAIN_DATA_PATH=./data/ckbadger-store
-CKB_DATA_PATH=/var/lib/ckb/data/db
-CKB_RPC_URL=http://127.0.0.1:8114
-REDIS_URL=redis://localhost:6379
+[store]
+domain_data_path = "data/domain"
+append_only_data_path = "data/append-only"
+
+[ckb]
+rpc_url = "http://127.0.0.1:8114"
+# data_path = "/var/lib/ckb/data/db"
 ```
 
 `pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
