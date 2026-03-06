@@ -9,6 +9,11 @@ describe('tooling config', () => {
     expect(pkg.scripts.build).toMatch(/^vite build/);
   });
 
+  it('does not keep next runtime packages in package.json', () => {
+    expect(pkg.dependencies).not.toHaveProperty('next');
+    expect(pkg.devDependencies).not.toHaveProperty('eslint-config-next');
+  });
+
   it('exposes a canonical local navigation module', async () => {
     const navigation = await vi.importActual<typeof import('@/src/navigation')>('@/src/navigation');
 
@@ -94,5 +99,14 @@ describe('tooling config', () => {
       const source = readFileSync(join(process.cwd(), relativePath), 'utf8');
       expect(source).not.toContain("from 'next/dynamic'");
     }
+  });
+
+  it('does not keep next aliases in vite config', () => {
+    const source = readFileSync(join(process.cwd(), 'vite.config.ts'), 'utf8');
+
+    expect(source).not.toContain("'next/link'");
+    expect(source).not.toContain("'next/image'");
+    expect(source).not.toContain("'next/navigation'");
+    expect(source).not.toContain("'next/dynamic'");
   });
 });

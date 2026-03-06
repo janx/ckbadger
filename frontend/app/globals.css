@@ -9,6 +9,9 @@
   --terminal-dim: #00cc33;
   --amber: #ffb000;
   --amber-dim: #cc8c00;
+  --font-sans: 'Inter', 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
+  --font-display: var(--font-mono);
 }
 
 body {
