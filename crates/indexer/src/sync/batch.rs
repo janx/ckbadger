@@ -895,21 +895,13 @@ impl Indexer {
                 perf_stats.immutable_memtables,
             );
 
-            let partition_range = format_partition_range(start_block, end_block);
-            let boundary_info = if crosses_partition_boundary(start_block, end_block) {
-                " (crosses boundary)"
-            } else {
-                ""
-            };
             info!(
-                "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms) {}{}",
+                "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms)",
                 start_block,
                 end_block,
                 self.progress.blocks_remaining(),
                 db_elapsed.as_secs_f64(),
-                write_metrics.commit_ms,
-                partition_range,
-                boundary_info
+                write_metrics.commit_ms
             );
         }
         self.perf

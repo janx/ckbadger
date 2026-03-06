@@ -581,29 +581,32 @@ fn test_consumed_cell_not_in_live_cells() {
 }
 
 #[test]
-fn test_cross_partition_cell_lookup() {
+fn test_cell_lookup_across_height_ranges() {
     let (store, writer) = setup_store();
-    let tx_p0 = vec![0x01u8; 32];
-    let tx_p1 = vec![0x02u8; 32];
+    let tx_low_height = vec![0x01u8; 32];
+    let tx_high_height = vec![0x02u8; 32];
     let cell = make_cell(100_00000000, 100, 0xAA);
 
     insert_cells_for_test(
         &store,
         &writer,
-        &[(&tx_p0, 0, &cell, 1_000_000), (&tx_p1, 0, &cell, 6_000_000)],
+        &[
+            (&tx_low_height, 0, &cell, 1_000_000),
+            (&tx_high_height, 0, &cell, 6_000_000),
+        ],
         false,
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_p0, 0), (&tx_p1, 0)], false)
+        .get_cells_info_batch(&[(&tx_low_height, 0), (&tx_high_height, 0)], false)
         .unwrap();
 
     assert_eq!(result.len(), 2);
 
-    let (_, block0, _, _) = result.get(&(tx_p0.clone(), 0)).unwrap();
+    let (_, block0, _, _) = result.get(&(tx_low_height.clone(), 0)).unwrap();
     assert_eq!(*block0, 1_000_000);
 
-    let (_, block1, _, _) = result.get(&(tx_p1.clone(), 0)).unwrap();
+    let (_, block1, _, _) = result.get(&(tx_high_height.clone(), 0)).unwrap();
     assert_eq!(*block1, 6_000_000);
 }
 

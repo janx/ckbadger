@@ -2085,12 +2085,6 @@ impl Indexer {
                         } else {
                             ""
                         };
-                        let partition_range = format_partition_range(start_block, end_block);
-                        let boundary_info = if crosses_partition_boundary(start_block, end_block) {
-                            " (crosses boundary)"
-                        } else {
-                            ""
-                        };
                         let writer_queue = parse_tx_for_writer_depth.max_capacity()
                             - parse_tx_for_writer_depth.capacity();
                         self.pipeline_perf.record_write(
@@ -2183,7 +2177,7 @@ impl Indexer {
                             perf_stats.immutable_memtables,
                         );
                         info!(
-                            "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
+                            "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}",
                             start_block,
                             end_block,
                             blocks_remaining,
@@ -2194,8 +2188,6 @@ impl Indexer {
                             adaptive_snapshot.target_batch_txs,
                             adaptive_snapshot.min_target_batch_txs,
                             adaptive_snapshot.inflight_limit,
-                            partition_range,
-                            boundary_info,
                             mode
                         );
 

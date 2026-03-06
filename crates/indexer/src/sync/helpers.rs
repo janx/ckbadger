@@ -1,6 +1,6 @@
 //! Pure utility functions with no CKB domain knowledge.
 //!
-//! Hex parsing, type conversions, partition math, panic/cgroup helpers, etc.
+//! Hex parsing, type conversions, panic/cgroup helpers, etc.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -13,9 +13,6 @@ use crate::runtime_diag::CgroupMemorySnapshot;
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub(crate) const PARTITION_SIZE: u64 = 5_000_000;
 
 pub(crate) const STARTUP_PHASE_NONE: u8 = 0;
 pub(crate) const STARTUP_PHASE_ROLLBACK_CLEANUP: u8 = 1;
@@ -112,31 +109,6 @@ pub(crate) fn decode_adaptive_batch_reason(reason_code: u8) -> Option<&'static s
         ADAPTIVE_REASON_SEVERE_PRESSURE_BACKOFF => Some("severe_pressure_backoff"),
         _ => None,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Partition helpers
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub(crate) fn get_partition_index(block_number: u64) -> usize {
-    (block_number / PARTITION_SIZE) as usize
-}
-
-#[allow(dead_code)]
-pub(crate) fn format_partition_range(start_block: u64, end_block: u64) -> String {
-    let start_partition = get_partition_index(start_block);
-    let end_partition = get_partition_index(end_block);
-    if start_partition == end_partition {
-        format!("[p{}]", start_partition)
-    } else {
-        format!("[p{}->p{}]", start_partition, end_partition)
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn crosses_partition_boundary(start_block: u64, end_block: u64) -> bool {
-    get_partition_index(start_block) != get_partition_index(end_block)
 }
 
 // ---------------------------------------------------------------------------
@@ -564,32 +536,5 @@ mod tests {
     #[should_panic(expected = "fetch batch end_block overflow while computing next start")]
     fn test_next_fetch_start_after_batch_panics_on_u64_max() {
         let _ = next_fetch_start_after_batch(u64::MAX);
-    }
-
-    #[test]
-    fn test_partition_boundary_detection() {
-        let start = 4_000_000u64;
-        let end = 4_999_999u64;
-        assert_eq!(get_partition_index(start), get_partition_index(end));
-        assert!(!crosses_partition_boundary(start, end));
-        assert_eq!(format_partition_range(start, end), "[p0]");
-
-        let start = 4_999_990u64;
-        let end = 5_000_009u64;
-        assert_ne!(get_partition_index(start), get_partition_index(end));
-        assert!(crosses_partition_boundary(start, end));
-        assert_eq!(format_partition_range(start, end), "[p0->p1]");
-
-        let start = 9_999_999u64;
-        let end = 10_000_001u64;
-        assert_ne!(get_partition_index(start), get_partition_index(end));
-        assert!(crosses_partition_boundary(start, end));
-        assert_eq!(format_partition_range(start, end), "[p1->p2]");
-
-        let start = 5_000_000u64;
-        let end = 5_100_000u64;
-        assert_eq!(get_partition_index(start), get_partition_index(end));
-        assert!(!crosses_partition_boundary(start, end));
-        assert_eq!(format_partition_range(start, end), "[p1]");
     }
 }
