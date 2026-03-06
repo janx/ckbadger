@@ -9,7 +9,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::Duration;
 
-use crate::db::TuiDb;
+use crate::db::{TuiDb, TuiPathConfig};
 use crate::ui::{self, App};
 
 /// Configuration for starting the TUI.
@@ -17,6 +17,9 @@ use crate::ui::{self, App};
 pub struct TuiServiceConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
+    pub ckbadger_workdir: String,
+    pub ckb_workdir: String,
+    pub ckb_db_path: String,
     pub api_url: String,
     pub refresh_ms: u64,
     pub supervisor_socket_path: Option<String>,
@@ -28,8 +31,13 @@ pub struct TuiServiceConfig {
 pub async fn run_tui(config: TuiServiceConfig) -> Result<()> {
     let db = TuiDb::new_with_monitoring(
         &config.api_url,
-        &config.domain_data_path,
-        &config.append_only_data_path,
+        TuiPathConfig {
+            domain_data_path: &config.domain_data_path,
+            append_only_data_path: &config.append_only_data_path,
+            ckbadger_workdir: &config.ckbadger_workdir,
+            ckb_workdir: &config.ckb_workdir,
+            ckb_db_path: &config.ckb_db_path,
+        },
         config.supervisor_socket_path.as_deref(),
         config.service_log_dir.as_deref(),
         config.store_runtime_config,
@@ -120,6 +128,9 @@ mod tests {
         let config = TuiServiceConfig {
             domain_data_path: "/data/domain".to_string(),
             append_only_data_path: "/data/append".to_string(),
+            ckbadger_workdir: "/workdir/ckbadger".to_string(),
+            ckb_workdir: "/workdir/ckb".to_string(),
+            ckb_db_path: "/workdir/ckb/data/db".to_string(),
             api_url: "http://localhost:3001/api/v1".to_string(),
             refresh_ms: 500,
             supervisor_socket_path: Some("/run/indexer.sock".to_string()),
@@ -129,6 +140,9 @@ mod tests {
 
         assert_eq!(config.domain_data_path, "/data/domain");
         assert_eq!(config.append_only_data_path, "/data/append");
+        assert_eq!(config.ckbadger_workdir, "/workdir/ckbadger");
+        assert_eq!(config.ckb_workdir, "/workdir/ckb");
+        assert_eq!(config.ckb_db_path, "/workdir/ckb/data/db");
         assert_eq!(config.api_url, "http://localhost:3001/api/v1");
         assert_eq!(config.refresh_ms, 500);
         assert_eq!(

@@ -278,10 +278,14 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
     let store_paths = resolve_store_paths(workdir, &config.store);
+    let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
 
     let tui_config = TuiServiceConfig {
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
+        ckbadger_workdir: work.root.to_string_lossy().to_string(),
+        ckb_workdir: ckb_paths.ckb_workdir.to_string_lossy().to_string(),
+        ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
         api_url: format!("http://{}:{}/api/v1", config.api.host, config.api.port),
         refresh_ms: 1000,
         supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),

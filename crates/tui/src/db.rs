@@ -207,14 +207,37 @@ pub struct TuiDb {
     service_log_dir: Option<PathBuf>,
     http: reqwest::Client,
     memory_profile: MemoryProfile,
+    ckbadger_workdir: PathBuf,
+    ckb_workdir: PathBuf,
+    ckb_db_path: PathBuf,
     domain_data_path: PathBuf,
     append_only_data_path: PathBuf,
     store_runtime_config: StoreRuntimeConfig,
 }
 
+pub struct TuiPathConfig<'a> {
+    pub domain_data_path: &'a str,
+    pub append_only_data_path: &'a str,
+    pub ckbadger_workdir: &'a str,
+    pub ckb_workdir: &'a str,
+    pub ckb_db_path: &'a str,
+}
+
 impl TuiDb {
     pub fn memory_profile(&self) -> &MemoryProfile {
         &self.memory_profile
+    }
+
+    pub fn ckbadger_workdir(&self) -> &Path {
+        &self.ckbadger_workdir
+    }
+
+    pub fn ckb_workdir(&self) -> &Path {
+        &self.ckb_workdir
+    }
+
+    pub fn ckb_db_path(&self) -> &Path {
+        &self.ckb_db_path
     }
 
     pub fn domain_data_path(&self) -> &Path {
@@ -232,8 +255,13 @@ impl TuiDb {
     pub async fn new(api_url: &str, domain_data_path: &str, append_only_data_path: &str) -> Self {
         Self::new_with_monitoring(
             api_url,
-            domain_data_path,
-            append_only_data_path,
+            TuiPathConfig {
+                domain_data_path,
+                append_only_data_path,
+                ckbadger_workdir: ".",
+                ckb_workdir: ".",
+                ckb_db_path: ".",
+            },
             None,
             None,
             StoreRuntimeConfig::default(),
@@ -249,8 +277,13 @@ impl TuiDb {
     ) -> Self {
         Self::new_with_monitoring(
             api_url,
-            domain_data_path,
-            append_only_data_path,
+            TuiPathConfig {
+                domain_data_path,
+                append_only_data_path,
+                ckbadger_workdir: ".",
+                ckb_workdir: ".",
+                ckb_db_path: ".",
+            },
             supervisor_socket_path,
             None,
             StoreRuntimeConfig::default(),
@@ -260,23 +293,23 @@ impl TuiDb {
 
     pub async fn new_with_monitoring(
         api_url: &str,
-        domain_data_path: &str,
-        append_only_data_path: &str,
+        path_config: TuiPathConfig<'_>,
         supervisor_socket_path: Option<&str>,
         service_log_dir: Option<&str>,
         store_runtime_config: StoreRuntimeConfig,
     ) -> Self {
         // Try to open the domain store in secondary (read-only) mode
-        let secondary_path = secondary_store_path(domain_data_path, SecondaryStoreOwner::Tui);
+        let secondary_path =
+            secondary_store_path(path_config.domain_data_path, SecondaryStoreOwner::Tui);
         let store = match CkbadgerStore::open_domain_secondary_with_runtime(
-            Path::new(domain_data_path),
+            Path::new(path_config.domain_data_path),
             secondary_path.as_path(),
             store_runtime_config,
         ) {
             Ok(s) => {
                 eprintln!(
                     "TUI: opened domain store (secondary) at {}",
-                    domain_data_path
+                    path_config.domain_data_path
                 );
                 Some(Arc::new(s))
             }
@@ -298,8 +331,11 @@ impl TuiDb {
             service_log_dir: service_log_dir.map(PathBuf::from),
             http,
             memory_profile: MemoryProfile::for_secondary_with_config(store_runtime_config),
-            domain_data_path: PathBuf::from(domain_data_path),
-            append_only_data_path: PathBuf::from(append_only_data_path),
+            ckbadger_workdir: PathBuf::from(path_config.ckbadger_workdir),
+            ckb_workdir: PathBuf::from(path_config.ckb_workdir),
+            ckb_db_path: PathBuf::from(path_config.ckb_db_path),
+            domain_data_path: PathBuf::from(path_config.domain_data_path),
+            append_only_data_path: PathBuf::from(path_config.append_only_data_path),
             store_runtime_config,
         }
     }
@@ -682,8 +718,8 @@ fn read_last_non_empty_line(path: &Path) -> Option<String> {
 mod tests {
     use super::{
         derive_sync_status_fields, parse_epoch_string, response_indicates_derived_syncing,
-        sync_modes_from_progress, sync_progress_is_stale, TuiDb, LEGACY_BULK_SYNC_THRESHOLD_BLOCKS,
-        SYNC_PROGRESS_STALE_SECS,
+        sync_modes_from_progress, sync_progress_is_stale, TuiDb, TuiPathConfig,
+        LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, SYNC_PROGRESS_STALE_SECS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
     use ckbadger_ipc::{
@@ -838,6 +874,9 @@ mod tests {
             db.append_only_data_path(),
             Path::new("/tmp/nonexistent-append-store-test")
         );
+        assert_eq!(db.ckbadger_workdir(), Path::new("."));
+        assert_eq!(db.ckb_workdir(), Path::new("."));
+        assert_eq!(db.ckb_db_path(), Path::new("."));
         assert!(db.memory_profile().is_secondary);
     }
 
@@ -1132,8 +1171,13 @@ mod tests {
 
         let db = TuiDb::new_with_monitoring(
             "http://127.0.0.1:3001/api/v1",
-            domain_path.to_str().unwrap(),
-            append_path.to_str().unwrap(),
+            TuiPathConfig {
+                domain_data_path: domain_path.to_str().unwrap(),
+                append_only_data_path: append_path.to_str().unwrap(),
+                ckbadger_workdir: ".",
+                ckb_workdir: ".",
+                ckb_db_path: ".",
+            },
             None,
             Some(log_dir.to_str().unwrap()),
             StoreRuntimeConfig::default(),

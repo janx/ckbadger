@@ -3576,7 +3576,8 @@ fn draw_system_content(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(env_height),
-            Constraint::Length(5),
+            Constraint::Length(4),
+            Constraint::Length(6),
             Constraint::Min(10),
         ])
         .split(area);
@@ -3584,19 +3585,23 @@ fn draw_system_content(f: &mut Frame, app: &App, area: Rect) {
     // -- Section 1: System Environment --
     draw_system_environment(f, p, mem, chunks[0]);
 
-    // -- Section 2: Store Paths --
+    // -- Section 2: Workdir --
+    draw_system_workdirs(f, db.ckbadger_workdir(), db.ckb_workdir(), chunks[1]);
+
+    // -- Section 3: Store Paths --
     draw_system_paths(
         f,
         db.domain_data_path(),
         db.append_only_data_path(),
-        chunks[1],
+        db.ckb_db_path(),
+        chunks[2],
     );
 
-    // -- Section 3: RocksDB Parameters --
+    // -- Section 4: RocksDB Parameters --
     if compact {
-        draw_system_params_compact(f, p, db.direct_io_reads_enabled(), chunks[2]);
+        draw_system_params_compact(f, p, db.direct_io_reads_enabled(), chunks[3]);
     } else {
-        draw_system_params_wide(f, p, db.direct_io_reads_enabled(), chunks[2]);
+        draw_system_params_wide(f, p, db.direct_io_reads_enabled(), chunks[3]);
     }
 }
 
@@ -3682,26 +3687,51 @@ fn draw_system_environment(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_system_paths(
+fn system_workdir_lines(
+    ckbadger_workdir: &std::path::Path,
+    ckb_workdir: &std::path::Path,
+) -> Vec<Line<'static>> {
+    vec![
+        system_kv_line("CKB workdir", ckb_workdir.display().to_string(), FOREGROUND),
+        system_kv_line(
+            "ckbadger workdir",
+            ckbadger_workdir.display().to_string(),
+            FOREGROUND,
+        ),
+    ]
+}
+
+fn draw_system_workdirs(
     f: &mut Frame,
-    domain_path: &std::path::Path,
-    append_path: &std::path::Path,
+    ckbadger_workdir: &std::path::Path,
+    ckb_workdir: &std::path::Path,
     area: Rect,
 ) {
     let block = Block::default()
         .title(Span::styled(
-            " Store Paths ",
+            " Workdir ",
             Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(SLATE_800));
     let inner = block.inner(area);
     f.render_widget(block, area);
+    f.render_widget(
+        Paragraph::new(system_workdir_lines(ckbadger_workdir, ckb_workdir)),
+        inner,
+    );
+}
 
+fn system_store_path_lines(
+    domain_path: &std::path::Path,
+    append_path: &std::path::Path,
+    ckb_db_path: &std::path::Path,
+) -> Vec<Line<'static>> {
     let domain_cf_count = DOMAIN_CFS.len();
     let append_cf_count = APPEND_CFS.len();
 
-    let lines = vec![
+    vec![
+        system_kv_line("CKB RocksDB", ckb_db_path.display().to_string(), FOREGROUND),
         system_kv_line(
             "Domain store",
             domain_path.display().to_string(),
@@ -3722,8 +3752,33 @@ fn draw_system_paths(
             ),
             SLATE_500,
         ),
-    ];
-    f.render_widget(Paragraph::new(lines), inner);
+    ]
+}
+
+fn draw_system_paths(
+    f: &mut Frame,
+    domain_path: &std::path::Path,
+    append_path: &std::path::Path,
+    ckb_db_path: &std::path::Path,
+    area: Rect,
+) {
+    let block = Block::default()
+        .title(Span::styled(
+            " Store Paths ",
+            Style::default().fg(FOREGROUND).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(SLATE_800));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    f.render_widget(
+        Paragraph::new(system_store_path_lines(
+            domain_path,
+            append_path,
+            ckb_db_path,
+        )),
+        inner,
+    );
 }
 
 fn system_normal_mode_lines(p: &ckbadger_store::MemoryProfile) -> Vec<Line<'static>> {
@@ -3930,10 +3985,10 @@ mod tests {
         pipeline_reset_line, rate_jitter, runtime_health_state, runtime_live_delta,
         service_log_tails_line, sparkline, stack_sync_charts, stale_age_secs, stale_status,
         startup_phase_label, storage_runtime_columns, supervisor_services_line, sync_bottleneck,
-        sync_chart_specs, sync_timing_lines, system_kv_line, trend_delta, trim_for_panel,
-        AdaptiveControlSnapshot, App, Color, CompactOverviewLayout, CompactSyncLayout,
-        DiagnosticsViewMode, SyncBottleneck, SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS,
-        TERMINAL_DIM,
+        sync_chart_specs, sync_timing_lines, system_kv_line, system_store_path_lines,
+        system_workdir_lines, trend_delta, trim_for_panel, AdaptiveControlSnapshot, App, Color,
+        CompactOverviewLayout, CompactSyncLayout, DiagnosticsViewMode, SyncBottleneck,
+        SyncChartKind, CYAN, STATUS_MESSAGE_TTL_SECS, TERMINAL_DIM,
     };
     use crate::db::{
         ApiServiceInfo, RuntimeDiagData, ServiceLogTailData, SupervisorServiceData, TuiDb,
@@ -4658,6 +4713,46 @@ mod tests {
         assert!(text.contains("value"));
         // Label is left-padded to 22 chars + 2-char indent = 24 chars before value
         assert!(text.starts_with("  Test label"));
+    }
+
+    #[test]
+    fn test_system_workdir_lines_include_both_roots() {
+        let lines = system_workdir_lines(
+            std::path::Path::new("/workdir/ckbadger"),
+            std::path::Path::new("/workdir/ckb"),
+        );
+        assert!(line_text(&lines[0]).contains("CKB workdir"));
+        assert!(line_text(&lines[1]).contains("ckbadger workdir"));
+        let text = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<String>>()
+            .join(" ");
+        assert!(text.contains("CKB workdir"));
+        assert!(text.contains("/workdir/ckb"));
+        assert!(text.contains("ckbadger workdir"));
+        assert!(text.contains("/workdir/ckbadger"));
+    }
+
+    #[test]
+    fn test_system_store_path_lines_include_ckb_rocksdb() {
+        let lines = system_store_path_lines(
+            std::path::Path::new("/data/domain"),
+            std::path::Path::new("/data/append-only"),
+            std::path::Path::new("/ckb/data/db"),
+        );
+        assert!(line_text(&lines[0]).contains("CKB RocksDB"));
+        let text = lines
+            .iter()
+            .map(line_text)
+            .collect::<Vec<String>>()
+            .join(" ");
+        assert!(text.contains("Domain store"));
+        assert!(text.contains("/data/domain"));
+        assert!(text.contains("Append-only store"));
+        assert!(text.contains("/data/append-only"));
+        assert!(text.contains("CKB RocksDB"));
+        assert!(text.contains("/ckb/data/db"));
     }
 
     #[test]
