@@ -116,6 +116,19 @@ describe('tooling config', () => {
     expect(proposalGraphSource).toContain("from '@/lib/dynamic-client'");
   });
 
+  it('keeps heavy graph runtime code out of the wrapper modules', () => {
+    const cellGraphSource = readFileSync(join(process.cwd(), 'components/cell-graph.tsx'), 'utf8');
+    const proposalGraphSource = readFileSync(
+      join(process.cwd(), 'components/proposal-graph.tsx'),
+      'utf8'
+    );
+
+    expect(cellGraphSource).not.toContain("from 'react-force-graph-2d'");
+    expect(proposalGraphSource).not.toContain("from 'react-force-graph-2d'");
+    expect(cellGraphSource).toContain("() => import('@/components/cell-graph-renderer')");
+    expect(proposalGraphSource).toContain("() => import('@/components/proposal-graph-renderer')");
+  });
+
   it('does not keep next aliases in vite config', () => {
     const source = readFileSync(join(process.cwd(), 'vite.config.ts'), 'utf8');
 
