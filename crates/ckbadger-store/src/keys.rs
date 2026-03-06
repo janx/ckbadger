@@ -3,6 +3,8 @@
 //! All numeric keys use big-endian encoding for correct lexicographic sort order.
 //! Fixed-size fields with no delimiters needed.
 
+use crate::types::CellIndexTag;
+
 /// Outpoint key: tx_hash(32B) + output_index(2B BE) = 34 bytes
 pub const OUTPOINT_KEY_SIZE: usize = 34;
 
@@ -12,6 +14,43 @@ pub const BLOCK_NUM_KEY_SIZE: usize = 8;
 pub const BLOCK_OUTPOINT_KEY_SIZE: usize = BLOCK_NUM_KEY_SIZE + OUTPOINT_KEY_SIZE;
 /// Reorg undo-log key: block_number(8B BE) + seq(8B BE) = 16 bytes
 pub const REORG_UNDO_LOG_KEY_SIZE: usize = 16;
+/// Cell payload key: created_block(8B BE) + outpoint(34B) = 42 bytes
+pub const CELL_PAYLOAD_KEY_SIZE: usize = BLOCK_OUTPOINT_KEY_SIZE;
+/// Activity tx envelope key: block_num_desc(8B BE) + tx_idx(4B BE) + tx_hash(32B) = 44 bytes
+pub const ACTIVITY_TX_ENVELOPE_KEY_SIZE: usize = 44;
+/// Activity-by-owner key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) + tx_hash(32B) = 76 bytes
+pub const ACTIVITY_OWNER_KEY_SIZE: usize = 76;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedCellPayloadKey {
+    pub block_number: i64,
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedCellIndexEntryKey {
+    pub tag: CellIndexTag,
+    pub script_hash: Vec<u8>,
+    pub block_number: i64,
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedActivityTxEnvelopeKey {
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub tx_hash: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecodedActivityOwnerKey {
+    pub lock_hash: Vec<u8>,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub tx_hash: Vec<u8>,
+}
 
 pub fn encode_outpoint(tx_hash: &[u8], output_index: i16) -> [u8; OUTPOINT_KEY_SIZE] {
     let mut key = [0u8; OUTPOINT_KEY_SIZE];
@@ -60,6 +99,26 @@ pub fn decode_block_outpoint_key(key: &[u8]) -> (i64, Vec<u8>, i16) {
     (block_num, tx_hash, output_index)
 }
 
+pub fn encode_cell_payload_key(
+    block_num: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; CELL_PAYLOAD_KEY_SIZE] {
+    encode_block_outpoint_key(block_num, tx_hash, output_index)
+}
+
+pub fn decode_cell_payload_key(key: &[u8]) -> Option<DecodedCellPayloadKey> {
+    if key.len() != CELL_PAYLOAD_KEY_SIZE {
+        return None;
+    }
+    let (block_number, tx_hash, output_index) = decode_block_outpoint_key(key);
+    Some(DecodedCellPayloadKey {
+        block_number,
+        tx_hash,
+        output_index,
+    })
+}
+
 pub fn encode_tx_idx(idx: i32) -> [u8; 4] {
     idx.to_be_bytes()
 }
@@ -75,6 +134,81 @@ pub fn decode_tx_idx(key: &[u8]) -> i32 {
             .try_into()
             .expect("decode_tx_idx: slice length checked"),
     )
+}
+
+pub fn encode_activity_tx_envelope_key(
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) -> [u8; ACTIVITY_TX_ENVELOPE_KEY_SIZE] {
+    assert!(
+        tx_hash.len() >= 32,
+        "encode_activity_tx_envelope_key: tx_hash must be >= 32 bytes, got {}",
+        tx_hash.len()
+    );
+    let mut key = [0u8; ACTIVITY_TX_ENVELOPE_KEY_SIZE];
+    key[..8].copy_from_slice(&(i64::MAX - block_num).to_be_bytes());
+    key[8..12].copy_from_slice(&tx_idx.to_be_bytes());
+    key[12..44].copy_from_slice(&tx_hash[..32]);
+    key
+}
+
+pub fn decode_activity_tx_envelope_key(key: &[u8]) -> Option<DecodedActivityTxEnvelopeKey> {
+    if key.len() != ACTIVITY_TX_ENVELOPE_KEY_SIZE {
+        return None;
+    }
+    Some(DecodedActivityTxEnvelopeKey {
+        block_number: i64::MAX - i64::from_be_bytes(key[..8].try_into().unwrap()),
+        tx_index: i32::from_be_bytes(key[8..12].try_into().unwrap()),
+        tx_hash: key[12..44].to_vec(),
+    })
+}
+
+pub fn encode_activity_owner_key(
+    lock_hash: &[u8],
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) -> [u8; ACTIVITY_OWNER_KEY_SIZE] {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_activity_owner_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    assert!(
+        tx_hash.len() >= 32,
+        "encode_activity_owner_key: tx_hash must be >= 32 bytes, got {}",
+        tx_hash.len()
+    );
+    let mut key = [0u8; ACTIVITY_OWNER_KEY_SIZE];
+    key[..32].copy_from_slice(&lock_hash[..32]);
+    key[32..40].copy_from_slice(&(i64::MAX - block_num).to_be_bytes());
+    key[40..44].copy_from_slice(&tx_idx.to_be_bytes());
+    key[44..76].copy_from_slice(&tx_hash[..32]);
+    key
+}
+
+pub fn encode_activity_owner_prefix(lock_hash: &[u8]) -> [u8; 32] {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_activity_owner_prefix: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    let mut prefix = [0u8; 32];
+    prefix.copy_from_slice(&lock_hash[..32]);
+    prefix
+}
+
+pub fn decode_activity_owner_key(key: &[u8]) -> Option<DecodedActivityOwnerKey> {
+    if key.len() != ACTIVITY_OWNER_KEY_SIZE {
+        return None;
+    }
+    Some(DecodedActivityOwnerKey {
+        lock_hash: key[..32].to_vec(),
+        block_number: i64::MAX - i64::from_be_bytes(key[32..40].try_into().unwrap()),
+        tx_index: i32::from_be_bytes(key[40..44].try_into().unwrap()),
+        tx_hash: key[44..76].to_vec(),
+    })
 }
 
 pub fn encode_reorg_undo_log_key(block_num: i64, seq: u64) -> [u8; REORG_UNDO_LOG_KEY_SIZE] {
@@ -106,20 +240,50 @@ pub fn encode_composite(parts: &[&[u8]]) -> Vec<u8> {
     key
 }
 
-/// Encode a cell-by-lock/type index key:
-/// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
-pub fn encode_cell_index_key(
+pub fn encode_cell_index_entry_key(
+    tag: CellIndexTag,
     script_hash: &[u8],
     block_num: i64,
     tx_hash: &[u8],
     output_index: i16,
 ) -> Vec<u8> {
-    let mut key = Vec::with_capacity(74);
+    assert!(
+        script_hash.len() >= 32,
+        "encode_cell_index_entry_key: expected script_hash >= 32 bytes, got {}",
+        script_hash.len()
+    );
+    let mut key = Vec::with_capacity(75);
+    key.push(tag.as_byte());
     key.extend_from_slice(&script_hash[..32]);
     key.extend_from_slice(&block_num.to_be_bytes());
     key.extend_from_slice(&tx_hash[..32]);
     key.extend_from_slice(&output_index.to_be_bytes());
     key
+}
+
+pub fn encode_cell_index_prefix(tag: CellIndexTag, script_hash: &[u8]) -> [u8; 33] {
+    assert!(
+        script_hash.len() >= 32,
+        "encode_cell_index_prefix: expected script_hash >= 32 bytes, got {}",
+        script_hash.len()
+    );
+    let mut prefix = [0u8; 33];
+    prefix[0] = tag.as_byte();
+    prefix[1..33].copy_from_slice(&script_hash[..32]);
+    prefix
+}
+
+pub fn decode_cell_index_entry_key(key: &[u8]) -> Option<DecodedCellIndexEntryKey> {
+    if key.len() != 75 {
+        return None;
+    }
+    Some(DecodedCellIndexEntryKey {
+        tag: CellIndexTag::from_byte(key[0])?,
+        script_hash: key[1..33].to_vec(),
+        block_number: i64::from_be_bytes(key[33..41].try_into().unwrap()),
+        tx_hash: key[41..73].to_vec(),
+        output_index: i16::from_be_bytes(key[73..75].try_into().unwrap()),
+    })
 }
 
 /// Encode an address-tx index key:
@@ -607,31 +771,6 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
     key[..32].copy_from_slice(&cluster_id[..32]);
     key[32..64].copy_from_slice(&spore_id[..32]);
     key
-}
-
-/// Activity key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
-/// Uses descending block_num so newest activities come first in prefix scan.
-pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
-    assert!(
-        lock_hash.len() >= 32,
-        "encode_activity_key: lock_hash must be >= 32 bytes, got {}",
-        lock_hash.len()
-    );
-    let block_desc = (i64::MAX - block_num).to_be_bytes();
-    let mut key = Vec::with_capacity(44);
-    key.extend_from_slice(&lock_hash[..32]);
-    key.extend_from_slice(&block_desc);
-    key.extend_from_slice(&tx_idx.to_be_bytes());
-    key
-}
-
-/// Decode block_num and tx_idx from an activity key.
-pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32) {
-    let lock_hash = key[..32].to_vec();
-    let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
-    let block_num = i64::MAX - block_desc;
-    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
-    (lock_hash, block_num, tx_idx)
 }
 
 /// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
@@ -1160,55 +1299,6 @@ mod tests {
         assert!(k2 < k3);
     }
 
-    // ---- Activity key ----
-
-    #[test]
-    fn test_activity_key_roundtrip() {
-        let lock_hash = [0xAAu8; 32];
-        for (block, idx) in [
-            (0i64, 0i32),
-            (1, 0),
-            (100, 5),
-            (1_000_000, 42),
-            (i64::MAX, 0),
-        ] {
-            let key = encode_activity_key(&lock_hash, block, idx);
-            assert_eq!(key.len(), 44);
-            let (decoded_hash, decoded_block, decoded_idx) = decode_activity_key(&key);
-            assert_eq!(decoded_hash, lock_hash.to_vec());
-            assert_eq!(decoded_block, block);
-            assert_eq!(decoded_idx, idx);
-        }
-    }
-
-    #[test]
-    fn test_activity_key_descending_sort_order() {
-        let lock_hash = [0xBBu8; 32];
-        let k1 = encode_activity_key(&lock_hash, 300, 0);
-        let k2 = encode_activity_key(&lock_hash, 200, 0);
-        let k3 = encode_activity_key(&lock_hash, 100, 0);
-        // Higher block_num should produce SMALLER key (descending)
-        assert!(k1 < k2);
-        assert!(k2 < k3);
-    }
-
-    #[test]
-    fn test_activity_key_prefix_is_lock_hash() {
-        let lock_hash = [0xCCu8; 32];
-        let key = encode_activity_key(&lock_hash, 500, 3);
-        assert!(key.starts_with(&lock_hash));
-    }
-
-    #[test]
-    fn test_activity_key_different_locks_differ() {
-        let lock_a = [0x01u8; 32];
-        let lock_b = [0x02u8; 32];
-        assert_ne!(
-            encode_activity_key(&lock_a, 100, 0),
-            encode_activity_key(&lock_b, 100, 0)
-        );
-    }
-
     #[test]
     fn test_script_daily_key_roundtrip() {
         let code_hash = [0x55u8; 32];
@@ -1463,5 +1553,27 @@ mod tests {
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
         assert_eq!(decoded_block, 100);
+    }
+
+    #[test]
+    fn test_encode_decode_cell_payload_key_round_trips() {
+        let tx_hash = vec![0x11; 32];
+        let key = encode_cell_payload_key(123, &tx_hash, 0);
+        let decoded = decode_cell_payload_key(&key).unwrap();
+        assert_eq!(decoded.block_number, 123);
+        assert_eq!(decoded.tx_hash, tx_hash);
+        assert_eq!(decoded.output_index, 0);
+    }
+
+    #[test]
+    fn test_encode_decode_activity_owner_key_round_trips() {
+        let lock = vec![0x22; 32];
+        let tx_hash = vec![0x33; 32];
+        let key = encode_activity_owner_key(&lock, 456, 7, &tx_hash);
+        let decoded = decode_activity_owner_key(&key).unwrap();
+        assert_eq!(decoded.lock_hash, lock);
+        assert_eq!(decoded.block_number, 456);
+        assert_eq!(decoded.tx_index, 7);
+        assert_eq!(decoded.tx_hash, tx_hash);
     }
 }

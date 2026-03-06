@@ -1371,7 +1371,10 @@ fn collect_nft_item_lifecycle_actions(
         .collect();
     let consumed_meta = state
         .store
-        .get_consumed_cell_meta_batch(&outpoint_refs)
+        .get_consumed_cell_meta_batch_with_payload_store(
+            state.append_only_store.as_ref(),
+            &outpoint_refs,
+        )
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     for (tx_hash, output_index) in outpoints {

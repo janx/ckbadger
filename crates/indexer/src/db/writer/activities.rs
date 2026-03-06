@@ -1,8 +1,11 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange};
+use anyhow::{bail, Result};
+use ckbadger_store::types::{
+    ActivityEntry, ActivityTxEnvelope, AssetAction, AssetChange, OwnerActivityViewStored,
+};
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
@@ -93,6 +96,15 @@ pub struct TxView<'a> {
     pub outputs_data: &'a [String],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalizedActivityTx {
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub tx_hash: Vec<u8>,
+    pub envelope: ActivityTxEnvelope,
+    pub owner_refs: Vec<(Vec<u8>, u16)>,
+}
+
 /// Build activities for all transactions in a block.
 ///
 /// Returns `(lock_hash, ActivityEntry)` pairs — one per owner per transaction.
@@ -109,6 +121,90 @@ pub fn build_activities_for_block(
     }
 
     all_activities
+}
+
+pub fn normalize_activities_for_storage(
+    entries: &[(Vec<u8>, ActivityEntry)],
+) -> Result<Vec<NormalizedActivityTx>> {
+    let mut grouped: BTreeMap<(i64, i32, Vec<u8>), Vec<(Vec<u8>, &ActivityEntry)>> =
+        BTreeMap::new();
+    for (lock_hash, entry) in entries {
+        grouped
+            .entry((entry.block_number, entry.tx_index, entry.tx_hash.clone()))
+            .or_default()
+            .push((lock_hash.clone(), entry));
+    }
+
+    let mut out = Vec::with_capacity(grouped.len());
+    for ((block_number, tx_index, tx_hash), group) in grouped {
+        let Some((_, first)) = group.first() else {
+            continue;
+        };
+
+        for (_, entry) in &group {
+            if entry.block_number != block_number
+                || entry.tx_index != tx_index
+                || entry.tx_hash != tx_hash
+                || entry.timestamp != first.timestamp
+                || entry.is_cellbase != first.is_cellbase
+            {
+                bail!(
+                    "inconsistent activity metadata within tx group: block_number={}, tx_index={}, tx_hash=0x{}",
+                    block_number,
+                    tx_index,
+                    hex::encode(&tx_hash)
+                );
+            }
+        }
+
+        let mut participants: Vec<Vec<u8>> = group
+            .iter()
+            .map(|(lock_hash, _)| lock_hash.clone())
+            .collect();
+        participants.sort();
+        participants.dedup();
+        if participants.len() != group.len() {
+            bail!(
+                "duplicate owner activity entries within tx group: block_number={}, tx_index={}, tx_hash=0x{}",
+                block_number,
+                tx_index,
+                hex::encode(&tx_hash)
+            );
+        }
+
+        let mut owner_views = Vec::with_capacity(participants.len());
+        let mut owner_refs = Vec::with_capacity(participants.len());
+        for (slot, participant) in participants.iter().enumerate() {
+            let (_, entry) = group
+                .iter()
+                .find(|(lock_hash, _)| lock_hash == participant)
+                .expect("participant sourced from grouped activities");
+            owner_views.push(OwnerActivityViewStored {
+                ckb_delta: entry.ckb_delta,
+                occupied_delta: entry.occupied_delta,
+                asset_changes: entry.asset_changes.clone(),
+            });
+            owner_refs.push((participant.clone(), slot as u16));
+        }
+
+        out.push(NormalizedActivityTx {
+            block_number,
+            tx_index,
+            tx_hash: tx_hash.clone(),
+            envelope: ActivityTxEnvelope {
+                tx_hash,
+                block_number,
+                tx_index,
+                timestamp: first.timestamp,
+                is_cellbase: first.is_cellbase,
+                participants,
+                owner_views,
+            },
+            owner_refs,
+        });
+    }
+
+    Ok(out)
 }
 
 /// Accumulator for per-owner position within one transaction.
@@ -741,6 +837,54 @@ mod tests {
             .filter(|(lh, _)| lh == &vec![alice; 32])
             .collect();
         assert_eq!(alice_entries.len(), 2);
+    }
+
+    #[test]
+    fn test_normalize_activities_for_storage_emits_one_envelope_per_tx() {
+        let alice = vec![0xAA; 32];
+        let bob = vec![0xBB; 32];
+        let entries = vec![
+            (
+                bob.clone(),
+                ActivityEntry {
+                    tx_hash: vec![0x11; 32],
+                    block_number: 100,
+                    tx_index: 3,
+                    timestamp: 1_700_000_100,
+                    ckb_delta: 50,
+                    occupied_delta: 5,
+                    is_cellbase: false,
+                    asset_changes: vec![],
+                    peers: vec![alice.clone()],
+                },
+            ),
+            (
+                alice.clone(),
+                ActivityEntry {
+                    tx_hash: vec![0x11; 32],
+                    block_number: 100,
+                    tx_index: 3,
+                    timestamp: 1_700_000_100,
+                    ckb_delta: -50,
+                    occupied_delta: -5,
+                    is_cellbase: false,
+                    asset_changes: vec![],
+                    peers: vec![bob.clone()],
+                },
+            ),
+        ];
+
+        let normalized = normalize_activities_for_storage(&entries).unwrap();
+        assert_eq!(normalized.len(), 1);
+        let tx = &normalized[0];
+        assert_eq!(tx.block_number, 100);
+        assert_eq!(tx.tx_index, 3);
+        assert_eq!(tx.tx_hash, vec![0x11; 32]);
+        assert_eq!(tx.envelope.participants, vec![alice.clone(), bob.clone()]);
+        assert_eq!(tx.owner_refs, vec![(alice, 0), (bob, 1)]);
+        assert_eq!(tx.envelope.owner_views.len(), 2);
+        assert_eq!(tx.envelope.owner_views[0].ckb_delta, -50);
+        assert_eq!(tx.envelope.owner_views[1].ckb_delta, 50);
     }
 
     #[test]

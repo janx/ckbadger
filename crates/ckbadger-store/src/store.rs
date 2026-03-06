@@ -257,14 +257,10 @@ fn detect_system_resources(runtime_config: StoreRuntimeConfig) -> (u64, usize) {
 }
 
 // Column family name constants
-pub const CF_CELLS: &str = "cells";
-pub const CF_LIVE_CELLS: &str = "live_cells";
-pub const CF_CONSUMED_CELLS: &str = "consumed_cells";
+pub const CF_CELL_STATE: &str = "cell_state";
 pub const CF_REORG_UNDO_LOG_BY_BLOCK: &str = "reorg_undo_log_by_block";
 pub const CF_BLOCK_HEADERS: &str = "block_headers";
 pub const CF_BLOCK_HASH_INDEX: &str = "block_hash_index";
-pub const CF_CELL_BY_LOCK: &str = "cell_by_lock";
-pub const CF_CELL_BY_TYPE: &str = "cell_by_type";
 pub const CF_TX_INDEX: &str = "tx_index";
 pub const CF_TX_HASH_MAP: &str = "tx_hash_map";
 pub const CF_ADDR_BALANCE: &str = "addr_balance";
@@ -289,10 +285,11 @@ pub const CF_STATS_NFT: &str = "stats_nft";
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
-pub const CF_CELL_BY_LOCK_CODE: &str = "cell_by_lock_code";
-pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
-pub const CF_ACTIVITIES: &str = "activities";
+pub const CF_CELL_PAYLOADS: &str = "cell_payloads";
+pub const CF_CELL_INDEX: &str = "cell_index";
+pub const CF_ACTIVITY_TX_ENVELOPES: &str = "activity_tx_envelopes";
+pub const CF_ACTIVITY_BY_OWNER: &str = "activity_by_owner";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
 pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
@@ -316,16 +313,10 @@ pub(crate) enum StoreWriteIntent {
 
 /// All column family names, used during DB open.
 pub const ALL_CFS: &[&str] = &[
-    CF_CELLS,
-    CF_LIVE_CELLS,
-    CF_CONSUMED_CELLS,
+    CF_CELL_STATE,
     CF_REORG_UNDO_LOG_BY_BLOCK,
     CF_BLOCK_HEADERS,
     CF_BLOCK_HASH_INDEX,
-    CF_CELL_BY_LOCK,
-    CF_CELL_BY_TYPE,
-    CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE_CODE,
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
@@ -351,7 +342,10 @@ pub const ALL_CFS: &[&str] = &[
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
-    CF_ACTIVITIES,
+    CF_CELL_PAYLOADS,
+    CF_CELL_INDEX,
+    CF_ACTIVITY_TX_ENVELOPES,
+    CF_ACTIVITY_BY_OWNER,
     CF_CLUSTER_AGG,
     CF_NFT_COLLECTION_AGG,
     CF_NFT_COLLECTION_ACTIVITIES,
@@ -359,20 +353,13 @@ pub const ALL_CFS: &[&str] = &[
 
 /// Column families intended for the domain mutable store.
 pub const DOMAIN_CFS: &[&str] = &[
-    CF_CELLS,
-    CF_LIVE_CELLS,
-    CF_CONSUMED_CELLS,
+    CF_CELL_STATE,
     CF_REORG_UNDO_LOG_BY_BLOCK,
     CF_BLOCK_HEADERS,
     CF_BLOCK_HASH_INDEX,
-    CF_CELL_BY_LOCK,
-    CF_CELL_BY_TYPE,
-    CF_CELL_BY_LOCK_CODE,
-    CF_CELL_BY_TYPE_CODE,
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
-    CF_ACTIVITIES,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_BY_BLOCK,
@@ -399,7 +386,14 @@ pub const DOMAIN_CFS: &[&str] = &[
 ];
 
 /// Column families intended for append-only history/archive store.
-pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
+pub const APPEND_CFS: &[&str] = &[
+    CF_ADDR_TXS,
+    CF_CELL_PAYLOADS,
+    CF_CELL_INDEX,
+    CF_ACTIVITY_TX_ENVELOPES,
+    CF_ACTIVITY_BY_OWNER,
+    CF_NFT_COLLECTION_ACTIVITIES,
+];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -424,7 +418,7 @@ fn domain_path_from_append(append_path: &Path) -> PathBuf {
     append_path.to_path_buf()
 }
 
-fn consumed_cf_storage_bytes(
+fn cf_storage_bytes(
     live_data_bytes: Option<u64>,
     sst_files_bytes: Option<u64>,
     memtable_bytes: Option<u64>,
@@ -513,6 +507,18 @@ impl CkbadgerStore {
         }
         if std::ptr::eq(cf, self.cf_addr_txs()) {
             return Ok(CF_ADDR_TXS);
+        }
+        if std::ptr::eq(cf, self.cf_cell_payloads()) {
+            return Ok(CF_CELL_PAYLOADS);
+        }
+        if std::ptr::eq(cf, self.cf_cell_index()) {
+            return Ok(CF_CELL_INDEX);
+        }
+        if std::ptr::eq(cf, self.cf_activity_tx_envelopes()) {
+            return Ok(CF_ACTIVITY_TX_ENVELOPES);
+        }
+        if std::ptr::eq(cf, self.cf_activity_by_owner()) {
+            return Ok(CF_ACTIVITY_BY_OWNER);
         }
         if std::ptr::eq(cf, self.cf_nft_collection_activities()) {
             return Ok(CF_NFT_COLLECTION_ACTIVITIES);
@@ -833,31 +839,24 @@ impl CkbadgerStore {
     /// 256MB write buffers prevent memtable flush stalls during mega-blocks
     /// (block 12M has ~1.31M txs → ~162MB per CF).
     const MEGA_WRITE_CFS: &'static [&'static str] = &[
-        CF_CELLS,
-        CF_LIVE_CELLS,
-        CF_CONSUMED_CELLS,
+        CF_CELL_STATE,
         CF_REORG_UNDO_LOG_BY_BLOCK,
-        CF_CELL_BY_LOCK,
-        CF_CELL_BY_TYPE,
-        CF_CELL_BY_LOCK_CODE,
-        CF_CELL_BY_TYPE_CODE,
         CF_TX_INDEX,
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
         CF_ADDR_TXS,
-        CF_ACTIVITIES,
+        CF_CELL_PAYLOADS,
+        CF_CELL_INDEX,
+        CF_ACTIVITY_TX_ENVELOPES,
+        CF_ACTIVITY_BY_OWNER,
     ];
 
     /// High-write column families that benefit from large write buffers (128 MB).
     const HIGH_WRITE_CFS: &'static [&'static str] = &[
-        CF_CELLS,
-        CF_LIVE_CELLS,
-        CF_CONSUMED_CELLS,
+        CF_CELL_STATE,
         CF_REORG_UNDO_LOG_BY_BLOCK,
         CF_BLOCK_HEADERS,
         CF_BLOCK_HASH_INDEX,
-        CF_CELL_BY_LOCK,
-        CF_CELL_BY_TYPE,
         CF_TX_INDEX,
         CF_TX_HASH_MAP,
         CF_ADDR_BALANCE,
@@ -866,7 +865,10 @@ impl CkbadgerStore {
         CF_DAO_BY_BLOCK,
         CF_DAO_BY_LOCK_BLOCK,
         CF_DAO_BY_STATUS_BLOCK,
-        CF_ACTIVITIES,
+        CF_CELL_PAYLOADS,
+        CF_CELL_INDEX,
+        CF_ACTIVITY_TX_ENVELOPES,
+        CF_ACTIVITY_BY_OWNER,
         CF_STATS_CHAIN,
         CF_STATS_SCRIPT,
         CF_STATS_TOKEN,
@@ -878,8 +880,14 @@ impl CkbadgerStore {
     ///
     /// These indexes are primarily append writes during sync and large range scans on reads.
     /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
-    const HISTORICAL_APPEND_CFS: &'static [&'static str] =
-        &[CF_ACTIVITIES, CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
+    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[
+        CF_ADDR_TXS,
+        CF_CELL_PAYLOADS,
+        CF_CELL_INDEX,
+        CF_ACTIVITY_TX_ENVELOPES,
+        CF_ACTIVITY_BY_OWNER,
+        CF_NFT_COLLECTION_ACTIVITIES,
+    ];
 
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
@@ -891,6 +899,16 @@ impl CkbadgerStore {
 
     fn is_historical_append_cf(name: &str) -> bool {
         Self::HISTORICAL_APPEND_CFS.contains(&name)
+    }
+
+    fn bulk_sync_hot_cfs(store_class: StoreClass) -> &'static [&'static str] {
+        match store_class {
+            StoreClass::Domain => &[CF_TX_INDEX, CF_CELL_STATE],
+            StoreClass::AppendOnly => &[CF_CELL_PAYLOADS, CF_CELL_INDEX],
+            StoreClass::TestUnified => {
+                &[CF_TX_INDEX, CF_CELL_STATE, CF_CELL_PAYLOADS, CF_CELL_INDEX]
+            }
+        }
     }
 
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
@@ -1030,14 +1048,8 @@ impl CkbadgerStore {
             .unwrap_or_else(|| panic!("CF '{}' not found", name))
     }
 
-    pub fn cf_live_cells(&self) -> &ColumnFamily {
-        self.cf(CF_LIVE_CELLS)
-    }
-    pub fn cf_cells(&self) -> &ColumnFamily {
-        self.cf(CF_CELLS)
-    }
-    pub fn cf_consumed_cells(&self) -> &ColumnFamily {
-        self.cf(CF_CONSUMED_CELLS)
+    pub fn cf_cell_state(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_STATE)
     }
     pub fn cf_reorg_undo_log_by_block(&self) -> &ColumnFamily {
         self.cf(CF_REORG_UNDO_LOG_BY_BLOCK)
@@ -1047,12 +1059,6 @@ impl CkbadgerStore {
     }
     pub fn cf_block_hash_index(&self) -> &ColumnFamily {
         self.cf(CF_BLOCK_HASH_INDEX)
-    }
-    pub fn cf_cell_by_lock(&self) -> &ColumnFamily {
-        self.cf(CF_CELL_BY_LOCK)
-    }
-    pub fn cf_cell_by_type(&self) -> &ColumnFamily {
-        self.cf(CF_CELL_BY_TYPE)
     }
     pub fn cf_tx_index(&self) -> &ColumnFamily {
         self.cf(CF_TX_INDEX)
@@ -1065,6 +1071,18 @@ impl CkbadgerStore {
     }
     pub fn cf_addr_txs(&self) -> &ColumnFamily {
         self.cf(CF_ADDR_TXS)
+    }
+    pub fn cf_cell_payloads(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_PAYLOADS)
+    }
+    pub fn cf_cell_index(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_INDEX)
+    }
+    pub fn cf_activity_tx_envelopes(&self) -> &ColumnFamily {
+        self.cf(CF_ACTIVITY_TX_ENVELOPES)
+    }
+    pub fn cf_activity_by_owner(&self) -> &ColumnFamily {
+        self.cf(CF_ACTIVITY_BY_OWNER)
     }
     pub fn cf_dao_deposits(&self) -> &ColumnFamily {
         self.cf(CF_DAO_DEPOSITS)
@@ -1126,17 +1144,8 @@ impl CkbadgerStore {
     pub fn cf_spore_by_cluster(&self) -> &ColumnFamily {
         self.cf(CF_SPORE_BY_CLUSTER)
     }
-    pub fn cf_cell_by_lock_code(&self) -> &ColumnFamily {
-        self.cf(CF_CELL_BY_LOCK_CODE)
-    }
-    pub fn cf_cell_by_type_code(&self) -> &ColumnFamily {
-        self.cf(CF_CELL_BY_TYPE_CODE)
-    }
     pub fn cf_token_transfers(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_TRANSFERS)
-    }
-    pub fn cf_activities(&self) -> &ColumnFamily {
-        self.cf(CF_ACTIVITIES)
     }
     pub fn cf_cluster_agg(&self) -> &ColumnFamily {
         self.cf(CF_CLUSTER_AGG)
@@ -1497,7 +1506,7 @@ impl CkbadgerStore {
             }
         }
 
-        for &hot_cf_name in &[CF_TX_INDEX, CF_CELLS] {
+        for &hot_cf_name in Self::bulk_sync_hot_cfs(self.store_class) {
             if let Some(cf) = self.db.cf_handle(hot_cf_name) {
                 let result = self
                     .db
@@ -1666,12 +1675,10 @@ impl CkbadgerStore {
     pub fn memory_stats(&self) -> MemoryStats {
         let mut memtable_bytes = 0usize;
         let mut table_readers_bytes = 0usize;
-        let mut cells_count = 0usize;
-        let mut live_cells_count = 0usize;
-        let mut consumed_cells_count = 0usize;
-        let mut consumed_cf_live_data_bytes: Option<u64> = None;
-        let mut consumed_cf_sst_files_bytes: Option<u64> = None;
-        let mut consumed_cf_memtable_bytes: Option<u64> = None;
+        let mut cell_state_count = 0usize;
+        let mut cell_state_live_data_bytes: Option<u64> = None;
+        let mut cell_state_sst_files_bytes: Option<u64> = None;
+        let mut cell_state_memtable_bytes: Option<u64> = None;
         let mut block_headers_count = 0usize;
         let mut addr_balance_count = 0usize;
         let mut compaction_pending_bytes = 0u64;
@@ -1690,8 +1697,8 @@ impl CkbadgerStore {
                     .property_int_value_cf(cf, "rocksdb.cur-size-all-mem-tables")
                 {
                     memtable_bytes += v as usize;
-                    if cf_name == CF_CONSUMED_CELLS {
-                        consumed_cf_memtable_bytes = Some(v);
+                    if cf_name == CF_CELL_STATE {
+                        cell_state_memtable_bytes = Some(v);
                     }
                 }
                 if let Ok(Some(v)) = self
@@ -1711,9 +1718,7 @@ impl CkbadgerStore {
                     .property_int_value_cf(cf, "rocksdb.estimate-num-keys")
                 {
                     match cf_name {
-                        CF_CELLS => cells_count = v as usize,
-                        CF_LIVE_CELLS => live_cells_count = v as usize,
-                        CF_CONSUMED_CELLS => consumed_cells_count = v as usize,
+                        CF_CELL_STATE => cell_state_count = v as usize,
                         CF_BLOCK_HEADERS => block_headers_count = v as usize,
                         CF_ADDR_BALANCE => addr_balance_count = v as usize,
                         _ => {}
@@ -1730,8 +1735,8 @@ impl CkbadgerStore {
                     .property_int_value_cf(cf, "rocksdb.total-sst-files-size")
                 {
                     sst_files_size += v;
-                    if cf_name == CF_CONSUMED_CELLS {
-                        consumed_cf_sst_files_bytes = Some(v);
+                    if cf_name == CF_CELL_STATE {
+                        cell_state_sst_files_bytes = Some(v);
                     }
                 }
                 // L0 file count — track both total and per-CF max
@@ -1758,8 +1763,8 @@ impl CkbadgerStore {
                     .db
                     .property_int_value_cf(cf, "rocksdb.estimate-live-data-size")
                 {
-                    if cf_name == CF_CONSUMED_CELLS {
-                        consumed_cf_live_data_bytes = Some(v);
+                    if cf_name == CF_CELL_STATE {
+                        cell_state_live_data_bytes = Some(v);
                     }
                     if v > 0 {
                         cf_sizes.push((cf_name.to_string(), v));
@@ -1771,10 +1776,10 @@ impl CkbadgerStore {
         // Sort by size descending and keep top 5
         cf_sizes.sort_by(|a, b| b.1.cmp(&a.1));
         cf_sizes.truncate(5);
-        let (consumed_cells_bytes, consumed_cells_bytes_source) = consumed_cf_storage_bytes(
-            consumed_cf_live_data_bytes,
-            consumed_cf_sst_files_bytes,
-            consumed_cf_memtable_bytes,
+        let (cell_state_bytes, cell_state_bytes_source) = cf_storage_bytes(
+            cell_state_live_data_bytes,
+            cell_state_sst_files_bytes,
+            cell_state_memtable_bytes,
         );
 
         let block_cache_bytes = self
@@ -1791,13 +1796,11 @@ impl CkbadgerStore {
             .unwrap_or(num_running_compactions_fallback);
 
         MemoryStats {
-            live_cells_count,
-            consumed_cells_count,
-            consumed_cells_bytes,
-            consumed_cells_bytes_source,
+            cell_state_count,
+            cell_state_bytes,
+            cell_state_bytes_source,
             block_headers_count,
             addr_balance_count,
-            cells_count,
             memory_bytes,
             memtable_bytes,
             block_cache_bytes,
@@ -1820,6 +1823,14 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    const LEGACY_CELL_STORAGE_CFS: &[&str] = &["cells", "live_cells", "consumed_cells"];
+    const LEGACY_CELL_INDEX_CFS: &[&str] = &[
+        "cell_by_lock",
+        "cell_by_type",
+        "cell_by_lock_code",
+        "cell_by_type_code",
+    ];
 
     #[test]
     fn test_open_and_close() {
@@ -1858,20 +1869,6 @@ mod tests {
         })
         .is_err();
         assert!(panicked, "append-only store should reject domain CF access");
-    }
-
-    #[test]
-    fn test_open_append_only_restricts_activities_cf() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let panicked = std::panic::catch_unwind(|| {
-            let _ = store.cf_activities();
-        })
-        .is_err();
-        assert!(
-            panicked,
-            "append-only store should reject activities CF access"
-        );
     }
 
     #[test]
@@ -2166,14 +2163,28 @@ mod tests {
     fn test_memory_stats() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let cell_state_cf = store.cf(CF_CELL_STATE);
         store
-            .put_cf(store.cf_cells(), b"cell-k1", b"cell-v1")
+            .put_cf(
+                cell_state_cf,
+                b"cell-state-k1",
+                &bincode::serialize(&crate::types::CellState::live(
+                    100,
+                    b"payload-key-1".to_vec(),
+                ))
+                .unwrap(),
+            )
             .unwrap();
         store
-            .put_cf(store.cf_live_cells(), b"live-k1", b"live-v1")
-            .unwrap();
-        store
-            .put_cf(store.cf_consumed_cells(), b"consumed-k1", b"consumed-v1")
+            .put_cf(
+                cell_state_cf,
+                b"cell-state-k2",
+                &bincode::serialize(
+                    &crate::types::CellState::live(101, b"payload-key-2".to_vec())
+                        .into_consumed(102, vec![0x42; 32]),
+                )
+                .unwrap(),
+            )
             .unwrap();
         store
             .put_cf(store.cf_block_headers(), b"hdr-k1", b"hdr-v1")
@@ -2189,25 +2200,22 @@ mod tests {
             .unwrap();
 
         // Flush written keys so RocksDB estimate properties have observable values.
-        store.db.flush_cf(store.cf_cells()).unwrap();
-        store.db.flush_cf(store.cf_live_cells()).unwrap();
-        store.db.flush_cf(store.cf_consumed_cells()).unwrap();
+        store.db.flush_cf(cell_state_cf).unwrap();
         store.db.flush_cf(store.cf_block_headers()).unwrap();
         store.db.flush_cf(store.cf_addr_balance()).unwrap();
 
         let stats = store.memory_stats();
-        assert!(stats.live_cells_count >= 1);
-        assert!(stats.consumed_cells_count >= 1);
+        assert!(stats.cell_state_count >= 2);
+        assert!(stats.cell_state_bytes >= 1);
         assert!(stats.block_headers_count >= 1);
         assert!(stats.addr_balance_count >= 1);
-        assert!(stats.cells_count >= stats.live_cells_count);
         assert!(
             matches!(
-                stats.consumed_cells_bytes_source,
+                stats.cell_state_bytes_source,
                 "live" | "sst" | "mem" | "none"
             ),
             "unexpected source: {}",
-            stats.consumed_cells_bytes_source
+            stats.cell_state_bytes_source
         );
     }
 
@@ -2227,41 +2235,27 @@ mod tests {
     }
 
     #[test]
-    fn test_consumed_cf_storage_bytes_prefers_live_data_estimate() {
+    fn test_cf_storage_bytes_prefers_live_data_estimate() {
         assert_eq!(
-            consumed_cf_storage_bytes(Some(100), Some(500), Some(20)),
+            cf_storage_bytes(Some(100), Some(500), Some(20)),
             (120, "live")
         );
     }
 
     #[test]
-    fn test_consumed_cf_storage_bytes_falls_back_to_sst_when_live_missing() {
-        assert_eq!(
-            consumed_cf_storage_bytes(None, Some(500), Some(20)),
-            (520, "sst")
-        );
-        assert_eq!(
-            consumed_cf_storage_bytes(Some(0), Some(500), Some(20)),
-            (520, "sst")
-        );
+    fn test_cf_storage_bytes_falls_back_to_sst_when_live_missing() {
+        assert_eq!(cf_storage_bytes(None, Some(500), Some(20)), (520, "sst"));
+        assert_eq!(cf_storage_bytes(Some(0), Some(500), Some(20)), (520, "sst"));
     }
 
     #[test]
-    fn test_consumed_cf_storage_bytes_returns_none_when_all_missing() {
-        assert_eq!(consumed_cf_storage_bytes(None, None, None), (0, "none"));
+    fn test_cf_storage_bytes_returns_none_when_all_missing() {
+        assert_eq!(cf_storage_bytes(None, None, None), (0, "none"));
     }
 
     #[test]
-    fn test_consumed_cf_storage_bytes_memtable_only_source() {
-        assert_eq!(consumed_cf_storage_bytes(None, None, Some(20)), (20, "mem"));
-    }
-
-    #[test]
-    fn test_mega_write_cfs_contains_activities() {
-        assert!(
-            CkbadgerStore::is_mega_write_cf(CF_ACTIVITIES),
-            "CF_ACTIVITIES should be in MEGA_WRITE_CFS"
-        );
+    fn test_cf_storage_bytes_memtable_only_source() {
+        assert_eq!(cf_storage_bytes(None, None, Some(20)), (20, "mem"));
     }
 
     #[test]
@@ -2273,21 +2267,46 @@ mod tests {
     }
 
     #[test]
+    fn test_mega_write_cfs_exclude_legacy_cell_families() {
+        for cf in LEGACY_CELL_STORAGE_CFS
+            .iter()
+            .chain(LEGACY_CELL_INDEX_CFS.iter())
+            .copied()
+        {
+            assert!(
+                !CkbadgerStore::is_mega_write_cf(cf),
+                "{cf} should not be in MEGA_WRITE_CFS"
+            );
+        }
+    }
+
+    #[test]
+    fn test_high_write_cfs_exclude_legacy_cell_families() {
+        for cf in LEGACY_CELL_STORAGE_CFS
+            .iter()
+            .chain(LEGACY_CELL_INDEX_CFS.iter())
+            .copied()
+        {
+            assert!(
+                !CkbadgerStore::is_high_write_cf(cf),
+                "{cf} should not be in HIGH_WRITE_CFS"
+            );
+        }
+    }
+
+    #[test]
     fn test_mega_write_cfs_expected_members() {
         let expected = &[
-            CF_CELLS,
-            CF_LIVE_CELLS,
-            CF_CONSUMED_CELLS,
+            CF_CELL_STATE,
             CF_REORG_UNDO_LOG_BY_BLOCK,
-            CF_CELL_BY_LOCK,
-            CF_CELL_BY_TYPE,
-            CF_CELL_BY_LOCK_CODE,
-            CF_CELL_BY_TYPE_CODE,
             CF_TX_INDEX,
             CF_TX_HASH_MAP,
             CF_ADDR_BALANCE,
             CF_ADDR_TXS,
-            CF_ACTIVITIES,
+            CF_CELL_PAYLOADS,
+            CF_CELL_INDEX,
+            CF_ACTIVITY_TX_ENVELOPES,
+            CF_ACTIVITY_BY_OWNER,
         ];
         for cf in expected {
             assert!(
@@ -2304,7 +2323,14 @@ mod tests {
 
     #[test]
     fn test_historical_append_cfs_expected_members() {
-        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
+        let expected = &[
+            CF_ADDR_TXS,
+            CF_CELL_PAYLOADS,
+            CF_CELL_INDEX,
+            CF_ACTIVITY_TX_ENVELOPES,
+            CF_ACTIVITY_BY_OWNER,
+            CF_NFT_COLLECTION_ACTIVITIES,
+        ];
         for cf in expected {
             assert!(
                 CkbadgerStore::is_historical_append_cf(cf),
@@ -2316,6 +2342,85 @@ mod tests {
             expected.len(),
             "HISTORICAL_APPEND_CFS length mismatch"
         );
+    }
+
+    #[test]
+    fn test_append_cfs_include_cell_payloads_and_activity_refs() {
+        assert!(APPEND_CFS.contains(&CF_CELL_PAYLOADS));
+        assert!(APPEND_CFS.contains(&CF_CELL_INDEX));
+        assert!(APPEND_CFS.contains(&CF_ACTIVITY_TX_ENVELOPES));
+        assert!(APPEND_CFS.contains(&CF_ACTIVITY_BY_OWNER));
+    }
+
+    #[test]
+    fn test_old_activity_cf_is_not_in_store_layout() {
+        let legacy_activity_cf = "activities";
+        assert!(!ALL_CFS.contains(&legacy_activity_cf));
+        assert!(!DOMAIN_CFS.contains(&legacy_activity_cf));
+        assert!(!APPEND_CFS.contains(&legacy_activity_cf));
+    }
+
+    #[test]
+    fn test_historical_append_cfs_exclude_legacy_activity_cf() {
+        assert!(!CkbadgerStore::is_historical_append_cf("activities"));
+    }
+
+    #[test]
+    fn test_all_cfs_exclude_legacy_cell_index_families() {
+        for cf in LEGACY_CELL_INDEX_CFS {
+            assert!(!ALL_CFS.contains(cf), "{cf} should not be in ALL_CFS");
+        }
+    }
+
+    #[test]
+    fn test_domain_cfs_exclude_legacy_cell_index_families() {
+        for cf in LEGACY_CELL_INDEX_CFS {
+            assert!(!DOMAIN_CFS.contains(cf), "{cf} should not be in DOMAIN_CFS");
+        }
+    }
+
+    #[test]
+    fn test_all_cfs_exclude_legacy_cell_storage_families() {
+        for cf in LEGACY_CELL_STORAGE_CFS {
+            assert!(!ALL_CFS.contains(cf), "{cf} should not be in ALL_CFS");
+        }
+    }
+
+    #[test]
+    fn test_domain_cfs_exclude_legacy_cell_storage_families() {
+        for cf in LEGACY_CELL_STORAGE_CFS {
+            assert!(!DOMAIN_CFS.contains(cf), "{cf} should not be in DOMAIN_CFS");
+        }
+    }
+
+    #[test]
+    fn test_bulk_sync_hot_cfs_expected_members_by_store_class() {
+        assert_eq!(
+            CkbadgerStore::bulk_sync_hot_cfs(StoreClass::Domain),
+            &[CF_TX_INDEX, CF_CELL_STATE]
+        );
+        assert_eq!(
+            CkbadgerStore::bulk_sync_hot_cfs(StoreClass::AppendOnly),
+            &[CF_CELL_PAYLOADS, CF_CELL_INDEX]
+        );
+        assert_eq!(
+            CkbadgerStore::bulk_sync_hot_cfs(StoreClass::TestUnified),
+            &[CF_TX_INDEX, CF_CELL_STATE, CF_CELL_PAYLOADS, CF_CELL_INDEX]
+        );
+    }
+
+    #[test]
+    fn test_bulk_sync_hot_cfs_exclude_legacy_split_cell_families() {
+        for store_class in [StoreClass::Domain, StoreClass::AppendOnly] {
+            let hot_cfs = CkbadgerStore::bulk_sync_hot_cfs(store_class);
+            for legacy_cf in LEGACY_CELL_STORAGE_CFS {
+                assert!(
+                    !hot_cfs.contains(legacy_cf),
+                    "{legacy_cf} should not be a bulk-sync hot CF for {:?}",
+                    store_class
+                );
+            }
+        }
     }
 
     #[test]

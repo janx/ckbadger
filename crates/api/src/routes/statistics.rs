@@ -1554,6 +1554,7 @@ const LIVE_CELL_SCAN_BATCH_SIZE: usize = 2_048;
 
 fn visit_live_cells_in_batches<F>(
     store: &ckbadger_store::CkbadgerStore,
+    payload_store: &ckbadger_store::CkbadgerStore,
     mut visit: F,
 ) -> Result<(), String>
 where
@@ -1571,7 +1572,7 @@ where
             .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
             .collect();
         let cells = store
-            .get_cells_batch(&outpoints)
+            .get_cells_batch_with_payload_store(payload_store, &outpoints)
             .map_err(|e| e.to_string())?;
 
         for cell in cells.values() {
@@ -1582,7 +1583,7 @@ where
         Ok(())
     };
 
-    let iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
+    let iter = store.iterator_cf(store.cf_cell_state(), rocksdb::IteratorMode::Start);
     for item in iter.flatten() {
         let (key, _) = item;
         if key.len() != ckbadger_store::keys::OUTPOINT_KEY_SIZE {
@@ -1639,7 +1640,7 @@ async fn get_cell_age_vs_occupied_capacity_chart(
     let mut d30_180d: i128 = 0;
     let mut gt_180d: i128 = 0;
 
-    visit_live_cells_in_batches(state.store.as_ref(), |cell| {
+    visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
         let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
             return Ok(());
         };
@@ -1821,7 +1822,7 @@ async fn get_cell_size_distribution_chart(
     let mut bucket_counts = vec![0_i128; bucket_labels.len()];
     let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
 
-    visit_live_cells_in_batches(state.store.as_ref(), |cell| {
+    visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
         let occupied = cell.occupied_capacity as i128;
         if occupied < 0 {
             return Err(format!(
@@ -3459,8 +3460,9 @@ mod tests {
 
     #[test]
     fn test_visit_live_cells_in_batches_reads_only_live_cells() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
 
         let live_a = ckbadger_store::LiveCellInfo {
             capacity: 100_00000000,
@@ -3505,14 +3507,20 @@ mod tests {
             udt_amount: None,
         };
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0xA1; 32], 0, &live_a);
-        batch.put_cell(&[0xA2; 32], 0, &live_b);
-        batch.put_consumed_cell(&[0xA3; 32], 0, &consumed_only, 99);
-        batch.commit().unwrap();
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&[0xA1; 32], 0, &live_a);
+        domain_batch.put_cell(&[0xA2; 32], 0, &live_b);
+        domain_batch.put_consumed_cell(&[0xA3; 32], 0, &consumed_only, 99);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&[0xA1; 32], 0, &live_a);
+        append_batch.put_cell(&[0xA2; 32], 0, &live_b);
+        append_batch.put_cell(&[0xA3; 32], 0, &consumed_only);
+        append_batch.commit().unwrap();
 
         let mut seen_blocks = Vec::new();
-        visit_live_cells_in_batches(&store, |cell| {
+        visit_live_cells_in_batches(&domain, &append, |cell| {
             seen_blocks.push(cell.created_at_block);
             Ok(())
         })

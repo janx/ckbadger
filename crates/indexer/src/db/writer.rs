@@ -11,20 +11,46 @@ use crate::cache::CacheInvalidator;
 #[derive(Clone)]
 pub struct BatchWriter {
     pub(super) store: Arc<CkbadgerStore>,
+    pub(super) cell_payload_store: Arc<CkbadgerStore>,
     pub(super) cache_invalidator: Option<CacheInvalidator>,
 }
 
 impl BatchWriter {
     pub fn new(store: Arc<CkbadgerStore>) -> Self {
         Self {
+            cell_payload_store: store.clone(),
             store,
+            cache_invalidator: None,
+        }
+    }
+
+    pub fn new_with_cell_payload_store(
+        store: Arc<CkbadgerStore>,
+        cell_payload_store: Arc<CkbadgerStore>,
+    ) -> Self {
+        Self {
+            store,
+            cell_payload_store,
             cache_invalidator: None,
         }
     }
 
     pub fn with_fast_sync_mode(store: Arc<CkbadgerStore>, _fast_sync_mode: bool) -> Self {
         Self {
+            cell_payload_store: store.clone(),
             store,
+            cache_invalidator: None,
+        }
+    }
+
+    pub fn with_fast_sync_mode_and_cell_payload_store(
+        store: Arc<CkbadgerStore>,
+        cell_payload_store: Arc<CkbadgerStore>,
+        _fast_sync_mode: bool,
+    ) -> Self {
+        Self {
+            store,
+            cell_payload_store,
             cache_invalidator: None,
         }
     }
@@ -35,7 +61,21 @@ impl BatchWriter {
         cache_invalidator: CacheInvalidator,
     ) -> Self {
         Self {
+            cell_payload_store: store.clone(),
             store,
+            cache_invalidator: Some(cache_invalidator),
+        }
+    }
+
+    pub fn with_cache_and_cell_payload_store(
+        store: Arc<CkbadgerStore>,
+        cell_payload_store: Arc<CkbadgerStore>,
+        _fast_sync_mode: bool,
+        cache_invalidator: CacheInvalidator,
+    ) -> Self {
+        Self {
+            store,
+            cell_payload_store,
             cache_invalidator: Some(cache_invalidator),
         }
     }
@@ -46,6 +86,10 @@ impl BatchWriter {
 
     pub fn store(&self) -> &Arc<CkbadgerStore> {
         &self.store
+    }
+
+    pub fn cell_payload_store(&self) -> &Arc<CkbadgerStore> {
+        &self.cell_payload_store
     }
 }
 

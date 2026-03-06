@@ -1,7 +1,7 @@
 //! Statistics operations.
 
 use crate::keys::{self, stats_prefix};
-use crate::store::CkbadgerStore;
+use crate::store::{CkbadgerStore, CF_CELL_PAYLOADS};
 use crate::types::*;
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -574,7 +574,30 @@ impl CkbadgerStore {
     ///
     /// Metadata fields (name/category/website/description/hash_type/deployment refs) are preserved.
     pub fn rebuild_script_infos_from_cells(&self) -> anyhow::Result<usize> {
+        self.rebuild_script_infos_from_cells_with_payload_store(None)
+    }
+
+    pub fn rebuild_script_infos_from_cells_with_payload_store(
+        &self,
+        payload_store: Option<&CkbadgerStore>,
+    ) -> anyhow::Result<usize> {
         use std::collections::HashMap;
+
+        let payload_store = if self.has_cf(CF_CELL_PAYLOADS) {
+            self
+        } else {
+            let payload_store = payload_store.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "rebuild_script_infos_from_cells requires append-only payload store when cell_payloads CF is absent"
+                )
+            })?;
+            if !payload_store.has_cf(CF_CELL_PAYLOADS) {
+                anyhow::bail!(
+                    "payload_store does not expose cell_payloads CF while rebuilding script infos"
+                );
+            }
+            payload_store
+        };
 
         fn reset_usage(info: &mut ScriptInfo) {
             info.cells_count = 0;
@@ -841,90 +864,27 @@ impl CkbadgerStore {
             info_by_code_hash.insert(key, info);
         }
 
-        let live_iter = self.iterator_cf(self.cf_live_cells(), rocksdb::IteratorMode::Start);
-        for item in live_iter {
+        let cell_state_iter = self.iterator_cf(self.cf_cell_state(), rocksdb::IteratorMode::Start);
+        for item in cell_state_iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate live_cells in rebuild_script_infos_from_cells: {}",
-                    e
-                )
-            })?;
-            let cell: LiveCellInfo = self
-                .get_cell_by_outpoint_key(&key)?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing canonical cell for live marker while rebuilding script info: outpoint=0x{}",
-                        bytes_to_hex(&key)
-                    )
-                })?;
-
-            let lock_code_hash = cell.lock_code_hash.clone();
-            let lock_info = info_by_code_hash
-                .entry(lock_code_hash.clone())
-                .or_insert_with(|| ScriptInfo {
-                    code_hash: lock_code_hash,
-                    ..Default::default()
-                });
-            apply_script_cell_usage(
-                lock_info,
-                false,
-                cell.capacity,
-                cell.occupied_capacity,
-                true,
-            )?;
-
-            if let Some(type_code_hash) = cell.type_code_hash.clone() {
-                let type_info = info_by_code_hash
-                    .entry(type_code_hash.clone())
-                    .or_insert_with(|| ScriptInfo {
-                        code_hash: type_code_hash,
-                        ..Default::default()
-                    });
-                apply_script_cell_usage(
-                    type_info,
-                    true,
-                    cell.capacity,
-                    cell.occupied_capacity,
-                    true,
-                )?;
-            }
-        }
-
-        let consumed_iter =
-            self.iterator_cf(self.cf_consumed_cells(), rocksdb::IteratorMode::Start);
-        for item in consumed_iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate consumed_cells in rebuild_script_infos_from_cells: {}",
+                    "failed to iterate cell_state in rebuild_script_infos_from_cells: {}",
                     e
                 )
             })?;
             if key.len() != keys::OUTPOINT_KEY_SIZE {
-                anyhow::bail!(
-                    "invalid consumed cell key length while rebuilding script info: key_len={}, expected={}, key=0x{}",
-                    key.len(),
-                    keys::OUTPOINT_KEY_SIZE,
-                    bytes_to_hex(&key)
-                );
+                continue;
             }
-            let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "failed to decode consumed cell payload while rebuilding script info: outpoint=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
-            let cell = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing canonical cell for consumed marker while rebuilding script info: outpoint=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
-            let consumed = ConsumedCellInfo {
-                cell,
-                consumed_at_block: meta.consumed_at_block,
-                consumed_by_tx: meta.consumed_by_tx,
+            let Some(state) = self.get_cell_state_by_outpoint_key(&key)? else {
+                continue;
             };
-            let cell = consumed.cell;
+            let cell = self.get_cell_payload_for_state_with_store(
+                payload_store,
+                &key,
+                &state,
+                "rebuild_script_infos_from_cells",
+            )?;
+            let is_live = state.is_live();
 
             let lock_code_hash = cell.lock_code_hash.clone();
             let lock_info = info_by_code_hash
@@ -938,7 +898,7 @@ impl CkbadgerStore {
                 false,
                 cell.capacity,
                 cell.occupied_capacity,
-                false,
+                is_live,
             )?;
 
             if let Some(type_code_hash) = cell.type_code_hash.clone() {
@@ -953,7 +913,7 @@ impl CkbadgerStore {
                     true,
                     cell.capacity,
                     cell.occupied_capacity,
-                    false,
+                    is_live,
                 )?;
             }
         }
@@ -1231,6 +1191,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&[0x01; 32], 0, &lock_live);
+        batch.put_cell(&[0x02; 32], 1, &lock_consumed);
         batch.put_consumed_cell(&[0x02; 32], 1, &lock_consumed, 5);
         batch.put_script_info(&lock_code_hash, &bad_lock_info);
         batch.put_script_info(&type_code_hash, &bad_type_info);
@@ -1283,6 +1244,71 @@ mod tests {
     }
 
     #[test]
+    fn test_rebuild_script_infos_from_cells_requires_append_store_for_split_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain =
+            CkbadgerStore::open_domain(dir.path().join("domain").to_str().unwrap()).unwrap();
+
+        let err = domain.rebuild_script_infos_from_cells().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("requires append-only payload store when cell_payloads CF is absent"));
+    }
+
+    #[test]
+    fn test_rebuild_script_infos_from_cells_with_payload_store_reads_split_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain =
+            CkbadgerStore::open_domain(dir.path().join("domain").to_str().unwrap()).unwrap();
+        let append =
+            CkbadgerStore::open_append_only(dir.path().join("append").to_str().unwrap()).unwrap();
+
+        let lock_code_hash = vec![0x44; 32];
+        let cell = LiveCellInfo {
+            capacity: 1_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![0x01],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 700,
+            udt_amount: None,
+        };
+        let info = ScriptInfo {
+            code_hash: lock_code_hash.clone(),
+            name: Some("Lock Script".to_string()),
+            ..Default::default()
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&[0x01; 32], 0, &cell);
+        domain_batch.put_script_info(&lock_code_hash, &info);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&[0x01; 32], 0, &cell);
+        append_batch.commit().unwrap();
+
+        let rebuilt = domain
+            .rebuild_script_infos_from_cells_with_payload_store(Some(&append))
+            .unwrap();
+        assert_eq!(rebuilt, 1);
+
+        let rebuilt_info = domain.get_script_info(&lock_code_hash).unwrap().unwrap();
+        assert_eq!(rebuilt_info.name.as_deref(), Some("Lock Script"));
+        assert_eq!(rebuilt_info.lock_cells_count, 1);
+        assert_eq!(rebuilt_info.lock_live_cells_count, 1);
+        assert_eq!(rebuilt_info.lock_capacity_sum, 1_000);
+        assert_eq!(rebuilt_info.lock_live_capacity_sum, 1_000);
+        assert_eq!(rebuilt_info.lock_occupied_capacity_sum, 700);
+        assert_eq!(rebuilt_info.lock_live_occupied_capacity_sum, 700);
+    }
+
+    #[test]
     fn test_list_script_infos_fails_on_invalid_payload() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
@@ -1298,64 +1324,45 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_script_infos_from_cells_fails_on_invalid_consumed_key_length() {
+    fn test_rebuild_script_infos_from_cells_fails_on_invalid_cell_state_payload() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
 
-        let bad_key = [0xAB; 3];
+        let bad_key = crate::keys::encode_outpoint(&[0xAB; 32], 0);
         let bad_value = [0xCD; 5];
         store
-            .put_cf(store.cf_consumed_cells(), &bad_key, &bad_value)
+            .put_cf(store.cf_cell_state(), &bad_key, &bad_value)
             .unwrap();
 
         let err = store.rebuild_script_infos_from_cells().unwrap_err();
         assert!(
             err.to_string()
-                .contains("invalid consumed cell key length while rebuilding script info"),
+                .contains("failed to deserialize cell_state in get_cell_state_by_outpoint_key"),
             "unexpected error: {err:#}"
         );
     }
 
     #[test]
-    fn test_rebuild_script_infos_from_cells_fails_on_legacy_consumed_payload() {
+    fn test_rebuild_script_infos_from_cells_fails_when_state_points_to_missing_payload() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let outpoint = crate::keys::encode_outpoint(&[0xAB; 32], 0);
-        let cell = LiveCellInfo {
-            capacity: 1000,
-            created_at_block: 1,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 1000,
-            udt_amount: None,
-        };
-        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&cell, 2, None);
-
         store
             .put_cf(
-                store.cf_cells(),
+                store.cf_cell_state(),
                 &outpoint,
-                &bincode::serialize(&cell).unwrap(),
-            )
-            .unwrap();
-        store
-            .put_cf(
-                store.cf_consumed_cells(),
-                &outpoint,
-                &bincode::serialize(&legacy).unwrap(),
+                &bincode::serialize(&crate::types::CellState::live(
+                    1,
+                    b"missing-payload".to_vec(),
+                ))
+                .unwrap(),
             )
             .unwrap();
 
         let err = store.rebuild_script_infos_from_cells().unwrap_err();
         assert!(
             err.to_string()
-                .contains("failed to decode consumed cell payload while rebuilding script info"),
+                .contains("missing canonical cell payload in rebuild_script_infos_from_cells"),
             "unexpected error: {err:#}"
         );
     }

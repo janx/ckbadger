@@ -32,7 +32,7 @@ fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
 
 fn setup_store() -> (Arc<CkbadgerStore>, BatchWriter) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap());
     let writer = BatchWriter::new(store.clone());
     // Leak the tempdir so it doesn't get cleaned up while store is open
     std::mem::forget(dir);
@@ -83,11 +83,19 @@ fn insert_cells_for_test(
     skip_cell_indices: bool,
 ) {
     let precomputed = precomputed_infos_for_insert(cells);
-    let mut batch = StoreBatch::new(store);
+    let mut domain_batch = StoreBatch::new(store);
+    let mut append_batch = StoreBatch::new(store);
     writer
-        .insert_cells_batch(cells, &precomputed, &mut batch, skip_cell_indices)
+        .insert_cells_batch(
+            cells,
+            &precomputed,
+            &mut domain_batch,
+            &mut append_batch,
+            skip_cell_indices,
+        )
         .unwrap();
-    batch.commit().unwrap();
+    append_batch.commit().unwrap();
+    domain_batch.commit().unwrap();
 }
 
 #[test]

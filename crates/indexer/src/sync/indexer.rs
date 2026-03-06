@@ -220,8 +220,9 @@ impl Indexer {
         info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
         let ckb_store = Some(Arc::new(reader));
         let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
-        let writer = BatchWriter::with_cache(
+        let writer = BatchWriter::with_cache_and_cell_payload_store(
             store.clone(),
+            append_only_store.clone(),
             config.fast_sync_mode,
             cache_invalidator.clone(),
         );
@@ -736,17 +737,30 @@ impl Indexer {
                 e
             )
         });
+        let total_live_cells = sync_status.total_cells_created - sync_status.total_cells_consumed;
         ckbadger_common::MemoryStatsData {
-            live_cells_count: stats.live_cells_count as u64,
-            consumed_cells_count: stats.consumed_cells_count as u64,
-            consumed_cells_bytes: stats.consumed_cells_bytes as u64,
-            consumed_cells_bytes_source: stats.consumed_cells_bytes_source.to_string(),
+            live_cells_count: u64::try_from(total_live_cells).unwrap_or_else(|_| {
+                panic!(
+                    "negative total_live_cells in memory stats: created={}, consumed={}",
+                    sync_status.total_cells_created, sync_status.total_cells_consumed
+                )
+            }),
+            consumed_cells_count: u64::try_from(sync_status.total_cells_consumed).unwrap_or_else(
+                |_| {
+                    panic!(
+                        "negative total_cells_consumed in memory stats: {}",
+                        sync_status.total_cells_consumed
+                    )
+                },
+            ),
+            cell_state_count: stats.cell_state_count as u64,
+            cell_state_bytes: stats.cell_state_bytes as u64,
+            cell_state_bytes_source: stats.cell_state_bytes_source.to_string(),
             rocksdb_memtable_bytes: stats.memtable_bytes as u64,
             rocksdb_block_cache_bytes: stats.block_cache_bytes as u64,
             rocksdb_table_readers_bytes: stats.table_readers_bytes as u64,
             rocksdb_total_bytes: stats.memory_bytes as u64,
             block_headers_count: stats.block_headers_count as u64,
-            bulk_sync_cell_cache_enabled: false,
             bulk_sync_mode: self.is_bulk_sync_active(),
             compaction_pending_bytes: stats.compaction_pending_bytes,
             num_running_compactions: stats.num_running_compactions,
@@ -760,7 +774,7 @@ impl Indexer {
             wbm_budget_bytes: stats.wbm_budget_bytes as u64,
             total_transactions: sync_status.total_transactions,
             total_cells: sync_status.total_cells_created,
-            total_live_cells: sync_status.total_cells_created - sync_status.total_cells_consumed,
+            total_live_cells,
             total_addresses: i64::try_from(stats.addr_balance_count).unwrap_or_else(|_| {
                 panic!(
                     "addr_balance_count over i64 range in memory stats: {}",

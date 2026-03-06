@@ -1,19 +1,25 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{ActivityEntry, UndoLogEntry, UndoLogStoreTarget};
+use ckbadger_store::types::{
+    ActivityEntry, ActivityTxEnvelope, OwnerActivityViewStored, UndoLogEntry, UndoLogStoreTarget,
+};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
     keys, CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, TxIndexEntry,
-    CF_ACTIVITIES,
+    CF_ACTIVITY_BY_OWNER, CF_ACTIVITY_TX_ENVELOPES,
 };
 use std::sync::Arc;
 
-fn setup_store() -> Arc<CkbadgerStore> {
+fn setup_store() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
+    let domain =
+        Arc::new(CkbadgerStore::open_domain(dir.path().join("domain").to_str().unwrap()).unwrap());
+    let append = Arc::new(
+        CkbadgerStore::open_append_only(dir.path().join("append").to_str().unwrap()).unwrap(),
+    );
     std::mem::forget(dir);
-    store
+    (domain, append)
 }
 
 fn make_header(block_num: i64) -> CachedBlockHeader {
@@ -60,7 +66,12 @@ fn make_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
 }
 
 /// Insert a fully populated block (header + txs + cells + indexes).
-fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
+fn insert_full_block(
+    domain_store: &CkbadgerStore,
+    append_store: &CkbadgerStore,
+    block_num: i64,
+    lock_hash: &[u8],
+) {
     let header = make_header(block_num);
     let cellbase = make_tx_entry(true);
     let normal_tx = make_tx_entry(false);
@@ -75,44 +86,79 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
 
     let cell = make_cell(block_num, lock_hash);
 
-    let mut batch = StoreBatch::new(store);
-    batch.put_block_header(block_num, &header);
-    batch.put_tx_index(block_num, 0, &cellbase);
-    batch.put_tx_index(block_num, 1, &normal_tx);
-    batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
-    batch.put_tx_hash_map(&tx_hash, block_num, 1);
-    batch.put_cell(&tx_hash, 0, &cell);
-    batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
-    batch.commit().unwrap();
+    let mut domain_batch = StoreBatch::new(domain_store);
+    domain_batch.put_block_header(block_num, &header);
+    domain_batch.put_tx_index(block_num, 0, &cellbase);
+    domain_batch.put_tx_index(block_num, 1, &normal_tx);
+    domain_batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
+    domain_batch.put_tx_hash_map(&tx_hash, block_num, 1);
+    domain_batch.put_cell(&tx_hash, 0, &cell);
+    domain_batch.commit().unwrap();
+
+    let mut append_batch = StoreBatch::new(append_store);
+    append_batch.put_cell(&tx_hash, 0, &cell);
+    append_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
+    append_batch.commit().unwrap();
+}
+
+fn put_normalized_activity(batch: &mut StoreBatch<'_>, lock_hash: &[u8], entry: &ActivityEntry) {
+    let envelope = ActivityTxEnvelope {
+        tx_hash: entry.tx_hash.clone(),
+        block_number: entry.block_number,
+        tx_index: entry.tx_index,
+        timestamp: entry.timestamp,
+        is_cellbase: entry.is_cellbase,
+        participants: vec![lock_hash.to_vec()],
+        owner_views: vec![OwnerActivityViewStored {
+            ckb_delta: entry.ckb_delta,
+            occupied_delta: entry.occupied_delta,
+            asset_changes: entry.asset_changes.clone(),
+        }],
+    };
+    batch.put_activity_tx_envelope(
+        entry.block_number,
+        entry.tx_index,
+        &entry.tx_hash,
+        &envelope,
+    );
+    batch.put_activity_owner_ref(
+        lock_hash,
+        entry.block_number,
+        entry.tx_index,
+        &entry.tx_hash,
+        0,
+    );
 }
 
 #[test]
 fn test_rollback_removes_blocks() {
-    let store = setup_store();
+    let (domain, append) = setup_store();
     let lock_hash = vec![0xFF; 32];
 
     // Insert blocks 1 through 10
     for i in 1..=10 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&domain, &append, i, &lock_hash);
     }
 
     // Verify all 10 blocks exist
     for i in 1..=10 {
         assert!(
-            store.get_block_header(i).unwrap().is_some(),
+            domain.get_block_header(i).unwrap().is_some(),
             "block {} should exist before rollback",
             i
         );
     }
 
     // Rollback to block 5: blocks 6-10 should be removed
-    let result: RollbackResult = store.rollback_to_block(5).unwrap();
+    let result: RollbackResult = domain
+        .rollback_to_block_with_tx_index_store(5, Some(&append))
+        .unwrap();
     assert_eq!(result.blocks_removed, 5, "should remove blocks 6-10");
 
     // Blocks 1-5 should still exist
     for i in 1..=5 {
         assert!(
-            store.get_block_header(i).unwrap().is_some(),
+            domain.get_block_header(i).unwrap().is_some(),
             "block {} should survive rollback",
             i
         );
@@ -121,7 +167,7 @@ fn test_rollback_removes_blocks() {
     // Blocks 6-10 should be gone
     for i in 6..=10 {
         assert!(
-            store.get_block_header(i).unwrap().is_none(),
+            domain.get_block_header(i).unwrap().is_none(),
             "block {} should be removed after rollback",
             i
         );
@@ -130,54 +176,62 @@ fn test_rollback_removes_blocks() {
 
 #[test]
 fn test_rollback_removes_transactions() {
-    let store = setup_store();
+    let (domain, append) = setup_store();
     let lock_hash = vec![0xEE; 32];
 
     // Insert blocks 1 through 6
     for i in 1..=6 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&domain, &append, i, &lock_hash);
     }
 
     // Verify txs in block 6 exist
-    let txs = store.list_block_txs(6).unwrap();
+    let txs = domain.list_block_txs(6).unwrap();
     assert_eq!(txs.len(), 2, "block 6 should have 2 txs before rollback");
 
     // Rollback to block 3
-    let result = store.rollback_to_block(3).unwrap();
+    let result = domain
+        .rollback_to_block_with_tx_index_store(3, Some(&append))
+        .unwrap();
     // Blocks 4, 5, 6 removed => 3 blocks, each with 2 txs => 6 txs removed
     assert_eq!(result.blocks_removed, 3);
     assert_eq!(result.txs_removed, 6);
 
     // Block 6 txs should be gone
-    let txs = store.list_block_txs(6).unwrap();
+    let txs = domain.list_block_txs(6).unwrap();
     assert_eq!(txs.len(), 0, "block 6 txs should be removed");
 
     // Block 3 txs should survive
-    let txs = store.list_block_txs(3).unwrap();
+    let txs = domain.list_block_txs(3).unwrap();
     assert_eq!(txs.len(), 2, "block 3 txs should survive");
 }
 
 #[test]
 fn test_rollback_removes_cells_and_indexes() {
-    let store = setup_store();
+    let (domain, append) = setup_store();
     let lock_hash = vec![0xDD; 32];
 
     // Insert blocks 1 through 4
     for i in 1..=4 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&domain, &append, i, &lock_hash);
     }
 
     // Verify cells exist via lock index (4 blocks, 1 cell each)
-    let cells_before = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    let cells_before = domain
+        .list_cells_by_lock_with_history_store(&append, &lock_hash, 100, None)
+        .unwrap();
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
     // Rollback to block 2: blocks 3-4 removed
-    let result = store.rollback_to_block(2).unwrap();
+    let result = domain
+        .rollback_to_block_with_tx_index_store(2, Some(&append))
+        .unwrap();
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
 
     // Cells from blocks 1-2 should survive via lock index
-    let cells_after = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    let cells_after = domain
+        .list_cells_by_lock_with_history_store(&append, &lock_hash, 100, None)
+        .unwrap();
     assert_eq!(
         cells_after.len(),
         2,
@@ -187,16 +241,18 @@ fn test_rollback_removes_cells_and_indexes() {
 
 #[test]
 fn test_rollback_result_counts() {
-    let store = setup_store();
+    let (domain, append) = setup_store();
     let lock_hash = vec![0xCC; 32];
 
     // Insert blocks 1 through 8
     for i in 1..=8 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&domain, &append, i, &lock_hash);
     }
 
     // Rollback to block 5: remove blocks 6, 7, 8
-    let result = store.rollback_to_block(5).unwrap();
+    let result = domain
+        .rollback_to_block_with_tx_index_store(5, Some(&append))
+        .unwrap();
 
     assert_eq!(result.blocks_removed, 3, "3 blocks removed (6, 7, 8)");
     assert_eq!(
@@ -214,10 +270,10 @@ fn test_rollback_result_counts() {
 
 #[test]
 fn test_deep_fork_flag() {
-    let store = setup_store();
+    let (domain, _append) = setup_store();
 
     // Initially no deep fork
-    assert!(!store.has_unresolved_deep_fork().unwrap());
+    assert!(!domain.has_unresolved_deep_fork().unwrap());
 
     // Set a deep fork
     let fork_info = DeepForkInfo {
@@ -228,27 +284,28 @@ fn test_deep_fork_flag() {
         depth: 12,
         fork_point: 988,
     };
-    store.set_deep_fork(fork_info).unwrap();
+    domain.set_deep_fork(fork_info).unwrap();
 
-    assert!(store.has_unresolved_deep_fork().unwrap());
+    assert!(domain.has_unresolved_deep_fork().unwrap());
 
-    let info = store.get_deep_fork_info().unwrap().unwrap();
+    let info = domain.get_deep_fork_info().unwrap().unwrap();
     assert_eq!(info.db_tip, 1000);
     assert_eq!(info.depth, 12);
     assert_eq!(info.fork_point, 988);
 
     // Clear deep fork
-    store.clear_deep_fork().unwrap();
-    assert!(!store.has_unresolved_deep_fork().unwrap());
+    domain.clear_deep_fork().unwrap();
+    assert!(!domain.has_unresolved_deep_fork().unwrap());
 }
 
 #[test]
 fn test_rollback_preserves_activities_history() {
-    let store = setup_store();
+    let (domain, append) = setup_store();
     let lock_hash = vec![0xAA; 32];
 
     // Insert activities at blocks 100, 200, 300, 400, 500
-    let mut batch = StoreBatch::new(&store);
+    let mut append_batch = StoreBatch::new(&append);
+    let mut domain_batch = StoreBatch::new(&domain);
     for (rollback_seq, i) in (1..=5).enumerate() {
         let block = i * 100;
         let entry = ActivityEntry {
@@ -262,38 +319,52 @@ fn test_rollback_preserves_activities_history() {
             asset_changes: vec![],
             peers: vec![],
         };
-        batch.put_activity(&lock_hash, block, 0, &entry);
-        let activity_key = keys::encode_activity_key(&lock_hash, block, 0);
-        batch.put_reorg_undo_log_by_block(
+        put_normalized_activity(&mut append_batch, &lock_hash, &entry);
+        let envelope_key = keys::encode_activity_tx_envelope_key(block, 0, &entry.tx_hash);
+        domain_batch.put_reorg_undo_log_by_block(
             block,
-            rollback_seq as u64,
+            (rollback_seq as u64) * 2,
             &UndoLogEntry::KeyMutation {
                 target_store: UndoLogStoreTarget::AppendOnly,
-                cf_name: CF_ACTIVITIES.to_string(),
-                key: activity_key,
+                cf_name: CF_ACTIVITY_TX_ENVELOPES.to_string(),
+                key: envelope_key.to_vec(),
+                previous_value: None,
+            },
+        );
+        let owner_key = keys::encode_activity_owner_key(&lock_hash, block, 0, &entry.tx_hash);
+        domain_batch.put_reorg_undo_log_by_block(
+            block,
+            (rollback_seq as u64) * 2 + 1,
+            &UndoLogEntry::KeyMutation {
+                target_store: UndoLogStoreTarget::AppendOnly,
+                cf_name: CF_ACTIVITY_BY_OWNER.to_string(),
+                key: owner_key.to_vec(),
                 previous_value: None,
             },
         );
     }
-    batch.commit().unwrap();
+    append_batch.commit().unwrap();
+    domain_batch.commit().unwrap();
 
     // Verify all 5 exist
-    let before = store.list_activities(&lock_hash, 100, None, None).unwrap();
+    let before = append.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(before.len(), 5);
 
     // Rollback to block 300: append-only activities history is preserved.
     // Need to also insert block headers so rollback_to_block works
-    let mut batch = StoreBatch::new(&store);
+    let mut batch = StoreBatch::new(&domain);
     for i in 1..=5 {
         let block = i * 100;
         batch.put_block_header(block, &make_header(block));
     }
     batch.commit().unwrap();
 
-    store.rollback_to_block(300).unwrap();
-    store.rollback_via_undo_log(&store, 300).unwrap();
+    domain
+        .rollback_to_block_with_tx_index_store(300, Some(&append))
+        .unwrap();
+    domain.rollback_via_undo_log(&append, 300).unwrap();
 
-    let after = store.list_activities(&lock_hash, 100, None, None).unwrap();
+    let after = append.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(after.len(), 5, "append-only history should be preserved");
     // Activities remain in descending block order.
     assert_eq!(after[0].0, 500);
