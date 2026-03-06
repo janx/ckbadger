@@ -1,8 +1,10 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use rocksdb::{ColumnFamilyDescriptor, Options, DB};
 use std::sync::Arc;
 use tower::ServiceExt;
+use uuid::Uuid;
 
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
@@ -22,6 +24,18 @@ fn test_store() -> Arc<CkbadgerStore> {
     Arc::new(CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap())
 }
 
+fn test_ckb_db_path() -> String {
+    let db_path = std::env::temp_dir().join(format!("ckbadger-api-test-ckb-db-{}", Uuid::new_v4()));
+    let mut db_opts = Options::default();
+    db_opts.create_if_missing(true);
+    db_opts.create_missing_column_families(true);
+    let cf_descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+        .map(|index| ColumnFamilyDescriptor::new(index.to_string(), Options::default()))
+        .collect();
+    let _db = DB::open_cf_descriptors(&db_opts, &db_path, cf_descriptors).unwrap();
+    db_path.to_string_lossy().to_string()
+}
+
 fn test_config_with_append_only(
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
@@ -34,7 +48,7 @@ fn test_config_with_append_only(
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
         start_background_tasks: false,
-        ckb_data_path: None,
+        ckb_db_path: test_ckb_db_path(),
     }
 }
 

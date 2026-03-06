@@ -190,7 +190,8 @@ fn canonical_activity_locations(
 }
 
 fn list_canonical_activities_page(
-    store: &CkbadgerStore,
+    activity_store: &CkbadgerStore,
+    canonical_store: &CkbadgerStore,
     lock_hash: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
@@ -205,12 +206,12 @@ fn list_canonical_activities_page(
     let mut scan_cursor = cursor;
 
     loop {
-        let rows = store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
+        let rows = activity_store.list_activities(lock_hash, scan_limit, scan_cursor, filter)?;
         if rows.is_empty() {
             break;
         }
         let rows_len = rows.len();
-        let canonical_locations = canonical_activity_locations(store, &rows)?;
+        let canonical_locations = canonical_activity_locations(canonical_store, &rows)?;
         let mut last_seen = None;
         for (block_num, tx_idx, entry) in rows {
             last_seen = Some((block_num, tx_idx));
@@ -259,6 +260,7 @@ async fn get_address_activities(
         .and_then(|c| parse_activity_cursor(c));
 
     let results = list_canonical_activities_page(
+        state.append_only_store.as_ref(),
         state.store.as_ref(),
         &lock_hash,
         limit + 1,
@@ -387,7 +389,8 @@ mod tests {
         domain_batch.put_tx_index(10, 0, &tx_index);
         domain_batch.commit().unwrap();
 
-        let rows = list_canonical_activities_page(&domain, &lock_hash, 3, None, None).unwrap();
+        let rows =
+            list_canonical_activities_page(&domain, &domain, &lock_hash, 3, None, None).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, 20);
         assert_eq!(rows[1].0, 10);

@@ -830,7 +830,7 @@ fn load_spore_content_from_ckb(
     entry: &ckbadger_store::DobEntry,
 ) -> anyhow::Result<(String, Vec<u8>)> {
     let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("CKB direct store unavailable; set [ckb].data_path in ckbadger.toml")
+        anyhow::anyhow!("CKB direct store unavailable; set [ckb].workdir in ckbadger.toml")
     })?;
 
     if entry.created_at_tx.len() != 32 {

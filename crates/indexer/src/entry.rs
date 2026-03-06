@@ -14,17 +14,6 @@ use crate::runtime_diag::{generate_run_id, read_cgroup_memory_snapshot};
 use crate::sync::Indexer;
 use crate::Config;
 
-fn require_ckb_data_path<'a>(path: Option<&'a str>, context: &str) -> Result<&'a str> {
-    let path = path.map(str::trim).unwrap_or_default();
-    if path.is_empty() {
-        anyhow::bail!(
-            "{}: [ckb].data_path is required and must point to the CKB node RocksDB directory",
-            context
-        );
-    }
-    Ok(path)
-}
-
 /// Configuration for starting the indexer sync daemon.
 /// This is the interface the CLI binary uses to start the indexer.
 pub struct IndexerServiceConfig {
@@ -32,7 +21,7 @@ pub struct IndexerServiceConfig {
     pub append_only_data_path: String,
     pub bulk_sync_perf_output_root: String,
     pub ckb_rpc_url: String,
-    pub ckb_data_path: Option<String>,
+    pub ckb_db_path: String,
     pub token_labels_path: String,
     pub batch_size: usize,
     pub poll_interval_ms: u64,
@@ -58,7 +47,7 @@ impl From<IndexerServiceConfig> for Config {
             pipeline_buffer: svc.pipeline_buffer,
             bulk_sync_threshold: svc.bulk_sync_threshold,
             fast_sync_mode: true,
-            ckb_data_path: svc.ckb_data_path,
+            ckb_db_path: svc.ckb_db_path,
             token_labels_path: svc.token_labels_path,
             force_startup_cleanup: false,
             store_runtime_config: svc.store_runtime_config,
@@ -70,7 +59,7 @@ impl From<IndexerServiceConfig> for Config {
 pub struct LabelImportServiceConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
-    pub ckb_data_path: Option<String>,
+    pub ckb_db_path: String,
     pub token_labels_path: String,
     pub network: String,
     pub import_udt: bool,
@@ -604,10 +593,8 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         config.store_runtime_config,
     )?);
 
-    let ckb_data_path =
-        require_ckb_data_path(config.ckb_data_path.as_deref(), "label import fail-fast")?;
-    let reader = CkbChainReader::open(ckb_data_path)?;
-    info!("CKB direct RocksDB reader opened at {}", ckb_data_path);
+    let reader = CkbChainReader::open(&config.ckb_db_path)?;
+    info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
     let ckb_store = Some(Arc::new(reader));
 
     let network = config.network.clone();
@@ -1224,7 +1211,7 @@ mod tests {
             append_only_data_path: "/data/append".to_string(),
             bulk_sync_perf_output_root: "/workdir/perf/bulk-sync".to_string(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
-            ckb_data_path: Some("/ckb/data".to_string()),
+            ckb_db_path: "/ckb/data/db".to_string(),
             token_labels_path: "docs/labels".to_string(),
             batch_size: 5000,
             poll_interval_ms: 500,
@@ -1243,7 +1230,7 @@ mod tests {
         assert_eq!(config.append_only_data_path, "/data/append");
         assert_eq!(config.bulk_sync_perf_output_root, "/workdir/perf/bulk-sync");
         assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
-        assert_eq!(config.ckb_data_path.as_deref(), Some("/ckb/data"));
+        assert_eq!(config.ckb_db_path, "/ckb/data/db");
         assert_eq!(config.token_labels_path, "docs/labels");
         assert_eq!(config.batch_size, 5000);
         assert_eq!(config.poll_interval_ms, 500);
@@ -1256,23 +1243,5 @@ mod tests {
         assert!(config.start_block.is_none());
         assert_eq!(config.store_runtime_config.memory_budget_gb, Some(24));
         assert!(!config.store_runtime_config.direct_io_reads);
-    }
-
-    #[test]
-    fn test_require_ckb_data_path_rejects_missing() {
-        let err = require_ckb_data_path(None, "indexer test").unwrap_err();
-        assert!(err.to_string().contains("[ckb].data_path is required"));
-    }
-
-    #[test]
-    fn test_require_ckb_data_path_rejects_blank() {
-        let err = require_ckb_data_path(Some("   "), "indexer test").unwrap_err();
-        assert!(err.to_string().contains("[ckb].data_path is required"));
-    }
-
-    #[test]
-    fn test_require_ckb_data_path_accepts_trimmed_value() {
-        let path = require_ckb_data_path(Some(" /var/lib/ckb/data/db "), "indexer test").unwrap();
-        assert_eq!(path, "/var/lib/ckb/data/db");
     }
 }

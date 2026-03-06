@@ -67,17 +67,19 @@ unsafe impl Send for CkbChainReader {}
 unsafe impl Sync for CkbChainReader {}
 
 impl CkbChainReader {
-    /// Open a CKB data directory as a secondary RocksDB instance.
+    /// Open a CKB RocksDB directory as a secondary RocksDB instance.
     ///
-    /// `ckb_data_path` should point to the `data/db` subdirectory of the CKB node's
-    /// data directory. For Docker, this is typically `/var/lib/ckb/data/db`.
+    /// `ckb_db_path` should be the final resolved RocksDB path for the CKB node.
+    /// For the default CKB layout, this is the `data/db` subdirectory under the
+    /// CKB node's configured `data_dir`. For Docker, this is typically
+    /// `/var/lib/ckb/data/db`.
     ///
     /// The secondary instance starts with a snapshot of the primary's state.
     /// Call [`refresh()`](Self::refresh) periodically to see new blocks written by the node.
-    pub fn open(ckb_data_path: &str) -> Result<Self> {
-        let db_path = std::path::Path::new(ckb_data_path);
+    pub fn open(ckb_db_path: &str) -> Result<Self> {
+        let db_path = std::path::Path::new(ckb_db_path);
         if !db_path.exists() {
-            return Err(anyhow!("CKB data path does not exist: {}", ckb_data_path));
+            return Err(anyhow!("CKB RocksDB path does not exist: {}", ckb_db_path));
         }
 
         // Secondary instances need their own directory for manifest tracking.
@@ -102,14 +104,14 @@ impl CkbChainReader {
 
         let db = DB::open_cf_descriptors_as_secondary(
             &opts,
-            ckb_data_path,
+            ckb_db_path,
             &secondary_path,
             cf_descriptors,
         )
         .map_err(|e| {
             anyhow!(
                 "Failed to open CKB RocksDB at {} as secondary: {}",
-                ckb_data_path,
+                ckb_db_path,
                 e
             )
         })?;
@@ -120,7 +122,7 @@ impl CkbChainReader {
 
         info!(
             "Opened CKB RocksDB at {} (secondary instance, path: {})",
-            ckb_data_path, secondary_path
+            ckb_db_path, secondary_path
         );
 
         Ok(Self { db })

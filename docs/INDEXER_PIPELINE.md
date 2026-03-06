@@ -7,12 +7,11 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │     FETCHER     │────▶│     PARSER      │────▶│     WRITER      │
-│  (RocksDB/RPC)  │     │  (CPU + Prefetch)│     │    (DB I/O)     │
+│    (RocksDB)    │     │  (CPU + Prefetch)│     │    (DB I/O)     │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
    Direct RocksDB         Rayon parallel          RocksDB batch
    reads (~0.1ms)         block parsing           writes
-   or RPC fallback
 ```
 
 ### Design Goals
@@ -30,8 +29,8 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 
 **Responsibilities**:
 
-- Query chain tip (from CKB RocksDB directly, or CKB RPC as fallback)
-- Read blocks from CKB's RocksDB (~0.1ms per block) when `[ckb].data_path` is configured in `ckbadger.toml`, or fetch via JSON-RPC
+- Query chain tip from the local CKB RocksDB
+- Read blocks from CKB's RocksDB (~0.1ms per block) using the RocksDB path resolved from `[ckb].workdir`
 - Send raw blocks to parser channel
 
 **Key behaviors**:
@@ -132,9 +131,9 @@ Block N arrives
 | `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)         |
 | `pipeline_buffer`     | `8`     | Channel capacity between stages                          |
 | `batch_size`          | `10000` | Blocks per batch                                         |
-| `parallel_fetch_size` | `64`    | Concurrent RPC requests (used only in RPC fallback mode) |
+| `parallel_fetch_size` | `64`    | Concurrent block fetch work units in the pipeline        |
 | `bulk_sync_threshold` | `1000`  | Blocks behind tip to treat sync as bulk mode             |
-| `ckb_data_path`       | -       | Path to CKB node's RocksDB data dir for direct reads     |
+| `ckb.workdir`         | -       | CKB node config directory; ckbadger derives RocksDB path |
 
 ### Relevant Config
 
@@ -145,7 +144,7 @@ append_only_data_path = "data/append-only"
 
 [ckb]
 rpc_url = "http://127.0.0.1:8114"
-# data_path = "/var/lib/ckb/data/db"
+workdir = "/var/lib/ckb"
 ```
 
 `pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and

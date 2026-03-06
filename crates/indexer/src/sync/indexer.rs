@@ -135,17 +135,6 @@ fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
     tip.ok_or_else(|| anyhow!("Failed to get chain tip from {}", source))
 }
 
-fn require_ckb_data_path<'a>(path: Option<&'a str>, context: &str) -> Result<&'a str> {
-    let path = path.map(str::trim).unwrap_or_default();
-    if path.is_empty() {
-        bail!(
-            "{}: [ckb].data_path is required and must point to the CKB node RocksDB directory",
-            context
-        );
-    }
-    Ok(path)
-}
-
 fn startup_header_gap_fail_fast_message(
     first_header_gap: i64,
     start_block: i64,
@@ -227,10 +216,8 @@ impl Indexer {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(store.clone());
 
-        let ckb_data_path =
-            require_ckb_data_path(config.ckb_data_path.as_deref(), "indexer startup fail-fast")?;
-        let reader = CkbChainReader::open(ckb_data_path)?;
-        info!("CKB direct RocksDB reader opened at {}", ckb_data_path);
+        let reader = CkbChainReader::open(&config.ckb_db_path)?;
+        info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
         let ckb_store = Some(Arc::new(reader));
         let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
         let writer = BatchWriter::with_cache(

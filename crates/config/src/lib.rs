@@ -5,7 +5,7 @@
 //!
 //! Priority: CLI args > ckbadger.toml > defaults
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,9 +31,9 @@ pub struct CkbadgerConfig {
 pub struct CkbConfig {
     pub rpc_url: String,
     pub network: String,
-    /// Path to CKB node's RocksDB data for direct reads.
+    /// Path to the CKB node config directory used by `ckb -C <path> run`.
     /// Empty means "not configured yet" and must fail fast at service startup.
-    pub data_path: Option<String>,
+    pub workdir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -105,7 +105,7 @@ impl Default for CkbConfig {
         Self {
             rpc_url: "http://127.0.0.1:8114".to_string(),
             network: "mainnet".to_string(),
-            data_path: Some(String::new()),
+            workdir: Some(String::new()),
         }
     }
 }
@@ -274,6 +274,16 @@ pub fn load_config(work_dir: &Path) -> Result<CkbadgerConfig> {
 ///
 /// Missing keys fall back to their default values via `#[serde(default)]`.
 pub fn parse_config(toml_str: &str) -> Result<CkbadgerConfig> {
+    let value: toml::Value = toml::from_str(toml_str).context("failed to parse ckbadger.toml")?;
+    if value
+        .get("ckb")
+        .and_then(toml::Value::as_table)
+        .and_then(|ckb| ckb.get("data_path"))
+        .is_some()
+    {
+        bail!("[ckb].data_path has been removed; use [ckb].workdir");
+    }
+
     toml::from_str(toml_str).context("failed to parse ckbadger.toml")
 }
 
@@ -314,7 +324,7 @@ pub fn default_config_toml() -> String {
     r#"[ckb]
 rpc_url = "http://127.0.0.1:8114"
 network = "mainnet"               # mainnet | testnet
-data_path = ""                    # REQUIRED: CKB node RocksDB path for direct reads
+workdir = ""                      # REQUIRED: CKB node config directory
 
 [api]
 host = "127.0.0.1"
@@ -352,6 +362,26 @@ pub struct ResolvedStorePaths {
     pub append_only_data: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedCkbPaths {
+    pub ckb_workdir: PathBuf,
+    pub ckb_config_path: PathBuf,
+    pub ckb_data_dir: PathBuf,
+    pub ckb_db_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+struct CkbNodeConfig {
+    data_dir: Option<String>,
+    #[serde(default)]
+    db: CkbNodeDbConfig,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CkbNodeDbConfig {
+    path: Option<String>,
+}
+
 pub fn resolve_workdir_path(work_dir: &Path, configured_path: &str) -> PathBuf {
     let configured = PathBuf::from(configured_path);
     if configured.is_absolute() {
@@ -366,6 +396,65 @@ pub fn resolve_store_paths(work_dir: &Path, store: &StoreConfig) -> ResolvedStor
         domain_data: resolve_workdir_path(work_dir, &store.domain_data_path),
         append_only_data: resolve_workdir_path(work_dir, &store.append_only_data_path),
     }
+}
+
+pub fn resolve_ckb_paths(work_dir: &Path, ckb: &CkbConfig) -> Result<ResolvedCkbPaths> {
+    let configured_workdir = ckb.workdir.as_deref().map(str::trim).unwrap_or_default();
+    if configured_workdir.is_empty() {
+        bail!("ckb.workdir is required");
+    }
+
+    let ckb_workdir = resolve_workdir_path(work_dir, configured_workdir);
+    let ckb_config_path = ckb_workdir.join("ckb.toml");
+    if !ckb_config_path.is_file() {
+        bail!("ckb.toml not found under {}", ckb_workdir.display());
+    }
+
+    let ckb_config_content = std::fs::read_to_string(&ckb_config_path)
+        .with_context(|| format!("failed to read CKB config at {}", ckb_config_path.display()))?;
+    let ckb_node_config: CkbNodeConfig =
+        toml::from_str(&ckb_config_content).with_context(|| {
+            format!(
+                "failed to parse CKB config at {}",
+                ckb_config_path.display()
+            )
+        })?;
+
+    let data_dir = ckb_node_config
+        .data_dir
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    if data_dir.is_empty() {
+        bail!("CKB config data_dir is blank");
+    }
+
+    let ckb_data_dir = resolve_workdir_path(&ckb_workdir, data_dir);
+    let db_path = ckb_node_config
+        .db
+        .path
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
+    let ckb_db_path = if db_path.is_empty() {
+        ckb_data_dir.join("db")
+    } else {
+        resolve_workdir_path(&ckb_workdir, db_path)
+    };
+
+    if !ckb_db_path.exists() {
+        bail!(
+            "resolved CKB RocksDB path does not exist: {}",
+            ckb_db_path.display()
+        );
+    }
+
+    Ok(ResolvedCkbPaths {
+        ckb_workdir,
+        ckb_config_path,
+        ckb_data_dir,
+        ckb_db_path,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -457,7 +546,7 @@ mod tests {
 
         assert_eq!(cfg.ckb.rpc_url, "http://127.0.0.1:8114");
         assert_eq!(cfg.ckb.network, "mainnet");
-        assert_eq!(cfg.ckb.data_path, Some(String::new()));
+        assert_eq!(cfg.ckb.workdir, Some(String::new()));
 
         assert_eq!(cfg.api.host, "127.0.0.1");
         assert_eq!(cfg.api.port, 8101);
@@ -514,7 +603,7 @@ port = 9999
 [ckb]
 rpc_url = "http://10.0.0.1:8114"
 network = "testnet"
-data_path = "/data/ckb"
+workdir = "/data/ckb-node"
 
 [api]
 host = "0.0.0.0"
@@ -546,7 +635,7 @@ level = "debug"
         let cfg = parse_config(toml).unwrap();
         assert_eq!(cfg.ckb.rpc_url, "http://10.0.0.1:8114");
         assert_eq!(cfg.ckb.network, "testnet");
-        assert_eq!(cfg.ckb.data_path, Some("/data/ckb".to_string()));
+        assert_eq!(cfg.ckb.workdir, Some("/data/ckb-node".to_string()));
         assert_eq!(cfg.api.host, "0.0.0.0");
         assert_eq!(cfg.api.port, 3001);
         assert_eq!(cfg.api.rate_limit, 50);
@@ -582,6 +671,18 @@ port = "not_a_number"
         assert!(result.is_err());
     }
 
+    #[test]
+    fn test_parse_config_rejects_legacy_ckb_data_path() {
+        let err = parse_config(
+            r#"
+[ckb]
+data_path = "/var/lib/ckb/data/db"
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("[ckb].data_path has been removed"));
+    }
+
     // -- Default config TOML generation --
 
     #[test]
@@ -592,10 +693,10 @@ port = "not_a_number"
     }
 
     #[test]
-    fn test_default_config_toml_declares_ckb_data_path() {
+    fn test_default_config_toml_declares_ckb_workdir() {
         let toml_str = default_config_toml();
-        assert!(toml_str.contains("data_path = "));
-        assert!(!toml_str.contains("# data_path = "));
+        assert!(toml_str.contains("workdir = "));
+        assert!(!toml_str.contains("\ndata_path = "));
     }
 
     #[test]
@@ -643,6 +744,49 @@ port = "not_a_number"
             PathBuf::from("/tmp/ckbadger/custom/domain")
         );
         assert_eq!(resolved.append_only_data, PathBuf::from("/ssd/append-only"));
+    }
+
+    #[test]
+    fn test_resolve_ckb_paths_uses_relative_data_dir_default_db_path() {
+        let ckbadger_root = TempDir::new().unwrap();
+        let ckb_root = ckbadger_root.path().join("node");
+        std::fs::create_dir_all(ckb_root.join("data/db")).unwrap();
+        std::fs::write(ckb_root.join("ckb.toml"), "data_dir = \"data\"\n").unwrap();
+
+        let config = parse_config("[ckb]\nworkdir = \"node\"\n").unwrap();
+        let resolved = resolve_ckb_paths(ckbadger_root.path(), &config.ckb).unwrap();
+
+        assert_eq!(resolved.ckb_workdir, ckb_root);
+        assert_eq!(resolved.ckb_config_path, ckb_root.join("ckb.toml"));
+        assert_eq!(resolved.ckb_data_dir, ckb_root.join("data"));
+        assert_eq!(resolved.ckb_db_path, ckb_root.join("data/db"));
+    }
+
+    #[test]
+    fn test_resolve_ckb_paths_uses_relative_db_path_override() {
+        let ckbadger_root = TempDir::new().unwrap();
+        let ckb_root = ckbadger_root.path().join("node");
+        std::fs::create_dir_all(ckb_root.join("custom-db")).unwrap();
+        std::fs::write(
+            ckb_root.join("ckb.toml"),
+            "data_dir = \"data\"\n[db]\npath = \"custom-db\"\n",
+        )
+        .unwrap();
+
+        let config = parse_config("[ckb]\nworkdir = \"node\"\n").unwrap();
+        let resolved = resolve_ckb_paths(ckbadger_root.path(), &config.ckb).unwrap();
+
+        assert_eq!(resolved.ckb_db_path, ckb_root.join("custom-db"));
+    }
+
+    #[test]
+    fn test_resolve_ckb_paths_rejects_missing_ckb_toml() {
+        let ckbadger_root = TempDir::new().unwrap();
+        let config = parse_config("[ckb]\nworkdir = \"node\"\n").unwrap();
+
+        let err = resolve_ckb_paths(ckbadger_root.path(), &config.ckb).unwrap_err();
+
+        assert!(err.to_string().contains("ckb.toml not found under"));
     }
 
     // -- load_config --

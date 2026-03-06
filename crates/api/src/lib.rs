@@ -31,7 +31,7 @@ pub struct AppState {
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub cycles_client: Arc<CyclesClient>,
-    /// Direct read-only access to CKB node's RocksDB (when configured).
+    /// Direct read-only access to the resolved CKB RocksDB path.
     pub ckb_store: Option<Arc<CkbChainReader>>,
     /// In-memory cache for assets/tokens/NFT data (refreshed by background loop).
     pub mem_cache: InMemoryCache,
@@ -45,8 +45,8 @@ pub struct AppConfig {
     pub rate_limit_per_second: Option<u32>,
     pub rate_limit_burst: Option<u32>,
     pub start_background_tasks: bool,
-    /// Path to CKB node's RocksDB data directory for direct reads.
-    pub ckb_data_path: Option<String>,
+    /// Resolved path to the CKB node RocksDB directory for direct reads.
+    pub ckb_db_path: String,
 }
 
 pub async fn create_router(config: AppConfig) -> Router {
@@ -60,15 +60,10 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let cycles_client = CyclesClient::disabled();
 
-    let ckb_store = match config.ckb_data_path.as_deref() {
-        Some(path) => {
-            let reader = CkbChainReader::open(path)
-                .expect("Failed to open CKB RocksDB -- check [ckb].data_path in ckbadger.toml");
-            tracing::info!("CKB direct RocksDB reader opened at {}", path);
-            Some(Arc::new(reader))
-        }
-        None => None,
-    };
+    let reader = CkbChainReader::open(&config.ckb_db_path)
+        .expect("Failed to open CKB RocksDB -- check [ckb].workdir in ckbadger.toml");
+    tracing::info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
+    let ckb_store = Some(Arc::new(reader));
 
     let mem_cache = InMemoryCache::new();
 

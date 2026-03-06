@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 use ckbadger_config::{
-    default_config_toml, load_config, resolve_share_dir, resolve_store_paths,
+    default_config_toml, load_config, resolve_ckb_paths, resolve_share_dir, resolve_store_paths,
     resolve_token_labels_path, CkbadgerConfig, StoreConfig, WorkDir,
 };
 
@@ -220,13 +220,14 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 resolve_token_labels_path(&work, resolve_share_dir().as_deref())
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
+            let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
 
             let indexer_config = IndexerServiceConfig {
                 domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
                 append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
                 bulk_sync_perf_output_root: work.bulk_sync_perf_dir.to_string_lossy().to_string(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
-                ckb_data_path: config.ckb.data_path.clone(),
+                ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
                 token_labels_path,
                 batch_size: config.indexer.batch_size,
                 poll_interval_ms: config.indexer.poll_interval_ms,
@@ -239,6 +240,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             run_indexer(indexer_config).await
         }
         InternalService::Api => {
+            let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
             let api_config = ApiServiceConfig {
                 domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
                 append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
@@ -248,7 +250,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 port: config.api.port,
                 rate_limit: config.api.rate_limit,
                 rate_limit_burst: config.api.rate_limit_burst,
-                ckb_data_path: config.ckb.data_path.clone(),
+                ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
                 store_runtime_config,
             };
             run_api(api_config).await
@@ -426,11 +428,12 @@ async fn cmd_label_import(workdir: &Path) -> Result<()> {
     if use_bundled {
         info!("No filesystem token-labels found, will use bundled data");
     }
+    let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
 
     let import_config = LabelImportServiceConfig {
         domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
         append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
-        ckb_data_path: config.ckb.data_path.clone(),
+        ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
         token_labels_path,
         network: config.ckb.network.clone(),
         import_udt: true,
