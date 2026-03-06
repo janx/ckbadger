@@ -118,32 +118,27 @@ impl Indexer {
 
     /// Get the block hash for a given block number, using direct RocksDB reads when available.
     pub(crate) async fn get_chain_block_hash(&self, number: u64) -> Result<Vec<u8>> {
-        if let Some(ref store) = self.ckb_store {
-            store.refresh()?;
-            store
-                .get_block_hash(number)
-                .map(|h| h.to_vec())
-                .ok_or_else(|| anyhow::anyhow!("Block {} not found in CKB RocksDB", number))
-        } else {
-            let hash_hex = self
-                .rpc
-                .get_block_hash(number)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Block {} not found on chain", number))?;
-            Ok(crate::rpc::parse_hex_to_bytes(&hash_hex))
-        }
+        let store = self
+            .ckb_store
+            .as_ref()
+            .expect("ckb_store must exist for chain block hash reads");
+        store.refresh()?;
+        store
+            .get_block_hash(number)
+            .map(|h| h.to_vec())
+            .ok_or_else(|| anyhow::anyhow!("Block {} not found in CKB RocksDB", number))
     }
 
     /// Get the chain tip block number, using direct RocksDB reads when available.
     pub(crate) async fn get_chain_tip(&self) -> Result<u64> {
-        if let Some(ref store) = self.ckb_store {
-            store.refresh()?;
-            store
-                .tip_number()
-                .ok_or_else(|| anyhow::anyhow!("Failed to get chain tip from CKB RocksDB"))
-        } else {
-            self.rpc.get_tip_block_number().await
-        }
+        let store = self
+            .ckb_store
+            .as_ref()
+            .expect("ckb_store must exist for chain tip reads");
+        store.refresh()?;
+        store
+            .tip_number()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get chain tip from CKB RocksDB"))
     }
 
     // === check_and_handle_reorg, find_fork_point ===

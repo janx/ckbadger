@@ -85,6 +85,14 @@ fn default_force_startup_cleanup() -> bool {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        let ckb_data_path = self
+            .ckb_data_path
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default();
+        if ckb_data_path.is_empty() {
+            bail!("config: ckb_data_path is required and must not be blank");
+        }
         if self.batch_size == 0 {
             bail!("config: batch_size must be > 0");
         }
@@ -161,7 +169,7 @@ mod tests {
             pipeline_buffer: 16,
             bulk_sync_threshold: 72,
             fast_sync_mode: true,
-            ckb_data_path: None,
+            ckb_data_path: Some("/var/lib/ckb/data/db".to_string()),
             token_labels_path: "docs/token-labels".to_string(),
             force_startup_cleanup: false,
             store_runtime_config: StoreRuntimeConfig::default(),
@@ -171,6 +179,22 @@ mod tests {
     #[test]
     fn test_validate_accepts_valid_config() {
         make_valid_config().validate().unwrap();
+    }
+
+    #[test]
+    fn test_validate_rejects_missing_ckb_data_path() {
+        let mut config = make_valid_config();
+        config.ckb_data_path = None;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ckb_data_path is required"));
+    }
+
+    #[test]
+    fn test_validate_rejects_blank_ckb_data_path() {
+        let mut config = make_valid_config();
+        config.ckb_data_path = Some("   ".to_string());
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ckb_data_path is required"));
     }
 
     #[test]

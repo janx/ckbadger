@@ -31,8 +31,8 @@ pub struct CkbadgerConfig {
 pub struct CkbConfig {
     pub rpc_url: String,
     pub network: String,
-    /// Path to CKB node's RocksDB data for direct reads (optional).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Path to CKB node's RocksDB data for direct reads.
+    /// Empty means "not configured yet" and must fail fast at service startup.
     pub data_path: Option<String>,
 }
 
@@ -105,7 +105,7 @@ impl Default for CkbConfig {
         Self {
             rpc_url: "http://127.0.0.1:8114".to_string(),
             network: "mainnet".to_string(),
-            data_path: None,
+            data_path: Some(String::new()),
         }
     }
 }
@@ -314,7 +314,7 @@ pub fn default_config_toml() -> String {
     r#"[ckb]
 rpc_url = "http://127.0.0.1:8114"
 network = "mainnet"               # mainnet | testnet
-# data_path = "/path/to/ckb/data" # CKB node RocksDB path for direct reads
+data_path = ""                    # REQUIRED: CKB node RocksDB path for direct reads
 
 [api]
 host = "127.0.0.1"
@@ -457,7 +457,7 @@ mod tests {
 
         assert_eq!(cfg.ckb.rpc_url, "http://127.0.0.1:8114");
         assert_eq!(cfg.ckb.network, "mainnet");
-        assert_eq!(cfg.ckb.data_path, None);
+        assert_eq!(cfg.ckb.data_path, Some(String::new()));
 
         assert_eq!(cfg.api.host, "127.0.0.1");
         assert_eq!(cfg.api.port, 8101);
@@ -589,6 +589,13 @@ port = "not_a_number"
         let toml_str = default_config_toml();
         let cfg = parse_config(&toml_str).unwrap();
         assert_eq!(cfg, CkbadgerConfig::default());
+    }
+
+    #[test]
+    fn test_default_config_toml_declares_ckb_data_path() {
+        let toml_str = default_config_toml();
+        assert!(toml_str.contains("data_path = "));
+        assert!(!toml_str.contains("# data_path = "));
     }
 
     #[test]

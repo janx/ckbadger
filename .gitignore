@@ -41,7 +41,6 @@ fuzzing/reports/
 playwright-report/
 test-results/
 .verify-cache/
-artifacts/
 
 # CLI runtime
 run/

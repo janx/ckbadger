@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
@@ -17,11 +17,10 @@ use crate::parser::{
     ParsedDotbitAccountOutput, ParsedMnftClass, ParsedMnftIssuer, ParsedMnftToken, ParsedSporeCell,
     SporeParser,
 };
-use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
+use crate::rpc::BlockResponseWithCycles;
 use crate::runtime_diag::read_cgroup_memory_snapshot;
 
 use ckb_store_reader::CkbChainReader;
-use futures::stream::{FuturesOrdered, StreamExt};
 use rayon::prelude::*;
 
 use super::adaptive::*;
@@ -37,14 +36,6 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{CachedCellInfo, DotbitConsumptionEvent, PreParsedNftData, ReorgAction, TxData};
 use super::undo::*;
-
-fn requires_direct_reads_for_fetch(
-    bulk_sync_allowed: bool,
-    blocks_behind: u64,
-    bulk_sync_threshold: u64,
-) -> bool {
-    bulk_sync_allowed && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
-}
 
 #[derive(Debug, Default, Clone, Copy)]
 struct ParserPrecomputePhaseMetrics {
@@ -109,7 +100,6 @@ impl Indexer {
         self.pipeline_perf
             .set_queue_capacities(self.config.pipeline_buffer, self.config.pipeline_buffer);
 
-        let rpc = self.rpc.clone();
         let config = self.config.clone();
         let progress = Arc::clone(&self.progress);
         let repo = self.repo.clone();
@@ -118,8 +108,10 @@ impl Indexer {
         let pipeline_reset_notify = Arc::clone(&self.pipeline_reset_notify_flag);
         let pipeline_reset_reason_code = Arc::clone(&self.pipeline_reset_reason_code);
         let pipeline_epoch_for_fetcher = Arc::clone(&self.pipeline_reset_epoch);
-        let ckb_store = self.ckb_store.clone();
-        let bulk_sync_allowed_for_fetcher = self.bulk_sync_allowed.load(Ordering::SeqCst);
+        let ckb_store = self
+            .ckb_store
+            .clone()
+            .expect("ckb_store must exist before pipeline starts");
         let pipeline_perf_for_fetcher = Arc::clone(&self.pipeline_perf);
         let adaptive_batch_controller_for_fetcher = Arc::clone(&self.adaptive_batch_controller);
         let parse_tx_for_fetcher_depth = parse_tx.clone();
@@ -158,31 +150,18 @@ impl Indexer {
                     next_block = None;
                 }
 
-                if let Some(ref store) = ckb_store {
-                    if let Err(e) = store.refresh() {
-                        error!("Failed to refresh CKB RocksDB secondary: {}", e);
-                        sleep(Duration::from_secs(5)).await;
-                        continue;
-                    }
+                if let Err(e) = ckb_store.refresh() {
+                    error!("Failed to refresh CKB RocksDB secondary: {}", e);
+                    sleep(Duration::from_secs(5)).await;
+                    continue;
                 }
 
-                let chain_tip = if let Some(ref store) = ckb_store {
-                    match store.tip_number() {
-                        Some(tip) => tip,
-                        None => {
-                            error!("Failed to get chain tip from CKB RocksDB");
-                            sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
-                    }
-                } else {
-                    match rpc.get_tip_block_number().await {
-                        Ok(tip) => tip,
-                        Err(e) => {
-                            error!("Failed to get chain tip: {}", e);
-                            sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
+                let chain_tip = match ckb_store.tip_number() {
+                    Some(tip) => tip,
+                    None => {
+                        error!("Failed to get chain tip from CKB RocksDB");
+                        sleep(Duration::from_secs(5)).await;
+                        continue;
                     }
                 };
                 progress.update_target(chain_tip);
@@ -262,65 +241,26 @@ impl Indexer {
 
                 let fetch_cycle_epoch = pipeline_epoch_for_fetcher.load(Ordering::SeqCst);
                 let fetch_started = Instant::now();
-                let blocks = if let Some(ref store) = ckb_store {
-                    let store = Arc::clone(store);
-                    let sb = start_block;
-                    let eb = end_block;
-                    match tokio::task::spawn_blocking(move || {
-                        Self::fetch_blocks_direct(&store, sb, eb)
-                    })
-                    .await
-                    {
-                        Ok(Ok(blocks)) => blocks,
-                        Ok(Err(e)) => {
-                            error!("Failed to fetch blocks from RocksDB: {}", e);
-                            sleep(Duration::from_secs(5)).await;
-                            next_block = None;
-                            continue;
-                        }
-                        Err(e) => {
-                            error!("Block fetch task panicked: {}", e);
-                            sleep(Duration::from_secs(5)).await;
-                            next_block = None;
-                            continue;
-                        }
+                let store = Arc::clone(&ckb_store);
+                let sb = start_block;
+                let eb = end_block;
+                let blocks = match tokio::task::spawn_blocking(move || {
+                    Self::fetch_blocks_direct(&store, sb, eb)
+                })
+                .await
+                {
+                    Ok(Ok(blocks)) => blocks,
+                    Ok(Err(e)) => {
+                        error!("Failed to fetch blocks from RocksDB: {}", e);
+                        sleep(Duration::from_secs(5)).await;
+                        next_block = None;
+                        continue;
                     }
-                } else {
-                    let blocks_behind = chain_tip.saturating_sub(start_block);
-                    if requires_direct_reads_for_fetch(
-                        bulk_sync_allowed_for_fetcher,
-                        blocks_behind,
-                        config.bulk_sync_threshold,
-                    ) {
-                        record_worker_exit_reason(
-                            &fetcher_exit_reason_for_fetcher,
-                            format!(
-                                "bulk sync requires direct RocksDB reads but [ckb].data_path is not configured: range={}-{}, chain_tip={}",
-                                start_block, end_block, chain_tip
-                            ),
-                        );
-                        error!(
-                            "bulk sync requires direct RocksDB reads but [ckb].data_path is not configured \
-                             (blocks {}-{}). Set [ckb].data_path in ckbadger.toml to the CKB node data directory",
-                            start_block, end_block
-                        );
-                        break;
-                    }
-                    match Self::fetch_blocks_with_config(
-                        &rpc,
-                        start_block,
-                        end_block,
-                        config.parallel_fetch_size,
-                    )
-                    .await
-                    {
-                        Ok(blocks) => blocks,
-                        Err(e) => {
-                            error!("Failed to fetch blocks: {}", e);
-                            sleep(Duration::from_secs(5)).await;
-                            next_block = None;
-                            continue;
-                        }
+                    Err(e) => {
+                        error!("Block fetch task panicked: {}", e);
+                        sleep(Duration::from_secs(5)).await;
+                        next_block = None;
+                        continue;
                     }
                 };
                 let fetch_elapsed = fetch_started.elapsed();
@@ -2376,34 +2316,6 @@ impl Indexer {
         }
     }
 
-    async fn fetch_blocks_with_config(
-        rpc: &CkbRpcClient,
-        start: u64,
-        end: u64,
-        parallel_fetch_size: usize,
-    ) -> Result<Vec<BlockResponseWithCycles>> {
-        let mut blocks = Vec::with_capacity((end - start + 1) as usize);
-        let mut current = start;
-        while current <= end {
-            let batch_end = std::cmp::min(current + parallel_fetch_size as u64 - 1, end);
-            let mut futures = FuturesOrdered::new();
-            for block_num in current..=batch_end {
-                futures.push_back(
-                    async move { (block_num, rpc.get_block_by_number(block_num).await) },
-                );
-            }
-            while let Some((block_num, result)) = futures.next().await {
-                match result {
-                    Ok(Some(block)) => blocks.push(block),
-                    Ok(None) => return Err(anyhow::anyhow!("Block {} not found", block_num)),
-                    Err(e) => return Err(e),
-                }
-            }
-            current = batch_end + 1;
-        }
-        Ok(blocks)
-    }
-
     fn fetch_blocks_direct(
         store: &CkbChainReader,
         start: u64,
@@ -2439,37 +2351,19 @@ impl Indexer {
         start: u64,
         end: u64,
     ) -> Result<Vec<BlockResponseWithCycles>> {
-        if let Some(ref store) = self.ckb_store {
-            let store = Arc::clone(store);
-            tokio::task::spawn_blocking(move || Self::fetch_blocks_direct(&store, start, end))
-                .await
-                .map_err(|e| anyhow::anyhow!("Block fetch task panicked: {}", e))?
-        } else if self.is_bulk_sync_active() {
-            bail!(
-                "bulk sync requires direct RocksDB reads but [ckb].data_path is not configured \
-                 (blocks {}-{}). Set [ckb].data_path in ckbadger.toml to the CKB node data directory",
-                start,
-                end
-            )
-        } else {
-            Self::fetch_blocks_with_config(&self.rpc, start, end, self.config.parallel_fetch_size)
-                .await
-        }
+        let store = Arc::clone(
+            self.ckb_store
+                .as_ref()
+                .expect("ckb_store must exist for block fetch"),
+        );
+        tokio::task::spawn_blocking(move || Self::fetch_blocks_direct(&store, start, end))
+            .await
+            .map_err(|e| anyhow::anyhow!("Block fetch task panicked: {}", e))?
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::requires_direct_reads_for_fetch;
-
-    #[test]
-    fn test_requires_direct_reads_for_fetch_only_when_bulk_allowed_and_lagging() {
-        assert!(requires_direct_reads_for_fetch(true, 1001, 1000));
-        assert!(!requires_direct_reads_for_fetch(false, 1001, 1000));
-        assert!(!requires_direct_reads_for_fetch(true, 1000, 1000));
-        assert!(!requires_direct_reads_for_fetch(true, 0, 1000));
-    }
-
     #[test]
     fn test_parser_precompute_phase_metrics_total_ms_sums_all_phases() {
         let metrics = super::ParserPrecomputePhaseMetrics {

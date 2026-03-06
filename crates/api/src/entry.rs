@@ -14,6 +14,17 @@ use ckbadger_store::{
 use crate::embedded_frontend;
 use crate::{create_router, AppConfig};
 
+fn require_ckb_data_path<'a>(path: Option<&'a str>, context: &str) -> Result<&'a str> {
+    let path = path.map(str::trim).unwrap_or_default();
+    if path.is_empty() {
+        bail!(
+            "{}: [ckb].data_path is required and must point to the CKB node RocksDB directory",
+            context
+        );
+    }
+    Ok(path)
+}
+
 /// Configuration for starting the API server.
 /// This is the interface the CLI binary uses to start the API.
 pub struct ApiServiceConfig {
@@ -44,6 +55,7 @@ pub struct FrontendServiceConfig {
 
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
+    let ckb_data_path = require_ckb_data_path(config.ckb_data_path.as_deref(), "api fail-fast")?;
     let secondary_path = secondary_store_path(&config.domain_data_path, SecondaryStoreOwner::Api);
     info!(
         "Opening ckbadger domain store (secondary) at: {} -> {}",
@@ -77,7 +89,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         rate_limit_per_second: Some(config.rate_limit),
         rate_limit_burst: Some(config.rate_limit_burst),
         start_background_tasks: true,
-        ckb_data_path: config.ckb_data_path,
+        ckb_data_path: Some(ckb_data_path.to_string()),
     };
     let app = create_router(app_config).await;
 
@@ -302,6 +314,24 @@ mod tests {
         assert_eq!(config.rate_limit_burst, 200);
         assert!(config.ckb_data_path.is_none());
         assert_eq!(config.store_runtime_config, StoreRuntimeConfig::default());
+    }
+
+    #[test]
+    fn test_require_ckb_data_path_rejects_missing() {
+        let err = require_ckb_data_path(None, "api test").unwrap_err();
+        assert!(err.to_string().contains("[ckb].data_path is required"));
+    }
+
+    #[test]
+    fn test_require_ckb_data_path_rejects_blank() {
+        let err = require_ckb_data_path(Some("   "), "api test").unwrap_err();
+        assert!(err.to_string().contains("[ckb].data_path is required"));
+    }
+
+    #[test]
+    fn test_require_ckb_data_path_accepts_trimmed_value() {
+        let path = require_ckb_data_path(Some(" /var/lib/ckb/data/db "), "api test").unwrap();
+        assert_eq!(path, "/var/lib/ckb/data/db");
     }
 
     #[test]

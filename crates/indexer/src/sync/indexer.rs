@@ -113,12 +113,10 @@ pub(super) fn is_fresh_sync_tip_state(
 pub(super) fn should_startup_bulk_sync_mode(
     blocks_behind: u64,
     bulk_sync_threshold: u64,
-    has_direct_ckb_store: bool,
     sync_tip_block: i64,
     sync_tip_hash: &Option<Vec<u8>>,
 ) -> bool {
-    has_direct_ckb_store
-        && is_fresh_sync_tip_state(sync_tip_block, sync_tip_hash)
+    is_fresh_sync_tip_state(sync_tip_block, sync_tip_hash)
         && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
 }
 
@@ -135,6 +133,17 @@ pub(crate) fn maybe_start_bulk_sync_perf_run(
 
 fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
     tip.ok_or_else(|| anyhow!("Failed to get chain tip from {}", source))
+}
+
+fn require_ckb_data_path<'a>(path: Option<&'a str>, context: &str) -> Result<&'a str> {
+    let path = path.map(str::trim).unwrap_or_default();
+    if path.is_empty() {
+        bail!(
+            "{}: [ckb].data_path is required and must point to the CKB node RocksDB directory",
+            context
+        );
+    }
+    Ok(path)
 }
 
 fn startup_header_gap_fail_fast_message(
@@ -218,14 +227,11 @@ impl Indexer {
         let rpc = CkbRpcClient::new(&config.ckb_rpc_url);
         let cache_invalidator = CacheInvalidator::new(store.clone());
 
-        let ckb_store = match config.ckb_data_path.as_deref() {
-            Some(path) => {
-                let reader = CkbChainReader::open(path)?;
-                info!("CKB direct RocksDB reader opened at {}", path);
-                Some(Arc::new(reader))
-            }
-            None => None,
-        };
+        let ckb_data_path =
+            require_ckb_data_path(config.ckb_data_path.as_deref(), "indexer startup fail-fast")?;
+        let reader = CkbChainReader::open(ckb_data_path)?;
+        info!("CKB direct RocksDB reader opened at {}", ckb_data_path);
+        let ckb_store = Some(Arc::new(reader));
         let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
         let writer = BatchWriter::with_cache(
             store.clone(),
@@ -234,11 +240,13 @@ impl Indexer {
         );
 
         let (tip_number, tip_hash) = repo.get_sync_tip().await?;
-        let chain_tip = if let Some(ref store) = ckb_store {
-            require_chain_tip_number(store.tip_number(), "CKB RocksDB during indexer startup")?
-        } else {
-            rpc.get_tip_block_number().await?
-        };
+        let chain_tip = require_chain_tip_number(
+            ckb_store
+                .as_ref()
+                .expect("ckb_store must exist after startup validation")
+                .tip_number(),
+            "CKB RocksDB during indexer startup",
+        )?;
 
         let tip_number_u64 =
             require_non_negative_block_number(tip_number, "indexer startup sync tip")?;
@@ -249,8 +257,7 @@ impl Indexer {
         let adaptive_batch_controller =
             Arc::new(AdaptiveBatchController::new(config.pipeline_buffer as u64));
 
-        let bulk_sync_allowed =
-            is_fresh_sync_tip_state(tip_number, &tip_hash) && ckb_store.is_some();
+        let bulk_sync_allowed = is_fresh_sync_tip_state(tip_number, &tip_hash);
         let was_bulk =
             bulk_sync_allowed && progress.blocks_remaining() > config.bulk_sync_threshold;
         let hodl_tracker = match store.get_hodl_tracker_state()? {
@@ -783,14 +790,12 @@ impl Indexer {
         let blocks_behind = self.progress.blocks_remaining();
         let (start_block, start_block_hash) = self.repo.get_sync_tip().await?;
         let fresh_sync_tip = is_fresh_sync_tip_state(start_block, &start_block_hash);
-        let has_direct_ckb_store = self.ckb_store.is_some();
-        let bulk_sync_allowed = fresh_sync_tip && has_direct_ckb_store;
+        let bulk_sync_allowed = fresh_sync_tip;
         self.bulk_sync_allowed
             .store(bulk_sync_allowed, Ordering::SeqCst);
         let bulk_sync_mode = should_startup_bulk_sync_mode(
             blocks_behind,
             self.config.bulk_sync_threshold,
-            has_direct_ckb_store,
             start_block,
             &start_block_hash,
         );
@@ -815,16 +820,6 @@ impl Indexer {
             );
             self.writer.store().set_bulk_sync_compaction_options();
             self.append_only_store.set_bulk_sync_compaction_options();
-        } else if fresh_sync_tip
-            && !has_direct_ckb_store
-            && is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold)
-        {
-            info!(
-                run_id = %self.run_id,
-                blocks_behind,
-                threshold = self.config.bulk_sync_threshold,
-                "[ckb].data_path is not configured in ckbadger.toml; bulk sync is disabled and indexer will run live catch-up via JSON-RPC"
-            );
         } else if !fresh_sync_tip
             && is_bulk_sync_active_by_lag(blocks_behind, self.config.bulk_sync_threshold)
         {
@@ -1050,13 +1045,11 @@ mod tests {
 
     #[test]
     fn test_should_startup_bulk_sync_mode_requires_fresh_tip_and_lag() {
-        assert!(should_startup_bulk_sync_mode(1001, 1000, true, 0, &None));
-        assert!(!should_startup_bulk_sync_mode(1000, 1000, true, 0, &None));
-        assert!(!should_startup_bulk_sync_mode(1001, 1000, false, 0, &None));
+        assert!(should_startup_bulk_sync_mode(1001, 1000, 0, &None));
+        assert!(!should_startup_bulk_sync_mode(1000, 1000, 0, &None));
         assert!(!should_startup_bulk_sync_mode(
             1001,
             1000,
-            true,
             10,
             &Some(vec![0x22; 32])
         ));
