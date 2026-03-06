@@ -211,6 +211,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
             let indexer_config = IndexerServiceConfig {
                 domain_data_path: work.domain_data.to_string_lossy().to_string(),
                 append_only_data_path: work.append_only_data.to_string_lossy().to_string(),
+                bulk_sync_perf_output_root: work.bulk_sync_perf_dir.to_string_lossy().to_string(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
                 ckb_data_path: config.ckb.data_path.clone(),
                 token_labels_path,
@@ -433,6 +434,8 @@ fn cmd_init(workdir: &Path) -> Result<()> {
         .with_context(|| format!("failed to create {}", work.append_only_data.display()))?;
     std::fs::create_dir_all(&work.log_dir)
         .with_context(|| format!("failed to create {}", work.log_dir.display()))?;
+    std::fs::create_dir_all(&work.perf_dir)
+        .with_context(|| format!("failed to create {}", work.perf_dir.display()))?;
 
     // Write default config
     let config_content = default_config_toml();
@@ -445,6 +448,7 @@ fn cmd_init(workdir: &Path) -> Result<()> {
     println!("  domain data: {}", work.domain_data.display());
     println!("  append-only: {}", work.append_only_data.display());
     println!("  logs:        {}", work.log_dir.display());
+    println!("  perf:        {}", work.perf_dir.display());
 
     Ok(())
 }
@@ -588,6 +592,7 @@ mod tests {
             "data/append-only/ should exist"
         );
         assert!(work.log_dir.exists(), "run/logs/ should exist");
+        assert!(work.perf_dir.exists(), "perf/ should exist");
     }
 
     #[test]
@@ -754,6 +759,24 @@ mod tests {
             !root.join("data/domain/test.db").exists(),
             "data should be purged"
         );
+    }
+
+    #[test]
+    fn test_purge_preserves_perf_contents() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_path_buf();
+
+        cmd_init(&root).unwrap();
+
+        let perf_run_dir = root.join("perf/bulk-sync/run-1");
+        std::fs::create_dir_all(&perf_run_dir).unwrap();
+        let perf_metrics = perf_run_dir.join("metrics.env");
+        std::fs::write(&perf_metrics, "status=completed\n").unwrap();
+
+        let args = PurgeArgs { confirm: true };
+        cmd_purge(&root, &args).unwrap();
+
+        assert!(perf_metrics.exists(), "perf artifacts should be preserved");
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::Config;
 pub struct IndexerServiceConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
+    pub bulk_sync_perf_output_root: String,
     pub ckb_rpc_url: String,
     pub ckb_data_path: Option<String>,
     pub token_labels_path: String,
@@ -35,6 +36,7 @@ impl From<IndexerServiceConfig> for Config {
         Config {
             domain_data_path: svc.domain_data_path,
             append_only_data_path: svc.append_only_data_path,
+            bulk_sync_perf_output_root: svc.bulk_sync_perf_output_root,
             ckb_rpc_url: svc.ckb_rpc_url,
             batch_size: svc.batch_size,
             poll_interval_ms: svc.poll_interval_ms,
@@ -351,6 +353,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                 .cache_invalidator()
                 .publish_memory_stats(&memory_stats)
                 .await;
+            indexer_for_progress.record_bulk_sync_perf_heartbeat_sample(
+                progress.current(),
+                progress.target(),
+                memory_stats.compaction_pending_bytes / (1024 * 1024),
+                memory_stats.l0_files_count,
+                memory_stats.immutable_memtables,
+            );
 
             info!(
                 run_id = %indexer_for_progress.run_id(),
@@ -540,6 +549,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
                     reason,
                     "Received shutdown signal, shutting down gracefully..."
                 );
+                indexer_for_shutdown.finalize_bulk_sync_perf_failed();
                 indexer_for_shutdown.mark_runtime_shutdown(reason, 0);
                 std::process::exit(0);
             }
@@ -551,9 +561,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
 
     let run_result = indexer.run().await;
     match &run_result {
-        Ok(_) => indexer.mark_runtime_shutdown("run_completed", 0),
+        Ok(_) => {
+            indexer.finalize_bulk_sync_perf_failed();
+            indexer.mark_runtime_shutdown("run_completed", 0);
+        }
         Err(e) => {
             tracing::error!("Indexer terminated with error: {}", e);
+            indexer.finalize_bulk_sync_perf_failed();
             indexer.mark_runtime_shutdown("run_error", 1);
         }
     }
@@ -1189,6 +1203,7 @@ mod tests {
         let svc = IndexerServiceConfig {
             domain_data_path: "/data/domain".to_string(),
             append_only_data_path: "/data/append".to_string(),
+            bulk_sync_perf_output_root: "/workdir/perf/bulk-sync".to_string(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_data_path: Some("/ckb/data".to_string()),
             token_labels_path: "docs/labels".to_string(),
@@ -1203,6 +1218,7 @@ mod tests {
         let config: Config = svc.into();
         assert_eq!(config.domain_data_path, "/data/domain");
         assert_eq!(config.append_only_data_path, "/data/append");
+        assert_eq!(config.bulk_sync_perf_output_root, "/workdir/perf/bulk-sync");
         assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
         assert_eq!(config.ckb_data_path.as_deref(), Some("/ckb/data"));
         assert_eq!(config.token_labels_path, "docs/labels");

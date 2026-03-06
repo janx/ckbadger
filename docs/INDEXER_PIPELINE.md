@@ -388,14 +388,16 @@ When bulk sync completes (transitions from `blocks_remaining > threshold` to `<=
 
 1. Indexer detects state transition via `was_bulk_sync_active` flag
 2. Marks bulk sync completed in sync status/cache metadata
-3. Invalidates chart caches
-4. Restores normal compaction options and triggers background compaction
+3. Finalizes the active bulk-sync perf artifact run under `workdir/perf/bulk-sync/<run_id>/`
+4. Invalidates chart caches
+5. Restores normal compaction options and triggers background compaction
 
 ### Implementation Details
 
 - State tracking: `was_bulk_sync_active: AtomicBool` in Indexer struct
 - Detection: `check_bulk_sync_completion()` called after each batch
 - No automatic call to `BatchWriter::rebuild_all_statistics()` in current runtime path
+- Fresh-db bulk sync writes perf artifacts directly from the indexer runtime under `workdir/perf/bulk-sync/`; failed runs keep their own directory and only completed runs refresh `workdir/perf/bulk-sync/latest/`
 
 ## Crash Recovery
 

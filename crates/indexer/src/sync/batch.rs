@@ -865,6 +865,15 @@ impl Indexer {
                 .sum();
             self.progress
                 .record_batch(last_block_number, batch_block_count, batch_tx_count);
+            let perf_stats = self.writer.store().memory_stats();
+            self.record_bulk_sync_perf_batch_sample(
+                batch_block_count,
+                db_elapsed.as_secs_f64(),
+                write_metrics.commit_ms,
+                perf_stats.compaction_pending_bytes / (1024 * 1024),
+                perf_stats.l0_files_count,
+                perf_stats.immutable_memtables,
+            );
 
             let partition_range = format_partition_range(start_block, end_block);
             let boundary_info = if crosses_partition_boundary(start_block, end_block) {
@@ -942,6 +951,7 @@ impl Indexer {
                 sst_size_gb = format!("{:.1}", sst_gb),
                 "Bulk sync completed"
             );
+            self.finalize_bulk_sync_perf_completed();
 
             self.cache_invalidator.invalidate_chart_caches().await;
 

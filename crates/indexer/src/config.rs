@@ -11,6 +11,9 @@ pub struct Config {
     pub domain_data_path: String,
     /// Path to ckbadger append-only RocksDB data directory.
     pub append_only_data_path: String,
+    /// Root directory for bulk-sync perf artifacts.
+    #[serde(default)]
+    pub bulk_sync_perf_output_root: String,
     pub ckb_rpc_url: String,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
@@ -142,6 +145,7 @@ mod tests {
         Config {
             domain_data_path: "/tmp/test".to_string(),
             append_only_data_path: "/tmp/test-ao".to_string(),
+            bulk_sync_perf_output_root: String::new(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
             batch_size: 10000,
             poll_interval_ms: 1000,

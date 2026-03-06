@@ -2229,6 +2229,16 @@ impl Indexer {
                             );
                         }
                         let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
+                        let perf_stats = self.writer.store().memory_stats();
+                        self.record_bulk_sync_perf_batch_sample(
+                            u64::try_from(all_parsed_blocks.len())
+                                .expect("parsed block count exceeds u64"),
+                            db_elapsed.as_secs_f64(),
+                            write_metrics.commit_ms,
+                            perf_stats.compaction_pending_bytes / (1024 * 1024),
+                            perf_stats.l0_files_count,
+                            perf_stats.immutable_memtables,
+                        );
                         info!(
                             "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}{} {}",
                             start_block,

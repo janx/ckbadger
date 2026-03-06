@@ -161,14 +161,14 @@ open http://localhost:8100
 ### Subcommands
 
 ```bash
-ckbadger init             # Initialize work directory (ckbadger.toml, data/, run/)
+ckbadger init             # Initialize work directory (ckbadger.toml, data/, run/, perf/)
 ckbadger run              # Supervisor: start indexer + api + frontend-server
 ckbadger run --only X     # Start specific services (indexer, api, frontend)
 ckbadger tui              # Terminal monitoring UI
 ckbadger status           # Lightweight sync/service status query
 ckbadger verify           # Data integrity checks
 ckbadger label-import     # Import token/script labels
-ckbadger purge --confirm  # Delete derived data, keep config
+ckbadger purge --confirm  # Delete derived data, keep config + perf history
 ```
 
 All subcommands accept `-C <path>` to specify work directory (default: current directory).
@@ -209,10 +209,12 @@ level = "info"
 ├── data/
 │   ├── domain/                # Mutable canonical state (RocksDB)
 │   └── append-only/           # Immutable history (RocksDB)
-└── run/                       # Runtime state (gitignored)
-    ├── supervisor.pid
-    ├── indexer.sock            # Indexer IPC socket
-    └── logs/                   # Process logs
+├── run/                       # Runtime state (gitignored)
+│   ├── supervisor.pid
+│   ├── indexer.sock            # Indexer IPC socket
+│   └── logs/                   # Process logs
+└── perf/
+    └── bulk-sync/             # Auto-generated bulk-sync perf artifacts + latest baseline
 ```
 
 ## API Reference

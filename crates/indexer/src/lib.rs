@@ -1,3 +1,4 @@
+pub mod bulk_sync_perf;
 pub mod cache;
 pub mod config;
 pub mod cycles_worker;

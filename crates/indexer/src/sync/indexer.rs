@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 use ckbadger_store::types::HodlTrackerState;
 use ckbadger_store::{CkbadgerStore, CF_ADDR_TXS};
 
+use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
 use crate::db::writer::hodl_wave::HodlWaveTracker;
@@ -121,6 +122,17 @@ pub(super) fn should_startup_bulk_sync_mode(
         && is_bulk_sync_active_by_lag(blocks_behind, bulk_sync_threshold)
 }
 
+pub(crate) fn maybe_start_bulk_sync_perf_run(
+    output_root: &Path,
+    bulk_sync_mode: bool,
+    run_id: &str,
+) -> Result<Option<BulkSyncPerfRun>> {
+    if !bulk_sync_mode {
+        return Ok(None);
+    }
+    Ok(Some(BulkSyncPerfRun::start(output_root, run_id)?))
+}
+
 fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
     tip.ok_or_else(|| anyhow!("Failed to get chain tip from {}", source))
 }
@@ -190,6 +202,7 @@ pub struct Indexer {
     pub(crate) flight_recorder: FlightRecorder,
     pub(crate) repeated_warning_tracker: RepeatedWarningTracker,
     pub(crate) incident_dir: PathBuf,
+    pub(crate) bulk_sync_perf_run: std::sync::Mutex<Option<BulkSyncPerfRun>>,
     pub(crate) label_import_started: std::sync::atomic::AtomicBool,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
@@ -284,6 +297,7 @@ impl Indexer {
             flight_recorder: FlightRecorder::new(FLIGHT_RECORDER_CAPACITY),
             repeated_warning_tracker: RepeatedWarningTracker::default(),
             incident_dir,
+            bulk_sync_perf_run: std::sync::Mutex::new(None),
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
@@ -438,6 +452,109 @@ impl Indexer {
                 exit_code,
                 error = %e,
                 "Failed to persist runtime shutdown reason"
+            );
+        }
+    }
+
+    pub fn record_bulk_sync_perf_heartbeat_sample(
+        &self,
+        current_block: u64,
+        target_block: u64,
+        compaction_pending_mb: u64,
+        l0_files: u64,
+        imm_memtables: u64,
+    ) {
+        let mut guard = self.bulk_sync_perf_run.lock().unwrap();
+        let Some(run) = guard.as_mut() else {
+            return;
+        };
+        if let Err(e) = run.record_heartbeat_sample(HeartbeatSample::new(
+            current_block,
+            target_block,
+            compaction_pending_mb,
+            l0_files,
+            imm_memtables,
+        )) {
+            warn!(
+                run_id = %self.run_id,
+                error = %e,
+                "Failed to record bulk-sync perf heartbeat sample"
+            );
+        }
+    }
+
+    pub fn record_bulk_sync_perf_batch_sample(
+        &self,
+        blocks: u64,
+        batch_seconds: f64,
+        commit_ms: f64,
+        compaction_pending_mb: u64,
+        l0_files: u64,
+        imm_memtables: u64,
+    ) {
+        let mut guard = self.bulk_sync_perf_run.lock().unwrap();
+        let Some(run) = guard.as_mut() else {
+            return;
+        };
+        if let Err(e) = run.record_batch_sample(BatchSample::new(
+            blocks,
+            batch_seconds,
+            commit_ms,
+            compaction_pending_mb,
+            l0_files,
+            imm_memtables,
+        )) {
+            warn!(
+                run_id = %self.run_id,
+                error = %e,
+                "Failed to record bulk-sync perf batch sample"
+            );
+        }
+    }
+
+    pub fn finalize_bulk_sync_perf_completed(&self) {
+        self.finalize_bulk_sync_perf_run(true);
+    }
+
+    pub fn finalize_bulk_sync_perf_failed(&self) {
+        self.finalize_bulk_sync_perf_run(false);
+    }
+
+    fn start_bulk_sync_perf_run(&self, bulk_sync_mode: bool) -> Result<()> {
+        if !bulk_sync_mode {
+            return Ok(());
+        }
+        if self.config.bulk_sync_perf_output_root.is_empty() {
+            bail!("bulk sync perf output root is empty");
+        }
+        let mut guard = self.bulk_sync_perf_run.lock().unwrap();
+        if guard.is_some() {
+            return Ok(());
+        }
+        *guard = maybe_start_bulk_sync_perf_run(
+            Path::new(&self.config.bulk_sync_perf_output_root),
+            bulk_sync_mode,
+            &self.run_id,
+        )?;
+        Ok(())
+    }
+
+    fn finalize_bulk_sync_perf_run(&self, completed: bool) {
+        let mut guard = self.bulk_sync_perf_run.lock().unwrap();
+        let Some(mut run) = guard.take() else {
+            return;
+        };
+        let result = if completed {
+            run.finish_completed()
+        } else {
+            run.finish_failed()
+        };
+        if let Err(e) = result {
+            warn!(
+                run_id = %self.run_id,
+                completed,
+                error = %e,
+                "Failed to finalize bulk-sync perf run"
             );
         }
     }
@@ -858,6 +975,7 @@ impl Indexer {
             }
         }
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
+        self.start_bulk_sync_perf_run(bulk_sync_mode)?;
 
         self.maybe_start_label_import();
 
@@ -942,6 +1060,14 @@ mod tests {
             10,
             &Some(vec![0x22; 32])
         ));
+    }
+
+    #[test]
+    fn test_maybe_start_bulk_sync_perf_run_returns_none_when_bulk_sync_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = maybe_start_bulk_sync_perf_run(dir.path(), false, "run-1").unwrap();
+        assert!(run.is_none());
+        assert!(!dir.path().join("run-1").exists());
     }
 
     #[test]

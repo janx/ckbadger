@@ -161,6 +161,10 @@ pub struct WorkDir {
     pub append_only_data: PathBuf,
     /// Runtime state directory.
     pub run_dir: PathBuf,
+    /// Performance artifacts directory.
+    pub perf_dir: PathBuf,
+    /// Bulk-sync performance artifacts directory.
+    pub bulk_sync_perf_dir: PathBuf,
     /// Supervisor PID file.
     pub supervisor_pid: PathBuf,
     /// Indexer IPC socket.
@@ -185,6 +189,8 @@ impl WorkDir {
         let domain_data = data_dir.join("domain");
         let append_only_data = data_dir.join("append-only");
         let run_dir = root.join("run");
+        let perf_dir = root.join("perf");
+        let bulk_sync_perf_dir = perf_dir.join("bulk-sync");
         let supervisor_pid = run_dir.join("supervisor.pid");
         let indexer_sock = run_dir.join("indexer.sock");
         let log_dir = run_dir.join("logs");
@@ -209,6 +215,8 @@ impl WorkDir {
             domain_data,
             append_only_data,
             run_dir,
+            perf_dir,
+            bulk_sync_perf_dir,
             supervisor_pid,
             indexer_sock,
             log_dir,
@@ -570,6 +578,8 @@ network = "testnet"
         assert_eq!(wd.domain_data, root.join("data/domain"));
         assert_eq!(wd.append_only_data, root.join("data/append-only"));
         assert_eq!(wd.run_dir, root.join("run"));
+        assert_eq!(wd.perf_dir, root.join("perf"));
+        assert_eq!(wd.bulk_sync_perf_dir, root.join("perf/bulk-sync"));
         assert_eq!(wd.supervisor_pid, root.join("run/supervisor.pid"));
         assert_eq!(wd.indexer_sock, root.join("run/indexer.sock"));
         assert_eq!(wd.log_dir, root.join("run/logs"));
