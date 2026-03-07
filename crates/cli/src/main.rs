@@ -11,7 +11,7 @@ use tracing::info;
 
 use ckbadger_config::{
     default_config_toml, load_config, resolve_ckb_paths, resolve_share_dir, resolve_store_paths,
-    resolve_token_labels_path, CkbadgerConfig, StoreConfig, WorkDir,
+    resolve_token_labels_path, CkbadgerConfig, ResolvedCkbPaths, StoreConfig, WorkDir,
 };
 
 use ckbadger_api::entry::{run_api, run_frontend_server, ApiServiceConfig, FrontendServiceConfig};
@@ -194,6 +194,36 @@ fn store_runtime_config(store: &StoreConfig) -> StoreRuntimeConfig {
     }
 }
 
+fn build_indexer_service_config(
+    workdir: &Path,
+    work: &WorkDir,
+    config: &CkbadgerConfig,
+    ckb_paths: &ResolvedCkbPaths,
+    build_version: &str,
+) -> Result<IndexerServiceConfig> {
+    let store_paths = resolve_store_paths(workdir, &config.store);
+    let token_labels_path = resolve_token_labels_path(work, resolve_share_dir().as_deref())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    Ok(IndexerServiceConfig {
+        domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
+        append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
+        bulk_sync_perf_output_root: work.bulk_sync_perf_dir.to_string_lossy().to_string(),
+        build_version: build_version.to_string(),
+        ckb_rpc_url: config.ckb.rpc_url.clone(),
+        ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
+        token_labels_path,
+        batch_size: config.indexer.batch_size,
+        poll_interval_ms: config.indexer.poll_interval_ms,
+        parallel_fetch_size: config.indexer.parallel_fetch_size,
+        pipeline_enabled: config.indexer.pipeline_enabled,
+        pipeline_buffer: config.indexer.pipeline_buffer,
+        bulk_sync_threshold: config.indexer.bulk_sync_threshold,
+        store_runtime_config: store_runtime_config(&config.store),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // run command
 // ---------------------------------------------------------------------------
@@ -220,32 +250,14 @@ async fn cmd_run(workdir: &Path, args: &RunArgs) -> Result<()> {
 async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
     let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
-    let store_paths = resolve_store_paths(workdir, &config.store);
     let store_runtime_config = store_runtime_config(&config.store);
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     match args.service {
         InternalService::Indexer => {
-            let token_labels_path =
-                resolve_token_labels_path(&work, resolve_share_dir().as_deref())
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
             let ckb_paths = resolve_ckb_paths(workdir, &config.ckb)?;
-
-            let indexer_config = IndexerServiceConfig {
-                domain_data_path: store_paths.domain_data.to_string_lossy().to_string(),
-                append_only_data_path: store_paths.append_only_data.to_string_lossy().to_string(),
-                bulk_sync_perf_output_root: work.bulk_sync_perf_dir.to_string_lossy().to_string(),
-                ckb_rpc_url: config.ckb.rpc_url.clone(),
-                ckb_db_path: ckb_paths.ckb_db_path.to_string_lossy().to_string(),
-                token_labels_path,
-                batch_size: config.indexer.batch_size,
-                poll_interval_ms: config.indexer.poll_interval_ms,
-                parallel_fetch_size: config.indexer.parallel_fetch_size,
-                pipeline_enabled: config.indexer.pipeline_enabled,
-                pipeline_buffer: config.indexer.pipeline_buffer,
-                bulk_sync_threshold: config.indexer.bulk_sync_threshold,
-                store_runtime_config,
-            };
+            let indexer_config =
+                build_indexer_service_config(workdir, &work, &config, &ckb_paths, BUILD_VERSION)?;
             run_indexer(indexer_config).await
         }
         InternalService::Api => {
@@ -665,6 +677,7 @@ fn resolve_frontend_dir(work: &WorkDir) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use clap::CommandFactory;
+    use std::path::Path;
     use tempfile::TempDir;
 
     // -- clap metadata --
@@ -1120,5 +1133,36 @@ mod tests {
 
         let work = WorkDir::resolve(dir.path());
         assert_eq!(resolve_frontend_dir(&work), Some(dist));
+    }
+
+    fn write_test_ckb_config(root: &Path) {
+        let ckb_workdir = root.join("ckb-node");
+        let ckb_db_path = ckb_workdir.join("data").join("db");
+        std::fs::create_dir_all(&ckb_workdir).unwrap();
+        std::fs::create_dir_all(&ckb_db_path).unwrap();
+        std::fs::write(
+            ckb_workdir.join("ckb.toml"),
+            r#"
+data_dir = "data"
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_build_indexer_service_config_uses_cli_build_version() {
+        let dir = TempDir::new().unwrap();
+        write_test_ckb_config(dir.path());
+
+        let work = WorkDir::resolve(dir.path());
+        let mut config = CkbadgerConfig::default();
+        config.ckb.workdir = Some("ckb-node".to_string());
+        let ckb_paths = resolve_ckb_paths(dir.path(), &config.ckb).unwrap();
+
+        let service =
+            build_indexer_service_config(dir.path(), &work, &config, &ckb_paths, BUILD_VERSION)
+                .unwrap();
+
+        assert_eq!(service.build_version, BUILD_VERSION);
     }
 }

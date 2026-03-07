@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -112,6 +112,7 @@ pub struct BulkSyncPerfRun {
     output_root: PathBuf,
     run_dir: PathBuf,
     run_id: String,
+    build_version: String,
     started_at_utc: String,
     status: String,
     batch_samples: Vec<BatchSample>,
@@ -119,8 +120,16 @@ pub struct BulkSyncPerfRun {
 }
 
 impl BulkSyncPerfRun {
-    pub fn start(output_root: &Path, run_id: impl Into<String>) -> Result<Self> {
+    pub fn start(
+        output_root: &Path,
+        run_id: impl Into<String>,
+        build_version: impl Into<String>,
+    ) -> Result<Self> {
         let run_id = run_id.into();
+        let build_version = build_version.into();
+        if build_version.trim().is_empty() {
+            bail!("bulk sync perf build_version must not be blank");
+        }
         let run_dir = output_root.join(&run_id);
         fs::create_dir_all(&run_dir)?;
 
@@ -128,6 +137,7 @@ impl BulkSyncPerfRun {
             output_root: output_root.to_path_buf(),
             run_dir,
             run_id,
+            build_version,
             started_at_utc: utc_now_string(),
             status: STATUS_RUNNING.to_string(),
             batch_samples: Vec::new(),
@@ -140,8 +150,8 @@ impl BulkSyncPerfRun {
     }
 
     #[cfg(test)]
-    pub fn start_for_test(output_root: &Path, run_id: &str) -> Result<Self> {
-        Self::start(output_root, run_id)
+    pub fn start_for_test(output_root: &Path, run_id: &str, build_version: &str) -> Result<Self> {
+        Self::start(output_root, run_id, build_version)
     }
 
     pub fn status(&self) -> &str {
@@ -286,8 +296,8 @@ impl BulkSyncPerfRun {
 
     fn write_metadata(&self) -> Result<()> {
         let content = format!(
-            "run_id={}\nstarted_at_utc={}\n",
-            self.run_id, self.started_at_utc
+            "run_id={}\nstarted_at_utc={}\nbuild_version={}\n",
+            self.run_id, self.started_at_utc, self.build_version
         );
         fs::write(self.run_dir.join("metadata.env"), content)?;
         Ok(())
@@ -338,6 +348,7 @@ impl BulkSyncPerfRun {
         let mut content = String::new();
         content.push_str("# Bulk Sync Perf Report\n\n");
         content.push_str(&format!("- Run ID: {}\n", metrics.run_id));
+        content.push_str(&format!("- Build Version: {}\n", self.build_version));
         content.push_str(&format!("- Status: {}\n", metrics.status));
         content.push_str(&format!("- Started at (UTC): {}\n", metrics.started_at_utc));
         if let Some(finished_at_utc) = metrics.finished_at_utc.as_deref() {
@@ -595,10 +606,12 @@ mod tests {
     use super::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
     use tempfile::TempDir;
 
+    const TEST_BUILD_VERSION: &str = "0.1.0+feature/foo@abcdef123456";
+
     #[test]
     fn test_bulk_sync_perf_run_start_writes_initial_artifacts() {
         let dir = TempDir::new().unwrap();
-        let run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
 
         assert!(dir.path().join("run-1/metadata.env").exists());
         assert!(dir.path().join("run-1/status.env").exists());
@@ -607,9 +620,19 @@ mod tests {
     }
 
     #[test]
+    fn test_bulk_sync_perf_run_start_writes_build_version_to_metadata() {
+        let dir = TempDir::new().unwrap();
+        BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        let metadata = std::fs::read_to_string(dir.path().join("run-1/metadata.env")).unwrap();
+        assert!(metadata.contains("build_version=0.1.0+feature/foo@abcdef123456"));
+    }
+
+    #[test]
     fn test_bulk_sync_perf_completed_run_updates_latest() {
         let dir = TempDir::new().unwrap();
-        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
 
         run.finish_completed().unwrap();
 
@@ -617,12 +640,30 @@ mod tests {
     }
 
     #[test]
+    fn test_bulk_sync_perf_completed_run_writes_build_version_to_report_and_latest() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        let latest_metadata =
+            std::fs::read_to_string(dir.path().join("latest/metadata.env")).unwrap();
+
+        assert!(report.contains("Build Version: 0.1.0+feature/foo@abcdef123456"));
+        assert!(latest_metadata.contains("build_version=0.1.0+feature/foo@abcdef123456"));
+    }
+
+    #[test]
     fn test_bulk_sync_perf_failed_run_does_not_update_latest() {
         let dir = TempDir::new().unwrap();
-        let mut completed = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut completed =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         completed.finish_completed().unwrap();
 
-        let mut failed = BulkSyncPerfRun::start_for_test(dir.path(), "run-2").unwrap();
+        let mut failed =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
         failed.finish_failed().unwrap();
 
         let latest = std::fs::read_to_string(dir.path().join("latest/metrics.env")).unwrap();
@@ -632,7 +673,8 @@ mod tests {
     #[test]
     fn test_bulk_sync_metrics_use_committed_batch_samples_for_percentiles() {
         let dir = TempDir::new().unwrap();
-        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
         run.record_batch_sample(BatchSample::new(20, 2.0, 80.0, 200, 7, 2))
@@ -651,13 +693,15 @@ mod tests {
     #[test]
     fn test_report_includes_baseline_table_when_latest_exists() {
         let dir = TempDir::new().unwrap();
-        let mut baseline = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut baseline =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         baseline
             .record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
         baseline.finish_completed().unwrap();
 
-        let mut current = BulkSyncPerfRun::start_for_test(dir.path(), "run-2").unwrap();
+        let mut current =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
         current
             .record_batch_sample(BatchSample::new(10, 2.0, 80.0, 120, 5, 1))
             .unwrap();
@@ -671,7 +715,8 @@ mod tests {
     #[test]
     fn test_metrics_and_report_include_wall_clock_fields() {
         let dir = TempDir::new().unwrap();
-        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
         run.record_batch_sample(BatchSample::new(20, 2.0, 80.0, 200, 7, 2))
@@ -695,7 +740,8 @@ mod tests {
     #[test]
     fn test_batch_samples_include_workload_and_hotpath_fields() {
         let dir = TempDir::new().unwrap();
-        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
 
@@ -714,7 +760,8 @@ mod tests {
     #[test]
     fn test_metrics_and_report_do_not_aggregate_batch_breakdown_fields() {
         let dir = TempDir::new().unwrap();
-        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         run.record_batch_sample(BatchSample {
             txs: 123,
             cells: 456,

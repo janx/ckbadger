@@ -400,6 +400,7 @@ When bulk sync completes (transitions from `blocks_remaining > threshold` to `<=
 - Detection: `check_bulk_sync_completion()` called after each batch
 - No automatic call to `BatchWriter::rebuild_all_statistics()` in current runtime path
 - Fresh-db bulk sync writes perf artifacts directly from the indexer runtime under `workdir/perf/bulk-sync/`; failed runs keep their own directory and only completed runs refresh `workdir/perf/bulk-sync/latest/`
+- `metadata.env` records both `run_id` and `build_version`, so artifact comparisons can separate one runtime execution from another binary build
 
 ## Crash Recovery
 

@@ -20,6 +20,7 @@ pub struct IndexerServiceConfig {
     pub domain_data_path: String,
     pub append_only_data_path: String,
     pub bulk_sync_perf_output_root: String,
+    pub build_version: String,
     pub ckb_rpc_url: String,
     pub ckb_db_path: String,
     pub token_labels_path: String,
@@ -38,6 +39,7 @@ impl From<IndexerServiceConfig> for Config {
             domain_data_path: svc.domain_data_path,
             append_only_data_path: svc.append_only_data_path,
             bulk_sync_perf_output_root: svc.bulk_sync_perf_output_root,
+            build_version: svc.build_version,
             ckb_rpc_url: svc.ckb_rpc_url,
             batch_size: svc.batch_size,
             poll_interval_ms: svc.poll_interval_ms,
@@ -1238,6 +1240,7 @@ mod tests {
             domain_data_path: "/data/domain".to_string(),
             append_only_data_path: "/data/append".to_string(),
             bulk_sync_perf_output_root: "/workdir/perf/bulk-sync".to_string(),
+            build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
             ckb_db_path: "/ckb/data/db".to_string(),
             token_labels_path: "docs/labels".to_string(),
@@ -1257,6 +1260,7 @@ mod tests {
         assert_eq!(config.domain_data_path, "/data/domain");
         assert_eq!(config.append_only_data_path, "/data/append");
         assert_eq!(config.bulk_sync_perf_output_root, "/workdir/perf/bulk-sync");
+        assert_eq!(config.build_version, "0.1.0+feature/foo@abcdef123456");
         assert_eq!(config.ckb_rpc_url, "http://localhost:8114");
         assert_eq!(config.ckb_db_path, "/ckb/data/db");
         assert_eq!(config.token_labels_path, "docs/labels");
