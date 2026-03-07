@@ -124,11 +124,16 @@ pub(crate) fn maybe_start_bulk_sync_perf_run(
     output_root: &Path,
     bulk_sync_mode: bool,
     run_id: &str,
+    build_version: &str,
 ) -> Result<Option<BulkSyncPerfRun>> {
     if !bulk_sync_mode {
         return Ok(None);
     }
-    Ok(Some(BulkSyncPerfRun::start(output_root, run_id)?))
+    Ok(Some(BulkSyncPerfRun::start(
+        output_root,
+        run_id,
+        build_version,
+    )?))
 }
 
 fn require_chain_tip_number(tip: Option<u64>, source: &str) -> Result<u64> {
@@ -514,6 +519,7 @@ impl Indexer {
             Path::new(&self.config.bulk_sync_perf_output_root),
             bulk_sync_mode,
             &self.run_id,
+            &self.config.build_version,
         )?;
         Ok(())
     }
@@ -1030,7 +1036,13 @@ mod tests {
     #[test]
     fn test_maybe_start_bulk_sync_perf_run_returns_none_when_bulk_sync_disabled() {
         let dir = tempfile::tempdir().unwrap();
-        let run = maybe_start_bulk_sync_perf_run(dir.path(), false, "run-1").unwrap();
+        let run = maybe_start_bulk_sync_perf_run(
+            dir.path(),
+            false,
+            "run-1",
+            "0.1.0+feature/foo@abcdef123456",
+        )
+        .unwrap();
         assert!(run.is_none());
         assert!(!dir.path().join("run-1").exists());
     }

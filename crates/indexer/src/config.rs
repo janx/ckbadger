@@ -15,6 +15,8 @@ pub struct Config {
     /// Root directory for bulk-sync perf artifacts.
     #[serde(default)]
     pub bulk_sync_perf_output_root: String,
+    /// Exact build identity propagated from CLI compile-time metadata.
+    pub build_version: String,
     pub ckb_rpc_url: String,
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
@@ -83,6 +85,9 @@ fn default_force_startup_cleanup() -> bool {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        if self.build_version.trim().is_empty() {
+            bail!("config: build_version must not be blank");
+        }
         if self.ckb_db_path.trim().is_empty() {
             bail!("config: ckb_db_path is required and must not be blank");
         }
@@ -153,6 +158,7 @@ mod tests {
             domain_data_path: "/tmp/test".to_string(),
             append_only_data_path: "/tmp/test-ao".to_string(),
             bulk_sync_perf_output_root: String::new(),
+            build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             ckb_rpc_url: "http://localhost:8114".to_string(),
             batch_size: 10000,
             poll_interval_ms: 1000,
@@ -214,5 +220,13 @@ mod tests {
         assert!(err
             .to_string()
             .contains("store.memory_budget_gb must be > 0"));
+    }
+
+    #[test]
+    fn test_validate_rejects_blank_build_version() {
+        let mut config = make_valid_config();
+        config.build_version = "   ".to_string();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("build_version must not be blank"));
     }
 }
