@@ -15,6 +15,15 @@ pub struct BatchSample {
     pub blocks: u64,
     pub batch_seconds: f64,
     pub commit_ms: f64,
+    pub txs: u64,
+    pub cells: u64,
+    pub inputs: u64,
+    pub parse_ms: f64,
+    pub precompute_ms: f64,
+    pub nft_precompute_ms: f64,
+    pub write_ms: f64,
+    pub t1_ms: f64,
+    pub t_act_ms: f64,
     pub compaction_pending_mb: u64,
     pub l0_files: u64,
     pub imm_memtables: u64,
@@ -33,6 +42,15 @@ impl BatchSample {
             blocks,
             batch_seconds,
             commit_ms,
+            txs: 0,
+            cells: 0,
+            inputs: 0,
+            parse_ms: 0.0,
+            precompute_ms: 0.0,
+            nft_precompute_ms: 0.0,
+            write_ms: 0.0,
+            t1_ms: 0.0,
+            t_act_ms: 0.0,
             compaction_pending_mb,
             l0_files,
             imm_memtables,
@@ -672,5 +690,53 @@ mod tests {
         assert!(report.contains("blocks_per_sec_wall"));
         assert!(report.contains("blocks_per_batch"));
         assert!(report.contains("total_commit_seconds"));
+    }
+
+    #[test]
+    fn test_batch_samples_include_workload_and_hotpath_fields() {
+        let dir = TempDir::new().unwrap();
+        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"txs\""));
+        assert!(samples.contains("\"cells\""));
+        assert!(samples.contains("\"inputs\""));
+        assert!(samples.contains("\"parse_ms\""));
+        assert!(samples.contains("\"precompute_ms\""));
+        assert!(samples.contains("\"nft_precompute_ms\""));
+        assert!(samples.contains("\"write_ms\""));
+        assert!(samples.contains("\"t1_ms\""));
+        assert!(samples.contains("\"t_act_ms\""));
+    }
+
+    #[test]
+    fn test_metrics_and_report_do_not_aggregate_batch_breakdown_fields() {
+        let dir = TempDir::new().unwrap();
+        let mut run = BulkSyncPerfRun::start_for_test(dir.path(), "run-1").unwrap();
+        run.record_batch_sample(BatchSample {
+            txs: 123,
+            cells: 456,
+            inputs: 321,
+            parse_ms: 11.0,
+            precompute_ms: 22.0,
+            nft_precompute_ms: 33.0,
+            write_ms: 44.0,
+            t1_ms: 55.0,
+            t_act_ms: 66.0,
+            ..BatchSample::new(10, 1.0, 40.0, 100, 4, 1)
+        })
+        .unwrap();
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(!metrics.contains("\ntxs="));
+        assert!(!metrics.contains("\nparse_ms="));
+        assert!(!metrics.contains("\nwrite_ms="));
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(!report.contains("nft_precompute_ms"));
+        assert!(!report.contains("t_act_ms"));
     }
 }

@@ -37,6 +37,7 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{CachedCellInfo, DotbitConsumptionEvent, PreParsedNftData, ReorgAction, TxData};
 use super::undo::*;
+use crate::bulk_sync_perf::BatchSample;
 
 #[derive(Debug, Default, Clone, Copy)]
 struct ParserPrecomputePhaseMetrics {
@@ -55,6 +56,13 @@ impl ParserPrecomputePhaseMetrics {
             + self.spore_precompute_ms
             + self.nft_precompute_ms
     }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ParserBatchPerfSample {
+    parse_ms: f64,
+    precompute_ms: f64,
+    nft_precompute_ms: f64,
 }
 
 #[derive(Debug, Default)]
@@ -302,6 +310,7 @@ impl Indexer {
             HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
             PreParsedSporeData,                    // pre-parsed spore/cluster data
             PreParsedNftData,                      // pre-parsed mNFT/DotBit data
+            ParserBatchPerfSample,                 // parser hotpath timings
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -1730,6 +1739,11 @@ impl Indexer {
 
                 let batch_tx_count_u64 =
                     u64::try_from(tx_count).expect("parsed batch tx count exceeds u64");
+                let parser_perf_sample = ParserBatchPerfSample {
+                    parse_ms: t_parse_ms,
+                    precompute_ms: precompute_parser_ms,
+                    nft_precompute_ms: precompute_phase_metrics.nft_precompute_ms,
+                };
                 if parse_tx
                     .send((
                         batch_epoch,
@@ -1753,6 +1767,7 @@ impl Indexer {
                         nft_daily_changes,
                         pre_parsed_spore_data,
                         pre_parsed_nft_data,
+                        parser_perf_sample,
                     ))
                     .await
                     .is_err()
@@ -1823,6 +1838,7 @@ impl Indexer {
                     nft_daily_changes,
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
+                    parser_perf_sample,
                 ))) => {
                     consecutive_idle_timeouts = 0;
                     atomic_saturating_sub_u64(
@@ -2214,15 +2230,26 @@ impl Indexer {
                         }
                         let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
                         let perf_stats = self.writer.store().memory_stats();
-                        self.record_bulk_sync_perf_batch_sample(
-                            u64::try_from(all_parsed_blocks.len())
-                                .expect("parsed block count exceeds u64"),
-                            db_elapsed.as_secs_f64(),
-                            write_metrics.commit_ms,
-                            perf_stats.compaction_pending_bytes / (1024 * 1024),
-                            perf_stats.l0_files_count,
-                            perf_stats.immutable_memtables,
-                        );
+                        self.record_bulk_sync_perf_batch_sample(BatchSample {
+                            txs: write_metrics.txs,
+                            cells: write_metrics.cells,
+                            inputs: write_metrics.inputs,
+                            parse_ms: parser_perf_sample.parse_ms,
+                            precompute_ms: parser_perf_sample.precompute_ms,
+                            nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
+                            write_ms: write_metrics.write_ms,
+                            t1_ms: write_metrics.t1_ms,
+                            t_act_ms: write_metrics.t_act_ms,
+                            ..BatchSample::new(
+                                u64::try_from(all_parsed_blocks.len())
+                                    .expect("parsed block count exceeds u64"),
+                                db_elapsed.as_secs_f64(),
+                                write_metrics.commit_ms,
+                                perf_stats.compaction_pending_bytes / (1024 * 1024),
+                                perf_stats.l0_files_count,
+                                perf_stats.immutable_memtables,
+                            )
+                        });
                         info!(
                             "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms, q={}, wait={:.0}ms, adaptive_txs={}, adaptive_min_txs={}, inflight_limit={}) {}",
                             start_block,

@@ -477,27 +477,12 @@ impl Indexer {
         }
     }
 
-    pub fn record_bulk_sync_perf_batch_sample(
-        &self,
-        blocks: u64,
-        batch_seconds: f64,
-        commit_ms: f64,
-        compaction_pending_mb: u64,
-        l0_files: u64,
-        imm_memtables: u64,
-    ) {
+    pub fn record_bulk_sync_perf_batch_sample(&self, sample: BatchSample) {
         let mut guard = self.bulk_sync_perf_run.lock().unwrap();
         let Some(run) = guard.as_mut() else {
             return;
         };
-        if let Err(e) = run.record_batch_sample(BatchSample::new(
-            blocks,
-            batch_seconds,
-            commit_ms,
-            compaction_pending_mb,
-            l0_files,
-            imm_memtables,
-        )) {
+        if let Err(e) = run.record_batch_sample(sample) {
             warn!(
                 run_id = %self.run_id,
                 error = %e,
