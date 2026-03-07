@@ -16,6 +16,16 @@ fn setup_store() -> Arc<CkbadgerStore> {
     store
 }
 
+fn setup_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
+    let domain_dir = tempfile::tempdir().unwrap();
+    let append_dir = tempfile::tempdir().unwrap();
+    let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+    let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+    std::mem::forget(domain_dir);
+    std::mem::forget(append_dir);
+    (domain, append)
+}
+
 fn make_header(block_num: i64) -> CachedBlockHeader {
     let mut hash = vec![0u8; 32];
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
@@ -88,7 +98,7 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
 
 #[test]
 fn test_rollback_removes_blocks() {
-    let store = setup_store();
+    let (store, append_store) = setup_split_stores();
     let lock_hash = vec![0xFF; 32];
 
     // Insert blocks 1 through 10
@@ -106,7 +116,9 @@ fn test_rollback_removes_blocks() {
     }
 
     // Rollback to block 5: blocks 6-10 should be removed
-    let result: RollbackResult = store.rollback_to_block(5).unwrap();
+    let result: RollbackResult = store
+        .rollback_to_block_with_tx_index_store(5, Some(append_store.as_ref()))
+        .unwrap();
     assert_eq!(result.blocks_removed, 5, "should remove blocks 6-10");
 
     // Blocks 1-5 should still exist
@@ -130,7 +142,7 @@ fn test_rollback_removes_blocks() {
 
 #[test]
 fn test_rollback_removes_transactions() {
-    let store = setup_store();
+    let (store, append_store) = setup_split_stores();
     let lock_hash = vec![0xEE; 32];
 
     // Insert blocks 1 through 6
@@ -143,7 +155,9 @@ fn test_rollback_removes_transactions() {
     assert_eq!(txs.len(), 2, "block 6 should have 2 txs before rollback");
 
     // Rollback to block 3
-    let result = store.rollback_to_block(3).unwrap();
+    let result = store
+        .rollback_to_block_with_tx_index_store(3, Some(append_store.as_ref()))
+        .unwrap();
     // Blocks 4, 5, 6 removed => 3 blocks, each with 2 txs => 6 txs removed
     assert_eq!(result.blocks_removed, 3);
     assert_eq!(result.txs_removed, 6);
@@ -159,7 +173,7 @@ fn test_rollback_removes_transactions() {
 
 #[test]
 fn test_rollback_removes_cells_and_indexes() {
-    let store = setup_store();
+    let (store, append_store) = setup_split_stores();
     let lock_hash = vec![0xDD; 32];
 
     // Insert blocks 1 through 4
@@ -172,7 +186,9 @@ fn test_rollback_removes_cells_and_indexes() {
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
     // Rollback to block 2: blocks 3-4 removed
-    let result = store.rollback_to_block(2).unwrap();
+    let result = store
+        .rollback_to_block_with_tx_index_store(2, Some(append_store.as_ref()))
+        .unwrap();
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
 
@@ -187,7 +203,7 @@ fn test_rollback_removes_cells_and_indexes() {
 
 #[test]
 fn test_rollback_result_counts() {
-    let store = setup_store();
+    let (store, append_store) = setup_split_stores();
     let lock_hash = vec![0xCC; 32];
 
     // Insert blocks 1 through 8
@@ -196,7 +212,9 @@ fn test_rollback_result_counts() {
     }
 
     // Rollback to block 5: remove blocks 6, 7, 8
-    let result = store.rollback_to_block(5).unwrap();
+    let result = store
+        .rollback_to_block_with_tx_index_store(5, Some(append_store.as_ref()))
+        .unwrap();
 
     assert_eq!(result.blocks_removed, 3, "3 blocks removed (6, 7, 8)");
     assert_eq!(

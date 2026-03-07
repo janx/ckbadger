@@ -471,7 +471,17 @@ fn normalize_dao_entry_for_rollback(
 impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
+    ///
+    /// This convenience method is only valid on unified/test stores that also
+    /// expose append-only history CFs. Split-store callers must use
+    /// `rollback_to_block_with_tx_index_store` and pass the append-only store.
     pub fn rollback_to_block(&self, rollback_to: i64) -> anyhow::Result<RollbackResult> {
+        if !self.has_cf(CF_ADDR_TXS) || !self.has_cf(CF_NFT_COLLECTION_ACTIVITIES) {
+            anyhow::bail!(
+                "rollback_to_block requires tx_index_store when store lacks append-only history CFs; \
+                 use rollback_to_block_with_tx_index_store(..., append_only_store)"
+            );
+        }
         self.rollback_to_block_with_tx_index_store(rollback_to, None)
     }
 
@@ -1826,6 +1836,17 @@ mod tests {
 
         assert!(store.get_daily_stats("20260304").unwrap().is_some());
         assert!(store.get_daily_stats("20260305").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_rollback_to_block_requires_append_store_for_domain_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let err = store.rollback_to_block(0).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("rollback_to_block requires tx_index_store"));
     }
 
     #[test]

@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn test_put_and_list_activities() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -964,7 +964,7 @@ mod tests {
     #[test]
     fn test_list_activities_with_limit() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xBBu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -982,7 +982,7 @@ mod tests {
     #[test]
     fn test_list_activities_cursor_pagination() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xCCu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1014,7 +1014,7 @@ mod tests {
     #[test]
     fn test_list_activities_different_locks_isolated() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock_a = [0x01u8; 32];
         let lock_b = [0x02u8; 32];
 
@@ -1035,7 +1035,7 @@ mod tests {
     #[test]
     fn test_list_activities_empty() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xFFu8; 32];
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
@@ -1045,7 +1045,7 @@ mod tests {
     #[test]
     fn test_list_activities_rejects_non_32_byte_lock_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
 
         let err = store
             .list_activities(&[0xAA; 31], 10, None, None)
@@ -1058,7 +1058,7 @@ mod tests {
     #[test]
     fn test_list_activities_cursor_i32_max_does_not_overflow() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xABu8; 32];
 
         let mut batch = StoreBatch::new(&store);

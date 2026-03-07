@@ -125,10 +125,18 @@ impl CkbadgerStore {
     /// - balance
     /// - occupied_capacity
     /// - live_cells_count
-    /// - txs_count (from addr_txs index when available)
+    /// - txs_count (from addr_txs index)
     ///
-    /// Other fields are re-initialized conservatively.
+    /// Other fields are re-initialized conservatively. Split-store callers must
+    /// use `rebuild_addr_balances_from_live_cells_with_tx_index_store` and pass
+    /// the append-only store that owns `addr_txs`.
     pub fn rebuild_addr_balances_from_live_cells(&self) -> anyhow::Result<usize> {
+        if !self.has_cf(CF_ADDR_TXS) {
+            anyhow::bail!(
+                "rebuild_addr_balances_from_live_cells requires tx_index_store when store lacks addr_txs; \
+                 use rebuild_addr_balances_from_live_cells_with_tx_index_store(..., append_only_store)"
+            );
+        }
         self.rebuild_addr_balances_from_live_cells_with_tx_index_store(None)
     }
 
@@ -496,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_addr_balances_domain_store_skips_missing_addr_txs_cf() {
+    fn test_rebuild_addr_balances_domain_store_requires_append_tx_index_store() {
         let dir = tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock_a = vec![0xAA; 32];
@@ -505,10 +513,10 @@ mod tests {
         batch.put_cell(&[0x01; 32], 0, &make_cell(lock_a.clone(), 10, 100, 120));
         batch.commit().unwrap();
 
-        let rebuilt = store.rebuild_addr_balances_from_live_cells().unwrap();
-        assert_eq!(rebuilt, 1);
-        let a = store.get_addr_balance(&lock_a).unwrap().unwrap();
-        assert_eq!(a.txs_count, 0);
+        let err = store.rebuild_addr_balances_from_live_cells().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("rebuild_addr_balances_from_live_cells requires tx_index_store"));
     }
 
     #[test]
@@ -590,7 +598,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_rejects_non_32_byte_lock_hash() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
 
         let err = store
             .list_addr_txs_recent(&[0xAA; 31], 10, None)
@@ -603,7 +611,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_limit_zero_returns_empty() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);

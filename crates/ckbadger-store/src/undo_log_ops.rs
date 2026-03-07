@@ -186,7 +186,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let domain_path = root.path().join("domain");
         let append_path = root.path().join("append");
-        let domain = CkbadgerStore::open_test_unified(&domain_path).unwrap();
+        let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
         let append = CkbadgerStore::open_append_only(&append_path).unwrap();
         (domain, append, root)
     }

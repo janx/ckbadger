@@ -15,6 +15,16 @@ fn setup_store() -> Arc<CkbadgerStore> {
     store
 }
 
+fn setup_split_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
+    let domain_dir = tempfile::tempdir().unwrap();
+    let append_dir = tempfile::tempdir().unwrap();
+    let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+    let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+    std::mem::forget(domain_dir);
+    std::mem::forget(append_dir);
+    (domain, append)
+}
+
 fn make_header(block_num: i64) -> CachedBlockHeader {
     let mut hash = vec![0u8; 32];
     hash[0..8].copy_from_slice(&block_num.to_le_bytes());
@@ -114,7 +124,7 @@ fn test_detect_partial_block_header_only() {
 
 #[test]
 fn test_rollback_restores_consistency() {
-    let store = setup_store();
+    let (store, append_store) = setup_split_stores();
 
     // Insert complete blocks 1-5
     for i in 1..=5 {
@@ -129,7 +139,9 @@ fn test_rollback_restores_consistency() {
     assert!(store.list_block_txs(6).unwrap().is_empty());
 
     // Rollback to block 5 to restore consistency
-    let result: RollbackResult = store.rollback_to_block(5).unwrap();
+    let result: RollbackResult = store
+        .rollback_to_block_with_tx_index_store(5, Some(append_store.as_ref()))
+        .unwrap();
     assert_eq!(
         result.blocks_removed, 1,
         "only block 6 header should be removed"

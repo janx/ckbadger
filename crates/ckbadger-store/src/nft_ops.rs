@@ -483,6 +483,12 @@ mod tests {
         (dir, store)
     }
 
+    fn test_append_only_store() -> (TempDir, CkbadgerStore) {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        (dir, store)
+    }
+
     #[test]
     fn test_get_nft_collection_aggregate_missing() {
         let (_dir, store) = test_store();
@@ -816,7 +822,7 @@ mod tests {
 
     #[test]
     fn test_list_nft_collection_activities_empty() {
-        let (_dir, store) = test_store();
+        let (_dir, store) = test_append_only_store();
         let cid = [0x01u8; 32];
         let results = store
             .list_nft_collection_activities(&cid, 10, None, None)
@@ -826,7 +832,7 @@ mod tests {
 
     #[test]
     fn test_list_nft_collection_activities_basic_pagination() {
-        let (_dir, store) = test_store();
+        let (_dir, store) = test_append_only_store();
         let cid = [0x01u8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -864,7 +870,7 @@ mod tests {
 
     #[test]
     fn test_list_nft_collection_activities_action_filter() {
-        let (_dir, store) = test_store();
+        let (_dir, store) = test_append_only_store();
         let cid = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -909,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_list_nft_collection_activities_multi_action_per_tx() {
-        let (_dir, store) = test_store();
+        let (_dir, store) = test_append_only_store();
         let cid = [0x03u8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -995,7 +1001,7 @@ mod tests {
 
     #[test]
     fn test_list_nft_collection_activities_isolation_between_collections() {
-        let (_dir, store) = test_store();
+        let (_dir, store) = test_append_only_store();
         let cid_a = [0x0Au8; 32];
         let cid_b = [0x0Bu8; 32];
 
@@ -1029,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_count_nft_collection_activities() {
-        let (_dir, store) = test_store();
+        let (_dir, store) = test_append_only_store();
         let cid = [0x0Cu8; 32];
         let cid_empty = [0x0Du8; 32];
 
