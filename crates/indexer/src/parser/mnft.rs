@@ -1,6 +1,7 @@
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::bytes_to_pg_string;
+use super::cell::ParsedCell;
 use super::script::ScriptParser;
 
 pub const MNFT_ISSUER_CODE_HASH: &str =
@@ -95,6 +96,29 @@ impl MnftParser {
         })
     }
 
+    pub fn parse_issuer_parsed_cell(cell: &ParsedCell) -> Option<ParsedMnftIssuer> {
+        let type_code_hash = cell.type_code_hash.as_ref()?;
+        if !Self::is_issuer_type_script(type_code_hash) {
+            return None;
+        }
+
+        let issuer_data = Self::parse_issuer_data(&cell.data)?;
+        let type_script_hash = cell
+            .type_script_hash
+            .clone()
+            .expect("mNFT issuer parsed cell missing type_script_hash");
+
+        Some(ParsedMnftIssuer {
+            issuer_id: type_script_hash[..20].to_vec(),
+            type_script_hash,
+            name: issuer_data.name,
+            info: issuer_data.info,
+            class_count: issuer_data.class_count,
+            set_count: issuer_data.set_count,
+            owner_lock_hash: cell.lock_script_hash.clone(),
+        })
+    }
+
     pub fn parse_class_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedMnftClass> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
@@ -135,6 +159,39 @@ impl MnftParser {
         })
     }
 
+    pub fn parse_class_parsed_cell(cell: &ParsedCell) -> Option<ParsedMnftClass> {
+        let type_code_hash = cell.type_code_hash.as_ref()?;
+        if !Self::is_class_type_script(type_code_hash) {
+            return None;
+        }
+
+        let args = cell
+            .type_args
+            .as_ref()
+            .expect("mNFT class parsed cell missing type_args");
+        if args.len() < 24 {
+            return None;
+        }
+
+        let class_data = Self::parse_class_data(&cell.data)?;
+
+        Some(ParsedMnftClass {
+            class_id: args[..24].to_vec(),
+            type_script_hash: cell
+                .type_script_hash
+                .clone()
+                .expect("mNFT class parsed cell missing type_script_hash"),
+            issuer_id: args[..20].to_vec(),
+            name: class_data.name,
+            description: class_data.description,
+            renderer: class_data.renderer,
+            total: class_data.total,
+            issued: class_data.issued,
+            configure: class_data.configure,
+            owner_lock_hash: cell.lock_script_hash.clone(),
+        })
+    }
+
     pub fn parse_token_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedMnftToken> {
         let type_script = output.type_.as_ref()?;
         let type_code_hash = parse_hex_to_bytes(&type_script.code_hash);
@@ -168,6 +225,37 @@ impl MnftParser {
             configure: token_data.configure,
             state: token_data.state,
             owner_lock_hash,
+        })
+    }
+
+    pub fn parse_token_parsed_cell(cell: &ParsedCell) -> Option<ParsedMnftToken> {
+        let type_code_hash = cell.type_code_hash.as_ref()?;
+        if !Self::is_token_type_script(type_code_hash) {
+            return None;
+        }
+
+        let args = cell
+            .type_args
+            .as_ref()
+            .expect("mNFT token parsed cell missing type_args");
+        if args.len() < 28 {
+            return None;
+        }
+
+        let token_data = Self::parse_token_data(&cell.data)?;
+
+        Some(ParsedMnftToken {
+            token_id: args.clone(),
+            type_script_hash: cell
+                .type_script_hash
+                .clone()
+                .expect("mNFT token parsed cell missing type_script_hash"),
+            class_id: args[..24].to_vec(),
+            token_index: u32::from_le_bytes(args[24..28].try_into().ok()?),
+            characteristic: token_data.characteristic,
+            configure: token_data.configure,
+            state: token_data.state,
+            owner_lock_hash: cell.lock_script_hash.clone(),
         })
     }
 
@@ -582,6 +670,37 @@ mod tests {
         assert_eq!(parsed.state, 0b00000000);
         assert_eq!(parsed.characteristic, characteristic.to_vec());
         assert_eq!(parsed.class_id, class_id);
+    }
+
+    #[test]
+    fn test_parse_token_parsed_cell_matches_raw_path() {
+        let issuer_id = [0xab; 20];
+        let mut class_id = issuer_id.to_vec();
+        class_id.extend_from_slice(&3u32.to_le_bytes());
+
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_token_type_script(&class_id, 42)),
+        };
+
+        let characteristic = [0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
+        let data = create_token_data(&characteristic, 0b00000001, 0b00000000);
+        let data_hex = format!("0x{}", hex::encode(&data));
+        let parsed_cell =
+            crate::parser::cell::CellParser::parse_output(&output, &data_hex).expect("parsed cell");
+
+        let raw = MnftParser::parse_token_cell(&output, &data_hex).expect("raw");
+        let preparsed = MnftParser::parse_token_parsed_cell(&parsed_cell).expect("preparsed");
+
+        assert_eq!(preparsed.token_id, raw.token_id);
+        assert_eq!(preparsed.type_script_hash, raw.type_script_hash);
+        assert_eq!(preparsed.class_id, raw.class_id);
+        assert_eq!(preparsed.token_index, raw.token_index);
+        assert_eq!(preparsed.characteristic, raw.characteristic);
+        assert_eq!(preparsed.configure, raw.configure);
+        assert_eq!(preparsed.state, raw.state);
+        assert_eq!(preparsed.owner_lock_hash, raw.owner_lock_hash);
     }
 
     #[test]
