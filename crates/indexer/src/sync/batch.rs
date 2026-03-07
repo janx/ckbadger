@@ -2806,6 +2806,7 @@ impl Indexer {
                     &DOTBIT_SENTINEL_COLLECTION,
                     activity.block_number,
                     activity.tx_idx,
+                    _tx_hash,
                 );
                 put_append_delete_undo_entry(
                     &mut consume_batch,
@@ -2823,10 +2824,15 @@ impl Indexer {
                 })?;
             }
         }
-        for (collection_id, block_number, tx_idx) in nft_activity_acc.flush(&mut nft_activity_batch)
+        for (collection_id, block_number, tx_idx, tx_hash) in
+            nft_activity_acc.flush(&mut nft_activity_batch)
         {
-            let append_key =
-                keys::encode_nft_collection_activity_key(&collection_id, block_number, tx_idx);
+            let append_key = keys::encode_nft_collection_activity_key(
+                &collection_id,
+                block_number,
+                tx_idx,
+                &tx_hash,
+            );
             put_append_delete_undo_entry(
                 &mut consume_batch,
                 &mut append_undo_seq_by_block,
@@ -4267,6 +4273,7 @@ impl Indexer {
                                 &DOTBIT_SENTINEL_COLLECTION,
                                 activity.block_number,
                                 activity.tx_idx,
+                                tx_hash,
                             );
                             put_append_delete_undo_entry(
                                 &mut batch,
@@ -4278,13 +4285,14 @@ impl Indexer {
                             );
                         }
                     }
-                    for (collection_id, block_number, tx_idx) in
+                    for (collection_id, block_number, tx_idx, tx_hash) in
                         nft_activity_acc.flush(&mut activity_batch)
                     {
                         let append_key = keys::encode_nft_collection_activity_key(
                             &collection_id,
                             block_number,
                             tx_idx,
+                            &tx_hash,
                         );
                         put_append_delete_undo_entry(
                             &mut batch,
@@ -4571,7 +4579,7 @@ impl Indexer {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                             let t = Instant::now();
                             let mut domain_batch = StoreBatch::new(store);
-                            let mut activity_batch = StoreBatch::new(store);
+                            let mut activity_batch = StoreBatch::new(append_only_store);
                             let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                             let token_info_cache = load_activity_token_info_cache(
                                 store,
@@ -5648,6 +5656,7 @@ impl Indexer {
                             &DOTBIT_SENTINEL_COLLECTION,
                             activity.block_number,
                             activity.tx_idx,
+                            tx_hash,
                         );
                         put_append_delete_undo_entry(
                             &mut data_batch,
@@ -5667,13 +5676,14 @@ impl Indexer {
                         })?;
                     }
                 }
-                for (collection_id, block_number, tx_idx) in
+                for (collection_id, block_number, tx_idx, tx_hash) in
                     nft_activity_acc.flush(&mut nft_activity_batch)
                 {
                     let append_key = keys::encode_nft_collection_activity_key(
                         &collection_id,
                         block_number,
                         tx_idx,
+                        &tx_hash,
                     );
                     put_append_delete_undo_entry(
                         &mut data_batch,
@@ -5702,7 +5712,7 @@ impl Indexer {
             )?;
 
             // Activity writes (live sync)
-            let mut activity_batch = StoreBatch::new(self.writer.store());
+            let mut activity_batch = StoreBatch::new(&self.append_only_store);
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),

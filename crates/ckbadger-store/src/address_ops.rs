@@ -57,7 +57,7 @@ impl CkbadgerStore {
         Ok(all)
     }
 
-    /// List transactions for an address (newest first, reverse scan).
+    /// List transactions for an address (newest first).
     pub fn list_addr_txs_recent(
         &self,
         lock_hash: &[u8],
@@ -74,27 +74,20 @@ impl CkbadgerStore {
             return Ok(Vec::new());
         }
 
-        // Seek to the cursor position or end of prefix range, then iterate backwards
-        let upper_key = match cursor {
+        // Descending position keys allow a simple forward prefix scan.
+        let start_key = match cursor {
             Some((block_num, tx_idx)) => {
-                // Seek to cursor position; skip it in the loop
-                crate::keys::encode_addr_tx_key(lock_hash, block_num, tx_idx)
+                crate::keys::encode_addr_tx_seek_after_key(lock_hash, block_num, tx_idx)
             }
-            None => {
-                let mut key = Vec::with_capacity(44);
-                key.extend_from_slice(lock_hash);
-                key.extend_from_slice(&[0xFF; 12]); // max block_num(8) + max tx_idx(4)
-                key
-            }
+            None => lock_hash.to_vec(),
         };
 
         let iter = self.iterator_cf(
             self.cf_addr_txs(),
-            rocksdb::IteratorMode::From(&upper_key, rocksdb::Direction::Reverse),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
         let mut results = Vec::new();
-        let mut skip_first = cursor.is_some();
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate addr_txs in list_addr_txs_recent: {}", e)
@@ -102,16 +95,21 @@ impl CkbadgerStore {
             if !key.starts_with(lock_hash) {
                 break;
             }
-            if key.len() == 44 {
-                let block_num = crate::keys::decode_block_num(&key[32..40]);
-                let tx_idx = crate::keys::decode_tx_idx(&key[40..44]);
-                if skip_first {
-                    skip_first = false;
-                    if Some((block_num, tx_idx)) == cursor {
-                        continue;
-                    }
+            if key.len() == crate::keys::ADDR_TX_KEY_SIZE {
+                let (_, block_num, tx_idx, tx_hash_from_key) =
+                    crate::keys::decode_addr_tx_key(&key);
+                let tx_hash = value.to_vec();
+                if tx_hash != tx_hash_from_key {
+                    anyhow::bail!(
+                        "addr_txs key/value tx_hash mismatch in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+                        bytes_to_hex(lock_hash),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&tx_hash_from_key),
+                        bytes_to_hex(&tx_hash)
+                    );
                 }
-                results.push((block_num, tx_idx, value.to_vec()));
+                results.push((block_num, tx_idx, tx_hash));
                 if results.len() >= limit {
                     break;
                 }
@@ -240,8 +238,7 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                // Key: lock_hash(32) + block_num(8) + tx_idx(4) = 44
-                if key.len() != 44 {
+                if key.len() != crate::keys::ADDR_TX_KEY_SIZE {
                     continue;
                 }
                 if tx_hash_bytes.len() != 32 {
@@ -252,15 +249,39 @@ impl CkbadgerStore {
                     );
                 }
 
-                let block_num = crate::keys::decode_block_num(&key[32..40]);
-                let tx_idx = crate::keys::decode_tx_idx(&key[40..44]);
+                let (decoded_lock_hash, block_num, tx_idx, tx_hash_from_key) =
+                    crate::keys::decode_addr_tx_key(&key);
                 let tx_hash = tx_hash_bytes.to_vec();
+                if tx_hash != tx_hash_from_key {
+                    anyhow::bail!(
+                        "addr_txs key/value tx_hash mismatch during addr balance rebuild: lock_hash=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+                        bytes_to_hex(&decoded_lock_hash),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&tx_hash_from_key),
+                        bytes_to_hex(&tx_hash)
+                    );
+                }
+                let Some((canonical_block_num, canonical_tx_idx)) =
+                    self.get_tx_location(&tx_hash)?
+                else {
+                    continue;
+                };
+                if canonical_block_num != block_num || canonical_tx_idx != tx_idx {
+                    continue;
+                }
+                if self
+                    .get_tx_index(canonical_block_num, canonical_tx_idx)?
+                    .is_none()
+                {
+                    continue;
+                }
 
-                if let Some(entry) = agg_by_lock.get_mut(&key[..32]) {
+                if let Some(entry) = agg_by_lock.get_mut(decoded_lock_hash.as_slice()) {
                     entry.txs_count = entry.txs_count.checked_add(1).ok_or_else(|| {
                         anyhow::anyhow!(
                             "addr_balance txs_count overflow during rebuild: lock_hash=0x{}, block_num={}, tx_idx={}",
-                            bytes_to_hex(&key[..32]),
+                            bytes_to_hex(&decoded_lock_hash),
                             block_num,
                             tx_idx
                         )
@@ -282,7 +303,7 @@ impl CkbadgerStore {
                     }
                 } else {
                     agg_by_lock.insert(
-                        key[..32].to_vec(),
+                        decoded_lock_hash,
                         Agg {
                             balance: 0,
                             occupied_capacity: 0,
@@ -370,6 +391,23 @@ mod tests {
     use crate::batch::StoreBatch;
     use tempfile::tempdir;
 
+    fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
+        batch.put_tx_hash_map(tx_hash, block_num, tx_idx);
+        batch.put_tx_index(
+            block_num,
+            tx_idx,
+            &crate::types::TxIndexEntry {
+                is_cellbase: false,
+                timestamp: 1_700_000_000 + block_num,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+            },
+        );
+    }
+
     fn make_cell(
         lock_hash: Vec<u8>,
         created_at: i64,
@@ -433,9 +471,13 @@ mod tests {
         batch.put_addr_tx(&lock_a, 10, 0, &[0x11; 32]);
         batch.put_addr_tx(&lock_a, 11, 1, &[0x22; 32]);
         batch.put_addr_tx(&lock_b, 12, 0, &[0x33; 32]);
+        put_canonical_tx(&mut batch, 10, 0, &[0x11; 32]);
+        put_canonical_tx(&mut batch, 11, 1, &[0x22; 32]);
+        put_canonical_tx(&mut batch, 12, 0, &[0x33; 32]);
         // This address has no live cells; rebuild should still materialize it
         // from addr_txs to keep tx/activity counters consistent.
         batch.put_addr_tx(&[0xCC; 32], 9, 0, &[0x44; 32]);
+        put_canonical_tx(&mut batch, 9, 0, &[0x44; 32]);
         batch.commit().unwrap();
 
         store.rebuild_addr_balances_from_live_cells().unwrap();
@@ -485,6 +527,11 @@ mod tests {
         append_batch.put_addr_tx(&lock_a, 10, 0, &[0x11; 32]);
         append_batch.put_addr_tx(&lock_a, 11, 1, &[0x22; 32]);
         append_batch.commit().unwrap();
+
+        let mut domain_tx_batch = StoreBatch::new(&domain);
+        put_canonical_tx(&mut domain_tx_batch, 10, 0, &[0x11; 32]);
+        put_canonical_tx(&mut domain_tx_batch, 11, 1, &[0x22; 32]);
+        domain_tx_batch.commit().unwrap();
 
         let rebuilt = domain
             .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(&append))
@@ -565,5 +612,48 @@ mod tests {
 
         let rows = store.list_addr_txs_recent(&lock, 0, None).unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_rebuild_addr_balances_ignores_orphaned_addr_txs_rows() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let lock = vec![0xDD; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&[0x01; 32], 0, &make_cell(lock.clone(), 10, 100, 120));
+        batch.put_addr_tx(&lock, 10, 0, &[0x11; 32]);
+        batch.put_addr_tx(&lock, 10, 0, &[0x22; 32]);
+        put_canonical_tx(&mut batch, 10, 0, &[0x11; 32]);
+        batch.commit().unwrap();
+
+        store.rebuild_addr_balances_from_live_cells().unwrap();
+
+        let rebuilt = store.get_addr_balance(&lock).unwrap().unwrap();
+        assert_eq!(rebuilt.txs_count, 1);
+    }
+
+    #[test]
+    fn test_list_addr_txs_recent_keeps_two_rows_same_position_different_tx_hash() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock = [0xAB; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 100, 1, &[0x10; 32]);
+        batch.put_addr_tx(&lock, 100, 1, &[0x20; 32]);
+        batch.put_addr_tx(&lock, 99, 0, &[0x30; 32]);
+        batch.commit().unwrap();
+
+        let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], (100, 1, vec![0x10; 32]));
+        assert_eq!(rows[1], (100, 1, vec![0x20; 32]));
+        assert_eq!(rows[2], (99, 0, vec![0x30; 32]));
+
+        let next = store
+            .list_addr_txs_recent(&lock, 10, Some((100, 1)))
+            .unwrap();
+        assert_eq!(next, vec![(99, 0, vec![0x30; 32])]);
     }
 }

@@ -24,6 +24,16 @@ fn test_store() -> Arc<CkbadgerStore> {
     Arc::new(CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap())
 }
 
+fn split_test_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
+    let domain_dir = tempfile::tempdir().unwrap();
+    let append_dir = tempfile::tempdir().unwrap();
+    let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
+    let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
+    std::mem::forget(domain_dir);
+    std::mem::forget(append_dir);
+    (domain, append)
+}
+
 fn test_ckb_db_path() -> String {
     let db_path = std::env::temp_dir().join(format!("ckbadger-api-test-ckb-db-{}", Uuid::new_v4()));
     let mut db_opts = Options::default();
@@ -3796,14 +3806,14 @@ async fn test_spore_cluster_holders_supports_pagination() {
 
 #[tokio::test]
 async fn test_spore_cluster_activities_supports_action_filter() {
-    let store = test_store();
+    let (core_store, append_only_store) = split_test_stores();
     let cluster_id = [0x62u8; 32];
     let mint_tx = vec![0x91; 32];
     let transfer_tx = vec![0x92; 32];
     let burn_tx = vec![0x93; 32];
 
     // Register cluster so existence check passes
-    store
+    core_store
         .put_spore_direct(
             &cluster_id,
             &DobEntry {
@@ -3821,11 +3831,11 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         .unwrap();
 
     // Write pre-computed collection activities (the index the handler now reads)
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_tx_hash_map(&mint_tx, 100, 0);
-    batch.put_tx_hash_map(&transfer_tx, 200, 0);
-    batch.put_tx_hash_map(&burn_tx, 300, 0);
-    batch.put_tx_index(
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_tx_hash_map(&mint_tx, 100, 0);
+    core_batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    core_batch.put_tx_hash_map(&burn_tx, 300, 0);
+    core_batch.put_tx_index(
         100,
         0,
         &TxIndexEntry {
@@ -3838,7 +3848,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_tx_index(
+    core_batch.put_tx_index(
         200,
         0,
         &TxIndexEntry {
@@ -3851,7 +3861,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_tx_index(
+    core_batch.put_tx_index(
         300,
         0,
         &TxIndexEntry {
@@ -3864,7 +3874,10 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_nft_collection_activity(
+    core_batch.commit().unwrap();
+
+    let mut append_batch = StoreBatch::new(append_only_store.as_ref());
+    append_batch.put_nft_collection_activity(
         &cluster_id,
         100,
         0,
@@ -3874,7 +3887,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             actions: vec![AssetAction::Mint],
         },
     );
-    batch.put_nft_collection_activity(
+    append_batch.put_nft_collection_activity(
         &cluster_id,
         200,
         0,
@@ -3884,7 +3897,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             actions: vec![AssetAction::Transfer],
         },
     );
-    batch.put_nft_collection_activity(
+    append_batch.put_nft_collection_activity(
         &cluster_id,
         300,
         0,
@@ -3894,9 +3907,9 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             actions: vec![AssetAction::Burn],
         },
     );
-    batch.commit().unwrap();
+    append_batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
 
     // All activities — newest first
@@ -5802,15 +5815,15 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
 
 #[tokio::test]
 async fn test_assets_nft_collection_activities_supports_action_filter() {
-    let store = test_store();
+    let (core_store, append_only_store) = split_test_stores();
     let collection_id = b"dotbit_collection_______________".to_vec();
     let account_id = [0x91u8; 20];
     let mint_tx = vec![0xa1; 32];
     let transfer_tx = vec![0xa2; 32];
     let burn_tx = vec![0xa3; 32];
 
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_nft_collection_aggregate(
         &collection_id,
         &NftCollectionAggregate {
             name: Some(".bit".to_string()),
@@ -5821,7 +5834,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             activities_count: 0,
         },
     );
-    batch.put_nft(
+    core_batch.put_nft(
         &account_id,
         &NftEntry {
             standard: NftStandard::DotBit,
@@ -5838,10 +5851,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             },
         },
     );
-    batch.put_nft_by_collection(&collection_id, &account_id);
-    batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
-    batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
-    batch.put_consumed_cell_with_consumer(
+    core_batch.put_nft_by_collection(&collection_id, &account_id);
+    core_batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    core_batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
+    core_batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
         &LiveCellInfo {
@@ -5861,7 +5874,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         200,
         Some(&transfer_tx),
     );
-    batch.put_consumed_cell_with_consumer(
+    core_batch.put_consumed_cell_with_consumer(
         &transfer_tx,
         0,
         &LiveCellInfo {
@@ -5881,8 +5894,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         300,
         Some(&burn_tx),
     );
-    batch.put_tx_hash_map(&mint_tx, 100, 0);
-    batch.put_tx_index(
+    core_batch.put_tx_hash_map(&mint_tx, 100, 0);
+    core_batch.put_tx_index(
         100,
         0,
         &TxIndexEntry {
@@ -5895,8 +5908,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_tx_hash_map(&transfer_tx, 200, 0);
-    batch.put_tx_index(
+    core_batch.put_tx_hash_map(&transfer_tx, 200, 0);
+    core_batch.put_tx_index(
         200,
         0,
         &TxIndexEntry {
@@ -5909,8 +5922,8 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_tx_hash_map(&burn_tx, 300, 0);
-    batch.put_tx_index(
+    core_batch.put_tx_hash_map(&burn_tx, 300, 0);
+    core_batch.put_tx_index(
         300,
         0,
         &TxIndexEntry {
@@ -5923,7 +5936,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
-    batch.put_nft_collection_activity(
+    core_batch.commit().unwrap();
+
+    let mut append_batch = StoreBatch::new(append_only_store.as_ref());
+    append_batch.put_nft_collection_activity(
         &collection_id,
         100,
         0,
@@ -5933,7 +5949,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             actions: vec![AssetAction::Mint],
         },
     );
-    batch.put_nft_collection_activity(
+    append_batch.put_nft_collection_activity(
         &collection_id,
         200,
         0,
@@ -5943,7 +5959,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             actions: vec![AssetAction::Transfer],
         },
     );
-    batch.put_nft_collection_activity(
+    append_batch.put_nft_collection_activity(
         &collection_id,
         300,
         0,
@@ -5953,9 +5969,9 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             actions: vec![AssetAction::Burn],
         },
     );
-    batch.commit().unwrap();
+    append_batch.commit().unwrap();
 
-    let config = test_config(store);
+    let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
         .uri("/api/v1/assets/nfts/dotbit/activities?limit=20")
@@ -6686,8 +6702,7 @@ async fn test_address_activities_returns_503_when_derived_store_lags() {
 
 #[tokio::test]
 async fn test_address_activities_reads_from_derived_store() {
-    let core_store = test_store();
-    let append_only_store = test_store();
+    let (core_store, append_only_store) = split_test_stores();
     let lock_hash = vec![0x22; 32];
     let activity = ActivityEntry {
         tx_hash: vec![0xaa; 32],
@@ -6702,7 +6717,6 @@ async fn test_address_activities_reads_from_derived_store() {
     };
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_activity(&lock_hash, 10, 0, &activity);
     core_batch.put_tx_hash_map(&activity.tx_hash, 10, 0);
     core_batch.put_tx_index(
         10,
@@ -7200,13 +7214,11 @@ async fn test_address_transactions_returns_503_when_derived_store_lags() {
 
 #[tokio::test]
 async fn test_address_transactions_reads_from_derived_store() {
-    let core_store = test_store();
-    let append_only_store = test_store();
+    let (core_store, append_only_store) = split_test_stores();
     let lock_hash = vec![0x33; 32];
     let tx_hash = vec![0xab; 32];
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_addr_tx(&lock_hash, 10, 0, &tx_hash);
     core_batch.put_tx_hash_map(&tx_hash, 10, 0);
     core_batch.put_tx_index(
         10,

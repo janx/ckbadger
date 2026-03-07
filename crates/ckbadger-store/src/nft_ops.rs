@@ -370,12 +370,14 @@ impl CkbadgerStore {
 
         let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
         let start_key = if let Some((cursor_block, cursor_tx_idx)) = cursor {
-            keys::encode_nft_collection_activity_key(collection_id, cursor_block, cursor_tx_idx)
+            keys::encode_nft_collection_activity_seek_after_key(
+                collection_id,
+                cursor_block,
+                cursor_tx_idx,
+            )
         } else {
-            // Start from the beginning of this collection (newest first)
             let mut k = [0u8; keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE];
             k[..32].copy_from_slice(&prefix);
-            // block_desc = 0 means block_num = i64::MAX (start of descending range)
             k
         };
 
@@ -409,13 +411,19 @@ impl CkbadgerStore {
                 continue;
             }
 
-            // Skip the cursor row itself
-            if cursor.is_some() && key.as_ref() == start_key.as_slice() {
-                continue;
-            }
-
-            let (_, block_num, tx_idx) = keys::decode_nft_collection_activity_key(&key);
+            let (_, block_num, tx_idx, tx_hash_from_key) =
+                keys::decode_nft_collection_activity_key(&key);
             let entry: NftCollectionActivityEntry = bincode::deserialize(&value)?;
+            if entry.tx_hash != tx_hash_from_key {
+                anyhow::bail!(
+                    "nft_collection_activities key/value tx_hash mismatch in list_nft_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+                    bytes_to_hex(&prefix),
+                    block_num,
+                    tx_idx,
+                    bytes_to_hex(&tx_hash_from_key),
+                    bytes_to_hex(&entry.tx_hash)
+                );
+            }
 
             // Apply action filter
             if let Some(ref filter) = action_filter_parsed {
@@ -933,6 +941,56 @@ mod tests {
             .list_nft_collection_activities(&cid, 10, None, Some("transfer"))
             .unwrap();
         assert!(transfers.is_empty());
+    }
+
+    #[test]
+    fn test_list_nft_collection_activities_keeps_two_rows_same_position_different_tx_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let cid = [0x04u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_activity(
+            &cid,
+            100,
+            1,
+            &make_activity(&[0x10; 32], 100_000, vec![AssetAction::Mint]),
+        );
+        batch.put_nft_collection_activity(
+            &cid,
+            100,
+            1,
+            &make_activity(&[0x20; 32], 100_001, vec![AssetAction::Transfer]),
+        );
+        batch.put_nft_collection_activity(
+            &cid,
+            99,
+            0,
+            &make_activity(&[0x30; 32], 99_000, vec![AssetAction::Burn]),
+        );
+        batch.commit().unwrap();
+
+        let rows = store
+            .list_nft_collection_activities(&cid, 10, None, None)
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, 100);
+        assert_eq!(rows[0].1, 1);
+        assert_eq!(rows[0].2.tx_hash, vec![0x10; 32]);
+        assert_eq!(rows[1].0, 100);
+        assert_eq!(rows[1].1, 1);
+        assert_eq!(rows[1].2.tx_hash, vec![0x20; 32]);
+        assert_eq!(rows[2].0, 99);
+        assert_eq!(rows[2].1, 0);
+        assert_eq!(rows[2].2.tx_hash, vec![0x30; 32]);
+
+        let next = store
+            .list_nft_collection_activities(&cid, 10, Some((100, 1)), None)
+            .unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0, 99);
+        assert_eq!(next[0].1, 0);
+        assert_eq!(next[0].2.tx_hash, vec![0x30; 32]);
     }
 
     #[test]

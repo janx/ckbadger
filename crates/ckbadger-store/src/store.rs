@@ -372,7 +372,6 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
-    CF_ACTIVITIES,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_BY_BLOCK,
@@ -399,7 +398,7 @@ pub const DOMAIN_CFS: &[&str] = &[
 ];
 
 /// Column families intended for append-only history/archive store.
-pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
+pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_ACTIVITIES, CF_NFT_COLLECTION_ACTIVITIES];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -513,6 +512,9 @@ impl CkbadgerStore {
         }
         if std::ptr::eq(cf, self.cf_addr_txs()) {
             return Ok(CF_ADDR_TXS);
+        }
+        if std::ptr::eq(cf, self.cf_activities()) {
+            return Ok(CF_ACTIVITIES);
         }
         if std::ptr::eq(cf, self.cf_nft_collection_activities()) {
             return Ok(CF_NFT_COLLECTION_ACTIVITIES);
@@ -1850,6 +1852,17 @@ mod tests {
     }
 
     #[test]
+    fn test_open_domain_rejects_activities_cf() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let panicked = std::panic::catch_unwind(|| {
+            let _ = store.cf_activities();
+        })
+        .is_err();
+        assert!(panicked, "domain store should reject activities CF access");
+    }
+
+    #[test]
     fn test_open_append_only_restricts_domain_cfs() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
@@ -1861,17 +1874,10 @@ mod tests {
     }
 
     #[test]
-    fn test_open_append_only_restricts_activities_cf() {
+    fn test_open_append_only_allows_activities_cf() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let panicked = std::panic::catch_unwind(|| {
-            let _ = store.cf_activities();
-        })
-        .is_err();
-        assert!(
-            panicked,
-            "append-only store should reject activities CF access"
-        );
+        let _ = store.cf_activities();
     }
 
     #[test]

@@ -1497,8 +1497,24 @@ impl CkbadgerStore {
                     key.len()
                 );
             }
-            let collection_id = key[..32].to_vec();
-            let total = nft_activity_totals.entry(collection_id).or_insert(0);
+            let (collection_id, block_num, tx_idx, tx_hash) =
+                keys::decode_nft_collection_activity_key(&key);
+            let Some((canonical_block_num, canonical_tx_idx)) = self.get_tx_location(&tx_hash)?
+            else {
+                continue;
+            };
+            if canonical_block_num != block_num || canonical_tx_idx != tx_idx {
+                continue;
+            }
+            if self
+                .get_tx_index(canonical_block_num, canonical_tx_idx)?
+                .is_none()
+            {
+                continue;
+            }
+            let total = nft_activity_totals
+                .entry(collection_id.to_vec())
+                .or_insert(0);
             *total = total.checked_add(1).ok_or_else(|| {
                 anyhow::anyhow!(
                     "nft collection activities_count overflow while repairing rollback state"
@@ -1664,11 +1680,29 @@ mod tests {
     use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{
-        AddressBalance, CachedBlockHeader, DaoDepositCacheEntry, DobEntry, DobExtra, DobStandard,
-        HodlTrackerState, LiveCellInfo, NftCollectionAggregate, NftEntry, NftExtra, NftStandard,
-        ScriptInfo, SporeMediaProfile, StorageDependencyTier, TokenDailyDelta, TokenInfo,
-        TokenTransferRecord, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        AddressBalance, AssetAction, CachedBlockHeader, DaoDepositCacheEntry, DobEntry, DobExtra,
+        DobStandard, HodlTrackerState, LiveCellInfo, NftCollectionActivityEntry,
+        NftCollectionAggregate, NftEntry, NftExtra, NftStandard, ScriptInfo, SporeMediaProfile,
+        StorageDependencyTier, TokenDailyDelta, TokenInfo, TokenTransferRecord, TxIndexEntry,
+        UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
+
+    fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
+        batch.put_tx_hash_map(tx_hash, block_num, tx_idx);
+        batch.put_tx_index(
+            block_num,
+            tx_idx,
+            &TxIndexEntry {
+                is_cellbase: false,
+                timestamp: 1_700_000_000 + block_num,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+            },
+        );
+    }
 
     #[test]
     fn test_should_delete_stats_for_replay_daily_prefix() {
@@ -1936,6 +1970,11 @@ mod tests {
         append_batch.put_addr_tx(&lock_hash, 0, 1, &[0x32; 32]);
         append_batch.commit().unwrap();
 
+        let mut domain_tx_batch = StoreBatch::new(&domain);
+        put_canonical_tx(&mut domain_tx_batch, 0, 0, &[0x31; 32]);
+        put_canonical_tx(&mut domain_tx_batch, 0, 1, &[0x32; 32]);
+        domain_tx_batch.commit().unwrap();
+
         domain
             .rollback_to_block_with_tx_index_store(0, Some(&append))
             .unwrap();
@@ -1945,6 +1984,105 @@ mod tests {
         assert_eq!(rebuilt.occupied_capacity, 0);
         assert_eq!(rebuilt.live_cells_count, 0);
         assert_eq!(rebuilt.txs_count, 2);
+    }
+
+    #[test]
+    fn test_rollback_rebuilds_nft_collection_aggregate_with_canonical_activity_count_only() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let class_id = vec![0x44; 32];
+        let nft_id = vec![0x55; 32];
+
+        let header0 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header1 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_block_header(0, &header0);
+        domain_batch.put_block_header(1, &header1);
+        domain_batch.put_nft(
+            &nft_id,
+            &NftEntry {
+                standard: NftStandard::MnftToken,
+                collection_id: Some(class_id.clone()),
+                token_id: Some(nft_id.clone()),
+                owner_lock_hash: Some(vec![0x66; 32]),
+                name: None,
+                is_live: true,
+                created_at_block: 0,
+                extra: NftExtra::MnftToken {
+                    token_index: 1,
+                    characteristic: vec![],
+                    configure: 0,
+                    state: 0,
+                },
+            },
+        );
+        domain_batch.put_nft_collection_aggregate(
+            &class_id,
+            &NftCollectionAggregate {
+                name: Some("stale".to_string()),
+                standard: NftStandard::MnftClass,
+                total_count: 99,
+                live_count: 99,
+                holders_count: 99,
+                activities_count: 99,
+            },
+        );
+        put_canonical_tx(&mut domain_batch, 0, 0, &[0xA1; 32]);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_nft_collection_activity(
+            &class_id,
+            0,
+            0,
+            &NftCollectionActivityEntry {
+                tx_hash: vec![0xA1; 32],
+                timestamp_ms: 1_700_000_000_000,
+                actions: vec![AssetAction::Mint],
+            },
+        );
+        append_batch.put_nft_collection_activity(
+            &class_id,
+            0,
+            0,
+            &NftCollectionActivityEntry {
+                tx_hash: vec![0xB2; 32],
+                timestamp_ms: 1_700_000_000_001,
+                actions: vec![AssetAction::Transfer],
+            },
+        );
+        append_batch.commit().unwrap();
+
+        domain
+            .rollback_to_block_with_tx_index_store(0, Some(&append))
+            .unwrap();
+
+        let rebuilt = domain
+            .get_nft_collection_aggregate(&class_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebuilt.total_count, 1);
+        assert_eq!(rebuilt.live_count, 1);
+        assert_eq!(rebuilt.activities_count, 1);
     }
 
     #[test]

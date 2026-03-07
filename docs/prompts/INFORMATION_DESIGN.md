@@ -37,6 +37,8 @@ Domain knowledge are like opinions about fact, for example, the activities of a 
 
 Reorgs could change opinions but don't change facts. The domain store should keep latest opinions.
 
+`domain knowledge` does not imply `domain store`: immutable domain-level history may live in append-only storage when that layout is better for write performance and reorg handling.
+
 ### Layer 2: Aggregations and Intelligence
 
 This layer contains higher-order semantics derived from syntax + semantics through broad synthesis and deep analysis, including:

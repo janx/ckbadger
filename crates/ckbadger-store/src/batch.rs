@@ -381,7 +381,7 @@ impl<'a> StoreBatch<'a> {
     }
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
-        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx);
+        let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
         self.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
     }
 
@@ -679,7 +679,7 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ActivityEntry,
     ) {
-        let key = keys::encode_activity_key(lock_hash, block_num, tx_idx);
+        let key = keys::encode_activity_key(lock_hash, block_num, tx_idx, &entry.tx_hash);
         let value = bincode::serialize(entry).expect("serialize ActivityEntry");
         self.put_cf(self.store.cf_activities(), key, &value);
     }
@@ -693,7 +693,12 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &NftCollectionActivityEntry,
     ) {
-        let key = keys::encode_nft_collection_activity_key(collection_id, block_num, tx_idx);
+        let key = keys::encode_nft_collection_activity_key(
+            collection_id,
+            block_num,
+            tx_idx,
+            &entry.tx_hash,
+        );
         let value = bincode::serialize(entry).expect("serialize NftCollectionActivityEntry");
         self.put_cf(self.store.cf_nft_collection_activities(), key, &value);
     }
@@ -1063,7 +1068,9 @@ mod tests {
         let results = store
             .list_activities(&lock, 10, Some((100, i32::MAX)), None)
             .unwrap();
-        assert!(results.is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 100);
+        assert_eq!(results[0].1, 0);
     }
 
     #[test]
@@ -1102,7 +1109,11 @@ mod tests {
             &collection_id,
             100,
             0,
-            &make_nft_collection_activity(0x02),
+            &NftCollectionActivityEntry {
+                tx_hash: vec![0x01; 32],
+                timestamp_ms: 1_700_000_000_999,
+                actions: vec![AssetAction::Mint],
+            },
         );
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
@@ -1133,21 +1144,42 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let lock = [0xA1u8; 32];
-        let tx_hash_old = [0x01u8; 32];
-        let tx_hash_new = [0x02u8; 32];
+        let tx_hash = [0x01u8; 32];
+        let first_entry = ActivityEntry {
+            tx_hash: tx_hash.to_vec(),
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_000,
+            ckb_delta: 1,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        };
+        let overwrite_entry = ActivityEntry {
+            tx_hash: tx_hash.to_vec(),
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1_700_000_001,
+            ckb_delta: 2,
+            occupied_delta: 0,
+            is_cellbase: false,
+            asset_changes: vec![],
+            peers: vec![],
+        };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_addr_tx(&lock, 100, 0, &tx_hash_old);
+        first_batch.put_activity(&lock, 100, 0, &first_entry);
         first_batch.commit().unwrap();
 
         store.set_bulk_sync_compaction_options();
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_addr_tx(&lock, 100, 0, &tx_hash_new);
+        overwrite_batch.put_activity(&lock, 100, 0, &overwrite_entry);
         overwrite_batch.commit().unwrap();
         store.restore_normal_compaction_options();
 
-        let rows = store.list_addr_txs_recent(&lock, 1, None).unwrap();
+        let rows = store.list_activities(&lock, 1, None, None).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2, tx_hash_new);
+        assert_eq!(rows[0].2.ckb_delta, 2);
     }
 }

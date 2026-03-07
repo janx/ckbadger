@@ -76,11 +76,11 @@ impl NftCollectionActivityAccumulator {
 
     /// Resolve raw actions into Mint/Transfer/Burn and write to the batch.
     ///
-    /// Returns inserted `(collection_id, block_number, tx_idx)` rows so callers
+    /// Returns inserted `(collection_id, block_number, tx_idx, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
-    pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32)> {
+    pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>)> {
         let mut inserted = Vec::new();
-        for ((collection_id, _tx_hash), entry) in self.entries {
+        for ((collection_id, tx_hash), entry) in self.entries {
             // Group by nft_id to detect transfers (create + consume of same NFT)
             let mut per_nft: HashMap<Vec<u8>, (bool, bool)> = HashMap::new();
             for (nft_id, action) in &entry.nft_actions {
@@ -120,7 +120,7 @@ impl NftCollectionActivityAccumulator {
             }
 
             let activity_entry = NftCollectionActivityEntry {
-                tx_hash: _tx_hash,
+                tx_hash: tx_hash.clone(),
                 timestamp_ms: entry.timestamp_ms,
                 actions,
             };
@@ -131,7 +131,7 @@ impl NftCollectionActivityAccumulator {
                 entry.tx_idx,
                 &activity_entry,
             );
-            inserted.push((collection_id, entry.block_number, entry.tx_idx));
+            inserted.push((collection_id, entry.block_number, entry.tx_idx, tx_hash));
         }
         inserted
     }

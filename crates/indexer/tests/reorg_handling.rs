@@ -244,11 +244,14 @@ fn test_deep_fork_flag() {
 
 #[test]
 fn test_rollback_preserves_activities_history() {
-    let store = setup_store();
+    let root = tempfile::tempdir().unwrap();
+    let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+    let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
     let lock_hash = vec![0xAA; 32];
 
     // Insert activities at blocks 100, 200, 300, 400, 500
-    let mut batch = StoreBatch::new(&store);
+    let mut append_batch = StoreBatch::new(&append);
+    let mut domain_batch = StoreBatch::new(&domain);
     for (rollback_seq, i) in (1..=5).enumerate() {
         let block = i * 100;
         let entry = ActivityEntry {
@@ -262,9 +265,9 @@ fn test_rollback_preserves_activities_history() {
             asset_changes: vec![],
             peers: vec![],
         };
-        batch.put_activity(&lock_hash, block, 0, &entry);
-        let activity_key = keys::encode_activity_key(&lock_hash, block, 0);
-        batch.put_reorg_undo_log_by_block(
+        append_batch.put_activity(&lock_hash, block, 0, &entry);
+        let activity_key = keys::encode_activity_key(&lock_hash, block, 0, &entry.tx_hash);
+        domain_batch.put_reorg_undo_log_by_block(
             block,
             rollback_seq as u64,
             &UndoLogEntry::KeyMutation {
@@ -275,25 +278,28 @@ fn test_rollback_preserves_activities_history() {
             },
         );
     }
-    batch.commit().unwrap();
+    append_batch.commit().unwrap();
+    domain_batch.commit().unwrap();
 
     // Verify all 5 exist
-    let before = store.list_activities(&lock_hash, 100, None, None).unwrap();
+    let before = append.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(before.len(), 5);
 
     // Rollback to block 300: append-only activities history is preserved.
     // Need to also insert block headers so rollback_to_block works
-    let mut batch = StoreBatch::new(&store);
+    let mut batch = StoreBatch::new(&domain);
     for i in 1..=5 {
         let block = i * 100;
         batch.put_block_header(block, &make_header(block));
     }
     batch.commit().unwrap();
 
-    store.rollback_to_block(300).unwrap();
-    store.rollback_via_undo_log(&store, 300).unwrap();
+    domain
+        .rollback_to_block_with_tx_index_store(300, Some(&append))
+        .unwrap();
+    domain.rollback_via_undo_log(&append, 300).unwrap();
 
-    let after = store.list_activities(&lock_hash, 100, None, None).unwrap();
+    let after = append.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(after.len(), 5, "append-only history should be preserved");
     // Activities remain in descending block order.
     assert_eq!(after[0].0, 500);

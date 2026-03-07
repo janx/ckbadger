@@ -4,6 +4,16 @@ use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
 impl CkbadgerStore {
     /// List activities for an address (lock_hash), newest first.
     ///
@@ -32,7 +42,9 @@ impl CkbadgerStore {
         // For cursor: seek to the cursor key and skip that exact row.
         // For no cursor: start from the lock_hash prefix (newest first due to desc key).
         let start_key = match cursor {
-            Some((block_num, tx_idx)) => keys::encode_activity_key(lock_hash, block_num, tx_idx),
+            Some((block_num, tx_idx)) => {
+                keys::encode_activity_seek_after_key(lock_hash, block_num, tx_idx)
+            }
             None => prefix.to_vec(),
         };
 
@@ -49,12 +61,19 @@ impl CkbadgerStore {
             if !key.starts_with(prefix) {
                 break;
             }
-            if key.len() == 44 {
-                if cursor.is_some() && key.as_ref() == start_key.as_slice() {
-                    continue;
-                }
-                let (_, block_num, tx_idx) = keys::decode_activity_key(&key);
+            if key.len() == keys::ACTIVITY_KEY_SIZE {
+                let (_, block_num, tx_idx, tx_hash_from_key) = keys::decode_activity_key(&key);
                 let entry: ActivityEntry = bincode::deserialize(&value)?;
+                if entry.tx_hash != tx_hash_from_key {
+                    anyhow::bail!(
+                        "activity key/value tx_hash mismatch in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+                        bytes_to_hex(prefix),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&tx_hash_from_key),
+                        bytes_to_hex(&entry.tx_hash)
+                    );
+                }
                 if Self::matches_activity_filter(&entry, filter) {
                     results.push((block_num, tx_idx, entry));
                     if results.len() >= limit {
@@ -97,9 +116,9 @@ mod tests {
     use crate::batch::StoreBatch;
     use tempfile::TempDir;
 
-    fn make_activity(block_num: i64, tx_idx: i32) -> ActivityEntry {
+    fn make_activity_with_hash(tx_hash: &[u8], block_num: i64, tx_idx: i32) -> ActivityEntry {
         ActivityEntry {
-            tx_hash: vec![block_num as u8; 32],
+            tx_hash: tx_hash.to_vec(),
             block_number: block_num,
             tx_index: tx_idx,
             timestamp: 1_700_000_000 + block_num,
@@ -109,6 +128,10 @@ mod tests {
             asset_changes: vec![],
             peers: vec![],
         }
+    }
+
+    fn make_activity(block_num: i64, tx_idx: i32) -> ActivityEntry {
+        make_activity_with_hash(&[block_num as u8; 32], block_num, tx_idx)
     }
 
     #[test]
@@ -137,5 +160,37 @@ mod tests {
 
         let rows = store.list_activities(&lock, 10, None, Some("tok")).unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_list_activities_keeps_two_rows_same_position_different_tx_hash() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock = [0xAB; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock, 100, 1, &make_activity_with_hash(&[0x10; 32], 100, 1));
+        batch.put_activity(&lock, 100, 1, &make_activity_with_hash(&[0x20; 32], 100, 1));
+        batch.put_activity(&lock, 99, 3, &make_activity_with_hash(&[0x30; 32], 99, 3));
+        batch.commit().unwrap();
+
+        let rows = store.list_activities(&lock, 10, None, None).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, 100);
+        assert_eq!(rows[0].1, 1);
+        assert_eq!(rows[0].2.tx_hash, vec![0x10; 32]);
+        assert_eq!(rows[1].0, 100);
+        assert_eq!(rows[1].1, 1);
+        assert_eq!(rows[1].2.tx_hash, vec![0x20; 32]);
+        assert_eq!(rows[2].0, 99);
+        assert_eq!(rows[2].1, 3);
+
+        let next = store
+            .list_activities(&lock, 10, Some((100, 1)), None)
+            .unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0, 99);
+        assert_eq!(next[0].1, 3);
+        assert_eq!(next[0].2.tx_hash, vec![0x30; 32]);
     }
 }

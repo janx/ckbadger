@@ -347,28 +347,30 @@ mod tests {
     fn test_list_canonical_activities_page_filters_orphaned_entries() {
         let root = tempfile::tempdir().unwrap();
         let domain_path = root.path().join("domain");
+        let append_path = root.path().join("append-only");
         let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append = CkbadgerStore::open_append_only(&append_path).unwrap();
 
         let lock_hash = [0xAA; 32];
         let stale_tx = vec![0x30; 32];
         let canonical_tx_new = vec![0x20; 32];
         let canonical_tx_old = vec![0x10; 32];
 
-        let mut domain_activity_batch = StoreBatch::new(&domain);
-        domain_activity_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
-        domain_activity_batch.put_activity(
+        let mut append_activity_batch = StoreBatch::new(&append);
+        append_activity_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
+        append_activity_batch.put_activity(
             &lock_hash,
             20,
             0,
             &make_activity(&canonical_tx_new, 20, 0),
         );
-        domain_activity_batch.put_activity(
+        append_activity_batch.put_activity(
             &lock_hash,
             10,
             0,
             &make_activity(&canonical_tx_old, 10, 0),
         );
-        domain_activity_batch.commit().unwrap();
+        append_activity_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -390,7 +392,7 @@ mod tests {
         domain_batch.commit().unwrap();
 
         let rows =
-            list_canonical_activities_page(&domain, &domain, &lock_hash, 3, None, None).unwrap();
+            list_canonical_activities_page(&append, &domain, &lock_hash, 3, None, None).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, 20);
         assert_eq!(rows[1].0, 10);

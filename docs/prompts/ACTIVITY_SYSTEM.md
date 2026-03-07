@@ -112,14 +112,14 @@ NFT/DOB action detection uses set comparison:
 ### Key Encoding
 
 ```
-lock_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
+lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 76 bytes
 ```
 
-`block_num_desc = i64::MAX - block_num` — descending order so prefix scan returns newest activities first.
+`block_num_desc = i64::MAX - block_num`, `tx_idx_desc = i32::MAX - tx_idx` — descending order so prefix scan returns newest activities first while remaining reorg-safe for append-only storage.
 
 ```rust
-pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8>;
-pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32);
+pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8>;
+pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>);
 ```
 
 ### Value Encoding

@@ -40,11 +40,12 @@ For reorgs up to 36 blocks deep, the indexer:
 
 1. Records a reorg event in `CF_SYNC_META` (`reorg:<timestamp_ms>`)
 2. Calls `rollback_to_block(fork_point)` for atomic multi-CF rollback
-3. Removes rolled-back entries from core CFs (`block_headers`, `tx_index`, `live_cells`, `token_transfers`, `activities`, etc.)
-4. Rebuilds `addr_balance` from remaining `live_cells`
-5. Clears deep-fork flag if it was set
-6. Updates sync cache status and continues syncing
-7. Notifies pipeline fetcher via `reorg_notify_flag` and drains stale batches
+3. Removes rolled-back entries from mutable domain CFs (`block_headers`, `tx_index`, `live_cells`, `token_transfers`, mutable aggregates, etc.)
+4. Preserves append-only history CFs (`activities`, `addr_txs`, `nft_collection_activities`) and only prunes their undo-log journal entries
+5. Rebuilds `addr_balance` and collection activity counts from remaining canonical state, using append-only history only as candidate rows filtered by canonical tx location
+6. Clears deep-fork flag if it was set
+7. Updates sync cache status and continues syncing
+8. Notifies pipeline fetcher via `reorg_notify_flag` and drains stale batches
 
 ### Pipeline Coordination
 
