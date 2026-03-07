@@ -164,7 +164,11 @@ impl BatchWriter {
             // UDT transfer inputs must come from pre-batch live state.
             // Do not fall back to consumed_cells here: historical consumed entries
             // can reintroduce already-spent cells and produce false negative deltas.
-            let cell_info = self.store.get_cell(tx_hash, output_index)?;
+            let cell_info = self.store.get_cell_with_payload_store(
+                self.cell_payload_store.as_ref(),
+                tx_hash,
+                output_index,
+            )?;
 
             if let Some(info) = cell_info {
                 // Only include cells that have a type script hash (UDT cells always have one).
@@ -693,6 +697,71 @@ mod tests {
         assert_eq!(entry.2, 1i16);
         assert_eq!(entry.3, vec![0x11; 20]);
         assert_eq!(entry.4, vec![0x22; 32]);
+        assert_eq!(entry.5, 1234u128);
+        assert_eq!(entry.6, "sudt".to_string());
+    }
+
+    #[test]
+    fn test_get_udt_cells_info_batch_reads_split_domain_append_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new_with_cell_payload_store(domain.clone(), append.clone());
+
+        let type_hash = vec![0xA1; 32];
+        let type_code_hash = vec![0xB2; 32];
+        let tx_hash = vec![0xC3; 32];
+        let output_index = 0i16;
+
+        let token = TokenInfo {
+            type_code_hash: type_code_hash.clone(),
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: None,
+            total_supply: Some(0),
+            max_supply: None,
+            holders_count: 0,
+            first_seen_block: 0,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+        };
+        domain.put_token_direct(&type_hash, &token).unwrap();
+
+        let cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x22; 32],
+            lock_code_hash: vec![0x33; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x44; 20],
+            type_script_hash: Some(type_hash.clone()),
+            type_code_hash: Some(type_code_hash.clone()),
+            type_args: Some(vec![0x11; 20]),
+            data_size: 16,
+            occupied_capacity: 0,
+            udt_amount: Some(1234),
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_hash, output_index, &cell);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, output_index, &cell);
+        append_batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        let entry = result
+            .get(&(tx_hash.clone(), output_index))
+            .expect("udt input should be resolved");
+
+        assert_eq!(entry.0, type_hash);
+        assert_eq!(entry.1, type_code_hash);
         assert_eq!(entry.5, 1234u128);
         assert_eq!(entry.6, "sudt".to_string());
     }

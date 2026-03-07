@@ -151,7 +151,7 @@ fn test_rollback_removes_blocks() {
 
     // Rollback to block 5: blocks 6-10 should be removed
     let result: RollbackResult = domain
-        .rollback_to_block_with_tx_index_store(5, Some(&append))
+        .rollback_to_block_with_history_store(5, Some(&append))
         .unwrap();
     assert_eq!(result.blocks_removed, 5, "should remove blocks 6-10");
 
@@ -190,7 +190,7 @@ fn test_rollback_removes_transactions() {
 
     // Rollback to block 3
     let result = domain
-        .rollback_to_block_with_tx_index_store(3, Some(&append))
+        .rollback_to_block_with_history_store(3, Some(&append))
         .unwrap();
     // Blocks 4, 5, 6 removed => 3 blocks, each with 2 txs => 6 txs removed
     assert_eq!(result.blocks_removed, 3);
@@ -223,7 +223,7 @@ fn test_rollback_removes_cells_and_indexes() {
 
     // Rollback to block 2: blocks 3-4 removed
     let result = domain
-        .rollback_to_block_with_tx_index_store(2, Some(&append))
+        .rollback_to_block_with_history_store(2, Some(&append))
         .unwrap();
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
@@ -251,7 +251,7 @@ fn test_rollback_result_counts() {
 
     // Rollback to block 5: remove blocks 6, 7, 8
     let result = domain
-        .rollback_to_block_with_tx_index_store(5, Some(&append))
+        .rollback_to_block_with_history_store(5, Some(&append))
         .unwrap();
 
     assert_eq!(result.blocks_removed, 3, "3 blocks removed (6, 7, 8)");
@@ -360,7 +360,7 @@ fn test_rollback_preserves_activities_history() {
     batch.commit().unwrap();
 
     domain
-        .rollback_to_block_with_tx_index_store(300, Some(&append))
+        .rollback_to_block_with_history_store(300, Some(&append))
         .unwrap();
     domain.rollback_via_undo_log(&append, 300).unwrap();
 

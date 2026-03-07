@@ -98,12 +98,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     )?);
     store.log_config();
 
-    // One-time backfill: populate code_hash indexes if they are empty
-    if !store.code_hash_indexes_populated() {
-        info!("Code hash indexes empty -- running one-time backfill from live_cells...");
-        let count = store.backfill_code_hash_indexes()?;
-        info!("Code hash index backfill complete: {} cells indexed", count);
-    }
+    ensure_code_hash_indexes(store.as_ref(), append_only_store.as_ref())?;
 
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
@@ -582,6 +577,19 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     run_result
 }
 
+fn ensure_code_hash_indexes(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+) -> Result<()> {
+    // code_hash indexes live in append-only history storage; canonical live state lives in domain.
+    if !append_only_store.code_hash_indexes_populated() {
+        info!("Code hash indexes empty -- running one-time backfill from live_cells...");
+        let count = append_only_store.backfill_code_hash_indexes_from_state_store(store)?;
+        info!("Code hash index backfill complete: {} cells indexed", count);
+    }
+    Ok(())
+}
+
 /// Run label import from a service config.
 pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
     info!(
@@ -848,6 +856,26 @@ async fn wait_for_shutdown_signal() -> std::io::Result<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use ckbadger_store::{types::LiveCellInfo, CkbadgerStore, StoreBatch};
+    use tempfile::TempDir;
+
+    fn make_code_hash_backfill_test_cell() -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 1_000,
+            created_at_block: 42,
+            lock_script_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0xBB; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x01, 0x02],
+            type_script_hash: Some(vec![0xCC; 32]),
+            type_code_hash: Some(vec![0xDD; 32]),
+            type_args: Some(vec![0x03, 0x04]),
+            data_size: 16,
+            occupied_capacity: 600,
+            udt_amount: None,
+        }
+    }
 
     #[test]
     fn test_queue_fill_pct() {
@@ -1243,5 +1271,80 @@ mod tests {
         assert!(config.start_block.is_none());
         assert_eq!(config.store_runtime_config.memory_budget_gb, Some(24));
         assert!(!config.store_runtime_config.direct_io_reads);
+    }
+
+    #[test]
+    fn test_ensure_code_hash_indexes_populates_split_domain_append_layout() {
+        let root = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let tx_hash = [0x11; 32];
+        let cell = make_code_hash_backfill_test_cell();
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_hash, 0, &cell);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, 0, &cell);
+        append_batch.commit().unwrap();
+
+        ensure_code_hash_indexes(&domain, &append).unwrap();
+
+        assert!(append.code_hash_indexes_populated());
+
+        let lock_rows = domain
+            .list_cells_by_lock_code_hash_with_history_store(
+                &append,
+                &cell.lock_code_hash,
+                10,
+                None,
+            )
+            .unwrap();
+        assert_eq!(lock_rows.len(), 1);
+        assert_eq!(lock_rows[0].0, tx_hash.to_vec());
+        assert_eq!(lock_rows[0].1, 0);
+
+        let type_rows = domain
+            .list_cells_by_type_code_hash_with_history_store(
+                &append,
+                cell.type_code_hash.as_ref().unwrap(),
+                10,
+                None,
+            )
+            .unwrap();
+        assert_eq!(type_rows.len(), 1);
+        assert_eq!(type_rows[0].0, tx_hash.to_vec());
+        assert_eq!(type_rows[0].1, 0);
+    }
+
+    #[test]
+    fn test_ensure_code_hash_indexes_is_idempotent_for_split_layout() {
+        let root = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let tx_hash = [0x22; 32];
+        let cell = make_code_hash_backfill_test_cell();
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_hash, 0, &cell);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, 0, &cell);
+        append_batch.commit().unwrap();
+
+        ensure_code_hash_indexes(&domain, &append).unwrap();
+        ensure_code_hash_indexes(&domain, &append).unwrap();
+
+        let lock_rows = domain
+            .list_cells_by_lock_code_hash_with_history_store(
+                &append,
+                &cell.lock_code_hash,
+                10,
+                None,
+            )
+            .unwrap();
+        assert_eq!(lock_rows.len(), 1);
     }
 }

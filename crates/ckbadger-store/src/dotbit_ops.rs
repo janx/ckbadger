@@ -75,11 +75,12 @@ impl CkbadgerStore {
 
     /// Resolve live dotbit account outpoints by account IDs.
     ///
-    /// Scans dotbit outpoint index in `stats` and validates liveness via `live_cells`.
-    /// Returns account_id -> (tx_hash, output_index) for accounts that currently have
-    /// a live outpoint.
-    pub fn get_live_dotbit_outpoints_by_account_ids(
+    /// Scans dotbit outpoint index in `stats` and validates liveness via `cell_state`
+    /// in `self` plus payloads in `payload_store`. Returns account_id -> (tx_hash,
+    /// output_index) for accounts that currently have a live outpoint.
+    pub fn get_live_dotbit_outpoints_by_account_ids_with_payload_store(
         &self,
+        payload_store: &CkbadgerStore,
         account_ids: &[Vec<u8>],
     ) -> anyhow::Result<DotbitLiveOutpointMap> {
         let targets: HashSet<Vec<u8>> = account_ids.iter().cloned().collect();
@@ -113,7 +114,10 @@ impl CkbadgerStore {
             }
 
             let (tx_hash, output_index) = keys::decode_dotbit_account_outpoint_key(&key);
-            if self.get_cell(&tx_hash, output_index)?.is_none() {
+            if self
+                .get_cell_with_payload_store(payload_store, &tx_hash, output_index)?
+                .is_none()
+            {
                 continue;
             }
 
@@ -266,7 +270,57 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = store
-            .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&account_id))
+            .get_live_dotbit_outpoints_by_account_ids_with_payload_store(
+                &store,
+                std::slice::from_ref(&account_id),
+            )
+            .unwrap();
+        let (tx_hash, output_index) = outpoints.get(&account_id).unwrap();
+        assert_eq!(tx_hash, &live_tx);
+        assert_eq!(*output_index, live_idx);
+    }
+
+    #[test]
+    fn test_get_live_dotbit_outpoints_by_account_ids_reads_split_layout() {
+        let root = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let account_id = vec![0x61u8; 20];
+        let old_tx = vec![0x71u8; 32];
+        let live_tx = vec![0x72u8; 32];
+        let old_idx = 1i16;
+        let live_idx = 2i16;
+
+        let live_cell = crate::types::LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 10,
+            lock_script_hash: vec![0x01; 32],
+            lock_code_hash: vec![0x02; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(vec![0x03; 32]),
+            type_code_hash: Some(vec![0x04; 32]),
+            type_args: Some(account_id.clone()),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_dotbit_account_outpoint(&old_tx, old_idx, &account_id);
+        domain_batch.put_dotbit_account_outpoint(&live_tx, live_idx, &account_id);
+        domain_batch.put_cell(&live_tx, live_idx, &live_cell);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&live_tx, live_idx, &live_cell);
+        append_batch.commit().unwrap();
+
+        let outpoints = domain
+            .get_live_dotbit_outpoints_by_account_ids_with_payload_store(
+                &append,
+                std::slice::from_ref(&account_id),
+            )
             .unwrap();
         let (tx_hash, output_index) = outpoints.get(&account_id).unwrap();
         assert_eq!(tx_hash, &live_tx);

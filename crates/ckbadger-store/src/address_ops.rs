@@ -73,6 +73,10 @@ impl CkbadgerStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
+        assert!(
+            self.has_cf(CF_ADDR_TXS),
+            "list_addr_txs_recent requires append-only history store"
+        );
 
         // Seek to the cursor position or end of prefix range, then iterate backwards
         let upper_key = match cursor {
@@ -131,31 +135,31 @@ impl CkbadgerStore {
     ///
     /// Other fields are re-initialized conservatively.
     pub fn rebuild_addr_balances_from_live_cells(&self) -> anyhow::Result<usize> {
-        self.rebuild_addr_balances_from_live_cells_with_tx_index_store(None)
+        self.rebuild_addr_balances_from_live_cells_with_history_store(None)
     }
 
-    /// Rebuild addr_balance from canonical live cell state and optionally source `txs_count`
-    /// from another store's `addr_txs` index.
+    /// Rebuild addr_balance from canonical live cell state and optionally source payload/history
+    /// data from another store.
     ///
-    /// This is used by domain-store rollback paths, where `addr_txs` lives in
-    /// append-only storage.
-    pub fn rebuild_addr_balances_from_live_cells_with_tx_index_store(
+    /// This is used by domain-store rollback paths, where `addr_txs` and `cell_payloads` live
+    /// in append-only storage.
+    pub fn rebuild_addr_balances_from_live_cells_with_history_store(
         &self,
-        tx_index_store: Option<&CkbadgerStore>,
+        history_store: Option<&CkbadgerStore>,
     ) -> anyhow::Result<usize> {
         use std::collections::HashMap;
 
         let payload_store = if self.has_cf(CF_CELL_PAYLOADS) {
             self
         } else {
-            let store = tx_index_store.ok_or_else(|| {
+            let store = history_store.ok_or_else(|| {
                 anyhow::anyhow!(
                     "rebuild_addr_balances_from_live_cells requires append-only payload store when cell_payloads CF is absent"
                 )
             })?;
             if !store.has_cf(CF_CELL_PAYLOADS) {
                 anyhow::bail!(
-                    "tx_index_store does not expose cell_payloads CF while rebuilding addr balances"
+                    "history_store does not expose cell_payloads CF while rebuilding addr balances"
                 );
             }
             store
@@ -247,12 +251,12 @@ impl CkbadgerStore {
         let tx_source = if self.has_cf(CF_ADDR_TXS) {
             Some(self)
         } else {
-            tx_index_store
+            history_store
         };
         if let Some(source) = tx_source {
             if !source.has_cf(CF_ADDR_TXS) {
                 anyhow::bail!(
-                    "tx_index_store does not expose addr_txs CF while rebuilding addr balances"
+                    "history_store does not expose addr_txs CF while rebuilding addr balances"
                 );
             }
             let iter = source.iterator_cf(source.cf_addr_txs(), rocksdb::IteratorMode::Start);
@@ -499,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rebuild_addr_balances_domain_store_uses_append_tx_index_store_when_provided() {
+    fn test_rebuild_addr_balances_domain_store_uses_append_history_store_when_provided() {
         let domain_dir = tempdir().unwrap();
         let append_dir = tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
@@ -523,7 +527,7 @@ mod tests {
         append_batch.commit().unwrap();
 
         let rebuilt = domain
-            .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(&append))
+            .rebuild_addr_balances_from_live_cells_with_history_store(Some(&append))
             .unwrap();
         assert_eq!(rebuilt, 1);
         let a = domain.get_addr_balance(&lock_a).unwrap().unwrap();
@@ -611,5 +615,13 @@ mod tests {
 
         let rows = store.list_addr_txs_recent(&lock, 0, None).unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "list_addr_txs_recent requires append-only history store")]
+    fn test_list_addr_txs_recent_panics_with_explicit_store_boundary_message() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let _ = store.list_addr_txs_recent(&[0xAA; 32], 10, None);
     }
 }

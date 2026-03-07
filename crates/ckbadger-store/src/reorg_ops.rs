@@ -398,13 +398,13 @@ impl CkbadgerStore {
     /// Atomic rollback across all CFs to a given block number.
     /// Deletes all data for blocks > rollback_to.
     pub fn rollback_to_block(&self, rollback_to: i64) -> anyhow::Result<RollbackResult> {
-        self.rollback_to_block_with_tx_index_store(rollback_to, None)
+        self.rollback_to_block_with_history_store(rollback_to, None)
     }
 
-    pub fn rollback_to_block_with_tx_index_store(
+    pub fn rollback_to_block_with_history_store(
         &self,
         rollback_to: i64,
-        tx_index_store: Option<&CkbadgerStore>,
+        history_store: Option<&CkbadgerStore>,
     ) -> anyhow::Result<RollbackResult> {
         if rollback_to < -1 {
             anyhow::bail!(
@@ -421,7 +421,7 @@ impl CkbadgerStore {
         let mut cells_restored = 0u64;
         let rollback_started_at = Instant::now();
         let replay_start = rollback_to + 1;
-        let history_store = tx_index_store.unwrap_or(self);
+        let history_store = history_store.unwrap_or(self);
         let replay_cutoff_date = self.get_block_header(replay_start)?.map(|h| {
             ckbadger_common::block_date_from_ms(h.timestamp)
                 .format("%Y%m%d")
@@ -1473,7 +1473,7 @@ impl CkbadgerStore {
         // addr_balance inconsistent with live_cells otherwise.
         info!("Rollback cleanup rebuilding addr_balance from live_cells");
         let rebuilt_balances =
-            self.rebuild_addr_balances_from_live_cells_with_tx_index_store(tx_index_store)?;
+            self.rebuild_addr_balances_from_live_cells_with_history_store(Some(history_store))?;
         info!(
             rebuilt_balances,
             elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
@@ -1495,7 +1495,7 @@ impl CkbadgerStore {
         // that can survive crash windows before block-header commit markers.
         info!("Rollback cleanup rebuilding token state from token_transfers");
         let token_rebuild =
-            self.rebuild_token_state_from_transfers_with_payload_store(tx_index_store)?;
+            self.rebuild_token_state_from_transfers_with_payload_store(Some(history_store))?;
         info!(
             token_holders_cleared = token_rebuild.token_holders_cleared,
             token_transfer_stats_cleared = token_rebuild.token_transfer_stats_cleared,
@@ -1837,7 +1837,7 @@ mod tests {
         append_batch.commit().unwrap();
 
         domain
-            .rollback_to_block_with_tx_index_store(0, Some(&append))
+            .rollback_to_block_with_history_store(0, Some(&append))
             .unwrap();
 
         let rebuilt = domain.get_addr_balance(&lock_hash).unwrap().unwrap();

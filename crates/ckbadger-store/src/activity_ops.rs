@@ -30,6 +30,10 @@ impl CkbadgerStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
+        assert!(
+            self.has_cf(CF_ACTIVITY_BY_OWNER) && self.has_cf(CF_ACTIVITY_TX_ENVELOPES),
+            "list_activities requires append-only activity store"
+        );
 
         let prefix = &lock_hash[..32];
         let zero_tx_hash = [0u8; 32];
@@ -339,5 +343,13 @@ mod tests {
             loaded.asset_changes.as_slice(),
             [AssetChange::DaoDeposit { capacity }] if *capacity == 1000
         ));
+    }
+
+    #[test]
+    #[should_panic(expected = "list_activities requires append-only activity store")]
+    fn test_list_activities_panics_with_explicit_store_boundary_message() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let _ = store.list_activities(&[0xAA; 32], 10, None, None);
     }
 }

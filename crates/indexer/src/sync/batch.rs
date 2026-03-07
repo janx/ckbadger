@@ -366,22 +366,25 @@ pub(super) fn classify_unresolved_local_probe(
     let mut summary = UnresolvedLocalProbeSummary::default();
     let sampled = unresolved_outpoints.iter().take(sample_limit);
     let store = writer.store();
+    let payload_store = writer.cell_payload_store();
 
     for (tx_hash, output_index) in sampled {
         summary.sampled += 1;
         let outpoint_label = format!("0x{}:{}", short_tx_hash(tx_hash), output_index);
 
-        let live_exists = match store.get_cell(tx_hash, *output_index) {
-            Ok(Some(_)) => true,
-            Ok(None) => false,
-            Err(_) => {
-                summary.store_errors += 1;
-                summary
-                    .sample_details
-                    .push(format!("{}=live_read_error", outpoint_label));
-                continue;
-            }
-        };
+        let live_exists =
+            match store.get_cell_with_payload_store(payload_store.as_ref(), tx_hash, *output_index)
+            {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                Err(_) => {
+                    summary.store_errors += 1;
+                    summary
+                        .sample_details
+                        .push(format!("{}=live_read_error", outpoint_label));
+                    continue;
+                }
+            };
         if live_exists {
             summary.live_hits += 1;
             summary
@@ -390,7 +393,11 @@ pub(super) fn classify_unresolved_local_probe(
             continue;
         }
 
-        let consumed_exists = match store.get_consumed_cell(tx_hash, *output_index) {
+        let consumed_exists = match store.get_consumed_cell_with_payload_store(
+            payload_store.as_ref(),
+            tx_hash,
+            *output_index,
+        ) {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => {
@@ -6929,6 +6936,94 @@ mod tests {
         assert_eq!(summary.missing_everywhere, 0);
         assert_eq!(summary.live_hits, 0);
         assert_eq!(summary.consumed_hits, 0);
+        assert_eq!(summary.store_errors, 0);
+    }
+
+    #[test]
+    fn test_classify_unresolved_local_probe_marks_live_cell_exists_in_split_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new_with_cell_payload_store(domain.clone(), append.clone());
+        let tx_hash = vec![0x56; 32];
+        let output_index = 0i16;
+
+        let live_cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x10; 32],
+            lock_code_hash: vec![0x20; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 1,
+            udt_amount: None,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_hash, output_index, &live_cell);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, output_index, &live_cell);
+        append_batch.commit().unwrap();
+
+        let unresolved = vec![(tx_hash, output_index)];
+        let summary = classify_unresolved_local_probe(&writer, &unresolved, 5);
+
+        assert_eq!(summary.sampled, 1);
+        assert_eq!(summary.live_hits, 1);
+        assert_eq!(summary.consumed_hits, 0);
+        assert_eq!(summary.store_errors, 0);
+    }
+
+    #[test]
+    fn test_classify_unresolved_local_probe_marks_consumed_cell_exists_in_split_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new_with_cell_payload_store(domain.clone(), append.clone());
+        let tx_hash = vec![0x78; 32];
+        let output_index = 1i16;
+
+        let consumed_cell = LiveCellInfo {
+            capacity: 100_000_000,
+            created_at_block: 1,
+            lock_script_hash: vec![0x10; 32],
+            lock_code_hash: vec![0x20; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 1,
+            udt_amount: None,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_consumed_cell_with_consumer(
+            &tx_hash,
+            output_index,
+            &consumed_cell,
+            2,
+            Some(&[0x99; 32]),
+        );
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, output_index, &consumed_cell);
+        append_batch.commit().unwrap();
+
+        let unresolved = vec![(tx_hash, output_index)];
+        let summary = classify_unresolved_local_probe(&writer, &unresolved, 5);
+
+        assert_eq!(summary.sampled, 1);
+        assert_eq!(summary.live_hits, 0);
+        assert_eq!(summary.consumed_hits, 1);
         assert_eq!(summary.store_errors, 0);
     }
 

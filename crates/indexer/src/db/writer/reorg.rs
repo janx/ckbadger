@@ -74,7 +74,7 @@ impl BatchWriter {
 
         // Domain rollback for canonical mutable state.
         self.store
-            .rollback_to_block_with_tx_index_store(fork_point, Some(append_store))?;
+            .rollback_to_block_with_history_store(fork_point, Some(append_store))?;
         // Revert domain mutations from undo-log and prune append undo entries.
         self.store.rollback_via_undo_log(append_store, fork_point)?;
 

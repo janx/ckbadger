@@ -6022,6 +6022,123 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
 }
 
 #[tokio::test]
+async fn test_assets_dotbit_activities_accepts_lifecycle_action_filters() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let recycle_tx = vec![0xb1; 32];
+    let renew_tx = vec![0xb2; 32];
+    let update_tx = vec![0xb3; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft_collection_aggregate(
+        &collection_id,
+        &NftCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: NftStandard::DotBit,
+            total_count: 1,
+            live_count: 1,
+            holders_count: 1,
+            activities_count: 0,
+        },
+    );
+
+    batch.put_tx_hash_map(&recycle_tx, 310, 0);
+    batch.put_tx_index(
+        310,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_310,
+            inputs_count: 1,
+            outputs_count: 0,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        310,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: recycle_tx.clone(),
+            timestamp_ms: 1_700_000_310,
+            actions: vec![AssetAction::Recycle],
+        },
+    );
+
+    batch.put_tx_hash_map(&renew_tx, 320, 0);
+    batch.put_tx_index(
+        320,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_320,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 190,
+            cycles: None,
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        320,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: renew_tx.clone(),
+            timestamp_ms: 1_700_000_320,
+            actions: vec![AssetAction::Renew],
+        },
+    );
+
+    batch.put_tx_hash_map(&update_tx, 330, 0);
+    batch.put_tx_index(
+        330,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_330,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 200,
+            cycles: None,
+        },
+    );
+    batch.put_nft_collection_activity(
+        &collection_id,
+        330,
+        0,
+        &NftCollectionActivityEntry {
+            tx_hash: update_tx.clone(),
+            timestamp_ms: 1_700_000_330,
+            actions: vec![AssetAction::Update],
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    for (action, expected_block) in [("recycle", 310), ("renew", 320), ("update", 330)] {
+        let request = Request::builder()
+            .uri(format!(
+                "/api/v1/assets/nfts/dotbit/activities?limit=20&action={action}"
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["data"].as_array().unwrap().len(), 1);
+        assert_eq!(json["data"][0]["blockNumber"], expected_block);
+        assert_eq!(json["data"][0]["actions"][0], action);
+    }
+}
+
+#[tokio::test]
 async fn test_assets_nft_item_detail_mnft() {
     let store = test_store();
     let issuer_id = [0x21u8; 20];
@@ -6731,6 +6848,61 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     assert_eq!(json["data"][0]["actions"][0], "burn");
     assert_eq!(json["data"][1]["actions"][0], "transfer");
     assert_eq!(json["data"][2]["actions"][0], "mint");
+}
+
+#[tokio::test]
+async fn test_assets_dotbit_item_activities_rejects_non_lifecycle_action_filter() {
+    let store = test_store();
+    let account_id = [0x41u8; 20];
+    let mint_tx = vec![0xc1; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_nft(
+        &account_id,
+        &NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: None,
+            token_id: Some(account_id.to_vec()),
+            owner_lock_hash: Some(vec![0x23; 32]),
+            name: Some("active.bit".to_string()),
+            is_live: true,
+            created_at_block: 110,
+            extra: NftExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    batch.put_tx_hash_map(&mint_tx, 110, 0);
+    batch.put_tx_index(
+        110,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_110,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 180,
+            cycles: None,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?action=renew",
+            hex::encode(account_id)
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

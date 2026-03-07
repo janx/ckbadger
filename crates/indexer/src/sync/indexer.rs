@@ -960,7 +960,7 @@ impl Indexer {
                 let rebuilt = self
                     .writer
                     .store()
-                    .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(
+                    .rebuild_addr_balances_from_live_cells_with_history_store(Some(
                         self.append_only_store.as_ref(),
                     ))?;
                 info!(

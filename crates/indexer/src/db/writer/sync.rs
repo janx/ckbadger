@@ -242,7 +242,7 @@ impl BatchWriter {
                     start_block
                 };
             self.store
-                .rollback_to_block_with_tx_index_store(rollback_target, Some(append_store))?;
+                .rollback_to_block_with_history_store(rollback_target, Some(append_store))?;
             info!(
                 start_block,
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
@@ -314,7 +314,7 @@ impl BatchWriter {
         // For range cleanup, we rollback to the block before the range
         // then the caller will re-sync from start_block
         self.store
-            .rollback_to_block_with_tx_index_store(start_block - 1, Some(append_store))?;
+            .rollback_to_block_with_history_store(start_block - 1, Some(append_store))?;
 
         info!(
             "Batch cleanup complete for blocks {} to {}",

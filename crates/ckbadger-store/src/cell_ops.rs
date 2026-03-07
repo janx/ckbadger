@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::batch::StoreBatch;
 use crate::keys;
 use crate::store::{CkbadgerStore, CF_CELL_INDEX, CF_CELL_PAYLOADS, CF_CELL_STATE};
 use crate::types::{
@@ -80,6 +81,25 @@ impl CkbadgerStore {
             has_state,
             has_payloads,
             has_index
+        );
+    }
+
+    fn ensure_code_hash_backfill_layout(
+        &self,
+        state_store: &CkbadgerStore,
+        context: &str,
+    ) -> anyhow::Result<()> {
+        let history_has_payloads = self.has_cf(CF_CELL_PAYLOADS);
+        let history_has_index = self.has_cf(CF_CELL_INDEX);
+        let state_has_cell_state = state_store.has_cf(CF_CELL_STATE);
+        if history_has_payloads && history_has_index && state_has_cell_state {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "{context} requires history_store with cell_payloads+cell_index and state_store with cell_state: history_has_cell_payloads={}, history_has_cell_index={}, state_has_cell_state={}",
+            history_has_payloads,
+            history_has_index,
+            state_has_cell_state
         );
     }
 
@@ -278,15 +298,6 @@ impl CkbadgerStore {
                     bytes_to_hex(&state.payload_key)
                 )
             })
-    }
-
-    pub(crate) fn get_cell_payload_for_state(
-        &self,
-        outpoint_key: &[u8],
-        state: &CellState,
-        context: &str,
-    ) -> anyhow::Result<LiveCellInfo> {
-        self.get_cell_payload_for_state_with_store(self, outpoint_key, state, context)
     }
 
     pub fn get_cell_by_outpoint_key_with_payload_store(
@@ -781,75 +792,90 @@ impl CkbadgerStore {
         count
     }
 
-    /// Backfill lock/type-code entries into the unified cell_index from canonical live state.
-    /// Returns the number of index entries written.
-    pub fn backfill_code_hash_indexes(&self) -> anyhow::Result<u64> {
+    /// Backfill lock/type-code entries into the history store's cell_index from canonical live
+    /// state stored in `state_store`. Returns the number of live cells scanned/written.
+    pub fn backfill_code_hash_indexes_from_state_store(
+        &self,
+        state_store: &CkbadgerStore,
+    ) -> anyhow::Result<u64> {
+        self.ensure_code_hash_backfill_layout(
+            state_store,
+            "backfill_code_hash_indexes_from_state_store",
+        )?;
         let mut count = 0u64;
-        let mut batch = rocksdb::WriteBatch::default();
+        let mut batch = StoreBatch::new(self);
         let batch_size = 10_000;
 
-        let iter = self.iterator_cf(self.cf_cell_state(), rocksdb::IteratorMode::Start);
+        let iter =
+            state_store.iterator_cf(state_store.cf_cell_state(), rocksdb::IteratorMode::Start);
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate cell_state in backfill_code_hash_indexes: {}",
+                    "failed to iterate cell_state in backfill_code_hash_indexes_from_state_store: {}",
                     e
                 )
             })?;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                let state = decode_cell_state(&key, &value, "backfill_code_hash_indexes")?;
+                let state =
+                    decode_cell_state(&key, &value, "backfill_code_hash_indexes_from_state_store")?;
                 if !state.is_live() {
                     continue;
                 }
-                let info =
-                    self.get_cell_payload_for_state(&key, &state, "backfill_code_hash_indexes")?;
+                let info = state_store.get_cell_payload_for_state_with_store(
+                    self,
+                    &key,
+                    &state,
+                    "backfill_code_hash_indexes_from_state_store",
+                )?;
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
 
-                let idx_key = keys::encode_cell_index_entry_key(
-                    CellIndexTag::LockCode,
+                batch.put_cell_by_lock_code(
                     &info.lock_code_hash,
                     info.created_at_block,
                     &tx_hash,
                     output_index,
                 );
-                batch.put_cf(self.cf_cell_index(), idx_key, []);
 
                 if let Some(ref type_code_hash) = info.type_code_hash {
-                    let idx_key = keys::encode_cell_index_entry_key(
-                        CellIndexTag::TypeCode,
+                    batch.put_cell_by_type_code(
                         type_code_hash,
                         info.created_at_block,
                         &tx_hash,
                         output_index,
                     );
-                    batch.put_cf(self.cf_cell_index(), idx_key, []);
                 }
 
                 count += 1;
                 #[allow(clippy::manual_is_multiple_of)]
                 if count % batch_size as u64 == 0 {
-                    self.write_batch(std::mem::take(&mut batch))?;
-                    batch = rocksdb::WriteBatch::default();
+                    batch.commit()?;
+                    batch = StoreBatch::new(self);
                 }
             }
         }
 
         if !batch.is_empty() {
-            self.write_batch(batch)?;
+            batch.commit()?;
         }
 
         Ok(count)
     }
 
+    /// Backfill lock/type-code entries into the unified cell_index from canonical live state.
+    /// Returns the number of live cells scanned/written.
+    pub fn backfill_code_hash_indexes(&self) -> anyhow::Result<u64> {
+        self.backfill_code_hash_indexes_from_state_store(self)
+    }
+
     /// Check if the code_hash indexes have been populated.
     pub fn code_hash_indexes_populated(&self) -> bool {
-        let prefix = keys::encode_cell_index_prefix(CellIndexTag::LockCode, &[0u8; 32]);
+        let tag = [CellIndexTag::LockCode.as_byte()];
         let mut iter = self.iterator_cf(
             self.cf_cell_index(),
-            rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
+            rocksdb::IteratorMode::From(&tag, rocksdb::Direction::Forward),
         );
         match iter.next() {
-            Some(Ok((key, _))) => key.starts_with(&prefix),
+            Some(Ok((key, _))) => key.first() == Some(&CellIndexTag::LockCode.as_byte()),
             Some(Err(e)) => panic!(
                 "failed to iterate unified cell_index in code_hash_indexes_populated: {}",
                 e
@@ -861,6 +887,15 @@ impl CkbadgerStore {
     /// Aggregate cell stats for a token (by type script hash).
     /// Prefix-scans unified cell_index and loads only canonical live cells.
     pub fn aggregate_token_cell_stats(&self, type_hash: &[u8]) -> anyhow::Result<TokenCellStats> {
+        self.ensure_unified_cell_history_layout("aggregate_token_cell_stats")?;
+        self.aggregate_token_cell_stats_with_history_store(self, type_hash)
+    }
+
+    pub fn aggregate_token_cell_stats_with_history_store(
+        &self,
+        history_store: &CkbadgerStore,
+        type_hash: &[u8],
+    ) -> anyhow::Result<TokenCellStats> {
         let mut stats = TokenCellStats {
             cells_count: 0,
             total_capacity: 0,
@@ -868,8 +903,8 @@ impl CkbadgerStore {
         };
 
         let prefix = keys::encode_cell_index_prefix(CellIndexTag::Type, type_hash);
-        let iter = self.iterator_cf(
-            self.cf_cell_index(),
+        let iter = history_store.iterator_cf(
+            history_store.cf_cell_index(),
             rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
         );
 
@@ -884,10 +919,10 @@ impl CkbadgerStore {
                 break;
             }
             if let Some((_, _, cell)) = self.live_cell_for_index_key(
-                self,
+                history_store,
                 &key,
                 CellIndexTag::Type,
-                "aggregate_token_cell_stats",
+                "aggregate_token_cell_stats_with_history_store",
             )? {
                 stats.cells_count += 1;
                 stats.total_capacity += cell.capacity as i128;
@@ -1013,6 +1048,32 @@ mod tests {
         let stats_b = store.aggregate_token_cell_stats(&type_b).unwrap();
         assert_eq!(stats_b.cells_count, 1);
         assert_eq!(stats_b.total_capacity, 500_00000000);
+    }
+
+    #[test]
+    fn test_aggregate_token_cell_stats_with_history_store_reads_split_layout() {
+        let root = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let type_hash = [0x05u8; 32];
+        let tx_hash = [0x77u8; 32];
+        let cell = make_cell(250_00000000, 72_00000000, &type_hash);
+
+        let mut domain_batch = crate::batch::StoreBatch::new(&domain);
+        domain_batch.put_cell(&tx_hash, 0, &cell);
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = crate::batch::StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, 0, &cell);
+        append_batch.put_cell_by_type(&type_hash, cell.created_at_block, &tx_hash, 0);
+        append_batch.commit().unwrap();
+
+        let stats = domain
+            .aggregate_token_cell_stats_with_history_store(&append, &type_hash)
+            .unwrap();
+        assert_eq!(stats.cells_count, 1);
+        assert_eq!(stats.total_capacity, 250_00000000);
+        assert_eq!(stats.total_occupied_capacity, 72_00000000);
     }
 
     #[test]

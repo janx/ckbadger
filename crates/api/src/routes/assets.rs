@@ -23,6 +23,7 @@ use crate::AppState;
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
+type LiveOutpointMap = HashMap<Vec<u8>, (Vec<u8>, i16)>;
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -774,7 +775,7 @@ fn decode_nft_collection_holders_cursor(
     Ok((count, lock_hash))
 }
 
-fn normalize_nft_activity_action_filter(
+fn normalize_nft_item_activity_action_filter(
     raw: Option<&str>,
 ) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
     let Some(raw_value) = raw else {
@@ -787,7 +788,27 @@ fn normalize_nft_activity_action_filter(
     match normalized.as_str() {
         "mint" | "transfer" | "burn" => Ok(Some(normalized)),
         _ => Err(ApiError::bad_request(
-            "Invalid nft activity action filter. Expected one of: mint, transfer, burn",
+            "Invalid nft item activity action filter. Expected one of: mint, transfer, burn",
+        )),
+    }
+}
+
+fn normalize_nft_collection_activity_action_filter(
+    raw: Option<&str>,
+) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
+    let Some(raw_value) = raw else {
+        return Ok(None);
+    };
+    let normalized = raw_value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    match normalized.as_str() {
+        "mint" | "transfer" | "burn" | "recycle" | "renew" | "update" => {
+            Ok(Some(normalized))
+        }
+        _ => Err(ApiError::bad_request(
+            "Invalid nft activity action filter. Expected one of: mint, transfer, burn, recycle, renew, update",
         )),
     }
 }
@@ -1257,10 +1278,11 @@ async fn get_nft_item_detail(
     };
 
     let live_outpoint = if entry.is_live {
-        let map = state
-            .store
-            .get_live_mnft_token_outpoints_by_token_ids(std::slice::from_ref(&nft_id_bytes))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let map = resolve_live_mnft_outpoints(
+            state.store.as_ref(),
+            state.append_only_store.as_ref(),
+            std::slice::from_ref(&nft_id_bytes),
+        )?;
         let (tx_hash, output_index) = map.get(&nft_id_bytes).ok_or_else(|| {
             ApiError::internal(format!(
                 "live mNFT token missing outpoint index: nft_id=0x{}",
@@ -1524,7 +1546,7 @@ async fn list_mnft_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_nft_item_activity_action_filter(params.action.as_deref())?;
     let nft_id_bytes = decode_nft_item_id(&nft_id)?;
     let entry = state
         .store
@@ -1562,7 +1584,7 @@ async fn list_dotbit_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_nft_item_activity_action_filter(params.action.as_deref())?;
     let nft_id_bytes = decode_nft_item_id(&nft_id)?;
     let entry = state
         .store
@@ -1595,7 +1617,7 @@ async fn list_did_ckb_item_activities(
     Query(params): Query<MnftItemActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
-    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_nft_item_activity_action_filter(params.action.as_deref())?;
     let nft_id_bytes = decode_nft_item_id(&nft_id)?;
     let entry = state
         .store
@@ -1765,6 +1787,26 @@ fn fetch_nft_collection_entries_by_ids(
     }
 
     Ok(out)
+}
+
+fn resolve_live_dotbit_outpoints(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    account_ids: &[Vec<u8>],
+) -> Result<LiveOutpointMap, ApiRouteError> {
+    store
+        .get_live_dotbit_outpoints_by_account_ids_with_payload_store(append_only_store, account_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))
+}
+
+fn resolve_live_mnft_outpoints(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    token_ids: &[Vec<u8>],
+) -> Result<LiveOutpointMap, ApiRouteError> {
+    store
+        .get_live_mnft_token_outpoints_by_token_ids_with_payload_store(append_only_store, token_ids)
+        .map_err(|e| ApiError::internal(e.to_string()))
 }
 
 async fn list_nft_collection_items(
@@ -1999,14 +2041,16 @@ async fn list_nft_collection_items(
                 .then_some(nft_id.clone())
         })
         .collect();
-    let dotbit_live_outpoints = state
-        .store
-        .get_live_dotbit_outpoints_by_account_ids(&dotbit_live_account_ids)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mnft_live_outpoints = state
-        .store
-        .get_live_mnft_token_outpoints_by_token_ids(&mnft_live_token_ids)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let dotbit_live_outpoints = resolve_live_dotbit_outpoints(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &dotbit_live_account_ids,
+    )?;
+    let mnft_live_outpoints = resolve_live_mnft_outpoints(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &mnft_live_token_ids,
+    )?;
 
     let mut rows = Vec::with_capacity(page_items.len());
     for (nft_id, entry) in &page_items {
@@ -2259,7 +2303,7 @@ async fn list_nft_collection_activities(
         .as_deref()
         .map(decode_activity_cursor)
         .transpose()?;
-    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_nft_collection_activity_action_filter(params.action.as_deref())?;
 
     // Validate collection exists
     let _agg = state
@@ -2350,10 +2394,11 @@ async fn get_dotbit_item_detail(
     };
 
     let (tx_hash, output_index) = if entry.is_live {
-        let outpoint_map = state
-            .store
-            .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&nft_id_bytes))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let outpoint_map = resolve_live_dotbit_outpoints(
+            state.store.as_ref(),
+            state.append_only_store.as_ref(),
+            std::slice::from_ref(&nft_id_bytes),
+        )?;
         let (tx_hash, output_index) = outpoint_map.get(&nft_id_bytes).ok_or_else(|| {
             ApiError::internal(format!(
                 "live dotbit account missing outpoint index: nft_id=0x{}",
@@ -2494,7 +2539,10 @@ async fn get_nft_collection_occupation_chart(
 mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{AssetAction, TxIndexEntry};
+    use ckbadger_store::types::{
+        AssetAction, LiveCellInfo, NftCollectionAggregate, NftEntry, NftExtra, NftStandard,
+        TxIndexEntry,
+    };
 
     fn make_collection_activity(
         tx_hash: &[u8],
@@ -2680,5 +2728,130 @@ mod tests {
                 .1,
             2
         );
+    }
+
+    fn make_live_nft_cell(type_args: Vec<u8>) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 100_00000000,
+            created_at_block: 10,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: Some(vec![0x33; 32]),
+            type_code_hash: Some(vec![0x44; 32]),
+            type_args: Some(type_args),
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_live_dotbit_outpoints_reads_split_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let collection_id = [0xD1; 32];
+        let account_id = vec![0x61; 20];
+        let live_tx = vec![0x71; 32];
+        let live_idx = 3i16;
+        let entry = NftEntry {
+            standard: NftStandard::DotBit,
+            collection_id: Some(collection_id.to_vec()),
+            token_id: Some(account_id.clone()),
+            owner_lock_hash: Some(vec![0x55; 32]),
+            name: Some("alice.bit".to_string()),
+            is_live: true,
+            created_at_block: 10,
+            extra: NftExtra::DotBit {
+                expired_at: None,
+                registered_at: None,
+                status: Some(0),
+            },
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_nft_collection_aggregate(
+            &collection_id,
+            &NftCollectionAggregate {
+                name: Some(".bit".to_string()),
+                standard: NftStandard::DotBit,
+                total_count: 1,
+                live_count: 1,
+                holders_count: 1,
+                activities_count: 0,
+            },
+        );
+        domain_batch.put_nft(&account_id, &entry);
+        domain_batch.put_nft_by_collection(&collection_id, &account_id);
+        domain_batch.put_dotbit_account_outpoint(&live_tx, live_idx, &account_id);
+        domain_batch.put_cell(&live_tx, live_idx, &make_live_nft_cell(account_id.clone()));
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&live_tx, live_idx, &make_live_nft_cell(account_id.clone()));
+        append_batch.commit().unwrap();
+
+        let outpoints =
+            resolve_live_dotbit_outpoints(&domain, &append, std::slice::from_ref(&account_id))
+                .unwrap();
+        let (tx_hash, output_index) = outpoints.get(&account_id).unwrap();
+        assert_eq!(tx_hash, &live_tx);
+        assert_eq!(*output_index, live_idx);
+    }
+
+    #[test]
+    fn test_resolve_live_mnft_outpoints_reads_split_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let collection_id = [0xE1; 32];
+        let token_id = vec![0x81; 28];
+        let live_tx = vec![0x91; 32];
+        let live_idx = 4i16;
+        let entry = NftEntry {
+            standard: NftStandard::MnftToken,
+            collection_id: Some(collection_id.to_vec()),
+            token_id: Some(token_id.clone()),
+            owner_lock_hash: Some(vec![0x66; 32]),
+            name: Some("mnft".to_string()),
+            is_live: true,
+            created_at_block: 10,
+            extra: NftExtra::MnftToken {
+                token_index: 1,
+                characteristic: vec![],
+                configure: 0,
+                state: 0,
+            },
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_nft_collection_aggregate(
+            &collection_id,
+            &NftCollectionAggregate {
+                name: Some("class".to_string()),
+                standard: NftStandard::MnftClass,
+                total_count: 1,
+                live_count: 1,
+                holders_count: 1,
+                activities_count: 0,
+            },
+        );
+        domain_batch.put_nft(&token_id, &entry);
+        domain_batch.put_nft_by_collection(&collection_id, &token_id);
+        domain_batch.put_mnft_token_outpoint(&live_tx, live_idx, &token_id);
+        domain_batch.put_cell(&live_tx, live_idx, &make_live_nft_cell(token_id.clone()));
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&live_tx, live_idx, &make_live_nft_cell(token_id.clone()));
+        append_batch.commit().unwrap();
+
+        let outpoints =
+            resolve_live_mnft_outpoints(&domain, &append, std::slice::from_ref(&token_id)).unwrap();
+        let (tx_hash, output_index) = outpoints.get(&token_id).unwrap();
+        assert_eq!(tx_hash, &live_tx);
+        assert_eq!(*output_index, live_idx);
     }
 }

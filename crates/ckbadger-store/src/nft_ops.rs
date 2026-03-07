@@ -1,7 +1,7 @@
 //! Generic NFT operations (cross-standard infrastructure).
 
 use crate::keys;
-use crate::store::CkbadgerStore;
+use crate::store::{CkbadgerStore, CF_NFT_COLLECTION_ACTIVITIES};
 use crate::types::{
     AssetAction, NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta, NftEntry,
     NftTypeIndex,
@@ -367,6 +367,10 @@ impl CkbadgerStore {
         if limit == 0 {
             return Ok(Vec::new());
         }
+        assert!(
+            self.has_cf(CF_NFT_COLLECTION_ACTIVITIES),
+            "list_nft_collection_activities requires append-only activity store"
+        );
 
         let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
         let start_key = if let Some((cursor_block, cursor_tx_idx)) = cursor {
@@ -439,6 +443,10 @@ impl CkbadgerStore {
 
     /// Count total activities for a collection (prefix scan, no deserialization).
     pub fn count_nft_collection_activities(&self, collection_id: &[u8]) -> anyhow::Result<i64> {
+        assert!(
+            self.has_cf(CF_NFT_COLLECTION_ACTIVITIES),
+            "count_nft_collection_activities requires append-only activity store"
+        );
         let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
         let iter = self.iterator_cf(
             self.cf_nft_collection_activities(),
@@ -991,5 +999,23 @@ mod tests {
             store.count_nft_collection_activities(&cid_empty).unwrap(),
             0
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "list_nft_collection_activities requires append-only activity store")]
+    fn test_list_nft_collection_activities_panics_with_explicit_store_boundary_message() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let _ = store.list_nft_collection_activities(&[0x10; 32], 10, None, None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "count_nft_collection_activities requires append-only activity store"
+    )]
+    fn test_count_nft_collection_activities_panics_with_explicit_store_boundary_message() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let _ = store.count_nft_collection_activities(&[0x10; 32]);
     }
 }

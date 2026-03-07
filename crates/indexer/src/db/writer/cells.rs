@@ -273,7 +273,11 @@ impl BatchWriter {
             if result.contains_key(&key) {
                 continue;
             }
-            if let Some(info) = self.store.get_consumed_cell_info(tx_hash, *output_index)? {
+            if let Some(info) = self.store.get_consumed_cell_info_with_payload_store(
+                self.cell_payload_store.as_ref(),
+                tx_hash,
+                *output_index,
+            )? {
                 result.insert(
                     key,
                     (
@@ -684,5 +688,54 @@ mod tests {
             "expected consumed batch lookup error context, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_get_cells_info_batch_reads_consumed_cells_from_split_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new_with_cell_payload_store(domain.clone(), append.clone());
+
+        let tx_hash = vec![0xAD; 32];
+        let output_index = 1i16;
+        let cell = LiveCellInfo {
+            capacity: 123_00000000,
+            created_at_block: 55,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 8,
+            occupied_capacity: 102_00000000,
+            udt_amount: None,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_consumed_cell_with_consumer(
+            &tx_hash,
+            output_index,
+            &cell,
+            60,
+            Some(&[0x44; 32]),
+        );
+        domain_batch.commit().unwrap();
+
+        let mut append_batch = StoreBatch::new(&append);
+        append_batch.put_cell(&tx_hash, output_index, &cell);
+        append_batch.commit().unwrap();
+
+        let outpoints = vec![(tx_hash.as_slice(), output_index)];
+        let info = writer.get_cells_info_batch(&outpoints, false).unwrap();
+        let row = info
+            .get(&(tx_hash.clone(), output_index))
+            .expect("consumed split-layout cell should be returned");
+        assert_eq!(row.0, cell.capacity);
+        assert_eq!(row.1, cell.created_at_block);
+        assert_eq!(row.2, cell.lock_script_hash);
+        assert_eq!(row.3, cell.data_size);
     }
 }
