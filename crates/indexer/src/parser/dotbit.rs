@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
+use super::cell::ParsedCell;
 use super::script::ScriptParser;
 
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
@@ -31,6 +32,19 @@ pub struct ParsedDotbitAccount {
 pub struct ParsedDotbitAccountOutput {
     pub output_index: i16,
     pub account: ParsedDotbitAccount,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DotbitWitnessBundle {
+    pub(crate) action: Option<String>,
+    pub(crate) accounts: HashMap<Vec<u8>, DotbitWitnessAccountData>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DotbitWitnessAccountData {
+    pub(crate) name: Option<String>,
+    pub(crate) registered_at: Option<u64>,
+    pub(crate) status: Option<u8>,
 }
 
 pub struct DotbitParser;
@@ -108,32 +122,78 @@ impl DotbitParser {
         })
     }
 
+    pub fn parse_account_parsed_cell(cell: &ParsedCell) -> Option<ParsedDotbitAccount> {
+        let type_code_hash = cell.type_code_hash.as_ref()?;
+
+        if !Self::is_account_cell_type_script(type_code_hash) {
+            return None;
+        }
+
+        let data = &cell.data;
+
+        let min_len = HASH_BYTES_LEN + ACCOUNT_ID_LEN;
+        if data.len() < min_len {
+            return None;
+        }
+
+        let account_id_from_args = cell
+            .type_args
+            .as_ref()
+            .expect("dotbit parsed cell missing type_args");
+        let account_id_from_data = data[HASH_BYTES_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN].to_vec();
+
+        let account_id = if account_id_from_args.len() == ACCOUNT_ID_LEN
+            && !account_id_from_args.iter().all(|&b| b == 0)
+        {
+            account_id_from_args.clone()
+        } else if !account_id_from_data.iter().all(|&b| b == 0) {
+            account_id_from_data
+        } else {
+            return None;
+        };
+
+        let next_account_id = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 {
+            let next_id =
+                data[HASH_BYTES_LEN + ACCOUNT_ID_LEN..HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2].to_vec();
+            if next_id.iter().all(|&b| b == 0) {
+                None
+            } else {
+                Some(next_id)
+            }
+        } else {
+            None
+        };
+
+        let expired_at = if data.len() >= HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2 + 8 {
+            let offset = HASH_BYTES_LEN + ACCOUNT_ID_LEN * 2;
+            let bytes: [u8; 8] = data[offset..offset + 8].try_into().ok()?;
+            Some(u64::from_le_bytes(bytes))
+        } else {
+            None
+        };
+
+        Some(ParsedDotbitAccount {
+            account_id,
+            account: None,
+            type_script_hash: cell
+                .type_script_hash
+                .clone()
+                .expect("dotbit parsed cell missing type_script_hash"),
+            next_account_id,
+            expired_at,
+            registered_at: None,
+            status: None,
+            owner_lock_hash: cell.lock_script_hash.clone(),
+        })
+    }
+
     /// Extract the .bit action name from the transaction's ActionData witness.
     ///
     /// Layout: witness bytes = "das"(3) + ActionDataType(4) + ActionData(molecule table)
     /// ActionDataType 0x00000000 = ActionData witness
     /// ActionData molecule table: field[0] = Action (Bytes), field[1] = Params (Bytes)
     pub fn parse_das_action(witnesses: &[String]) -> Option<String> {
-        for witness in witnesses {
-            let bytes = parse_hex_to_bytes(witness);
-            if bytes.len() <= DAS_WITNESS_HEADER_LEN {
-                continue;
-            }
-            if &bytes[..3] != b"das" {
-                continue;
-            }
-            if bytes[3..7] != DAS_ACTION_DATA_TYPE {
-                continue;
-            }
-
-            // Remaining bytes are ActionData molecule table with 2 fields:
-            // field[0] = Action (Bytes), field[1] = Params (Bytes)
-            let fields = parse_molecule_table_fields(&bytes[7..], 2)?;
-            let action_bytes = parse_molecule_bytes(fields[0])?;
-            let action = std::str::from_utf8(action_bytes).ok()?;
-            return Some(action.to_string());
-        }
-        None
+        parse_dotbit_witness_bundle(witnesses).action
     }
 
     pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccountOutput>> {
@@ -145,7 +205,7 @@ impl DotbitParser {
                 tx.outputs_data.len()
             ));
         }
-        let witness_data = parse_account_data_from_witnesses(&tx.witnesses);
+        let witness_bundle = parse_dotbit_witness_bundle(&tx.witnesses);
         let mut accounts = Vec::new();
         let mut missing_name_count = 0usize;
         let mut missing_name_samples: Vec<String> = Vec::new();
@@ -164,7 +224,7 @@ impl DotbitParser {
                     output_index
                 )
             })?;
-            if let Some(wd) = witness_data.get(&account.account_id) {
+            if let Some(wd) = witness_bundle.accounts.get(&account.account_id) {
                 account.account = wd.name.clone();
                 account.registered_at = wd.registered_at;
                 account.status = wd.status;
@@ -194,15 +254,8 @@ impl DotbitParser {
     }
 }
 
-/// Witness-extracted data for a single .bit account.
-struct WitnessAccountData {
-    name: Option<String>,
-    registered_at: Option<u64>,
-    status: Option<u8>,
-}
-
-fn parse_account_data_from_witnesses(witnesses: &[String]) -> HashMap<Vec<u8>, WitnessAccountData> {
-    let mut result = HashMap::new();
+pub(crate) fn parse_dotbit_witness_bundle(witnesses: &[String]) -> DotbitWitnessBundle {
+    let mut bundle = DotbitWitnessBundle::default();
 
     for witness in witnesses {
         let witness_bytes = parse_hex_to_bytes(witness);
@@ -212,43 +265,62 @@ fn parse_account_data_from_witnesses(witnesses: &[String]) -> HashMap<Vec<u8>, W
         if &witness_bytes[..3] != b"das" {
             continue;
         }
-        if witness_bytes[3..7] != DAS_ACCOUNT_CELL_ACTION_DATA_TYPE {
-            continue;
-        }
 
-        // `Data` molecule table: dep/old/new DataEntityOpt.
-        let Some(data_fields) = parse_molecule_table_fields(&witness_bytes[7..], 3) else {
-            continue;
-        };
-
-        for data_entity_opt in data_fields {
-            if data_entity_opt.is_empty() {
-                continue;
+        let action_data_type = &witness_bytes[3..7];
+        if action_data_type == DAS_ACTION_DATA_TYPE {
+            if bundle.action.is_none() {
+                bundle.action = parse_das_action_from_witness_bytes(&witness_bytes);
             }
-            // DataEntity table: index(Uint32), version(Uint32), entity(Bytes)
-            let Some(data_entity_fields) = parse_molecule_table_fields(data_entity_opt, 3) else {
-                continue;
-            };
-            if data_entity_fields[1].len() != 4 {
-                continue;
-            }
-            let Ok(version_bytes) = <[u8; 4]>::try_from(data_entity_fields[1]) else {
-                continue;
-            };
-            let version = u32::from_le_bytes(version_bytes);
-            let Some(entity) = parse_molecule_bytes(data_entity_fields[2]) else {
-                continue;
-            };
-            if let Some((account_id, data)) = parse_account_cell_entity(entity, version) {
-                result.insert(account_id, data);
-            }
+        } else if action_data_type == DAS_ACCOUNT_CELL_ACTION_DATA_TYPE {
+            parse_account_data_from_witness_bytes(&witness_bytes, &mut bundle.accounts);
         }
     }
 
-    result
+    bundle
 }
 
-fn parse_account_cell_entity(entity: &[u8], version: u32) -> Option<(Vec<u8>, WitnessAccountData)> {
+fn parse_das_action_from_witness_bytes(witness_bytes: &[u8]) -> Option<String> {
+    let fields = parse_molecule_table_fields(&witness_bytes[7..], 2)?;
+    let action_bytes = parse_molecule_bytes(fields[0])?;
+    let action = std::str::from_utf8(action_bytes).ok()?;
+    Some(action.to_string())
+}
+
+fn parse_account_data_from_witness_bytes(
+    witness_bytes: &[u8],
+    accounts: &mut HashMap<Vec<u8>, DotbitWitnessAccountData>,
+) {
+    let Some(data_fields) = parse_molecule_table_fields(&witness_bytes[7..], 3) else {
+        return;
+    };
+
+    for data_entity_opt in data_fields {
+        if data_entity_opt.is_empty() {
+            continue;
+        }
+        let Some(data_entity_fields) = parse_molecule_table_fields(data_entity_opt, 3) else {
+            continue;
+        };
+        if data_entity_fields[1].len() != 4 {
+            continue;
+        }
+        let Ok(version_bytes) = <[u8; 4]>::try_from(data_entity_fields[1]) else {
+            continue;
+        };
+        let version = u32::from_le_bytes(version_bytes);
+        let Some(entity) = parse_molecule_bytes(data_entity_fields[2]) else {
+            continue;
+        };
+        if let Some((account_id, data)) = parse_account_cell_entity(entity, version) {
+            accounts.insert(account_id, data);
+        }
+    }
+}
+
+fn parse_account_cell_entity(
+    entity: &[u8],
+    version: u32,
+) -> Option<(Vec<u8>, DotbitWitnessAccountData)> {
     let min_field_count = match version {
         1 => 6,
         2 => 8,
@@ -286,7 +358,7 @@ fn parse_account_cell_entity(entity: &[u8], version: u32) -> Option<(Vec<u8>, Wi
 
     Some((
         account_id,
-        WitnessAccountData {
+        DotbitWitnessAccountData {
             name,
             registered_at,
             status,
@@ -802,6 +874,35 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_account_parsed_cell_matches_raw_path() {
+        let account_id = [0x19u8; 20];
+        let output = CellOutput {
+            capacity: "0x174876e800".to_string(),
+            lock: create_lock_script(),
+            type_: Some(create_account_cell_type_script_with_args(&account_id)),
+        };
+        let data_hex = format!(
+            "0x{}",
+            hex::encode(create_account_cell_data(
+                &account_id,
+                None,
+                Some(1735689600)
+            ))
+        );
+        let parsed_cell =
+            crate::parser::cell::CellParser::parse_output(&output, &data_hex).expect("parsed cell");
+
+        let raw = DotbitParser::parse_account_cell(&output, &data_hex).expect("raw");
+        let preparsed = DotbitParser::parse_account_parsed_cell(&parsed_cell).expect("preparsed");
+
+        assert_eq!(preparsed.account_id, raw.account_id);
+        assert_eq!(preparsed.type_script_hash, raw.type_script_hash);
+        assert_eq!(preparsed.next_account_id, raw.next_account_id);
+        assert_eq!(preparsed.expired_at, raw.expired_at);
+        assert_eq!(preparsed.owner_lock_hash, raw.owner_lock_hash);
+    }
+
+    #[test]
     fn test_parse_accounts_fails_when_witness_name_missing() {
         let account_id = [0x22u8; 20];
         let tx = create_dotbit_tx(&account_id, false);
@@ -903,15 +1004,40 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_account_data_from_witnesses_supports_v2_bytes_fixvec() {
+    fn test_parse_dotbit_witness_bundle_supports_v2_bytes_fixvec() {
         let account_id = [0x55u8; 20];
         let witness = encode_dotbit_account_cell_witness_v2(&account_id, "smartest.bit");
-        let result = parse_account_data_from_witnesses(&[witness]);
+        let result = parse_dotbit_witness_bundle(&[witness]);
 
         let data = result
+            .accounts
             .get(account_id.as_slice())
             .expect("should find account");
         assert_eq!(data.name.as_deref(), Some("smartest.bit"));
+    }
+
+    #[test]
+    fn test_parse_dotbit_witness_bundle_extracts_account_data_and_action_once() {
+        let account_id = [0x77u8; 20];
+        let account_witness = encode_dotbit_account_cell_witness(&account_id, "alice.bit");
+        let action_witness = encode_das_action_witness("transfer_account");
+
+        let bundle = parse_dotbit_witness_bundle(&[account_witness, action_witness]);
+
+        assert_eq!(bundle.action.as_deref(), Some("transfer_account"));
+        let account = bundle
+            .accounts
+            .get(account_id.as_slice())
+            .expect("account bundle entry");
+        assert_eq!(account.name.as_deref(), Some("alice.bit"));
+    }
+
+    #[test]
+    fn test_parse_dotbit_witness_bundle_handles_non_das_witnesses() {
+        let bundle = parse_dotbit_witness_bundle(&["0xaabbccdd".to_string()]);
+
+        assert!(bundle.action.is_none());
+        assert!(bundle.accounts.is_empty());
     }
 
     // ---- parse_das_action tests ----

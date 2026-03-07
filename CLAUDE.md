@@ -42,7 +42,7 @@ For any non-trivial task, use this structure in the final summary or PR descript
 
 ## Result
 
-- Behavior change summary / Re-sync required: yes/no / Next items on plan (if any) / What to do next suggestions (think deep think broad, if plan completed)
+- Behavior change summary / Re-sync required: yes/no / What to do next
 ```
 
 **Principle Sync Rule**: If principle wording changes, update both `README.md` and `CLAUDE.md` in the same commit.
