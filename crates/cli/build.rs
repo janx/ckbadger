@@ -1,3 +1,6 @@
+#[path = "src/build_version_format.rs"]
+mod build_version_format;
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -8,17 +11,22 @@ fn main() {
     let manifest_dir =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"));
     let semver = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION is not set");
+    let branch_name = git_stdout(&manifest_dir, &["branch", "--show-current"]);
     let commit_hash = git_stdout(&manifest_dir, &["rev-parse", "--short=12", "HEAD"]);
 
+    assert!(
+        !branch_name.is_empty(),
+        "git branch --show-current returned an empty branch name"
+    );
     assert!(
         !commit_hash.is_empty(),
         "git rev-parse --short HEAD returned an empty commit hash"
     );
 
-    println!(
-        "cargo:rustc-env=CKBADGER_BUILD_VERSION={}+{}",
-        semver, commit_hash
-    );
+    let build_version =
+        build_version_format::format_build_version(&semver, &branch_name, &commit_hash);
+
+    println!("cargo:rustc-env=CKBADGER_BUILD_VERSION={}", build_version);
 
     emit_git_rerun_hints(&manifest_dir);
 }

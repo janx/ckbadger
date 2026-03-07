@@ -1,8 +1,14 @@
 import { render, screen } from '../utils/test-utils';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { SiteFooter } from '@/components/layout/site-footer';
 
 describe('SiteFooter', () => {
+  beforeEach(() => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      buildVersion: '0.1.0+feature/foo@abcdef123456',
+    };
+  });
+
   it('shows curated quick links, shortcut hint, and attribution', () => {
     render(<SiteFooter />);
 
@@ -33,5 +39,6 @@ describe('SiteFooter', () => {
     const profileLink = screen.getByRole('link', { name: '@busyforking' });
     expect(profileLink).toHaveAttribute('href', 'https://x.com/busyforking');
     expect(profileLink.parentElement).toHaveTextContent('with agents Coco and Dede');
+    expect(screen.getByText('0.1.0+feature/foo@abcdef123456')).toBeInTheDocument();
   });
 });

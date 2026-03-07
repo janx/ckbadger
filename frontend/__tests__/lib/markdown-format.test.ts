@@ -27,6 +27,7 @@ describe('markdown-format helpers', () => {
         canonical: 'http://localhost:3000/blocks',
         pageType: 'blocks_list',
         generatedAt: '2026-01-01T00:00:00.000Z',
+        buildVersion: '0.1.0+feature/foo@abcdef123456',
       },
       ['# Header', '', 'body']
     );
@@ -34,6 +35,7 @@ describe('markdown-format helpers', () => {
     expect(output).toContain('title: "doc title"');
     expect(output).toContain('path: "/blocks"');
     expect(output).toContain('canonical: "http://localhost:3000/blocks"');
+    expect(output).toContain('buildVersion: "0.1.0+feature/foo@abcdef123456"');
     expect(output).toContain('formatVersion: 1');
     expect(output).toContain('# Header');
   });

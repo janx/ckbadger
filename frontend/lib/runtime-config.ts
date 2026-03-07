@@ -3,6 +3,7 @@ export interface CkbadgerRuntimeConfig {
   wsUrl?: string;
   ckbNetwork?: string;
   ckbRpcUrl?: string;
+  buildVersion?: string;
 }
 
 declare global {
@@ -15,6 +16,7 @@ export const DEFAULT_API_BASE = 'http://localhost:8101/api/v1';
 export const DEFAULT_WS_URL = 'ws://localhost:8101/ws';
 export const DEFAULT_CKB_NETWORK = 'mainnet';
 export const DEFAULT_CKB_RPC_URL = 'http://127.0.0.1:8114';
+export const DEFAULT_BUILD_VERSION = 'dev';
 
 function runtimeConfigFromWindow(): CkbadgerRuntimeConfig | undefined {
   if (typeof window === 'undefined') {
@@ -45,4 +47,11 @@ export function resolveCkbNetwork(config: CkbadgerRuntimeConfig = runtimeConfigF
 export function resolveCkbRpcUrl(config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}) {
   const configured = config.ckbRpcUrl?.trim();
   return configured && configured.length > 0 ? configured : DEFAULT_CKB_RPC_URL;
+}
+
+export function resolveBuildVersion(
+  config: CkbadgerRuntimeConfig = runtimeConfigFromWindow() ?? {}
+) {
+  const configured = config.buildVersion?.trim();
+  return configured && configured.length > 0 ? configured : DEFAULT_BUILD_VERSION;
 }

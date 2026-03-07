@@ -8,6 +8,7 @@ Markdown output convention:
 
 - Any page URL can be requested as markdown by appending `.md`.
 - Response content-type: `text/markdown`.
+- Markdown YAML frontmatter includes `buildVersion`.
 - Examples:
   - `/blocks.md`
   - `/blocks/123.md`
@@ -31,6 +32,7 @@ Raw output convention:
   - `/tx/{hash}.raw` (profiles: `default`, `debugger`)
 - `profile=debugger` includes `data.txDebugger.mockTransaction`, compatible with `ckb-debugger --tx-file`.
 - `/tx/{hash}.raw` includes `data.txWitness` with witness analyses, script-group lens, and inference.
+- Raw `meta` includes `buildVersion`.
 - Raw responses include headers: `x-ckbadger-format`, `x-ckbadger-profile`, `x-ckbadger-schema`.
 
 Known markdown page routes:

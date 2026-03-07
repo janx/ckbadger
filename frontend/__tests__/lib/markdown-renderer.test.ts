@@ -22,6 +22,9 @@ vi.mock('@/lib/api', () => ({
 describe('renderMarkdownPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      buildVersion: '0.1.0+feature/foo@abcdef123456',
+    };
   });
 
   it('renders blocks list markdown', async () => {
@@ -64,6 +67,7 @@ describe('renderMarkdownPage', () => {
     });
 
     expect(result.status).toBe(200);
+    expect(result.body).toContain('buildVersion: "0.1.0+feature/foo@abcdef123456"');
     expect(result.body).toContain('# Blocks');
     expect(result.body).toContain('| number | hash | txs | proposals | timestamp |');
     expect(result.body).toContain('| 123 |');

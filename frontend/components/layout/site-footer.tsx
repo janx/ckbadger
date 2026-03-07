@@ -1,8 +1,11 @@
 import Link from '@/components/ui/link';
+import { resolveBuildVersion } from '@/lib/runtime-config';
 
 const quickLinks = [{ href: '/hardforks', label: 'Hardforks' }];
 
 export function SiteFooter() {
+  const buildVersion = resolveBuildVersion();
+
   return (
     <footer className="border-t border-slate-800 bg-slate-950/95">
       <div className="container mx-auto px-4 py-1.5">
@@ -22,6 +25,10 @@ export function SiteFooter() {
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+              <div className="inline-flex items-center rounded border border-slate-700/80 bg-slate-900/75 px-2.5 py-1 text-[10px] text-slate-500">
+                {buildVersion}
+              </div>
+
               <div className="inline-flex items-center rounded border border-slate-700/80 bg-slate-900/75 px-2.5 py-1 text-[10px] text-slate-500">
                 Press ? for shortcuts
               </div>

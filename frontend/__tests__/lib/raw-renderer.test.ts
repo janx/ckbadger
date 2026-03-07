@@ -23,6 +23,9 @@ describe('renderRawPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      buildVersion: '0.1.0+feature/foo@abcdef123456',
+    };
   });
 
   it('renders tx raw with default profile', async () => {
@@ -65,6 +68,7 @@ describe('renderRawPage', () => {
     expect(result.body.meta.format).toBe('raw');
     expect(result.body.meta.profile).toBe('default');
     expect(result.body.meta.schemaVersion).toBe('1.1.0');
+    expect(result.body.meta.buildVersion).toBe('0.1.0+feature/foo@abcdef123456');
     expect(result.body.data?.transaction?.hash).toBe(`0x${'a'.repeat(64)}`);
     expect(result.body.data?.txWitness?.available).toBe(true);
     expect(result.body.data?.txWitness?.witnessesCount).toBe(1);

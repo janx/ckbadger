@@ -4,6 +4,7 @@ Frontend pages support two machine-oriented formats:
 
 - `md` for summary-style markdown
 - `raw` for structured automation payloads
+- Both carry `buildVersion` in structured metadata (`.md` frontmatter, `.raw` meta)
 
 ## Format Negotiation
 

@@ -1,5 +1,8 @@
 mod supervisor;
 
+#[cfg(test)]
+mod build_version_format;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -269,6 +272,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 api_port: config.api.port,
                 ckb_network: config.ckb.network.clone(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
+                build_version: BUILD_VERSION.to_string(),
                 frontend_dir,
             };
             run_frontend_server(frontend_config).await
@@ -674,18 +678,37 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_version_uses_semver_plus_short_commit_hash() {
+    fn test_format_build_version_omits_main_branch_label() {
+        assert_eq!(
+            build_version_format::format_build_version("0.1.0", "main", "abcdef123456"),
+            "0.1.0@abcdef123456"
+        );
+    }
+
+    #[test]
+    fn test_format_build_version_includes_non_main_branch_label_verbatim() {
+        assert_eq!(
+            build_version_format::format_build_version("0.1.0", "feature/foo", "abcdef123456"),
+            "0.1.0+feature/foo@abcdef123456"
+        );
+    }
+
+    #[test]
+    fn test_cli_version_uses_semver_optional_branch_and_commit_hash() {
         let cmd = Cli::command();
         let version = cmd.get_version().expect("cli version should be present");
-        let mut parts = version.split('+');
-        let semver = parts.next().expect("semver part should exist");
-        let hash = parts.next().expect("hash part should exist");
+        let (version_prefix, hash) = version
+            .rsplit_once('@')
+            .expect("version should contain a single '@'");
 
         assert!(
-            parts.next().is_none(),
-            "version should contain a single '+'"
+            !version.contains("+main@"),
+            "main branch should not be rendered explicitly: {version}"
         );
-        assert!(!semver.is_empty(), "semver part should not be empty");
+        assert!(
+            !version_prefix.is_empty(),
+            "version prefix should not be empty"
+        );
         assert!(hash.len() >= 7, "hash should use at least 7 hex chars");
         assert!(
             hash.chars().all(|c| c.is_ascii_hexdigit()),

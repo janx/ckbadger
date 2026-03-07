@@ -23,6 +23,7 @@ async fn frontend_server_falls_back_to_index_html_for_spa_route() {
         api_port: 8101,
         ckb_network: "mainnet".to_string(),
         ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+        build_version: "0.1.0+testbuild".to_string(),
         frontend_dir: Some(PathBuf::from(dir.path())),
     })
     .unwrap();
