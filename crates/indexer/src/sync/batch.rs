@@ -20,6 +20,7 @@ use ckbadger_store::types::{
 };
 use ckbadger_store::CkbadgerStore;
 
+use crate::bulk_sync_perf::BatchSample;
 use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
 use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
@@ -895,14 +896,22 @@ impl Indexer {
             self.progress
                 .record_batch(last_block_number, batch_block_count, batch_tx_count);
             let perf_stats = self.writer.store().memory_stats();
-            self.record_bulk_sync_perf_batch_sample(
-                batch_block_count,
-                db_elapsed.as_secs_f64(),
-                write_metrics.commit_ms,
-                perf_stats.compaction_pending_bytes / (1024 * 1024),
-                perf_stats.l0_files_count,
-                perf_stats.immutable_memtables,
-            );
+            self.record_bulk_sync_perf_batch_sample(BatchSample {
+                txs: write_metrics.txs,
+                cells: write_metrics.cells,
+                inputs: write_metrics.inputs,
+                write_ms: write_metrics.write_ms,
+                t1_ms: write_metrics.t1_ms,
+                t_act_ms: write_metrics.t_act_ms,
+                ..BatchSample::new(
+                    batch_block_count,
+                    db_elapsed.as_secs_f64(),
+                    write_metrics.commit_ms,
+                    perf_stats.compaction_pending_bytes / (1024 * 1024),
+                    perf_stats.l0_files_count,
+                    perf_stats.immutable_memtables,
+                )
+            });
 
             info!(
                 "Wrote blocks {} to {} ({} remaining, {:.2}s, commit={:.0}ms)",
@@ -2933,6 +2942,19 @@ impl Indexer {
         }
 
         let stats_ms = t_stats.elapsed().as_secs_f64() * 1000.0;
+        let batch_tx_count =
+            u64::try_from(all_tx_data.len()).expect("sequential batch tx count exceeds u64");
+        let batch_cell_count =
+            u64::try_from(all_tx_data.iter().map(|t| t.cells.len()).sum::<usize>())
+                .expect("sequential batch cell count exceeds u64");
+        let batch_input_count = u64::try_from(
+            all_tx_data
+                .iter()
+                .filter(|t| !t.is_cellbase)
+                .map(|t| t.inputs.len())
+                .sum::<usize>(),
+        )
+        .expect("sequential batch input count exceeds u64");
         debug!(
             headers_ms = format!("{:.1}", headers_ms),
             cells_ms = format!("{:.1}", cells_ms),
@@ -2941,7 +2963,13 @@ impl Indexer {
             "Batch write breakdown"
         );
 
-        Ok(BatchWriteMetrics { commit_ms })
+        Ok(BatchWriteMetrics {
+            commit_ms,
+            txs: batch_tx_count,
+            cells: batch_cell_count,
+            inputs: batch_input_count,
+            ..BatchWriteMetrics::default()
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -6180,7 +6208,7 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
+        let (t1_ms, t_act_ms) = if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
@@ -6200,6 +6228,7 @@ impl Indexer {
                 inputs = batch_input_count,
                 "Batch write breakdown"
             );
+            (t1, t_act)
         } else {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
@@ -6211,9 +6240,16 @@ impl Indexer {
                 inputs = batch_input_count,
                 "Batch write breakdown"
             );
-        }
+            (0.0, 0.0)
+        };
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
+            write_ms,
+            txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
+            cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
+            inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
+            t1_ms,
+            t_act_ms,
         })
     }
 

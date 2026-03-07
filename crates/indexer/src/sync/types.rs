@@ -131,6 +131,12 @@ pub(crate) struct TxData {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct BatchWriteMetrics {
     pub(crate) commit_ms: f64,
+    pub(crate) write_ms: f64,
+    pub(crate) txs: u64,
+    pub(crate) cells: u64,
+    pub(crate) inputs: u64,
+    pub(crate) t1_ms: f64,
+    pub(crate) t_act_ms: f64,
 }
 
 // ── Unresolved outpoint probe summaries ────────────────────────────────
