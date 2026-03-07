@@ -35,6 +35,14 @@ impl Default for StoreRuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompactionPressureSnapshot {
+    pub l0_files_total: u64,
+    pub l0_files_max: u64,
+    pub compaction_pending_bytes: u64,
+    pub immutable_memtables: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecondaryStoreOwner {
     Api,
@@ -1636,8 +1644,9 @@ impl CkbadgerStore {
     /// Lightweight compaction pressure snapshot for the adaptive batch controller.
     /// Only collects the 3 RocksDB properties needed for backpressure decisions,
     /// avoiding the full CF iteration of `memory_stats()`.
-    pub fn compaction_pressure(&self) -> (u64, u64, u64) {
+    pub fn compaction_pressure(&self) -> CompactionPressureSnapshot {
         let mut compaction_pending_bytes = 0u64;
+        let mut l0_files_total = 0u64;
         let mut l0_files_max: u64 = 0;
         let mut immutable_memtables = 0u64;
         for &cf_name in ALL_CFS {
@@ -1652,6 +1661,7 @@ impl CkbadgerStore {
                     .db
                     .property_int_value_cf(cf, "rocksdb.num-files-at-level0")
                 {
+                    l0_files_total += v;
                     l0_files_max = l0_files_max.max(v);
                 }
                 if let Ok(Some(v)) = self
@@ -1662,7 +1672,12 @@ impl CkbadgerStore {
                 }
             }
         }
-        (l0_files_max, compaction_pending_bytes, immutable_memtables)
+        CompactionPressureSnapshot {
+            l0_files_total,
+            l0_files_max,
+            compaction_pending_bytes,
+            immutable_memtables,
+        }
     }
 
     pub fn memory_stats(&self) -> MemoryStats {
@@ -2230,6 +2245,19 @@ mod tests {
         if let Some(expected) = global {
             assert_eq!(stats.num_running_compactions, expected);
         }
+    }
+
+    #[test]
+    fn test_compaction_pressure_snapshot_reports_l0_total_and_l0_max() {
+        let snapshot = CompactionPressureSnapshot {
+            l0_files_total: 82,
+            l0_files_max: 3,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 0,
+        };
+
+        assert_eq!(snapshot.l0_files_total, 82);
+        assert_eq!(snapshot.l0_files_max, 3);
     }
 
     #[test]

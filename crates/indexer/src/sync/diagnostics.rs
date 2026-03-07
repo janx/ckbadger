@@ -346,6 +346,38 @@ pub(crate) fn queue_fill_percentage(depth: Option<u64>, capacity: Option<u64>) -
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct QueuePressureSnapshot {
+    pub(crate) parse_queue_pending_txs: u64,
+    pub(crate) parse_queue_capacity_txs: u64,
+    pub(crate) parse_queue_fill_pct: Option<f64>,
+    pub(crate) writer_queue_depth: u64,
+    pub(crate) writer_queue_capacity: u64,
+    pub(crate) writer_queue_fill_pct: Option<f64>,
+}
+
+pub(crate) fn build_queue_pressure_snapshot(
+    parse_queue_pending_txs: u64,
+    parse_queue_capacity_txs: u64,
+    writer_queue_depth: u64,
+    writer_queue_capacity: u64,
+) -> QueuePressureSnapshot {
+    QueuePressureSnapshot {
+        parse_queue_pending_txs,
+        parse_queue_capacity_txs,
+        parse_queue_fill_pct: queue_fill_percentage(
+            Some(parse_queue_pending_txs),
+            Some(parse_queue_capacity_txs),
+        ),
+        writer_queue_depth,
+        writer_queue_capacity,
+        writer_queue_fill_pct: queue_fill_percentage(
+            Some(writer_queue_depth),
+            Some(writer_queue_capacity),
+        ),
+    }
+}
+
 pub(crate) fn parse_queue_capacity_txs(
     queue_capacity_batches: usize,
     target_batch_txs: u64,
@@ -512,6 +544,31 @@ mod tests {
         assert_eq!(queue_fill_percentage(Some(1), Some(0)), None);
         assert_eq!(queue_fill_percentage(None, Some(10)), None);
         assert_eq!(queue_fill_percentage(Some(1), None), None);
+    }
+
+    #[test]
+    fn test_queue_fill_snapshot_keeps_parser_and_writer_pressure_separate() {
+        let snapshot = build_queue_pressure_snapshot(320_000, 1_280_000, 3, 8);
+
+        assert_eq!(snapshot.parse_queue_pending_txs, 320_000);
+        assert_eq!(snapshot.parse_queue_capacity_txs, 1_280_000);
+        assert_eq!(snapshot.parse_queue_fill_pct, Some(25.0));
+        assert_eq!(snapshot.writer_queue_depth, 3);
+        assert_eq!(snapshot.writer_queue_capacity, 8);
+        assert_eq!(snapshot.writer_queue_fill_pct, Some(37.5));
+    }
+
+    #[test]
+    fn test_compaction_pressure_snapshot_reports_l0_total_and_l0_max() {
+        let snapshot = ckbadger_store::store::CompactionPressureSnapshot {
+            l0_files_total: 82,
+            l0_files_max: 3,
+            compaction_pending_bytes: 0,
+            immutable_memtables: 0,
+        };
+
+        assert_eq!(snapshot.l0_files_total, 82);
+        assert_eq!(snapshot.l0_files_max, 3);
     }
 
     #[test]

@@ -2142,17 +2142,15 @@ impl Indexer {
                             adaptive_snapshot_before.target_batch_txs,
                             adaptive_snapshot_before.min_target_batch_txs,
                         );
-                        // Model queue pressure by pending tx volume to avoid over-reacting to
-                        // temporary bursts with dense transactions.
-                        let parse_queue_fill_pct = queue_fill_percentage(
-                            Some(parse_queue_pending_txs),
-                            Some(parse_queue_capacity_txs),
+                        let queue_pressure = build_queue_pressure_snapshot(
+                            parse_queue_pending_txs,
+                            parse_queue_capacity_txs,
+                            writer_queue as u64,
+                            parse_tx_for_writer_depth.max_capacity() as u64,
                         );
-                        let writer_queue_fill_pct = parse_queue_fill_pct;
                         let memory_ratio_pct =
                             cgroup_memory_ratio_pct(&read_cgroup_memory_snapshot());
-                        let (l0_files_max, compaction_pending_bytes, immutable_memtables) =
-                            self.writer.store().compaction_pressure();
+                        let compaction_pressure = self.writer.store().compaction_pressure();
                         let blocks_remaining = self.progress.blocks_remaining();
                         let db_stage_ms = db_elapsed.as_secs_f64() * 1000.0;
                         let write_us_per_tx = if batch_tx_count > 0 && db_stage_ms > 0.0 {
@@ -2168,12 +2166,17 @@ impl Indexer {
                                     commit_ms: write_metrics.commit_ms,
                                     batch_tx_count,
                                     blocks_remaining,
-                                    parse_queue_fill_pct,
-                                    writer_queue_fill_pct,
+                                    parse_queue_fill_pct: queue_pressure.parse_queue_fill_pct,
+                                    writer_queue_fill_pct: queue_pressure.writer_queue_fill_pct,
                                     memory_ratio_pct,
-                                    l0_files_max: Some(l0_files_max),
-                                    compaction_pending_bytes: Some(compaction_pending_bytes),
-                                    immutable_memtables: Some(immutable_memtables),
+                                    l0_files_total: Some(compaction_pressure.l0_files_total),
+                                    l0_files_max: Some(compaction_pressure.l0_files_max),
+                                    compaction_pending_bytes: Some(
+                                        compaction_pressure.compaction_pending_bytes,
+                                    ),
+                                    immutable_memtables: Some(
+                                        compaction_pressure.immutable_memtables,
+                                    ),
                                     severe_pending_threshold: mem_profile
                                         .severe_compaction_pending_bytes,
                                     moderate_pending_threshold: mem_profile
@@ -2192,10 +2195,14 @@ impl Indexer {
                                 new_inflight_limit = adjustment.new_inflight_limit,
                                 previous_min_target_batch_txs = adjustment.previous_min_target_batch_txs,
                                 new_min_target_batch_txs = adjustment.new_min_target_batch_txs,
-                                parse_queue_fill_pct = parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                writer_queue_fill_pct = writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
-                                parse_queue_pending_txs,
-                                parse_queue_capacity_txs,
+                                parse_queue_fill_pct = queue_pressure.parse_queue_fill_pct.map(|v| format!("{:.1}", v)),
+                                writer_queue_fill_pct = queue_pressure.writer_queue_fill_pct.map(|v| format!("{:.1}", v)),
+                                parse_queue_pending_txs = queue_pressure.parse_queue_pending_txs,
+                                parse_queue_capacity_txs = queue_pressure.parse_queue_capacity_txs,
+                                writer_queue_depth = queue_pressure.writer_queue_depth,
+                                writer_queue_capacity = queue_pressure.writer_queue_capacity,
+                                l0_files_total = compaction_pressure.l0_files_total,
+                                l0_files_max = compaction_pressure.l0_files_max,
                                 memory_ratio_pct = memory_ratio_pct.map(|v| format!("{:.1}", v)),
                                 write_us_per_tx = write_us_per_tx.map(|v| format!("{:.1}", v)),
                                 adaptive_backoff_streak = self.adaptive_batch_controller.snapshot().backoff_streak,

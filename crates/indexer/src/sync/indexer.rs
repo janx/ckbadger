@@ -351,24 +351,24 @@ impl Indexer {
             domain_store.set_bulk_sync_compaction_options();
             append_store.set_bulk_sync_compaction_options();
         } else if !should_be_bulk && in_bulk {
-            let (l0_files_max, compaction_pending_bytes, _imm) = domain_store.compaction_pressure();
+            let pressure = domain_store.compaction_pressure();
             const DRAIN_L0_THRESHOLD: u64 = 10;
             let drain_pending_threshold =
                 domain_store.memory_profile().drain_pending_bytes_threshold;
-            if l0_files_max < DRAIN_L0_THRESHOLD
-                && compaction_pending_bytes < drain_pending_threshold
+            if pressure.l0_files_max < DRAIN_L0_THRESHOLD
+                && pressure.compaction_pending_bytes < drain_pending_threshold
             {
                 info!(
-                    l0_files_max,
-                    compaction_pending_mb = compaction_pending_bytes / (1024 * 1024),
+                    l0_files_max = pressure.l0_files_max,
+                    compaction_pending_mb = pressure.compaction_pending_bytes / (1024 * 1024),
                     "Compaction drained, restoring normal compaction options"
                 );
                 domain_store.restore_normal_compaction_options();
                 append_store.restore_normal_compaction_options();
             } else {
                 debug!(
-                    l0_files_max,
-                    compaction_pending_mb = compaction_pending_bytes / (1024 * 1024),
+                    l0_files_max = pressure.l0_files_max,
+                    compaction_pending_mb = pressure.compaction_pending_bytes / (1024 * 1024),
                     "Deferring normal compaction: pressure still high"
                 );
             }
@@ -1148,10 +1148,10 @@ mod tests {
         assert!(store.is_bulk_sync_mode());
 
         // Check compaction_pressure on an empty store (should be 0/0/0 → drain OK)
-        let (l0_files_max, compaction_pending_bytes, _imm) = store.compaction_pressure();
+        let pressure = store.compaction_pressure();
         // Empty store has no L0 files and no pending compaction
-        assert!(l0_files_max < 10);
-        assert!(compaction_pending_bytes < 2 * 1024 * 1024 * 1024);
+        assert!(pressure.l0_files_max < 10);
+        assert!(pressure.compaction_pending_bytes < 2 * 1024 * 1024 * 1024);
 
         // Restore should succeed on empty store (drain condition met)
         store.restore_normal_compaction_options();
