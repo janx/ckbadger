@@ -15,10 +15,14 @@ describe('SiteFooter', () => {
     const footer = screen.getByRole('contentinfo');
     expect(footer).toHaveClass('border-t');
     const footerPanel = footer.querySelector('.rounded-xl');
-    expect(footerPanel).not.toHaveClass('border');
+    expect(footerPanel).not.toBeNull();
 
     expect(screen.queryByText(/ckbadger explorer/i)).toBeNull();
     expect(screen.queryByText(/Local-first CKB observability and protocol context/i)).toBeNull();
+    expect(screen.getByText('Credits')).toBeInTheDocument();
+    expect(screen.getByText('Build')).toBeInTheDocument();
+    expect(screen.getByText('Shortcut')).toBeInTheDocument();
+    expect(screen.getByText('Links')).toBeInTheDocument();
     const hardforksLink = screen.getByRole('link', { name: 'Hardforks' });
     expect(hardforksLink).toHaveAttribute('href', '/hardforks');
     expect(screen.queryByRole('link', { name: 'Blocks' })).toBeNull();
@@ -35,10 +39,11 @@ describe('SiteFooter', () => {
     expect(shortcutHint).toBeInTheDocument();
     expect(hardforksLink.className).not.toEqual(shortcutHint.className);
     expect(githubLink.className).not.toEqual(shortcutHint.className);
-    expect(screen.getByText(/Built by/i)).toBeInTheDocument();
     const profileLink = screen.getByRole('link', { name: '@busyforking' });
     expect(profileLink).toHaveAttribute('href', 'https://x.com/busyforking');
-    expect(profileLink.parentElement).toHaveTextContent('with agents Coco and Dede');
+    expect(footer).toHaveTextContent('Designed by @busyforking, coded by Claude and Codex. ❤️');
+    expect(screen.getByText(/coded by Claude and Codex\./i)).toBeInTheDocument();
+    expect(screen.getByText(/❤️/)).toBeInTheDocument();
     expect(screen.getByText('0.1.0+feature/foo@abcdef123456')).toBeInTheDocument();
   });
 });
