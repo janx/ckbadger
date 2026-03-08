@@ -947,7 +947,6 @@ impl Indexer {
 
             if let Err(e) = self.writer.store().update_sync_status(|status| {
                 status.mark_bulk_sync_completed(chain_tip_i64);
-                status.derived_sync_in_progress = false;
             }) {
                 warn!(
                     error = %e,

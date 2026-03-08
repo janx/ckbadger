@@ -658,16 +658,10 @@ pub struct HodlTrackerState {
 pub struct SyncStatus {
     pub tip_block_number: i64,
     pub tip_block_hash: Vec<u8>,
-    #[serde(default)]
-    pub derived_tip_block_number: i64,
     pub total_transactions: i64,
     pub total_cells_created: i64,
     pub total_cells_consumed: i64,
     pub last_synced_at: i64,
-    #[serde(default)]
-    pub derived_last_synced_at: i64,
-    #[serde(default)]
-    pub derived_sync_in_progress: bool,
     #[serde(default)]
     pub sync_started_at: Option<i64>,
     #[serde(default)]
@@ -694,14 +688,12 @@ impl SyncStatus {
                 self.sync_started_block = start_block;
                 self.bulk_sync_completed_at = None;
                 self.bulk_sync_completed_block = None;
-                self.derived_sync_in_progress = true;
             }
         } else {
             if self.sync_started_at.is_none() || start_block < self.sync_started_block {
                 self.sync_started_at = Some(chrono::Utc::now().timestamp());
             }
             self.sync_started_block = start_block;
-            self.derived_sync_in_progress = false;
         }
     }
 

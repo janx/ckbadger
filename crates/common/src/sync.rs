@@ -11,17 +11,11 @@ pub struct SyncStatusData {
     pub tip_block_number: i64,
     #[serde(default)]
     pub tip_block_hash: String,
-    #[serde(default)]
-    pub derived_tip_block_number: Option<i64>,
     pub total_transactions: i64,
     pub total_cells: i64,
     pub total_live_cells: i64,
     pub total_addresses: i64,
     pub last_synced_at: i64,
-    #[serde(default)]
-    pub derived_last_synced_at: Option<i64>,
-    #[serde(default)]
-    pub derived_sync_in_progress: bool,
 
     pub sync_started_at: Option<i64>,
     pub sync_started_block: i64,
@@ -51,14 +45,11 @@ impl SyncStatusData {
     ) {
         self.tip_block_number = block_number;
         self.tip_block_hash = block_hash.to_string();
-        self.derived_tip_block_number = Some(block_number);
         self.total_transactions += tx_count;
         self.total_cells += cells_created;
         self.total_live_cells += cells_created - cells_consumed;
         self.total_addresses += new_addresses;
         self.last_synced_at = chrono::Utc::now().timestamp();
-        self.derived_last_synced_at = Some(self.last_synced_at);
-        self.derived_sync_in_progress = false;
         if let Some(rate) = ema_rate {
             self.sync_ema_rate = Some(rate);
         }
@@ -79,14 +70,12 @@ impl SyncStatusData {
                 self.sync_started_block = start_block;
                 self.bulk_sync_completed_at = None;
                 self.bulk_sync_completed_block = None;
-                self.derived_sync_in_progress = true;
             }
         } else {
             if self.sync_started_at.is_none() || start_block < self.sync_started_block {
                 self.sync_started_at = Some(chrono::Utc::now().timestamp());
             }
             self.sync_started_block = start_block;
-            self.derived_sync_in_progress = false;
         }
     }
 

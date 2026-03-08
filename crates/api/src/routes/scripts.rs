@@ -17,8 +17,8 @@ use crate::response::{
 };
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
-    ensure_derived_ready, is_known_script_name, merge_script_info_for_reference,
-    parse_chart_date_range, related_code_hashes_for_reference,
+    is_known_script_name, merge_script_info_for_reference, parse_chart_date_range,
+    related_code_hashes_for_reference,
 };
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
@@ -450,8 +450,6 @@ async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LookupScriptsRequest>,
 ) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
-    ensure_derived_ready(state.as_ref())?;
-
     if request.code_hashes.is_empty() {
         return ok(HashMap::new());
     }
@@ -571,8 +569,6 @@ async fn get_code_cell(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CodeCellQuery>,
 ) -> ApiResult<CodeCellResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let code_hash_bytes = hex::decode(
         params
             .code_hash
@@ -613,8 +609,6 @@ async fn list_scripts(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<ScriptResponse>> {
-    ensure_derived_ready(state.as_ref())?;
-
     let limit = params.limit.clamp(1, 100) as usize;
     let network = params.network.as_deref().unwrap_or(&state.ckb_network);
 
@@ -724,8 +718,6 @@ async fn get_script(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<Vec<ScriptResponse>> {
-    ensure_derived_ready(state.as_ref())?;
-
     let network = &state.ckb_network;
 
     let all_scripts = load_script_infos_cached(&state)?;
@@ -773,8 +765,6 @@ async fn get_script_usage(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> ApiResult<ScriptUsageResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let all_scripts = load_script_infos_cached(&state)?;
 
     let matching: Vec<_> = all_scripts
@@ -1031,8 +1021,6 @@ async fn get_script_occupation_chart(
     Path(name): Path<String>,
     Query(params): Query<ScriptOccupationQuery>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
@@ -1076,8 +1064,6 @@ async fn get_script_occupation_chart_by_code_hash(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ScriptOccupationByCodeHashQuery>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
-
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
