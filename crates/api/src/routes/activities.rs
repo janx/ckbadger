@@ -12,13 +12,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::address::address_to_lock_script_hash;
+use crate::utils::address::{address_to_lock_script_hash, script_to_address};
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route("/addresses/{addr}/activities", get(get_address_activities))
+    Router::new()
+        .route("/addresses/{addr}/activities", get(get_address_activities))
+        .route("/activities/latest", get(get_latest_activities))
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +83,31 @@ pub enum AssetChangeResponse {
         capacity: String,
         compensation: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalActivityResponse {
+    pub address: String,
+    pub tx_hash: String,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: String,
+    pub ckb_delta: String,
+    pub occupied_delta: String,
+    pub is_cellbase: bool,
+    pub asset_changes: Vec<AssetChangeResponse>,
+    pub peers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LatestActivityParams {
+    #[serde(default = "default_latest_limit")]
+    limit: usize,
+}
+
+fn default_latest_limit() -> usize {
+    8
 }
 
 fn action_to_string(action: &AssetAction) -> String {
@@ -309,6 +336,61 @@ async fn get_address_activities(
         limit as i64,
         next_cursor,
     ))
+}
+
+async fn get_latest_activities(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LatestActivityParams>,
+) -> ApiResult<Vec<GlobalActivityResponse>> {
+    let limit = params.limit.clamp(1, 64);
+    let items = state
+        .store
+        .get_latest_activities()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let network = &state.ckb_network;
+    let activities: Vec<GlobalActivityResponse> = items
+        .into_iter()
+        .take(limit)
+        .map(|item| {
+            let address = if !item.lock_code_hash.is_empty() {
+                script_to_address(
+                    &item.lock_code_hash,
+                    item.lock_hash_type,
+                    &item.lock_args,
+                    network,
+                )
+                .unwrap_or_else(|_| format!("0x{}", hex::encode(&item.lock_hash)))
+            } else {
+                format!("0x{}", hex::encode(&item.lock_hash))
+            };
+
+            GlobalActivityResponse {
+                address,
+                tx_hash: format!("0x{}", hex::encode(&item.entry.tx_hash)),
+                block_number: item.entry.block_number,
+                tx_index: item.entry.tx_index,
+                timestamp: item.entry.timestamp.to_string(),
+                ckb_delta: item.entry.ckb_delta.to_string(),
+                occupied_delta: item.entry.occupied_delta.to_string(),
+                is_cellbase: item.entry.is_cellbase,
+                asset_changes: item
+                    .entry
+                    .asset_changes
+                    .iter()
+                    .map(convert_asset_change)
+                    .collect(),
+                peers: item
+                    .entry
+                    .peers
+                    .iter()
+                    .map(|h| format!("0x{}", hex::encode(h)))
+                    .collect(),
+            }
+        })
+        .collect();
+
+    ok(activities)
 }
 
 #[cfg(test)]
