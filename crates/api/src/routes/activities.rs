@@ -278,26 +278,46 @@ async fn get_address_activities(
         None
     };
 
+    let unique_blocks: Vec<i64> = page
+        .iter()
+        .map(|(block_num, _, _)| *block_num)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut block_timestamps: HashMap<i64, i64> = HashMap::new();
+    for block_num in unique_blocks {
+        if let Some(header) = state
+            .store
+            .get_block_header(block_num)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            block_timestamps.insert(block_num, header.timestamp);
+        }
+    }
+
     let activities: Vec<ActivityResponse> = page
         .into_iter()
-        .map(|(_, _, entry)| ActivityResponse {
-            tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-            block_number: entry.block_number,
-            tx_index: entry.tx_index,
-            timestamp: entry.timestamp.to_string(),
-            ckb_delta: entry.ckb_delta.to_string(),
-            occupied_delta: entry.occupied_delta.to_string(),
-            is_cellbase: entry.is_cellbase,
-            asset_changes: entry
-                .asset_changes
-                .iter()
-                .map(convert_asset_change)
-                .collect(),
-            peers: entry
-                .peers
-                .iter()
-                .map(|h| format!("0x{}", hex::encode(h)))
-                .collect(),
+        .map(|(block_num, _, entry)| {
+            let timestamp = block_timestamps.get(&block_num).copied().unwrap_or(0);
+            ActivityResponse {
+                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                block_number: entry.block_number,
+                tx_index: entry.tx_index,
+                timestamp: timestamp.to_string(),
+                ckb_delta: entry.ckb_delta.to_string(),
+                occupied_delta: entry.occupied_delta.to_string(),
+                is_cellbase: entry.is_cellbase,
+                asset_changes: entry
+                    .asset_changes
+                    .iter()
+                    .map(convert_asset_change)
+                    .collect(),
+                peers: entry
+                    .peers
+                    .iter()
+                    .map(|h| format!("0x{}", hex::encode(h)))
+                    .collect(),
+            }
         })
         .collect();
 
