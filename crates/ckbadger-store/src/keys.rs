@@ -962,6 +962,7 @@ pub mod sync_meta_keys {
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
     pub const SYNC_PROGRESS: &[u8] = b"sync_progress";
     pub const MEMORY_STATS: &[u8] = b"memory_stats";
+    pub const LATEST_ACTIVITIES: &[u8] = b"latest_activities";
 }
 
 #[cfg(test)]

@@ -861,6 +861,17 @@ pub struct ActivityEntry {
     pub peers: Vec<Vec<u8>>,
 }
 
+/// A single activity item for the global latest-activities feed.
+/// Includes lock script components so the API can compute CKB addresses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestActivityItem {
+    pub lock_hash: Vec<u8>,
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
+    pub entry: ActivityEntry,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetChange {
     Token {
