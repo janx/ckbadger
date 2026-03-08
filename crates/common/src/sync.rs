@@ -330,14 +330,11 @@ mod tests {
         let status = SyncStatusData {
             tip_block_number: 12345,
             tip_block_hash: "0xabc123".to_string(),
-            derived_tip_block_number: Some(12345),
             total_transactions: 1000,
             total_cells: 500,
             total_live_cells: 300,
             total_addresses: 100,
             last_synced_at: 1700000000,
-            derived_last_synced_at: Some(1700000000),
-            derived_sync_in_progress: false,
             sync_started_at: Some(1699999000),
             sync_started_block: 0,
             sync_ema_rate: Some(500.5),
@@ -415,7 +412,6 @@ mod tests {
 
         assert_eq!(status.sync_started_block, 200);
         assert!(status.sync_started_at.is_some());
-        assert!(!status.derived_sync_in_progress);
     }
 
     #[test]

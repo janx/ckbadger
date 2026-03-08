@@ -667,8 +667,7 @@ fn read_last_non_empty_line(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_sync_status_fields, parse_epoch_string, response_indicates_derived_syncing,
-        sync_modes_from_progress, sync_progress_is_stale, TuiDb, TuiPathConfig,
+        parse_epoch_string, sync_modes_from_progress, sync_progress_is_stale, TuiDb, TuiPathConfig,
         LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, SYNC_PROGRESS_STALE_SECS,
     };
     use ckbadger_common::{SyncProgressData, SyncStatusData};
@@ -730,28 +729,6 @@ mod tests {
     }
 
     #[test]
-    fn derive_sync_status_fields_maps_lag_and_progress() {
-        let status = SyncStatusData {
-            tip_block_number: 120,
-            derived_tip_block_number: Some(100),
-            derived_sync_in_progress: false,
-            ..Default::default()
-        };
-        let (derived_tip, lag, in_progress) = derive_sync_status_fields(120, Some(&status));
-        assert_eq!(derived_tip, Some(100));
-        assert_eq!(lag, Some(20));
-        assert!(in_progress);
-    }
-
-    #[test]
-    fn derive_sync_status_fields_handles_missing_status() {
-        let (derived_tip, lag, in_progress) = derive_sync_status_fields(120, None);
-        assert_eq!(derived_tip, None);
-        assert_eq!(lag, None);
-        assert!(!in_progress);
-    }
-
-    #[test]
     fn sync_modes_from_progress_uses_lag_when_status_missing() {
         let progress = sample_progress();
         let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, None, 10_000);
@@ -763,8 +740,9 @@ mod tests {
     fn sync_modes_from_progress_falls_back_to_status_or_legacy_lag() {
         let progress = sample_progress();
 
+        // bulk_sync_completed_at is None => bulk sync still in progress
         let status_hint = SyncStatusData {
-            derived_sync_in_progress: true,
+            bulk_sync_completed_at: None,
             ..Default::default()
         };
         let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, Some(&status_hint), 8);
@@ -775,23 +753,6 @@ mod tests {
             sync_modes_from_progress(&progress, None, 1001);
         assert!(is_syncing_legacy);
         assert!(is_bulk_sync_legacy);
-    }
-
-    #[test]
-    fn response_indicates_derived_syncing_detects_marker() {
-        assert!(response_indicates_derived_syncing(
-            503,
-            r#"{"error":"derived_syncing","message":"derived store syncing"}"#
-        ));
-        assert!(response_indicates_derived_syncing(503, "derived_syncing"));
-        assert!(!response_indicates_derived_syncing(
-            500,
-            r#"{"error":"derived_syncing"}"#
-        ));
-        assert!(!response_indicates_derived_syncing(
-            503,
-            r#"{"error":"internal"}"#
-        ));
     }
 
     #[test]
@@ -856,13 +817,10 @@ mod tests {
             .set_sync_status(&ckbadger_store::types::SyncStatus {
                 tip_block_number: progress.current_block as i64,
                 tip_block_hash: vec![0x11; 32],
-                derived_tip_block_number: progress.current_block as i64,
                 total_transactions: 1,
                 total_cells_created: 1,
                 total_cells_consumed: 0,
                 last_synced_at: 1_700_000_000,
-                derived_last_synced_at: 1_700_000_000,
-                derived_sync_in_progress: true,
                 sync_started_at: Some(1_700_000_000),
                 sync_started_block: 0,
                 sync_ema_rate: Some(95.0),
@@ -917,13 +875,10 @@ mod tests {
             .set_sync_status(&ckbadger_store::types::SyncStatus {
                 tip_block_number: 150,
                 tip_block_hash: vec![0x22; 32],
-                derived_tip_block_number: 150,
                 total_transactions: 9000,
                 total_cells_created: 20000,
                 total_cells_consumed: 10000,
                 last_synced_at: chrono::Utc::now().timestamp(),
-                derived_last_synced_at: chrono::Utc::now().timestamp(),
-                derived_sync_in_progress: false,
                 sync_started_at: Some(1_700_000_000),
                 sync_started_block: 1,
                 sync_ema_rate: Some(42.0),

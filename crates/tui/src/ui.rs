@@ -3935,7 +3935,7 @@ mod tests {
     use super::{
         adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
         compact_overview_layout, compact_sync_layout, consumed_cells_source_color,
-        consumed_cells_source_label, dense_right_lines, derived_status_line, detail_right_lines,
+        consumed_cells_source_label, dense_right_lines, detail_right_lines,
         diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
         footer_status_message, format_age_secs, format_num, format_num_commas, format_rate_pair,
         format_signed_num_i128, format_stage_commit_gap_ms, header_right_line, header_title_line,
@@ -4340,24 +4340,6 @@ mod tests {
     }
 
     #[test]
-    fn test_derived_status_line_ready() {
-        let line = derived_status_line(Some(1_000), Some(0), false);
-        let text = line_text(&line);
-        assert!(text.contains("Derived: 1,000"));
-        assert!(text.contains("lag 0"));
-        assert!(text.contains("ready"));
-    }
-
-    #[test]
-    fn test_derived_status_line_syncing() {
-        let line = derived_status_line(Some(2_000), Some(12), true);
-        let text = line_text(&line);
-        assert!(text.contains("Derived: 2,000"));
-        assert!(text.contains("lag 12"));
-        assert!(text.contains("syncing"));
-    }
-
-    #[test]
     fn test_stack_sync_charts_rule() {
         assert!(stack_sync_charts(Rect::new(0, 0, 100, 12)));
         assert!(!stack_sync_charts(Rect::new(0, 0, 100, 8)));
@@ -4552,17 +4534,6 @@ mod tests {
     fn test_api_health_state() {
         let down = ApiServiceInfo::default();
         assert_eq!(api_health_state(&down), ("DOWN", Color::Rgb(239, 68, 68)));
-
-        let degraded = ApiServiceInfo {
-            reachable: true,
-            status_code: Some(503),
-            derived_syncing: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            api_health_state(&degraded),
-            ("DEGRADED", Color::Rgb(56, 189, 248))
-        );
 
         let warn_http = ApiServiceInfo {
             reachable: true,

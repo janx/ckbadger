@@ -1615,6 +1615,5 @@ mod tests {
 
         assert_eq!(status.sync_started_block, 128);
         assert!(status.sync_started_at.is_some());
-        assert!(!status.derived_sync_in_progress);
     }
 }

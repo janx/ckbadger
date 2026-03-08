@@ -658,7 +658,6 @@ mod tests {
         assert!(status.sync_started_at.is_some());
         assert_eq!(status.bulk_sync_completed_at, None);
         assert_eq!(status.bulk_sync_completed_block, None);
-        assert!(status.derived_sync_in_progress);
     }
 
     #[test]
