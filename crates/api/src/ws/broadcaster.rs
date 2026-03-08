@@ -1,3 +1,4 @@
+use ckb_store_reader::CkbChainReader;
 use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
 use ckbadger_store::CkbadgerStore;
 use std::sync::Arc;
@@ -45,6 +46,7 @@ pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
+    ckb_store: Option<Arc<CkbChainReader>>,
 ) {
     let mut last_block_number: Option<i64> = None;
     let mut ticker = interval(Duration::from_secs(2));
@@ -163,18 +165,46 @@ pub async fn start_block_broadcaster(
                 info!("Broadcasting new block: {}", num);
                 ws_manager.broadcast_block(msg);
 
-                broadcast_block_transactions(&store, &ws_manager, num);
+                broadcast_block_transactions(&store, &ws_manager, &ckb_store, num);
                 last_block_number = Some(num);
             }
         }
     }
 }
 
+fn get_block_tx_hashes(
+    ckb_store: &Option<Arc<CkbChainReader>>,
+    block_num: i64,
+) -> Option<Vec<Vec<u8>>> {
+    let store = ckb_store.as_ref()?;
+    let block_hash_bytes = store.get_block_hash(block_num as u64)?;
+    let block = store.get_block(&block_hash_bytes)?;
+    Some(
+        block
+            .transactions()
+            .into_iter()
+            .map(|tx| tx.hash().raw_data().to_vec())
+            .collect(),
+    )
+}
+
 fn broadcast_block_transactions(
     store: &CkbadgerStore,
-    _ws_manager: &Arc<WsManager>,
+    ws_manager: &Arc<WsManager>,
+    ckb_store: &Option<Arc<CkbChainReader>>,
     block_number: i64,
 ) {
+    let tx_hashes = match get_block_tx_hashes(ckb_store, block_number) {
+        Some(h) => h,
+        None => {
+            debug!(
+                "Cannot resolve tx hashes for block {} (CKB store unavailable)",
+                block_number
+            );
+            return;
+        }
+    };
+
     let txs = match store.list_block_txs(block_number) {
         Ok(txs) => txs,
         Err(e) => {
@@ -183,14 +213,31 @@ fn broadcast_block_transactions(
         }
     };
 
+    let block_header = store.get_block_header(block_number).ok().flatten();
+    let timestamp_str = block_header
+        .and_then(|h| chrono::DateTime::from_timestamp(h.timestamp / 1000, 0))
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default();
+
     for (tx_idx, entry) in txs {
         if entry.is_cellbase {
             continue;
         }
-        // We need the tx hash — look it up from the tx_index
-        // The tx_hash isn't stored in TxIndexEntry, so we skip individual tx broadcast
-        // or we could iterate block txs from CKB store. For now, skip.
-        let _ = (tx_idx, entry);
+
+        let tx_hash = match tx_hashes.get(tx_idx as usize) {
+            Some(h) => format!("0x{}", hex::encode(h)),
+            None => continue,
+        };
+
+        let msg = BroadcastMessage::NewTransaction {
+            hash: tx_hash,
+            block_number,
+            inputs_count: entry.inputs_count as i32,
+            outputs_count: entry.outputs_count as i32,
+            fee: entry.fee.to_string(),
+            timestamp: timestamp_str.clone(),
+        };
+        ws_manager.broadcast_transaction(msg);
     }
 }
 
