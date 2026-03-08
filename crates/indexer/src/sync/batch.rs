@@ -3602,10 +3602,10 @@ impl Indexer {
         let mut batch_stats;
         let mut thread_times: Option<[f64; 8]> = None;
         if bulk_sync_mode {
-            // Parallel write path: each thread writes to its own StoreBatch and commits independently.
-            // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
-            // Independent batches let all threads run fully in parallel; the RocksDB write
-            // group overhead (~2ms) is negligible.
+            // Parallel write path: each thread builds its own StoreBatch but does NOT commit.
+            // After all threads complete, the main thread merges all domain batches into one
+            // WriteBatch and all append-only batches into another, then commits just twice.
+            // This reduces ~13 commits/batch to 2, cutting RocksDB write group serialization.
             let store = self.writer.store();
             let append_only_store = &self.append_only_store;
             let writer = &self.writer;
@@ -3616,8 +3616,7 @@ impl Indexer {
                     // T1: Cells + Consumption + Cell Indexes (merged T1a+T1b)
                     // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE,
                     //       CELL_BY_LOCK_CODE, CELL_BY_TYPE_CODE
-                    // Single batch + single commit reduces atomic flush trigger frequency.
-                    let h1 = s.spawn(|| -> Result<(f64, f64)> {
+                    let h1 = s.spawn(|| -> Result<(f64, StoreBatch<'_>)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         if !all_cells.is_empty() {
@@ -3657,14 +3656,12 @@ impl Indexer {
                                 batch.delete_cell_by_type_code_raw(k);
                             }
                         }
-                        let commit_ms =
-                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                        Ok((t.elapsed().as_secs_f64() * 1000.0, batch))
                     });
 
                     // T2: Transactions + Address Balances + Script Usage + Analytics + Addr TX index
                     // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, STATS_SCRIPT, STATS_TOKEN, STATS_SPORE, STATS_NFT, REORG_UNDO_LOG_BY_BLOCK, ADDR_TX
-                    let h2 = s.spawn(|| -> Result<(f64, f64)> {
+                    let h2 = s.spawn(|| -> Result<(f64, StoreBatch<'_>, StoreBatch<'_>)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         let mut append_history_batch = StoreBatch::new(append_only_store);
@@ -3741,22 +3738,16 @@ impl Indexer {
                                 tx_hash,
                             );
                         }
-                        let mut commit_ms =
-                            commit_phase_no_wal("T2_txs_addr", first_block, last_block, batch)?;
-                        if !append_history_batch.is_empty() {
-                            commit_ms += commit_phase_no_wal(
-                                "T2_append_history",
-                                first_block,
-                                last_block,
-                                append_history_batch,
-                            )?;
-                        }
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                        Ok((
+                            t.elapsed().as_secs_f64() * 1000.0,
+                            batch,
+                            append_history_batch,
+                        ))
                     });
 
                     // T4: DAO (writes only — DB reads pre-fetched above)
                     // CFs: DAO_DEPOSITS, DAO_BY_WITHDRAW_TX
-                    let h4 = s.spawn(|| -> Result<(f64, f64)> {
+                    let h4 = s.spawn(|| -> Result<(f64, StoreBatch<'_>)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
 
@@ -3970,8 +3961,7 @@ impl Indexer {
                         }
                     }
 
-                    let commit_ms = commit_phase_no_wal("T4_dao", first_block, last_block, batch)?;
-                    Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                    Ok((t.elapsed().as_secs_f64() * 1000.0, batch))
                 });
 
                     // T5: UDT (writes only — DB reads + parsing pre-fetched above)
@@ -3981,7 +3971,7 @@ impl Indexer {
                     let max_supply_observations =
                         collect_token_max_supply_observations(&all_tx_data);
                     let h5 =
-                        s.spawn(move || -> Result<(f64, f64)> {
+                        s.spawn(move || -> Result<(f64, StoreBatch<'_>)> {
                             let t = Instant::now();
                             let mut batch = StoreBatch::new(store);
 
@@ -4047,17 +4037,19 @@ impl Indexer {
                                 }
                             }
 
-                            let commit_ms =
-                                commit_phase_no_wal("T5_udt", first_block, last_block, batch)?;
-                            Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                            Ok((t.elapsed().as_secs_f64() * 1000.0, batch))
                         });
 
                     // T6a: Spore writes (clusters + cells + content).
                     // CFs: SPORE_DATA, SPORE_BY_CLUSTER, CLUSTER_AGG, STATS (spore keys only)
                     // Runs in parallel with T6b — writes to independent CFs.
-                    let h6a = s.spawn(|| -> Result<(f64, f64)> {
+                    let h6a = s.spawn(|| -> Result<(f64, StoreBatch<'_>, StoreBatch<'_>)> {
                         if skip_spore {
-                            return Ok((0.0, 0.0));
+                            return Ok((
+                                0.0,
+                                StoreBatch::new(store),
+                                StoreBatch::new(append_only_store),
+                            ));
                         }
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
@@ -4128,17 +4120,7 @@ impl Indexer {
                             block_tx_idx += tx_count_for_block;
                         }
                         spore_activity_acc.flush(&mut activity_batch);
-                        let mut commit_ms =
-                            commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
-                        if !activity_batch.is_empty() {
-                            commit_ms += commit_phase_no_wal(
-                                "T6a_spore_activity",
-                                first_block,
-                                last_block,
-                                activity_batch,
-                            )?;
-                        }
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                        Ok((t.elapsed().as_secs_f64() * 1000.0, batch, activity_batch))
                     });
 
                     // T6b: mNFT + DotBit writes and DotBit consumption.
@@ -4146,7 +4128,7 @@ impl Indexer {
                     // Runs in parallel with T6a — mNFT/DotBit use independent CFs from Spore.
                     // All parsing is done in the parser stage (pre_parsed_nft_data);
                     // this thread only does DB writes.
-                    let h6b = s.spawn(|| -> Result<(f64, f64)> {
+                    let h6b = s.spawn(|| -> Result<(f64, StoreBatch<'_>, StoreBatch<'_>)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut activity_batch = StoreBatch::new(append_only_store);
@@ -4347,17 +4329,7 @@ impl Indexer {
                             &append_key,
                         );
                     }
-                    let mut commit_ms =
-                        commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
-                    if !activity_batch.is_empty() {
-                        commit_ms += commit_phase_no_wal(
-                            "T6b_nft_activity",
-                            first_block,
-                            last_block,
-                            activity_batch,
-                        )?;
-                    }
-                    Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                    Ok((t.elapsed().as_secs_f64() * 1000.0, batch, activity_batch))
                 });
 
                     // T7: Stats accumulation (overlaps with T1-T6 IO)
@@ -4620,110 +4592,145 @@ impl Indexer {
                     // T_ACT: Activity builder
                     // CFs: REORG_UNDO_LOG_BY_BLOCK, ACTIVITIES
                     let h_act = if !skip_activities {
-                        Some(s.spawn(|| -> Result<(f64, f64)> {
-                            let t = Instant::now();
-                            let mut domain_batch = StoreBatch::new(store);
-                            let mut activity_batch = StoreBatch::new(append_only_store);
-                            let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
-                            let token_info_cache = load_activity_token_info_cache(
-                                store,
-                                &all_tx_data,
-                                &input_cell_info,
-                                &batch_cell_infos,
-                            )?;
-                            let mut block_tx_idx = 0usize;
-                            for parsed in all_parsed_blocks {
-                                let tx_count = parsed.transactions_count as usize;
-                                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
-                                block_tx_idx += tx_count;
+                        Some(
+                            s.spawn(|| -> Result<(f64, StoreBatch<'_>, StoreBatch<'_>)> {
+                                let t = Instant::now();
+                                let mut domain_batch = StoreBatch::new(store);
+                                let mut activity_batch = StoreBatch::new(append_only_store);
+                                let mut append_undo_seq_by_block: HashMap<i64, u64> =
+                                    HashMap::new();
+                                let token_info_cache = load_activity_token_info_cache(
+                                    store,
+                                    &all_tx_data,
+                                    &input_cell_info,
+                                    &batch_cell_infos,
+                                )?;
+                                let mut block_tx_idx = 0usize;
+                                for parsed in all_parsed_blocks {
+                                    let tx_count = parsed.transactions_count as usize;
+                                    let tx_slice =
+                                        &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+                                    block_tx_idx += tx_count;
 
-                                let tx_views: Vec<crate::db::writer::activities::TxView<'_>> =
-                                    tx_slice
-                                        .iter()
-                                        .map(
-                                            |td| -> Result<
-                                                crate::db::writer::activities::TxView<'_>,
-                                            > {
-                                                let inputs = build_activity_input_views(
-                                                    store,
-                                                    td,
-                                                    parsed.number,
-                                                    &input_cell_info,
-                                                    &batch_cell_infos,
-                                                )?;
-                                                Ok(crate::db::writer::activities::TxView {
-                                                    tx_hash: &td.hash,
-                                                    block_hash: &parsed.hash,
-                                                    tx_index: td.tx_index,
-                                                    block_number: parsed.number,
-                                                    timestamp: parsed.timestamp.timestamp_millis(),
-                                                    is_cellbase: td.is_cellbase,
-                                                    inputs,
-                                                    outputs: &td.cells,
-                                                    outputs_data: &td.outputs_data,
-                                                })
-                                            },
-                                        )
-                                        .collect::<Result<Vec<_>>>()?;
+                                    let tx_views: Vec<crate::db::writer::activities::TxView<'_>> =
+                                        tx_slice
+                                            .iter()
+                                            .map(
+                                                |td| -> Result<
+                                                    crate::db::writer::activities::TxView<'_>,
+                                                > {
+                                                    let inputs = build_activity_input_views(
+                                                        store,
+                                                        td,
+                                                        parsed.number,
+                                                        &input_cell_info,
+                                                        &batch_cell_infos,
+                                                    )?;
+                                                    Ok(crate::db::writer::activities::TxView {
+                                                        tx_hash: &td.hash,
+                                                        block_hash: &parsed.hash,
+                                                        tx_index: td.tx_index,
+                                                        block_number: parsed.number,
+                                                        timestamp: parsed
+                                                            .timestamp
+                                                            .timestamp_millis(),
+                                                        is_cellbase: td.is_cellbase,
+                                                        inputs,
+                                                        outputs: &td.cells,
+                                                        outputs_data: &td.outputs_data,
+                                                    })
+                                                },
+                                            )
+                                            .collect::<Result<Vec<_>>>()?;
 
-                                let activities =
-                                    crate::db::writer::activities::build_activities_for_block(
-                                        &tx_views,
-                                        &token_info_cache,
-                                    );
-                                for (lock_hash, entry) in activities {
-                                    put_activity_with_undo_log(
-                                        &mut domain_batch,
-                                        &mut activity_batch,
-                                        &mut append_undo_seq_by_block,
-                                        &lock_hash,
-                                        entry.block_number,
-                                        entry.tx_index,
-                                        &entry,
-                                    );
+                                    let activities =
+                                        crate::db::writer::activities::build_activities_for_block(
+                                            &tx_views,
+                                            &token_info_cache,
+                                        );
+                                    for (lock_hash, entry) in activities {
+                                        put_activity_with_undo_log(
+                                            &mut domain_batch,
+                                            &mut activity_batch,
+                                            &mut append_undo_seq_by_block,
+                                            &lock_hash,
+                                            entry.block_number,
+                                            entry.tx_index,
+                                            &entry,
+                                        );
+                                    }
                                 }
-                            }
-                            let mut commit_ms = 0.0;
-                            if !domain_batch.is_empty() {
-                                commit_ms += commit_phase_no_wal(
-                                    "T_ACT_reorg_history",
-                                    first_block,
-                                    last_block,
+                                Ok((
+                                    t.elapsed().as_secs_f64() * 1000.0,
                                     domain_batch,
-                                )?;
-                            }
-                            if !activity_batch.is_empty() {
-                                commit_ms += commit_phase_no_wal(
-                                    "T_ACT_activities",
-                                    first_block,
-                                    last_block,
                                     activity_batch,
-                                )?;
-                            }
-                            Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
-                        }))
+                                ))
+                            }),
+                        )
                     } else {
                         None
                     };
 
-                    let (t1_ms, t1_commit_ms) = h1.join().expect("T1 panicked")?;
-                    let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
-                    let (t4_ms, t4_commit_ms) = h4.join().expect("T4 panicked")?;
-                    let (t5_ms, t5_commit_ms) = h5.join().expect("T5 panicked")?;
-                    let (t6a_ms, t6a_commit_ms) = h6a.join().expect("T6a panicked")?;
-                    let (t6b_ms, t6b_commit_ms) = h6b.join().expect("T6b panicked")?;
+                    // Collect thread results (uncommitted batches)
+                    let (t1_ms, t1_domain) = h1.join().expect("T1 panicked")?;
+                    let (t2_ms, t2_domain, t2_append) = h2.join().expect("T2 panicked")?;
+                    let (t4_ms, t4_domain) = h4.join().expect("T4 panicked")?;
+                    let (t5_ms, t5_domain) = h5.join().expect("T5 panicked")?;
+                    let (t6a_ms, t6a_domain, t6a_append) = h6a.join().expect("T6a panicked")?;
+                    let (t6b_ms, t6b_domain, t6b_append) = h6b.join().expect("T6b panicked")?;
                     let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                    let (t_act_ms, t_act_commit_ms) = match h_act {
-                        Some(h) => h.join().expect("T_ACT panicked")?,
-                        None => (0.0, 0.0),
+                    let (t_act_ms, t_act_domain, t_act_append) = match h_act {
+                        Some(h) => {
+                            let (ms, d, a) = h.join().expect("T_ACT panicked")?;
+                            (ms, Some(d), Some(a))
+                        }
+                        None => (0.0, None, None),
                     };
-                    let commit_total_ms = t1_commit_ms
-                        + t2_commit_ms
-                        + t4_commit_ms
-                        + t5_commit_ms
-                        + t6a_commit_ms
-                        + t6b_commit_ms
-                        + t_act_commit_ms;
+
+                    // Merge all domain batches into one WriteBatch
+                    let mut merged_domain = t1_domain;
+                    merged_domain.merge_from(t2_domain);
+                    merged_domain.merge_from(t4_domain);
+                    merged_domain.merge_from(t5_domain);
+                    merged_domain.merge_from(t6a_domain);
+                    merged_domain.merge_from(t6b_domain);
+                    if let Some(act_domain) = t_act_domain {
+                        merged_domain.merge_from(act_domain);
+                    }
+
+                    // Add finalize data (block headers + stats) to merged domain batch
+                    writer.insert_blocks_batch(&block_refs, &mut merged_domain)?;
+                    self.write_batch_stats_to_batch(&stats, &mut merged_domain)?;
+
+                    // Single domain commit
+                    let domain_commit_ms = commit_phase_no_wal(
+                        "consolidated_domain",
+                        first_block,
+                        last_block,
+                        merged_domain,
+                    )?;
+
+                    // Merge all append-only batches into one
+                    let mut merged_append = t2_append;
+                    merged_append.merge_from(t6a_append);
+                    merged_append.merge_from(t6b_append);
+                    if let Some(act_append) = t_act_append {
+                        merged_append.merge_from(act_append);
+                    }
+
+                    // Single append commit (if non-empty)
+                    let append_commit_ms = if !merged_append.is_empty() {
+                        commit_phase_no_wal(
+                            "consolidated_append",
+                            first_block,
+                            last_block,
+                            merged_append,
+                        )?
+                    } else {
+                        0.0
+                    };
+
+                    let commit_total_ms = domain_commit_ms + append_commit_ms;
                     Ok((
                         stats,
                         [t1_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms],
@@ -6146,8 +6153,9 @@ impl Indexer {
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
 
         // Finalization: block headers + stats commit
+        // Bulk sync path handles finalization inside the consolidated commit above.
         let t_finalize = Instant::now();
-        {
+        if !bulk_sync_mode {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
                 .insert_blocks_batch(&block_refs, &mut core_batch)?;
@@ -6161,33 +6169,18 @@ impl Indexer {
                 "Batch finalize commit start"
             );
             let finalize_commit_started = Instant::now();
-            if bulk_sync_mode {
-                core_batch.commit_no_wal().with_context(|| {
-                    format!(
-                        "core finalize commit_no_wal failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-                stats_batch.commit_no_wal().with_context(|| {
-                    format!(
-                        "stats finalize commit_no_wal failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-            } else {
-                core_batch.commit().with_context(|| {
-                    format!(
-                        "core finalize commit failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-                stats_batch.commit().with_context(|| {
-                    format!(
-                        "stats finalize commit failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-            }
+            core_batch.commit().with_context(|| {
+                format!(
+                    "core finalize commit failed for blocks {}-{}",
+                    first_block, last_block
+                )
+            })?;
+            stats_batch.commit().with_context(|| {
+                format!(
+                    "stats finalize commit failed for blocks {}-{}",
+                    first_block, last_block
+                )
+            })?;
             let finalize_commit_ms = finalize_commit_started.elapsed().as_secs_f64() * 1000.0;
             write_commit_ms += finalize_commit_ms;
             if finalize_commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
