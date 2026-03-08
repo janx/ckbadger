@@ -2689,6 +2689,7 @@ impl Indexer {
                 }
                 block_tx_idx += tx_count_for_block;
             }
+            mnft_state.flush_to_batch(&mut nft_batch);
             let commit_started = Instant::now();
             nft_batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
@@ -4361,6 +4362,7 @@ impl Indexer {
                     }
                     // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                     nft_activity_acc.flush(&mut activity_batch);
+                    mnft_state.flush_to_batch(&mut batch);
                     let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     if !activity_batch.is_empty() {
@@ -5758,6 +5760,7 @@ impl Indexer {
                     })?;
                 }
 
+                mnft_state.flush_to_batch(&mut data_batch);
                 mnft_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
                 dotbit_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
                 spore_state
