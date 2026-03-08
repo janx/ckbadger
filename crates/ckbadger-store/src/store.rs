@@ -1487,8 +1487,8 @@ impl CkbadgerStore {
                 let result = self.db.set_options_cf(
                     cf,
                     &[
-                        ("level0_slowdown_writes_trigger", "64"),
-                        ("level0_stop_writes_trigger", "128"),
+                        ("level0_slowdown_writes_trigger", "96"),
+                        ("level0_stop_writes_trigger", "192"),
                         ("max_write_buffer_number", max_wb),
                         ("max_bytes_for_level_base", &level_base_str),
                         ("target_file_size_base", &file_base_str),
@@ -1530,7 +1530,7 @@ impl CkbadgerStore {
             fail,
             wbm_budget_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
             block_cache_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
-            "Bulk sync compaction options set: l0_slowdown=64, l0_stop=128, \
+            "Bulk sync compaction options set: l0_slowdown=96, l0_stop=192, \
              write_buffers mega=12/high=8/low=6"
         );
     }
