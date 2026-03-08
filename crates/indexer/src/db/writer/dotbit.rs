@@ -515,14 +515,7 @@ impl BatchWriter {
                 hour_bucket,
             );
             let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
-            let next = current.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "dotbit hourly transfer overflow: hour_bucket={}, current={}, account_id=0x{}",
-                    hour_bucket,
-                    current,
-                    hex::encode(&account.account_id)
-                )
-            })?;
+            let next = current + 1;
             state.put_hourly_transfer(key, next);
         }
         batch.put_dotbit_account_outpoint(
