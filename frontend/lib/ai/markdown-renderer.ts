@@ -22,6 +22,7 @@ import {
 } from '@/lib/api';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
+import { resolveBuildVersion } from '@/lib/runtime-config';
 import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 
 const DEFAULT_LIMIT = 20;
@@ -110,6 +111,7 @@ function buildMeta(pathname: string, pageType: string, origin: string) {
     canonical,
     pageType,
     generatedAt: new Date().toISOString(),
+    buildVersion: resolveBuildVersion(),
   };
 }
 

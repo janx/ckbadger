@@ -4,6 +4,7 @@ export interface MarkdownDocMeta {
   canonical: string;
   pageType: string;
   generatedAt: string;
+  buildVersion: string;
 }
 
 export function formatValue(value: unknown): string {
@@ -52,6 +53,7 @@ export function buildMarkdownDocument(meta: MarkdownDocMeta, sections: string[])
     `canonical: ${escapeYaml(meta.canonical)}`,
     `pageType: ${escapeYaml(meta.pageType)}`,
     `generatedAt: ${escapeYaml(meta.generatedAt)}`,
+    `buildVersion: ${escapeYaml(meta.buildVersion)}`,
     'formatVersion: 1',
     '---',
   ].join('\n');

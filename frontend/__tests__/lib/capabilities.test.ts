@@ -16,6 +16,8 @@ describe('buildAiCapabilities', () => {
     expect(capabilities.responseHeaders.raw.formatHeader).toBe('x-ckbadger-format');
     expect(capabilities.responseHeaders.raw.profileHeader).toBe('x-ckbadger-profile');
     expect(capabilities.responseHeaders.raw.schemaHeader).toBe('x-ckbadger-schema');
+    expect(capabilities.responseMetadata.markdown.frontmatterFields).toContain('buildVersion');
+    expect(capabilities.responseMetadata.raw.metaFields).toContain('buildVersion');
   });
 
   it('declares tx debugger profile in raw route matrix', () => {

@@ -1,5 +1,8 @@
 mod supervisor;
 
+#[cfg(test)]
+mod build_version_format;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -22,12 +25,18 @@ use ckbadger_store::{
 };
 use ckbadger_tui::entry::{run_tui, TuiServiceConfig};
 
+const BUILD_VERSION: &str = env!("CKBADGER_BUILD_VERSION");
+
 // ---------------------------------------------------------------------------
 // CLI definition
 // ---------------------------------------------------------------------------
 
 #[derive(Parser)]
-#[command(name = "ckbadger", about = "CKB blockchain explorer")]
+#[command(
+    name = "ckbadger",
+    about = "A local-first and agent-friendly CKB explorer",
+    version = BUILD_VERSION
+)]
 struct Cli {
     /// Work directory (default: current directory)
     #[arg(short = 'C', long, global = true)]
@@ -263,6 +272,7 @@ async fn cmd_internal(workdir: &Path, args: &InternalArgs) -> Result<()> {
                 api_port: config.api.port,
                 ckb_network: config.ckb.network.clone(),
                 ckb_rpc_url: config.ckb.rpc_url.clone(),
+                build_version: BUILD_VERSION.to_string(),
                 frontend_dir,
             };
             run_frontend_server(frontend_config).await
@@ -498,9 +508,7 @@ fn cmd_init(workdir: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
-    let config = load_config(workdir)?;
     let work = WorkDir::resolve(workdir);
-    let store_paths = resolve_store_paths(workdir, &config.store);
 
     if !work.is_initialized() {
         bail!(
@@ -508,6 +516,9 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
             work.config_path.display()
         );
     }
+
+    let config = load_config(workdir)?;
+    let store_paths = resolve_store_paths(workdir, &config.store);
 
     if !args.confirm {
         bail!("purge requires --confirm flag to proceed");
@@ -653,7 +664,57 @@ fn resolve_frontend_dir(work: &WorkDir) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
     use tempfile::TempDir;
+
+    // -- clap metadata --
+
+    #[test]
+    fn test_cli_help_uses_project_positioning_title() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_help().to_string();
+
+        assert!(help.contains("A local-first and agent-friendly CKB explorer"));
+    }
+
+    #[test]
+    fn test_format_build_version_omits_main_branch_label() {
+        assert_eq!(
+            build_version_format::format_build_version("0.1.0", "main", "abcdef123456"),
+            "0.1.0@abcdef123456"
+        );
+    }
+
+    #[test]
+    fn test_format_build_version_includes_non_main_branch_label_verbatim() {
+        assert_eq!(
+            build_version_format::format_build_version("0.1.0", "feature/foo", "abcdef123456"),
+            "0.1.0+feature/foo@abcdef123456"
+        );
+    }
+
+    #[test]
+    fn test_cli_version_uses_semver_optional_branch_and_commit_hash() {
+        let cmd = Cli::command();
+        let version = cmd.get_version().expect("cli version should be present");
+        let (version_prefix, hash) = version
+            .rsplit_once('@')
+            .expect("version should contain a single '@'");
+
+        assert!(
+            !version.contains("+main@"),
+            "main branch should not be rendered explicitly: {version}"
+        );
+        assert!(
+            !version_prefix.is_empty(),
+            "version prefix should not be empty"
+        );
+        assert!(hash.len() >= 7, "hash should use at least 7 hex chars");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "hash should be hex: {hash}"
+        );
+    }
 
     // -- init command --
 

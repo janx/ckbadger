@@ -10,7 +10,7 @@ import type {
 } from '@/lib/api';
 import { api } from '@/lib/api';
 import type { ParsedRawPage } from '@/lib/ai/raw-route';
-import { resolveCkbNetwork, resolveCkbRpcUrl } from '@/lib/runtime-config';
+import { resolveBuildVersion, resolveCkbNetwork, resolveCkbRpcUrl } from '@/lib/runtime-config';
 import {
   analyzeWitness,
   buildScriptGroupLens,
@@ -50,6 +50,7 @@ interface RawMeta {
   format: typeof RAW_FORMAT;
   profile: RawProfile;
   schemaVersion: string;
+  buildVersion: string;
   network: string;
   path: string;
   canonical: string;
@@ -332,6 +333,7 @@ function buildMeta(
     format: RAW_FORMAT,
     profile,
     schemaVersion: RAW_SCHEMA_VERSION,
+    buildVersion: resolveBuildVersion(),
     network: resolveCkbNetwork(),
     path: pathname,
     canonical: `${origin}${pathname}`,

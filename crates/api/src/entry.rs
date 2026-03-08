@@ -37,6 +37,7 @@ pub struct FrontendServiceConfig {
     pub api_port: u16,
     pub ckb_network: String,
     pub ckb_rpc_url: String,
+    pub build_version: String,
     /// Local filesystem override directory (e.g. workdir/frontend/).
     /// When set, serves from disk instead of embedded assets.
     pub frontend_dir: Option<PathBuf>,
@@ -119,6 +120,7 @@ struct FrontendRuntimeConfig {
     api_port: u16,
     ckb_network: String,
     ckb_rpc_url: String,
+    build_version: String,
 }
 
 pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
@@ -126,6 +128,7 @@ pub fn build_frontend_router(config: FrontendServiceConfig) -> Result<Router> {
         api_port: config.api_port,
         ckb_network: config.ckb_network.clone(),
         ckb_rpc_url: config.ckb_rpc_url.clone(),
+        build_version: config.build_version.clone(),
     };
 
     if let Some(frontend_dir) = config.frontend_dir {
@@ -187,6 +190,8 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
         .expect("failed to serialize ckb_network for runtime config");
     let rpc_url =
         serde_json::to_string(&config.ckb_rpc_url).expect("failed to serialize ckb_rpc_url");
+    let build_version = serde_json::to_string(&config.build_version)
+        .expect("failed to serialize build_version for runtime config");
     let body = format!(
         r#"(() => {{
   const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
@@ -197,12 +202,14 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
     wsUrl: `${{wsProtocol}}//${{hostname}}:{api_port}/ws`,
     ckbNetwork: {network},
     ckbRpcUrl: {rpc_url},
+    buildVersion: {build_version},
   }};
 }})();
 "#,
         api_port = config.api_port,
         network = network,
         rpc_url = rpc_url,
+        build_version = build_version,
     );
 
     (
@@ -312,6 +319,7 @@ mod tests {
             api_port: 8101,
             ckb_network: "mainnet".to_string(),
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+            build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(PathBuf::from("/work/frontend")),
         };
 
@@ -334,6 +342,7 @@ mod tests {
             api_port: 8101,
             ckb_network: "mainnet".to_string(),
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+            build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: None,
         };
 
@@ -357,6 +366,7 @@ mod tests {
             api_port: 8101,
             ckb_network: "mainnet".to_string(),
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+            build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
         })
         .unwrap_err();
@@ -374,6 +384,7 @@ mod tests {
             api_port: 8101,
             ckb_network: "mainnet".to_string(),
             ckb_rpc_url: "http://127.0.0.1:8114".to_string(),
+            build_version: "0.1.0+testbuild".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
         })
         .unwrap();
@@ -404,6 +415,7 @@ mod tests {
             api_port: 9101,
             ckb_network: "testnet".to_string(),
             ckb_rpc_url: "http://127.0.0.1:18114".to_string(),
+            build_version: "0.1.0+feature/foo@abcdef123456".to_string(),
             frontend_dir: Some(dir.path().to_path_buf()),
         })
         .unwrap();
@@ -424,5 +436,7 @@ mod tests {
         assert!(text.contains(":9101/api/v1"));
         assert!(text.contains("\"testnet\""));
         assert!(text.contains("\"http://127.0.0.1:18114\""));
+        assert!(text.contains("buildVersion"));
+        assert!(text.contains("\"0.1.0+feature/foo@abcdef123456\""));
     }
 }

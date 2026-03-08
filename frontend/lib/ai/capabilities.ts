@@ -42,6 +42,32 @@ export interface AiCapabilities {
       schemaHeader: 'x-ckbadger-schema';
     };
   };
+  responseMetadata: {
+    markdown: {
+      frontmatterFields: readonly [
+        'title',
+        'path',
+        'canonical',
+        'pageType',
+        'generatedAt',
+        'buildVersion',
+        'formatVersion',
+      ];
+    };
+    raw: {
+      metaFields: readonly [
+        'format',
+        'profile',
+        'schemaVersion',
+        'buildVersion',
+        'network',
+        'path',
+        'canonical',
+        'pageType',
+        'generatedAt',
+      ];
+    };
+  };
   routes: {
     markdown: readonly string[];
     raw: readonly string[];
@@ -94,6 +120,32 @@ export function buildAiCapabilities(origin?: string): AiCapabilities & { origin?
         formatHeader: 'x-ckbadger-format',
         profileHeader: 'x-ckbadger-profile',
         schemaHeader: 'x-ckbadger-schema',
+      },
+    },
+    responseMetadata: {
+      markdown: {
+        frontmatterFields: [
+          'title',
+          'path',
+          'canonical',
+          'pageType',
+          'generatedAt',
+          'buildVersion',
+          'formatVersion',
+        ],
+      },
+      raw: {
+        metaFields: [
+          'format',
+          'profile',
+          'schemaVersion',
+          'buildVersion',
+          'network',
+          'path',
+          'canonical',
+          'pageType',
+          'generatedAt',
+        ],
       },
     },
     routes: {
