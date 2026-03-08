@@ -397,17 +397,13 @@ impl TuiDb {
     }
 
     fn build_from_status(&self, status: &SyncStatusData) -> Result<SyncStatusRow> {
+        // Fallback path: progress data is stale/absent, so we only have the
+        // persisted sync status.  Without a live progress loop we cannot know
+        // the chain tip, so tip_block == chain_tip and we report "caught up".
         let tip_block = status.tip_block_number;
         let chain_tip = tip_block;
-
-        let blocks_behind = chain_tip - tip_block;
-        let is_syncing = blocks_behind > 0;
-
-        let progress = if chain_tip > 0 {
-            (tip_block as f64 / chain_tip as f64 * 100.0).min(100.0)
-        } else {
-            100.0
-        };
+        let is_syncing = false;
+        let progress = 100.0;
 
         let elapsed_time = status.sync_started_at.map(|started| {
             let end = status
@@ -416,17 +412,7 @@ impl TuiDb {
             format_duration_smart((end - started) as f64)
         });
 
-        let eta = if is_syncing {
-            status.sync_ema_rate.and_then(|rate| {
-                if rate > 0.0 {
-                    Some(format_duration_smart(blocks_behind as f64 / rate))
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
+        let eta = None;
 
         Ok(SyncStatusRow {
             tip_block,
