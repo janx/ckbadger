@@ -441,6 +441,19 @@ interface Activity {
   peers: string[];
 }
 
+interface GlobalActivity {
+  address: string;
+  txHash: string;
+  blockNumber: number;
+  txIndex: number;
+  timestamp: string;
+  ckbDelta: string;
+  occupiedDelta: string;
+  isCellbase: boolean;
+  assetChanges: ActivityAssetChange[];
+  peers: string[];
+}
+
 interface GraphNode {
   id: string;
   nodeType: string;
@@ -1259,6 +1272,7 @@ export type {
   HardforkActivation,
   Activity,
   ActivityAssetChange,
+  GlobalActivity,
 };
 
 export const api = {
@@ -1377,6 +1391,10 @@ export const api = {
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
     return fetchApi(`/addresses/${addr}/activities?${query}`);
+  },
+
+  getLatestActivities: (limit: number = 8): Promise<GlobalActivity[]> => {
+    return fetchApi(`/activities/latest?limit=${limit}`);
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {
