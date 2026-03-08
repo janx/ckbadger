@@ -8,6 +8,7 @@ import { EpochProgress } from '@/components/chain-wave/epoch-progress';
 import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
 import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
+import { LatestActivities } from '@/components/latest-activities';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
 import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
 
@@ -60,6 +61,10 @@ export function HomeContent({ initialData }: HomeContentProps) {
 
       <div className="mt-6">
         <PipelinePreview initialBlocks={initialData.blocks} />
+      </div>
+
+      <div className="mt-6">
+        <LatestActivities isRealtime={isConnected} />
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
