@@ -1374,4 +1374,34 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].2, tx_hash_new);
     }
+
+    #[test]
+    fn test_activity_envelope_idempotent_write_after_reorg() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+
+        let envelope = ActivityTxEnvelope {
+            tx_hash: vec![0x55; 32],
+            block_number: 100,
+            tx_index: 0,
+            is_cellbase: true,
+            participants: vec![vec![0x66; 32]],
+            owner_views: vec![OwnerActivityViewStored {
+                ckb_delta: 500_00000000,
+                occupied_delta: 61_00000000,
+                asset_changes: vec![],
+            }],
+        };
+
+        // First write (initial sync)
+        let mut batch1 = StoreBatch::new(&store);
+        batch1.put_activity_tx_envelope(100, 0, &[0x55; 32], &envelope);
+        batch1.commit().unwrap();
+
+        // Second write (after reorg replay — same tx content, same envelope)
+        let mut batch2 = StoreBatch::new(&store);
+        batch2.put_activity_tx_envelope(100, 0, &[0x55; 32], &envelope);
+        // This should succeed via idempotent skip (same key + same value)
+        batch2.commit().unwrap();
+    }
 }
