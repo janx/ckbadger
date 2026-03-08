@@ -3662,19 +3662,12 @@ impl Indexer {
                     });
 
                     // T2: Transactions + Address Balances + Script Usage + Analytics + Addr TX index
-                    // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, STATS_SCRIPT, STATS_TOKEN, STATS_SPORE, STATS_NFT, REORG_UNDO_LOG_BY_BLOCK, ADDR_TX
+                    // CFs: TX_INDEX, TX_HASH_MAP, ADDR_BALANCE, SCRIPT_INFO, STATS_SCRIPT, STATS_TOKEN, STATS_SPORE, STATS_NFT, ADDR_TX
                     let h2 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
                         let mut append_history_batch = StoreBatch::new(append_only_store);
-                        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
-                        if !all_tx_data.is_empty() {
-                            put_tx_context_undo_entries(
-                                &mut batch,
-                                &mut append_undo_seq_by_block,
-                                &all_tx_data,
-                            )?;
-                        }
+                        // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                         if !txs_for_batch.is_empty() {
                             writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
                         }
@@ -3729,16 +3722,10 @@ impl Indexer {
                                 &mut batch,
                             )?;
                         }
+                        // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                         for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                            put_addr_tx_with_undo_log(
-                                &mut batch,
-                                &mut append_history_batch,
-                                &mut append_undo_seq_by_block,
-                                lock_hash,
-                                *block_num,
-                                *tx_idx,
-                                tx_hash,
-                            );
+                            append_history_batch
+                                .put_addr_tx(lock_hash, *block_num, *tx_idx, tx_hash);
                         }
                         let mut commit_ms =
                             commit_phase_no_wal("T2_txs_addr", first_block, last_block, batch)?;
@@ -4149,7 +4136,7 @@ impl Indexer {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut activity_batch = StoreBatch::new(append_only_store);
-                    let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+                    // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut mnft_state = writer.new_mnft_batch_state();
                     let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
@@ -4309,43 +4296,11 @@ impl Indexer {
                             activity.timestamp_ms,
                             &mut activity_batch,
                         );
-                        if inserted {
-                            let append_key = keys::encode_nft_collection_activity_key(
-                                &DOTBIT_SENTINEL_COLLECTION,
-                                activity.block_number,
-                                activity.tx_idx,
-                                &activity.block_hash,
-                                tx_hash,
-                            );
-                            put_append_delete_undo_entry(
-                                &mut batch,
-                                &mut append_undo_seq_by_block,
-                                UndoSeqScope::AppendNftCollectionActivity,
-                                activity.block_number,
-                                ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
-                                &append_key,
-                            );
-                        }
+                        // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
+                        let _ = inserted;
                     }
-                    for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
-                        nft_activity_acc.flush(&mut activity_batch)
-                    {
-                        let append_key = keys::encode_nft_collection_activity_key(
-                            &collection_id,
-                            block_number,
-                            tx_idx,
-                            &block_hash,
-                            &tx_hash,
-                        );
-                        put_append_delete_undo_entry(
-                            &mut batch,
-                            &mut append_undo_seq_by_block,
-                            UndoSeqScope::AppendNftCollectionActivity,
-                            block_number,
-                            ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
-                            &append_key,
-                        );
-                    }
+                    // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
+                    nft_activity_acc.flush(&mut activity_batch);
                     let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     if !activity_batch.is_empty() {
@@ -4617,13 +4572,12 @@ impl Indexer {
                 });
 
                     // T_ACT: Activity builder
-                    // CFs: REORG_UNDO_LOG_BY_BLOCK, ACTIVITIES
+                    // CFs: ACTIVITIES
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<(f64, f64)> {
                             let t = Instant::now();
-                            let mut domain_batch = StoreBatch::new(store);
+                            // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                             let mut activity_batch = StoreBatch::new(append_only_store);
-                            let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
                             let token_info_cache = load_activity_token_info_cache(
                                 store,
                                 &all_tx_data,
@@ -4671,10 +4625,7 @@ impl Indexer {
                                         &token_info_cache,
                                     );
                                 for (lock_hash, entry) in activities {
-                                    put_activity_with_undo_log(
-                                        &mut domain_batch,
-                                        &mut activity_batch,
-                                        &mut append_undo_seq_by_block,
+                                    activity_batch.put_activity(
                                         &lock_hash,
                                         entry.block_number,
                                         entry.tx_index,
@@ -4683,14 +4634,6 @@ impl Indexer {
                                 }
                             }
                             let mut commit_ms = 0.0;
-                            if !domain_batch.is_empty() {
-                                commit_ms += commit_phase_no_wal(
-                                    "T_ACT_reorg_history",
-                                    first_block,
-                                    last_block,
-                                    domain_batch,
-                                )?;
-                            }
                             if !activity_batch.is_empty() {
                                 commit_ms += commit_phase_no_wal(
                                     "T_ACT_activities",
