@@ -381,7 +381,6 @@ async fn cmd_status(workdir: &Path) -> Result<()> {
             Ok(status) => {
                 println!("Sync status:");
                 println!("  Tip block:           {}", status.tip_block_number);
-                println!("  Derived tip block:   {}", status.derived_tip_block_number);
                 println!("  Total transactions:  {}", status.total_transactions);
                 println!("  Total cells created: {}", status.total_cells_created);
                 println!("  Total cells consumed:{}", status.total_cells_consumed);
