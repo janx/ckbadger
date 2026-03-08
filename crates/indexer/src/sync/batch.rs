@@ -6850,7 +6850,7 @@ mod tests {
     #[test]
     fn test_resolve_input_udt_info_reads_live_cells_and_refreshes_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
         let cache = DashMap::new();
 

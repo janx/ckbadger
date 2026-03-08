@@ -465,24 +465,21 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(0, &make_header(0x30, 1_700_000_000_000));
         batch.put_block_header(1, &make_header(0x31, 1_700_000_010_000));
-        batch.put_cell(
-            &tx_hash,
-            0,
-            &LiveCellInfo {
-                capacity: 100,
-                occupied_capacity: 100,
-                created_at_block: 0,
-                lock_script_hash: lock_hash.clone(),
-                lock_code_hash: vec![0x11; 32],
-                lock_hash_type: 1,
-                lock_args: vec![],
-                type_script_hash: None,
-                type_code_hash: None,
-                type_args: None,
-                data_size: 0,
-                udt_amount: None,
-            },
-        );
+        let cell_info = LiveCellInfo {
+            capacity: 100,
+            occupied_capacity: 100,
+            created_at_block: 0,
+            lock_script_hash: lock_hash.clone(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            udt_amount: None,
+        };
+        batch.put_cell(&tx_hash, 0, &cell_info);
         batch.put_addr_balance(
             &lock_hash,
             &AddressBalance {
@@ -499,7 +496,9 @@ mod tests {
         );
         batch.commit().unwrap();
 
+        // Write cell payload to append store (cell_payloads CF lives in append-only).
         let mut append_batch = StoreBatch::new(&append_store);
+        append_batch.put_cell_payload(0, &tx_hash, 0, &cell_info);
         append_batch.put_addr_tx(&lock_hash, 0, 0, &tx_hash);
         append_batch.put_addr_tx(&lock_hash, 0, 1, &[0xCD; 32]);
         append_batch.commit().unwrap();

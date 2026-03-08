@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_falls_back_to_token_type_code_hash() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAB; 32];
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_ignores_typed_cells_without_token_metadata() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xEE; 32];
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_skips_xudt_cells_without_amount() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAC; 32];
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn test_get_udt_cells_info_batch_errors_on_sudt_cells_without_amount() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_hash = vec![0xAD; 32];
