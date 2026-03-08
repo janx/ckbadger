@@ -2689,6 +2689,7 @@ impl Indexer {
                 }
                 block_tx_idx += tx_count_for_block;
             }
+            spore_state.flush_to_batch(&mut nft_batch);
             mnft_state.flush_to_batch(&mut nft_batch);
             dotbit_state.flush_to_batch(&mut nft_batch);
             let commit_started = Instant::now();
@@ -2868,6 +2869,7 @@ impl Indexer {
                 .ok_or_else(|| anyhow!("nft activity delta overflow while writing batch"))?;
         }
         let mut pending_nft_collection_aggs = HashMap::new();
+        spore_state.flush_to_batch(&mut consume_batch);
         dotbit_state.flush_to_batch(&mut consume_batch);
         dotbit_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
         spore_state.extend_pending_nft_collection_aggregates(&mut pending_nft_collection_aggs);
@@ -4181,6 +4183,7 @@ impl Indexer {
                             block_tx_idx += tx_count_for_block;
                         }
                         spore_activity_acc.flush(&mut activity_batch);
+                        spore_state.flush_to_batch(&mut batch);
                         let mut commit_ms =
                             commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
                         if !activity_batch.is_empty() {
@@ -5763,6 +5766,7 @@ impl Indexer {
                     })?;
                 }
 
+                spore_state.flush_to_batch(&mut data_batch);
                 mnft_state.flush_to_batch(&mut data_batch);
                 dotbit_state.flush_to_batch(&mut data_batch);
                 mnft_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
