@@ -27,7 +27,9 @@ pub(crate) const ADAPTIVE_BATCH_WRITE_HI_US_PER_TX: f64 = 900.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_WRITE_MS: f64 = 10_000.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_COMMIT_MS: f64 = 3_000.0;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX: f64 = 1_500.0;
+#[allow(dead_code)] // Kept for future use; removed from decision paths.
 pub(crate) const ADAPTIVE_BATCH_MODERATE_L0_TOTAL_FILES: u64 = 48;
+#[allow(dead_code)] // Kept for future use; removed from decision paths.
 pub(crate) const ADAPTIVE_BATCH_SEVERE_L0_TOTAL_FILES: u64 = 80;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED: u64 = 2;
 pub(crate) const ADAPTIVE_BATCH_SEVERE_COOLDOWN_STEPS: u64 = 2;
@@ -98,7 +100,8 @@ pub(crate) struct AdaptiveBatchInput {
     pub(crate) parse_queue_fill_pct: Option<f64>,
     pub(crate) writer_queue_fill_pct: Option<f64>,
     pub(crate) memory_ratio_pct: Option<f64>,
-    /// Total L0 file count across all CFs (from memory_stats)
+    /// Total L0 file count across all CFs (diagnostics only; not used in decisions)
+    #[allow(dead_code)]
     pub(crate) l0_files_total: Option<u64>,
     /// Max L0 file count across all CFs (from memory_stats)
     pub(crate) l0_files_max: Option<u64>,
@@ -308,7 +311,7 @@ impl AdaptiveBatchController {
         let previous_min_target_batch_txs = self
             .min_target_batch_txs
             .load(Ordering::Relaxed)
-            .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_MAX_TXS);
+            .clamp(ADAPTIVE_BATCH_HARD_MIN_TXS, ADAPTIVE_BATCH_BASE_MIN_TXS);
         let mut new_target_batch_txs = previous_target_batch_txs;
         let mut new_inflight_limit = previous_inflight_limit;
         let mut new_min_target_batch_txs = previous_min_target_batch_txs;
@@ -336,9 +339,6 @@ impl AdaptiveBatchController {
             write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_WRITE_HI_US_PER_TX);
         let target_unit_write_cost =
             write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_WRITE_TARGET_US_PER_TX);
-        let healthy_absolute_write_cost = input.write_ms < ADAPTIVE_BATCH_WRITE_LO_MS
-            && input.commit_ms < ADAPTIVE_BATCH_HEALTHY_BONUS_COMMIT_MS
-            && write_us_per_tx.is_some_and(|us| us < ADAPTIVE_BATCH_WRITE_HEALTHY_US_PER_TX);
         let queue_pressure = input
             .parse_queue_fill_pct
             .is_some_and(|pct| pct >= ADAPTIVE_BATCH_PARSE_PRESSURE_PCT)
@@ -350,20 +350,14 @@ impl AdaptiveBatchController {
         // and immutable memtable accumulation BEFORE they cause write stalls.
         // L0 thresholds (40/20) are architectural; pending bytes and immutable memtable
         // thresholds scale with the memory profile.
-        let rocksdb_severe_pressure = input
-            .l0_files_total
-            .is_some_and(|l0| l0 >= ADAPTIVE_BATCH_SEVERE_L0_TOTAL_FILES)
-            || input.l0_files_max.is_some_and(|l0| l0 >= 40)
+        let rocksdb_severe_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 40)
             || input
                 .compaction_pending_bytes
                 .is_some_and(|b| b >= input.severe_pending_threshold)
             || input
                 .immutable_memtables
                 .is_some_and(|imm| imm >= input.severe_imm_threshold);
-        let rocksdb_moderate_pressure = input
-            .l0_files_total
-            .is_some_and(|l0| l0 >= ADAPTIVE_BATCH_MODERATE_L0_TOTAL_FILES)
-            || input.l0_files_max.is_some_and(|l0| l0 >= 20)
+        let rocksdb_moderate_pressure = input.l0_files_max.is_some_and(|l0| l0 >= 20)
             || input
                 .compaction_pending_bytes
                 .is_some_and(|b| b >= input.moderate_pending_threshold)
@@ -371,11 +365,10 @@ impl AdaptiveBatchController {
                 .immutable_memtables
                 .is_some_and(|imm| imm >= input.moderate_imm_threshold);
 
-        let far_bulk_cost_backoff_allowed = near_tip || !healthy_absolute_write_cost;
         let severe_pressure_signal = input.write_ms >= ADAPTIVE_BATCH_SEVERE_WRITE_MS
             || input.commit_ms >= ADAPTIVE_BATCH_SEVERE_COMMIT_MS
             || write_us_per_tx.is_some_and(|us| us >= ADAPTIVE_BATCH_SEVERE_WRITE_US_PER_TX)
-            || (rocksdb_severe_pressure && far_bulk_cost_backoff_allowed);
+            || rocksdb_severe_pressure;
         let severe_pressure_streak = if severe_pressure_signal {
             self.severe_pressure_streak.fetch_add(1, Ordering::Relaxed) + 1
         } else {
@@ -385,11 +378,11 @@ impl AdaptiveBatchController {
         let severe_pressure = severe_pressure_streak >= ADAPTIVE_BATCH_SEVERE_CONSECUTIVE_REQUIRED;
         let moderate_pressure = target_unit_write_cost
             || (input.write_ms > ADAPTIVE_BATCH_WRITE_HI_MS && throughput_drop_under_load)
-            || (queue_pressure && throughput_drop_under_load && far_bulk_cost_backoff_allowed)
+            || (queue_pressure && throughput_drop_under_load)
             || input
                 .memory_ratio_pct
                 .is_some_and(|pct| pct >= ADAPTIVE_BATCH_MEMORY_PRESSURE_PCT)
-            || (rocksdb_moderate_pressure && far_bulk_cost_backoff_allowed);
+            || rocksdb_moderate_pressure;
 
         if severe_pressure {
             new_target_batch_txs = ((previous_target_batch_txs as f64) * 0.7).round() as u64;
@@ -482,8 +475,7 @@ impl AdaptiveBatchController {
             }
         }
 
-        let severe_floor_relaxation = !near_tip
-            && (severe_pressure || (severe_pressure_signal && reason == Some("moderate_backoff")));
+        let severe_floor_relaxation = !near_tip && severe_pressure;
 
         if near_tip {
             new_min_target_batch_txs = new_min_target_batch_txs
@@ -682,101 +674,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_after_write_l0_total_only_does_not_backoff_in_far_bulk() {
-        let controller = AdaptiveBatchController::new(8);
-        controller
-            .target_batch_txs
-            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
-        controller
-            .inflight_limit
-            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
-        controller.min_target_batch_txs.store(
-            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
-            Ordering::Relaxed,
-        );
-
-        let adjustment = controller.update_after_write(AdaptiveBatchInput {
-            write_ms: 1_200.0,
-            commit_ms: 100.0,
-            batch_tx_count: 10_000,
-            blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
-            parse_queue_fill_pct: Some(10.0),
-            writer_queue_fill_pct: Some(10.0),
-            memory_ratio_pct: Some(10.0),
-            l0_files_total: Some(60),
-            l0_files_max: Some(3),
-            compaction_pending_bytes: None,
-            immutable_memtables: None,
-            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
-            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
-            severe_imm_threshold: 60,
-            moderate_imm_threshold: 30,
-        });
-
-        assert!(
-            adjustment.is_none(),
-            "l0_total alone should stay diagnostic while far-bulk write cost is still healthy"
-        );
-    }
-
-    #[test]
-    fn test_update_after_write_writer_only_pressure_does_not_shard_healthy_far_bulk_batches() {
-        let controller = AdaptiveBatchController::new(8);
-        controller
-            .target_batch_txs
-            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
-        controller
-            .inflight_limit
-            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
-        controller.min_target_batch_txs.store(
-            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
-            Ordering::Relaxed,
-        );
-        let _ = controller
-            .update_after_write(AdaptiveBatchInput {
-                write_ms: 200.0,
-                commit_ms: 0.0,
-                batch_tx_count: 10_000,
-                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 20_000,
-                parse_queue_fill_pct: Some(10.0),
-                writer_queue_fill_pct: Some(10.0),
-                memory_ratio_pct: Some(10.0),
-                l0_files_total: None,
-                l0_files_max: None,
-                compaction_pending_bytes: None,
-                immutable_memtables: None,
-                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
-                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
-                severe_imm_threshold: 60,
-                moderate_imm_threshold: 30,
-            })
-            .expect("seed sample should still count as a healthy adjustment");
-
-        let adjustment = controller.update_after_write(AdaptiveBatchInput {
-            write_ms: 336.0,
-            commit_ms: 135.6,
-            batch_tx_count: 5_488,
-            blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 20_000,
-            parse_queue_fill_pct: Some(3.4),
-            writer_queue_fill_pct: Some(100.0),
-            memory_ratio_pct: Some(10.0),
-            l0_files_total: None,
-            l0_files_max: None,
-            compaction_pending_bytes: None,
-            immutable_memtables: None,
-            severe_pending_threshold: 8 * 1024 * 1024 * 1024,
-            moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
-            severe_imm_threshold: 60,
-            moderate_imm_threshold: 30,
-        });
-
-        assert!(
-            adjustment.is_none(),
-            "writer-only pressure should not shrink healthy far-bulk batches just because tx throughput dipped"
-        );
-    }
-
-    #[test]
     fn test_update_after_write_severe_hint_in_far_bulk_does_not_noop_at_bulk_floor() {
         let controller = AdaptiveBatchController::new(8);
         controller.target_batch_txs.store(
@@ -791,6 +688,34 @@ mod tests {
             .inflight_limit
             .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
 
+        // First severe hint: streak=1, below consecutive threshold; moderate_backoff
+        // is clamped by bulk floor so target does not decrease.
+        let first = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 100.0,
+                commit_ms: 0.0,
+                batch_tx_count: 8_000,
+                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
+                memory_ratio_pct: Some(10.0),
+                l0_files_total: None,
+                l0_files_max: None,
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
+            })
+            .expect("first severe hint should still adjust (min floor sync)");
+        assert_eq!(
+            first.new_target_batch_txs, first.previous_target_batch_txs,
+            "target should not decrease on first severe hint (clamped by bulk floor)"
+        );
+
+        // Second severe hint: streak=2, triggers severe_pressure_backoff with
+        // severe_floor_relaxation, allowing target below bulk floor.
         let adjustment = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 100.0,
@@ -809,8 +734,9 @@ mod tests {
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
             })
-            .expect("severe hint should still produce a real far-bulk backoff");
+            .expect("consecutive severe hints should produce severe_pressure_backoff");
 
+        assert_eq!(adjustment.reason, "severe_pressure_backoff");
         assert!(adjustment.new_target_batch_txs < adjustment.previous_target_batch_txs);
     }
 
@@ -898,6 +824,8 @@ mod tests {
             .inflight_limit
             .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
 
+        // First severe hint: streak=1, below consecutive threshold.
+        // moderate_backoff is clamped by bulk floor so target does not decrease.
         let first = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 100.0,
@@ -916,18 +844,14 @@ mod tests {
                 severe_imm_threshold: 60,
                 moderate_imm_threshold: 30,
             })
-            .expect("first severe hint should already relax far-bulk floor");
-        assert_eq!(first.reason, "moderate_backoff");
+            .expect("first severe hint should still adjust (min floor sync)");
         assert_eq!(
-            first.new_inflight_limit,
-            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT
+            first.new_target_batch_txs, first.previous_target_batch_txs,
+            "target should not decrease on first severe hint (clamped by bulk floor)"
         );
-        assert_eq!(
-            first.new_min_target_batch_txs,
-            ADAPTIVE_BATCH_BULK_SEVERE_MIN_TARGET_TXS
-        );
-        assert!(first.new_target_batch_txs < ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS);
 
+        // Second severe hint: streak=2, triggers severe_pressure with
+        // severe_floor_relaxation, allowing values below bulk floor.
         let second = controller
             .update_after_write(AdaptiveBatchInput {
                 write_ms: ADAPTIVE_BATCH_SEVERE_WRITE_MS + 200.0,
@@ -1483,6 +1407,93 @@ mod tests {
     #[should_panic(expected = "tx_cap and input_cap must be > 0")]
     fn test_plan_fetch_sub_batches_panics_on_zero_limit() {
         let _ = plan_fetch_sub_batches(&[1], &[1], 0, 100);
+    }
+
+    #[test]
+    fn test_l0_total_does_not_trigger_backoff_when_l0_max_healthy() {
+        // l0_files_total is kept for diagnostics but removed from pressure
+        // decisions. High l0_total with healthy l0_max should not back off.
+        let controller = AdaptiveBatchController::new(8);
+        controller
+            .target_batch_txs
+            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
+        controller
+            .inflight_limit
+            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
+        controller.min_target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 1_200.0,
+                commit_ms: 100.0,
+                batch_tx_count: 10_000,
+                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
+                memory_ratio_pct: Some(10.0),
+                l0_files_total: Some(200),
+                l0_files_max: Some(5),
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
+            })
+            .expect("healthy conditions should produce a step-up, not a backoff");
+
+        assert_eq!(
+            adjustment.reason, "healthy_step_up",
+            "l0_files_total=200 with healthy l0_files_max=5 should not trigger backoff"
+        );
+        assert!(
+            adjustment.new_target_batch_txs >= adjustment.previous_target_batch_txs,
+            "target should not decrease when l0_files_total is high but l0_files_max is healthy"
+        );
+    }
+
+    #[test]
+    fn test_l0_max_moderate_triggers_backoff_regardless_of_write_cost() {
+        // After removing far_bulk_cost_backoff_allowed gating, moderate
+        // rocksdb pressure (l0_max >= 20) triggers backoff even when write
+        // cost is very healthy.
+        let controller = AdaptiveBatchController::new(8);
+        controller
+            .target_batch_txs
+            .store(ADAPTIVE_BATCH_MAX_TXS, Ordering::Relaxed);
+        controller
+            .inflight_limit
+            .store(ADAPTIVE_BATCH_BULK_DISTANCE_MIN_INFLIGHT, Ordering::Relaxed);
+        controller.min_target_batch_txs.store(
+            ADAPTIVE_BATCH_BULK_DISTANCE_MIN_TARGET_TXS,
+            Ordering::Relaxed,
+        );
+
+        let adjustment = controller
+            .update_after_write(AdaptiveBatchInput {
+                write_ms: 500.0,
+                commit_ms: 50.0,
+                batch_tx_count: 10_000,
+                blocks_remaining: ADAPTIVE_BATCH_NEAR_TIP_THRESHOLD_BLOCKS + 10_000,
+                parse_queue_fill_pct: Some(10.0),
+                writer_queue_fill_pct: Some(10.0),
+                memory_ratio_pct: Some(10.0),
+                l0_files_total: None,
+                l0_files_max: Some(25),
+                compaction_pending_bytes: None,
+                immutable_memtables: None,
+                severe_pending_threshold: 8 * 1024 * 1024 * 1024,
+                moderate_pending_threshold: 4 * 1024 * 1024 * 1024,
+                severe_imm_threshold: 60,
+                moderate_imm_threshold: 30,
+            })
+            .expect("l0_max=25 (moderate) should trigger backoff even with healthy write cost");
+
+        assert_eq!(adjustment.reason, "moderate_backoff");
+        assert!(adjustment.new_target_batch_txs < adjustment.previous_target_batch_txs);
     }
 
     #[test]
