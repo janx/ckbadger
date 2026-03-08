@@ -67,6 +67,63 @@ impl<'a> StoreBatch<'a> {
         self.batch.size_in_bytes()
     }
 
+    /// Merge another `StoreBatch` into this one.
+    ///
+    /// Both batches must reference the same `CkbadgerStore` instance.
+    /// After merging, `other` is consumed and all its operations are
+    /// appended to `self`.
+    ///
+    /// The domain `WriteBatch` is merged at the byte level using
+    /// RocksDB's serialized representation (`data()` / `from_data()`).
+    /// Append-only ops and pending DAO deposits are merged by extending
+    /// the corresponding collections.
+    pub fn merge_from(&mut self, other: StoreBatch<'a>) {
+        assert!(
+            std::ptr::eq(self.store, other.store),
+            "StoreBatch::merge_from: both batches must reference the same CkbadgerStore"
+        );
+
+        // Merge domain WriteBatch via raw byte-level concatenation.
+        //
+        // WriteBatch wire format (little-endian):
+        //   [0..8]   sequence number (u64)
+        //   [8..12]  operation count (u32)
+        //   [12..]   serialized operations
+        //
+        // We keep self's sequence, sum the counts, and concatenate ops.
+        if !other.batch.is_empty() {
+            let self_data = self.batch.data();
+            let other_data = other.batch.data();
+
+            let self_count = u32::from_le_bytes(
+                self_data[8..12]
+                    .try_into()
+                    .expect("WriteBatch header must be at least 12 bytes"),
+            );
+            let other_count = u32::from_le_bytes(
+                other_data[8..12]
+                    .try_into()
+                    .expect("WriteBatch header must be at least 12 bytes"),
+            );
+            let total_count = self_count + other_count;
+
+            let mut merged = Vec::with_capacity(self_data.len() + other_data.len() - 12);
+            merged.extend_from_slice(&self_data[..8]); // sequence from self
+            merged.extend_from_slice(&total_count.to_le_bytes()); // combined count
+            merged.extend_from_slice(&self_data[12..]); // ops from self
+            merged.extend_from_slice(&other_data[12..]); // ops from other
+
+            self.batch = WriteBatch::from_data(&merged);
+        }
+
+        // Merge append-only ops.
+        self.append_ops.extend(other.append_ops);
+
+        // Merge pending DAO deposits (other's entries win on conflict,
+        // preserving last-write-wins within a batch merge sequence).
+        self.pending_dao_deposits.extend(other.pending_dao_deposits);
+    }
+
     fn commit_inner(self, no_wal: bool) -> anyhow::Result<()> {
         if self.store.is_append_only_store() {
             let intent = if self.store.is_bulk_sync_mode() {
@@ -174,15 +231,26 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
+        self.put_cell_raw_key(&key, info);
+    }
+
+    /// Insert a cell using pre-encoded outpoint key.
+    /// Writes to CF_CELLS (full data) and CF_LIVE_CELLS (empty marker).
+    pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
         let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
-        self.put_cf(self.store.cf_cells(), key, &value);
-        self.put_cf(self.store.cf_live_cells(), key, []);
+        self.put_cf(self.store.cf_cells(), raw_key, &value);
+        self.put_cf(self.store.cf_live_cells(), raw_key, []);
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.delete_cf(self.store.cf_live_cells(), key);
+        self.delete_cell_raw_key(&key);
+    }
+
+    /// Delete a live cell marker using pre-encoded outpoint key.
+    pub fn delete_cell_raw_key(&mut self, raw_key: &[u8]) {
+        self.delete_cf(self.store.cf_live_cells(), raw_key);
     }
 
     pub fn put_consumed_cell(
@@ -204,15 +272,27 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
+        self.put_consumed_cell_with_consumer_raw_key(&key, info, consumed_at_block, consumed_by_tx);
+    }
+
+    /// Mark a cell as consumed using pre-encoded outpoint key.
+    /// Writes canonical payload to CF_CELLS and consumption metadata to CF_CONSUMED_CELLS.
+    pub fn put_consumed_cell_with_consumer_raw_key(
+        &mut self,
+        raw_key: &[u8],
+        info: &LiveCellInfo,
+        consumed_at_block: i64,
+        consumed_by_tx: Option<&[u8]>,
+    ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
         let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.put_cf(self.store.cf_cells(), key, &cell_value);
+        self.put_cf(self.store.cf_cells(), raw_key, &cell_value);
         let consumed = ConsumedCellMeta {
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
         let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
-        self.put_cf(self.store.cf_consumed_cells(), key, &value);
+        self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
     }
 
     // ---- Cell indexes ----
@@ -1260,5 +1340,395 @@ mod tests {
         let rows = store.list_activities(&lock, 1, None, None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].2.ckb_delta, 2);
+    }
+
+    #[test]
+    fn test_put_cell_raw_key_produces_same_result() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let tx_hash = [0x33u8; 32];
+        let output_index: i16 = 2;
+        let raw_key = keys::encode_outpoint(&tx_hash, output_index);
+
+        let info = LiveCellInfo {
+            capacity: 50000,
+            created_at_block: 7,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: Some(vec![4u8; 32]),
+            type_code_hash: Some(vec![5u8; 32]),
+            type_args: Some(vec![6u8; 32]),
+            data_size: 64,
+            occupied_capacity: 10200000000,
+            udt_amount: Some(999),
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_raw_key(&raw_key, &info);
+        batch.commit().unwrap();
+
+        // Verify readable via standard get_cell (which encodes the key internally)
+        let cell = store.get_cell(&tx_hash, output_index).unwrap();
+        assert!(cell.is_some());
+        let cell = cell.unwrap();
+        assert_eq!(cell.capacity, 50000);
+        assert_eq!(cell.created_at_block, 7);
+        assert_eq!(cell.udt_amount, Some(999));
+        assert_eq!(cell.data_size, 64);
+
+        // Verify live marker exists
+        assert!(store
+            .get_cf(store.cf_live_cells(), &raw_key)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn test_put_cell_raw_key_matches_put_cell() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let tx_hash_a = [0xAAu8; 32];
+        let tx_hash_b = [0xBBu8; 32];
+        let output_index: i16 = 1;
+
+        let info = LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 3,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+
+        // Write cell A via put_cell (original method)
+        let mut batch_a = StoreBatch::new(&store);
+        batch_a.put_cell(&tx_hash_a, output_index, &info);
+        batch_a.commit().unwrap();
+
+        // Write cell B via put_cell_raw_key
+        let raw_key_b = keys::encode_outpoint(&tx_hash_b, output_index);
+        let mut batch_b = StoreBatch::new(&store);
+        batch_b.put_cell_raw_key(&raw_key_b, &info);
+        batch_b.commit().unwrap();
+
+        // Both should be readable and produce identical cell info
+        let cell_a = store.get_cell(&tx_hash_a, output_index).unwrap().unwrap();
+        let cell_b = store.get_cell(&tx_hash_b, output_index).unwrap().unwrap();
+        assert_eq!(cell_a.capacity, cell_b.capacity);
+        assert_eq!(cell_a.created_at_block, cell_b.created_at_block);
+        assert_eq!(cell_a.lock_script_hash, cell_b.lock_script_hash);
+
+        // Both should have live markers
+        let key_a = keys::encode_outpoint(&tx_hash_a, output_index);
+        assert!(store
+            .get_cf(store.cf_live_cells(), &key_a)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cf(store.cf_live_cells(), &raw_key_b)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn test_consume_cell_raw_key_matches_consume_cell() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let tx_hash = [0xCCu8; 32];
+        let output_index: i16 = 0;
+        let consumed_by = [0xDDu8; 32];
+
+        let info = LiveCellInfo {
+            capacity: 20000,
+            created_at_block: 5,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+
+        // First, insert the cell as live
+        let raw_key = keys::encode_outpoint(&tx_hash, output_index);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_raw_key(&raw_key, &info);
+        batch.commit().unwrap();
+
+        // Verify live marker exists
+        assert!(store
+            .get_cf(store.cf_live_cells(), &raw_key)
+            .unwrap()
+            .is_some());
+
+        // Consume via raw-key methods
+        let mut batch = StoreBatch::new(&store);
+        batch.put_consumed_cell_with_consumer_raw_key(&raw_key, &info, 10, Some(&consumed_by));
+        batch.delete_cell_raw_key(&raw_key);
+        batch.commit().unwrap();
+
+        // Verify live marker is gone
+        assert!(store
+            .get_cf(store.cf_live_cells(), &raw_key)
+            .unwrap()
+            .is_none());
+
+        // Verify consumed cell metadata is written correctly
+        let meta_bytes = store
+            .get_cf(store.cf_consumed_cells(), &raw_key)
+            .unwrap()
+            .unwrap();
+        let meta: ConsumedCellMeta = bincode::deserialize(&meta_bytes).unwrap();
+        assert_eq!(meta.consumed_at_block, 10);
+        assert_eq!(meta.consumed_by_tx, Some(consumed_by.to_vec()));
+
+        // Verify canonical cell payload is still present in CF_CELLS
+        let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();
+        let cell: LiveCellInfo = bincode::deserialize(&cell_bytes).unwrap();
+        assert_eq!(cell.capacity, 20000);
+        assert_eq!(cell.created_at_block, 5);
+    }
+
+    #[test]
+    fn test_delete_cell_raw_key_removes_live_marker() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let tx_hash = [0xEEu8; 32];
+        let output_index: i16 = 3;
+        let raw_key = keys::encode_outpoint(&tx_hash, output_index);
+
+        let info = LiveCellInfo {
+            capacity: 30000,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_raw_key(&raw_key, &info);
+        batch.commit().unwrap();
+
+        assert!(store
+            .get_cf(store.cf_live_cells(), &raw_key)
+            .unwrap()
+            .is_some());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.delete_cell_raw_key(&raw_key);
+        batch.commit().unwrap();
+
+        assert!(store
+            .get_cf(store.cf_live_cells(), &raw_key)
+            .unwrap()
+            .is_none());
+    }
+
+    // ---- merge_from tests ----
+
+    #[test]
+    fn test_merge_domain_batches() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut a = StoreBatch::new(&store);
+        let mut b = StoreBatch::new(&store);
+
+        a.put_tx_hash_map(&[0x11; 32], 1, 0);
+        b.put_tx_hash_map(&[0x22; 32], 2, 0);
+
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
+
+        a.merge_from(b);
+        assert_eq!(a.len(), 2);
+
+        // Commit and verify both writes landed
+        a.commit().unwrap();
+        assert!(store.get_tx_location(&[0x11; 32]).unwrap().is_some());
+        assert!(store.get_tx_location(&[0x22; 32]).unwrap().is_some());
+
+        let (block1, idx1) = store.get_tx_location(&[0x11; 32]).unwrap().unwrap();
+        assert_eq!(block1, 1);
+        assert_eq!(idx1, 0);
+
+        let (block2, idx2) = store.get_tx_location(&[0x22; 32]).unwrap().unwrap();
+        assert_eq!(block2, 2);
+        assert_eq!(idx2, 0);
+    }
+
+    #[test]
+    fn test_merge_into_empty_batch() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut a = StoreBatch::new(&store);
+        let mut b = StoreBatch::new(&store);
+
+        b.put_tx_hash_map(&[0x33; 32], 3, 1);
+        assert_eq!(a.len(), 0);
+        assert_eq!(b.len(), 1);
+
+        a.merge_from(b);
+        assert_eq!(a.len(), 1);
+
+        a.commit().unwrap();
+        let (block, idx) = store.get_tx_location(&[0x33; 32]).unwrap().unwrap();
+        assert_eq!(block, 3);
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn test_merge_empty_into_nonempty() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut a = StoreBatch::new(&store);
+        let b = StoreBatch::new(&store);
+
+        a.put_tx_hash_map(&[0x44; 32], 4, 2);
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 0);
+
+        a.merge_from(b);
+        assert_eq!(a.len(), 1);
+
+        a.commit().unwrap();
+        let (block, idx) = store.get_tx_location(&[0x44; 32]).unwrap().unwrap();
+        assert_eq!(block, 4);
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn test_merge_multiple_batches() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut a = StoreBatch::new(&store);
+        let mut b = StoreBatch::new(&store);
+        let mut c = StoreBatch::new(&store);
+
+        a.put_tx_hash_map(&[0x01; 32], 10, 0);
+        b.put_tx_hash_map(&[0x02; 32], 20, 0);
+        b.put_tx_hash_map(&[0x03; 32], 30, 0);
+        c.put_tx_hash_map(&[0x04; 32], 40, 0);
+
+        a.merge_from(b);
+        a.merge_from(c);
+        assert_eq!(a.len(), 4);
+
+        a.commit().unwrap();
+        for (hash_byte, expected_block) in [(0x01, 10), (0x02, 20), (0x03, 30), (0x04, 40)] {
+            let (block, _) = store
+                .get_tx_location(&[hash_byte; 32])
+                .unwrap()
+                .unwrap_or_else(|| panic!("tx 0x{hash_byte:02x} not found"));
+            assert_eq!(block, expected_block);
+        }
+    }
+
+    #[test]
+    fn test_merge_cross_cf_operations() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let mut a = StoreBatch::new(&store);
+        let mut b = StoreBatch::new(&store);
+
+        // Batch a: block header
+        let header = CachedBlockHeader {
+            hash: vec![0xAA; 32],
+            timestamp: 9999,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1800,
+            dao: vec![0u8; 32],
+            transactions_count: 2,
+        };
+        a.put_block_header(42, &header);
+
+        // Batch b: tx hash map + sync meta
+        b.put_tx_hash_map(&[0xBB; 32], 42, 0);
+        b.put_sync_meta(b"tip", b"42");
+
+        a.merge_from(b);
+        a.commit().unwrap();
+
+        // Verify block header
+        let key = keys::encode_block_num(42);
+        let val = store
+            .get_cf(store.cf_block_headers(), &key)
+            .unwrap()
+            .unwrap();
+        let decoded: CachedBlockHeader = bincode::deserialize(&val).unwrap();
+        assert_eq!(decoded.timestamp, 9999);
+
+        // Verify tx hash map
+        let (block, idx) = store.get_tx_location(&[0xBB; 32]).unwrap().unwrap();
+        assert_eq!(block, 42);
+        assert_eq!(idx, 0);
+
+        // Verify sync meta
+        let val = store.get_cf(store.cf_sync_meta(), b"tip").unwrap().unwrap();
+        assert_eq!(&val[..], b"42");
+    }
+
+    #[test]
+    fn test_merge_append_only_batches() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock = [0xDDu8; 32];
+
+        let mut a = StoreBatch::new(&store);
+        let mut b = StoreBatch::new(&store);
+
+        a.put_activity(&lock, 100, 0, &make_activity(100, 0, 500));
+        b.put_activity(&lock, 200, 0, &make_activity(200, 0, 600));
+
+        a.merge_from(b);
+        a.commit().unwrap();
+
+        let results = store.list_activities(&lock, 100, None, None).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, 200);
+        assert_eq!(results[0].2.ckb_delta, 600);
+        assert_eq!(results[1].0, 100);
+        assert_eq!(results[1].2.ckb_delta, 500);
+    }
+
+    #[test]
+    #[should_panic(expected = "both batches must reference the same CkbadgerStore")]
+    fn test_merge_different_stores_panics() {
+        let dir_a = TempDir::new().unwrap();
+        let dir_b = TempDir::new().unwrap();
+        let store_a = CkbadgerStore::open_test_unified(dir_a.path()).unwrap();
+        let store_b = CkbadgerStore::open_test_unified(dir_b.path()).unwrap();
+
+        let mut a = StoreBatch::new(&store_a);
+        let b = StoreBatch::new(&store_b);
+        a.merge_from(b);
     }
 }

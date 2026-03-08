@@ -126,8 +126,8 @@ impl BatchWriter {
         }
 
         for (tx_hash, output_index, _cell, _created_at_block) in cells {
-            let key = (tx_hash.to_vec(), *output_index);
-            let info = precomputed_infos.get(&key).cloned().ok_or_else(|| {
+            let lookup_key = (tx_hash.to_vec(), *output_index);
+            let info = precomputed_infos.get(&lookup_key).cloned().ok_or_else(|| {
                 anyhow!(
                     "missing precomputed cell info for insert: outpoint=0x{}:{}, precomputed_size={}",
                     hex::encode(tx_hash),
@@ -135,7 +135,8 @@ impl BatchWriter {
                     precomputed_infos.len()
                 )
             })?;
-            batch.put_cell(tx_hash, *output_index, &info);
+            let raw_key = keys::encode_outpoint(tx_hash, *output_index);
+            batch.put_cell_raw_key(&raw_key, &info);
             if !skip_cell_indices {
                 batch.put_cell_by_lock(
                     &info.lock_script_hash,
@@ -446,10 +447,10 @@ impl BatchWriter {
         for (tx_hash, output_index, _created_at_block, consumed_by_tx, consumed_at_block, _idx) in
             consumptions
         {
-            let key = (tx_hash.to_vec(), *output_index);
+            let lookup_key = (tx_hash.to_vec(), *output_index);
             let info = preloaded_cells
-                .get(&key)
-                .or_else(|| same_batch_cells.get(&key));
+                .get(&lookup_key)
+                .or_else(|| same_batch_cells.get(&lookup_key));
 
             let Some(info) = info else {
                 bail!(
@@ -463,14 +464,14 @@ impl BatchWriter {
                 );
             };
 
-            batch.put_consumed_cell_with_consumer(
-                tx_hash,
-                *output_index,
+            let raw_key = keys::encode_outpoint(tx_hash, *output_index);
+            batch.put_consumed_cell_with_consumer_raw_key(
+                &raw_key,
                 info,
                 *consumed_at_block,
                 Some(*consumed_by_tx),
             );
-            batch.delete_cell(tx_hash, *output_index);
+            batch.delete_cell_raw_key(&raw_key);
             if !skip_cell_indices {
                 batch.delete_cell_by_lock(
                     &info.lock_script_hash,
