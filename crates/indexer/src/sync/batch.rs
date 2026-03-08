@@ -2581,6 +2581,7 @@ impl Indexer {
                                 coll_id,
                                 &tx_data.hash,
                                 &spore.spore_id,
+                                &parsed.hash,
                                 parsed.number,
                                 checked_usize_to_i32(tx_idx, "tx_idx"),
                                 parsed.timestamp.timestamp_millis(),
@@ -2638,6 +2639,7 @@ impl Indexer {
                             &token.class_id,
                             &tx_data.hash,
                             &token.token_id,
+                            &parsed.hash,
                             parsed.number,
                             checked_usize_to_i32(tx_idx, "tx_idx"),
                             parsed.timestamp.timestamp_millis(),
@@ -2679,6 +2681,7 @@ impl Indexer {
                                 created_account_ids: created_ids,
                                 consumed_account_ids: HashSet::new(),
                                 block_number: parsed.number,
+                                block_hash: parsed.hash.clone(),
                                 tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                 timestamp_ms: parsed.timestamp.timestamp_millis(),
                             },
@@ -2744,6 +2747,7 @@ impl Indexer {
                                         &coll_id,
                                         &tx_data.hash,
                                         &spore_id,
+                                        &parsed.hash,
                                         parsed.number,
                                         checked_usize_to_i32(tx_idx, "tx_idx"),
                                         parsed.timestamp.timestamp_millis(),
@@ -2785,6 +2789,7 @@ impl Indexer {
                                         created_account_ids: HashSet::new(),
                                         consumed_account_ids: HashSet::new(),
                                         block_number: parsed.number,
+                                        block_hash: parsed.hash.clone(),
                                         tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                         timestamp_ms: parsed.timestamp.timestamp_millis(),
                                     }
@@ -2805,6 +2810,7 @@ impl Indexer {
                 &activity.created_account_ids,
                 &activity.consumed_account_ids,
                 _tx_hash,
+                &activity.block_hash,
                 activity.block_number,
                 activity.tx_idx,
                 activity.timestamp_ms,
@@ -2815,6 +2821,7 @@ impl Indexer {
                     &DOTBIT_SENTINEL_COLLECTION,
                     activity.block_number,
                     activity.tx_idx,
+                    &activity.block_hash,
                     _tx_hash,
                 );
                 put_append_delete_undo_entry(
@@ -2833,13 +2840,14 @@ impl Indexer {
                 })?;
             }
         }
-        for (collection_id, block_number, tx_idx, tx_hash) in
+        for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
             nft_activity_acc.flush(&mut nft_activity_batch)
         {
             let append_key = keys::encode_nft_collection_activity_key(
                 &collection_id,
                 block_number,
                 tx_idx,
+                &block_hash,
                 &tx_hash,
             );
             put_append_delete_undo_entry(
@@ -4109,6 +4117,7 @@ impl Indexer {
                                         coll_id,
                                         &tx_data.hash,
                                         &spore.spore_id,
+                                        &parsed.hash,
                                         parsed.number,
                                         checked_usize_to_i32(tx_idx, "tx_idx"),
                                         ts_ms,
@@ -4147,18 +4156,19 @@ impl Indexer {
                     let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
 
                     // Build tx_global_index → (tx_idx_in_block, block_number, ts_ms) lookup.
-                    let mut tx_lookup: Vec<(usize, i64, i64)> = Vec::with_capacity(all_tx_data.len());
+                    let mut tx_lookup: Vec<(usize, i64, i64, Vec<u8>)> =
+                        Vec::with_capacity(all_tx_data.len());
                     for parsed in all_parsed_blocks.iter().take(blocks.len()) {
                         let tx_count_for_block = parsed.transactions_count as usize;
                         let ts_ms = parsed.timestamp.timestamp_millis();
                         for tx_idx in 0..tx_count_for_block {
-                            tx_lookup.push((tx_idx, parsed.number, ts_ms));
+                            tx_lookup.push((tx_idx, parsed.number, ts_ms, parsed.hash.clone()));
                         }
                     }
 
                     // Phase 1: Insert mNFT issuers/classes/tokens from pre-parsed data.
                     for &(tx_gi, ref issuer) in &pre_parsed_nft_data.mnft_issuers {
-                        let (_, block_number, _) = tx_lookup[tx_gi];
+                        let (_, block_number, _, _) = tx_lookup[tx_gi];
                         writer.insert_mnft_issuer(
                             issuer,
                             &all_tx_data[tx_gi].hash,
@@ -4168,7 +4178,7 @@ impl Indexer {
                         )?;
                     }
                     for &(tx_gi, output_index, ref class) in &pre_parsed_nft_data.mnft_classes {
-                        let (_, block_number, _) = tx_lookup[tx_gi];
+                        let (_, block_number, _, _) = tx_lookup[tx_gi];
                         let output_index = i16::try_from(output_index).map_err(|_| {
                             anyhow!(
                                 "mNFT class output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
@@ -4187,7 +4197,7 @@ impl Indexer {
                         )?;
                     }
                     for &(tx_gi, output_index, ref token) in &pre_parsed_nft_data.mnft_tokens {
-                        let (tx_idx, block_number, ts_ms) = tx_lookup[tx_gi];
+                        let (tx_idx, block_number, ts_ms, ref block_hash) = tx_lookup[tx_gi];
                         let output_index = i16::try_from(output_index).map_err(|_| {
                             anyhow!(
                                 "mNFT token output index exceeds i16 range: block={}, tx_hash=0x{}, output_index={}",
@@ -4209,6 +4219,7 @@ impl Indexer {
                             &token.class_id,
                             &all_tx_data[tx_gi].hash,
                             &token.token_id,
+                            block_hash,
                             block_number,
                             checked_usize_to_i32(tx_idx, "tx_idx"),
                             ts_ms,
@@ -4221,7 +4232,7 @@ impl Indexer {
                     let mut dotbit_pipeline_activity: HashMap<[u8; 32], DotbitTxActivityData> =
                         HashMap::new();
                     for &(tx_gi, ref account) in &pre_parsed_nft_data.dotbit_accounts {
-                        let (tx_idx, block_number, ts_ms) = tx_lookup[tx_gi];
+                        let (tx_idx, block_number, ts_ms, ref block_hash) = tx_lookup[tx_gi];
                         writer.insert_dotbit_account_with_state(
                             account,
                             &all_tx_data[tx_gi].hash,
@@ -4240,6 +4251,7 @@ impl Indexer {
                                 created_account_ids: HashSet::new(),
                                 consumed_account_ids: HashSet::new(),
                                 block_number,
+                                block_hash: block_hash.clone(),
                                 tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                 timestamp_ms: ts_ms,
                             });
@@ -4263,10 +4275,10 @@ impl Indexer {
                                 .entry(event.consuming_tx_hash)
                                 .or_insert_with(|| {
                                     // Find the tx_global_index for this consume event
-                                    let tx_gi = tx_lookup.iter().position(|&(tx_idx, bn, ts)| {
-                                        bn == event.block_number
-                                            && checked_usize_to_i32(tx_idx, "tx_idx") == event.tx_idx
-                                            && ts == event.ts_ms
+                                    let tx_gi = tx_lookup.iter().position(|(tx_idx, bn, ts, _)| {
+                                        *bn == event.block_number
+                                            && checked_usize_to_i32(*tx_idx, "tx_idx") == event.tx_idx
+                                            && *ts == event.ts_ms
                                     });
                                     let das_action = tx_gi.and_then(|gi| {
                                         pre_parsed_nft_data.dotbit_tx_actions.get(&gi).cloned()
@@ -4276,6 +4288,7 @@ impl Indexer {
                                         created_account_ids: HashSet::new(),
                                         consumed_account_ids: HashSet::new(),
                                         block_number: event.block_number,
+                                        block_hash: event.block_hash.clone(),
                                         tx_idx: event.tx_idx,
                                         timestamp_ms: event.ts_ms,
                                     }
@@ -4291,6 +4304,7 @@ impl Indexer {
                             &activity.created_account_ids,
                             &activity.consumed_account_ids,
                             tx_hash,
+                            &activity.block_hash,
                             activity.block_number,
                             activity.tx_idx,
                             activity.timestamp_ms,
@@ -4301,6 +4315,7 @@ impl Indexer {
                                 &DOTBIT_SENTINEL_COLLECTION,
                                 activity.block_number,
                                 activity.tx_idx,
+                                &activity.block_hash,
                                 tx_hash,
                             );
                             put_append_delete_undo_entry(
@@ -4313,13 +4328,14 @@ impl Indexer {
                             );
                         }
                     }
-                    for (collection_id, block_number, tx_idx, tx_hash) in
+                    for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
                         nft_activity_acc.flush(&mut activity_batch)
                     {
                         let append_key = keys::encode_nft_collection_activity_key(
                             &collection_id,
                             block_number,
                             tx_idx,
+                            &block_hash,
                             &tx_hash,
                         );
                         put_append_delete_undo_entry(
@@ -4637,6 +4653,7 @@ impl Indexer {
                                                 )?;
                                                 Ok(crate::db::writer::activities::TxView {
                                                     tx_hash: &td.hash,
+                                                    block_hash: &parsed.hash,
                                                     tx_index: td.tx_index,
                                                     block_number: parsed.number,
                                                     timestamp: parsed.timestamp.timestamp_millis(),
@@ -5340,6 +5357,7 @@ impl Indexer {
                                     coll_id,
                                     &tx_data.hash,
                                     &spore.spore_id,
+                                    &parsed.hash,
                                     parsed.number,
                                     checked_usize_to_i32(tx_idx, "tx_idx"),
                                     ts_ms,
@@ -5406,6 +5424,7 @@ impl Indexer {
                                 &token.class_id,
                                 &tx_data.hash,
                                 &token.token_id,
+                                &parsed.hash,
                                 parsed.number,
                                 checked_usize_to_i32(tx_idx, "tx_idx"),
                                 ts_ms,
@@ -5447,6 +5466,7 @@ impl Indexer {
                                     created_account_ids: created_ids,
                                     consumed_account_ids: HashSet::new(),
                                     block_number: parsed.number,
+                                    block_hash: parsed.hash.clone(),
                                     tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
                                     timestamp_ms: ts_ms,
                                 },
@@ -5460,8 +5480,9 @@ impl Indexer {
                 let bulk_sync_active = self.is_bulk_sync_active();
                 let mut all_prev_tx_hashes: Vec<Vec<u8>> = Vec::new();
                 let mut all_prev_indices: Vec<i16> = Vec::new();
-                // (block_number, consuming_tx_hash, dotbit_consume_order, tx_idx, ts_ms, tx_global_index)
-                let mut outpoint_context: Vec<(i64, Vec<u8>, u64, i32, i64, usize)> = Vec::new();
+                // (block_number, block_hash, consuming_tx_hash, dotbit_consume_order, tx_idx, ts_ms, tx_global_index)
+                let mut outpoint_context: Vec<(i64, Vec<u8>, Vec<u8>, u64, i32, i64, usize)> =
+                    Vec::new();
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
@@ -5493,6 +5514,7 @@ impl Indexer {
                             all_prev_indices.push(prev_index);
                             outpoint_context.push((
                                 parsed.number,
+                                parsed.hash.clone(),
                                 tx_data.hash.to_vec(),
                                 dotbit_consume_order,
                                 checked_usize_to_i32(tx_idx, "tx_idx"),
@@ -5572,6 +5594,7 @@ impl Indexer {
                         i,
                         (
                             block_number,
+                            block_hash,
                             consuming_tx_hash,
                             dotbit_consume_order,
                             ctx_tx_idx,
@@ -5595,6 +5618,7 @@ impl Indexer {
                                             &coll_id,
                                             consuming_tx_hash,
                                             spore_id,
+                                            block_hash,
                                             *block_number,
                                             *ctx_tx_idx,
                                             *ctx_ts_ms,
@@ -5622,6 +5646,7 @@ impl Indexer {
                                             &coll_id,
                                             consuming_tx_hash,
                                             token_id,
+                                            block_hash,
                                             *block_number,
                                             *ctx_tx_idx,
                                             *ctx_ts_ms,
@@ -5659,6 +5684,7 @@ impl Indexer {
                                         created_account_ids: HashSet::new(),
                                         consumed_account_ids: HashSet::new(),
                                         block_number: *block_number,
+                                        block_hash: block_hash.clone(),
                                         tx_idx: *ctx_tx_idx,
                                         timestamp_ms: *ctx_ts_ms,
                                     });
@@ -5674,6 +5700,7 @@ impl Indexer {
                         &activity.created_account_ids,
                         &activity.consumed_account_ids,
                         tx_hash,
+                        &activity.block_hash,
                         activity.block_number,
                         activity.tx_idx,
                         activity.timestamp_ms,
@@ -5684,6 +5711,7 @@ impl Indexer {
                             &DOTBIT_SENTINEL_COLLECTION,
                             activity.block_number,
                             activity.tx_idx,
+                            &activity.block_hash,
                             tx_hash,
                         );
                         put_append_delete_undo_entry(
@@ -5704,13 +5732,14 @@ impl Indexer {
                         })?;
                     }
                 }
-                for (collection_id, block_number, tx_idx, tx_hash) in
+                for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
                     nft_activity_acc.flush(&mut nft_activity_batch)
                 {
                     let append_key = keys::encode_nft_collection_activity_key(
                         &collection_id,
                         block_number,
                         tx_idx,
+                        &block_hash,
                         &tx_hash,
                     );
                     put_append_delete_undo_entry(
@@ -5766,6 +5795,7 @@ impl Indexer {
                             )?;
                             Ok(crate::db::writer::activities::TxView {
                                 tx_hash: &td.hash,
+                                block_hash: &parsed.hash,
                                 tx_index: td.tx_index,
                                 block_number: parsed.number,
                                 timestamp: parsed.timestamp.timestamp_millis(),

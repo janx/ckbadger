@@ -84,6 +84,7 @@ pub struct InputCellView {
 /// Transaction data needed for activity building.
 pub struct TxView<'a> {
     pub tx_hash: &'a [u8],
+    pub block_hash: &'a [u8],
     pub tx_index: i32,
     pub block_number: i64,
     pub timestamp: i64,
@@ -307,6 +308,7 @@ fn build_tx_activities(
 
         let entry = ActivityEntry {
             tx_hash: tx.tx_hash.to_vec(),
+            block_hash: tx.block_hash.to_vec(),
             block_number: tx.block_number,
             tx_index: tx.tx_index,
             timestamp: tx.timestamp,
@@ -581,6 +583,7 @@ mod tests {
         let outputs_data = vec!["0x".to_string(), "0x".to_string()];
         let tx = TxView {
             tx_hash: &[0x01; 32],
+            block_hash: &[0xA1; 32],
             tx_index: 1,
             block_number: 1000,
             timestamp: 1_700_000_000,
@@ -620,6 +623,7 @@ mod tests {
         let outputs_data = vec!["0x".to_string()];
         let tx = TxView {
             tx_hash: &[0x02; 32],
+            block_hash: &[0xA2; 32],
             tx_index: 0,
             block_number: 500,
             timestamp: 1_700_000_000,
@@ -652,6 +656,7 @@ mod tests {
         let outputs_data = vec!["0x".to_string()];
         let tx = TxView {
             tx_hash: &[0x03; 32],
+            block_hash: &[0xA3; 32],
             tx_index: 1,
             block_number: 1000,
             timestamp: 1_700_000_000,
@@ -684,6 +689,7 @@ mod tests {
         let outputs_data = vec!["0x".to_string(); 3];
         let tx = TxView {
             tx_hash: &[0x04; 32],
+            block_hash: &[0xA4; 32],
             tx_index: 1,
             block_number: 1000,
             timestamp: 1_700_000_000,
@@ -711,6 +717,7 @@ mod tests {
         let outputs_data1 = vec!["0x".to_string()];
         let tx1 = TxView {
             tx_hash: &[0x01; 32],
+            block_hash: &[0xB1; 32],
             tx_index: 0,
             block_number: 100,
             timestamp: 1_700_000_000,
@@ -724,6 +731,7 @@ mod tests {
         let outputs_data2 = vec!["0x".to_string()];
         let tx2 = TxView {
             tx_hash: &[0x02; 32],
+            block_hash: &[0xB1; 32],
             tx_index: 1,
             block_number: 100,
             timestamp: 1_700_000_000,
@@ -779,6 +787,7 @@ mod tests {
         ];
         let tx = TxView {
             tx_hash: &[0x05; 32],
+            block_hash: &[0xA5; 32],
             tx_index: 1,
             block_number: 1000,
             timestamp: 1_700_000_000,
@@ -876,6 +885,7 @@ mod tests {
         ];
         let tx = TxView {
             tx_hash: &[0x06; 32],
+            block_hash: &[0xA6; 32],
             tx_index: 1,
             block_number: 1000,
             timestamp: 1_700_000_000,
@@ -935,6 +945,7 @@ mod tests {
         let outputs_data = vec!["0x".to_string()];
         let tx = TxView {
             tx_hash: &[0x07; 32],
+            block_hash: &[0xA7; 32],
             tx_index: 0,
             block_number: 123,
             timestamp: 1_700_000_000,
@@ -985,6 +996,7 @@ mod tests {
         let outputs_data = vec!["0x".to_string()];
         let tx = TxView {
             tx_hash: &[0x08; 32],
+            block_hash: &[0xA8; 32],
             tx_index: 0,
             block_number: 124,
             timestamp: 1_700_000_100,
@@ -1030,6 +1042,7 @@ mod tests {
         let outputs_data: Vec<String> = vec![];
         let tx = TxView {
             tx_hash: &[0x09; 32],
+            block_hash: &[0xA9; 32],
             tx_index: 1,
             block_number: 200,
             timestamp: 1_700_000_200,

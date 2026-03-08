@@ -679,7 +679,13 @@ impl<'a> StoreBatch<'a> {
         tx_idx: i32,
         entry: &ActivityEntry,
     ) {
-        let key = keys::encode_activity_key(lock_hash, block_num, tx_idx, &entry.tx_hash);
+        let key = keys::encode_activity_key(
+            lock_hash,
+            block_num,
+            tx_idx,
+            &entry.block_hash,
+            &entry.tx_hash,
+        );
         let value = bincode::serialize(entry).expect("serialize ActivityEntry");
         self.put_cf(self.store.cf_activities(), key, &value);
     }
@@ -697,6 +703,7 @@ impl<'a> StoreBatch<'a> {
             collection_id,
             block_num,
             tx_idx,
+            &entry.block_hash,
             &entry.tx_hash,
         );
         let value = bincode::serialize(entry).expect("serialize NftCollectionActivityEntry");
@@ -919,6 +926,7 @@ mod tests {
     fn make_activity(block_num: i64, tx_idx: i32, delta: i128) -> ActivityEntry {
         ActivityEntry {
             tx_hash: vec![block_num as u8; 32],
+            block_hash: vec![0x80 | (block_num as u8); 32],
             block_number: block_num,
             tx_index: tx_idx,
             timestamp: 1_700_000_000 + block_num,
@@ -933,6 +941,7 @@ mod tests {
     fn make_nft_collection_activity(tx_hash_byte: u8) -> NftCollectionActivityEntry {
         NftCollectionActivityEntry {
             tx_hash: vec![tx_hash_byte; 32],
+            block_hash: vec![tx_hash_byte.wrapping_add(1); 32],
             timestamp_ms: 1_700_000_000_000 + i64::from(tx_hash_byte),
             actions: vec![AssetAction::Transfer],
         }
@@ -1111,12 +1120,80 @@ mod tests {
             0,
             &NftCollectionActivityEntry {
                 tx_hash: vec![0x01; 32],
+                block_hash: vec![0x02; 32],
                 timestamp_ms: 1_700_000_000_999,
                 actions: vec![AssetAction::Mint],
             },
         );
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
+    }
+
+    #[test]
+    fn test_append_only_activity_preserves_competing_block_hash_history() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let lock = [0xA2u8; 32];
+        let tx_hash = [0xC3u8; 32];
+
+        let mut first = make_activity(100, 0, 1);
+        first.tx_hash = tx_hash.to_vec();
+        first.block_hash = vec![0x11; 32];
+
+        let mut second = make_activity(100, 0, 2);
+        second.tx_hash = tx_hash.to_vec();
+        second.block_hash = vec![0x22; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_activity(&lock, 100, 0, &first);
+        batch.put_activity(&lock, 100, 0, &second);
+        batch.commit().unwrap();
+
+        let rows = store.list_activities(&lock, 10, None, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|(_, _, entry)| entry.block_hash == vec![0x11; 32]));
+        assert!(rows
+            .iter()
+            .any(|(_, _, entry)| entry.block_hash == vec![0x22; 32]));
+    }
+
+    #[test]
+    fn test_append_only_nft_collection_activity_preserves_competing_block_hash_history() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let collection_id = [0x12u8; 32];
+        let tx_hash = vec![0x44; 32];
+
+        let first = NftCollectionActivityEntry {
+            tx_hash: tx_hash.clone(),
+            block_hash: vec![0x31; 32],
+            timestamp_ms: 1_700_000_000_100,
+            actions: vec![AssetAction::Mint],
+        };
+        let second = NftCollectionActivityEntry {
+            tx_hash: tx_hash.clone(),
+            block_hash: vec![0x32; 32],
+            timestamp_ms: 1_700_000_000_200,
+            actions: vec![AssetAction::Transfer],
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_collection_activity(&collection_id, 100, 0, &first);
+        batch.put_nft_collection_activity(&collection_id, 100, 0, &second);
+        batch.commit().unwrap();
+
+        let rows = store
+            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .any(|(_, _, entry)| entry.block_hash == vec![0x31; 32]));
+        assert!(rows
+            .iter()
+            .any(|(_, _, entry)| entry.block_hash == vec![0x32; 32]));
     }
 
     #[test]
@@ -1147,6 +1224,7 @@ mod tests {
         let tx_hash = [0x01u8; 32];
         let first_entry = ActivityEntry {
             tx_hash: tx_hash.to_vec(),
+            block_hash: vec![0x11; 32],
             block_number: 100,
             tx_index: 0,
             timestamp: 1_700_000_000,
@@ -1158,6 +1236,7 @@ mod tests {
         };
         let overwrite_entry = ActivityEntry {
             tx_hash: tx_hash.to_vec(),
+            block_hash: vec![0x11; 32],
             block_number: 100,
             tx_index: 0,
             timestamp: 1_700_000_001,

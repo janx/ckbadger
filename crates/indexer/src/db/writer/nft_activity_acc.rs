@@ -27,6 +27,7 @@ struct AccEntry {
     block_number: i64,
     tx_idx: i32,
     timestamp_ms: i64,
+    block_hash: Vec<u8>,
     /// `(nft_id, action)` pairs collected for this (collection, tx).
     nft_actions: Vec<(Vec<u8>, RawAction)>,
 }
@@ -54,6 +55,7 @@ impl NftCollectionActivityAccumulator {
         collection_id: &[u8],
         tx_hash: &[u8],
         nft_id: &[u8],
+        block_hash: &[u8],
         block_number: i64,
         tx_idx: i32,
         timestamp_ms: i64,
@@ -69,6 +71,7 @@ impl NftCollectionActivityAccumulator {
             block_number,
             tx_idx,
             timestamp_ms,
+            block_hash: block_hash.to_vec(),
             nft_actions: Vec::new(),
         });
         entry.nft_actions.push((nft_id.to_vec(), action));
@@ -76,9 +79,9 @@ impl NftCollectionActivityAccumulator {
 
     /// Resolve raw actions into Mint/Transfer/Burn and write to the batch.
     ///
-    /// Returns inserted `(collection_id, block_number, tx_idx, tx_hash)` rows so callers
+    /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
-    pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>)> {
+    pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
         let mut inserted = Vec::new();
         for ((collection_id, tx_hash), entry) in self.entries {
             // Group by nft_id to detect transfers (create + consume of same NFT)
@@ -121,6 +124,7 @@ impl NftCollectionActivityAccumulator {
 
             let activity_entry = NftCollectionActivityEntry {
                 tx_hash: tx_hash.clone(),
+                block_hash: entry.block_hash.clone(),
                 timestamp_ms: entry.timestamp_ms,
                 actions,
             };
@@ -131,7 +135,13 @@ impl NftCollectionActivityAccumulator {
                 entry.tx_idx,
                 &activity_entry,
             );
-            inserted.push((collection_id, entry.block_number, entry.tx_idx, tx_hash));
+            inserted.push((
+                collection_id,
+                entry.block_number,
+                entry.tx_idx,
+                entry.block_hash,
+                tx_hash,
+            ));
         }
         inserted
     }
@@ -155,9 +165,19 @@ mod tests {
         let mut acc = NftCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
+        let block_hash = [0xA1u8; 32];
         let nft_id = [3u8; 32];
 
-        acc.record(&collection_id, &tx_hash, &nft_id, 100, 1, 1000, true);
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_id,
+            &block_hash,
+            100,
+            1,
+            1000,
+            true,
+        );
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);
@@ -179,11 +199,30 @@ mod tests {
         let mut acc = NftCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
+        let block_hash = [0xA2u8; 32];
         let nft_id = [3u8; 32];
 
         // Same NFT created and consumed in same tx = Transfer
-        acc.record(&collection_id, &tx_hash, &nft_id, 200, 5, 2000, false);
-        acc.record(&collection_id, &tx_hash, &nft_id, 200, 5, 2000, true);
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_id,
+            &block_hash,
+            200,
+            5,
+            2000,
+            false,
+        );
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_id,
+            &block_hash,
+            200,
+            5,
+            2000,
+            true,
+        );
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);
@@ -203,9 +242,19 @@ mod tests {
         let mut acc = NftCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
+        let block_hash = [0xA3u8; 32];
         let nft_id = [3u8; 32];
 
-        acc.record(&collection_id, &tx_hash, &nft_id, 300, 2, 3000, false);
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_id,
+            &block_hash,
+            300,
+            2,
+            3000,
+            false,
+        );
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);
@@ -225,11 +274,30 @@ mod tests {
         let mut acc = NftCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
+        let block_hash = [0xA4u8; 32];
         let nft_a = [3u8; 32];
         let nft_b = [4u8; 32];
 
-        acc.record(&collection_id, &tx_hash, &nft_a, 400, 0, 4000, true);
-        acc.record(&collection_id, &tx_hash, &nft_b, 400, 0, 4000, true);
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_a,
+            &block_hash,
+            400,
+            0,
+            4000,
+            true,
+        );
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_b,
+            &block_hash,
+            400,
+            0,
+            4000,
+            true,
+        );
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);
@@ -250,11 +318,30 @@ mod tests {
         let mut acc = NftCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
+        let block_hash = [0xA5u8; 32];
         let nft_a = [3u8; 32]; // gets minted
         let nft_b = [4u8; 32]; // gets burned
 
-        acc.record(&collection_id, &tx_hash, &nft_a, 500, 3, 5000, true);
-        acc.record(&collection_id, &tx_hash, &nft_b, 500, 3, 5000, false);
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_a,
+            &block_hash,
+            500,
+            3,
+            5000,
+            true,
+        );
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_b,
+            &block_hash,
+            500,
+            3,
+            5000,
+            false,
+        );
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);
@@ -277,10 +364,12 @@ mod tests {
         let coll_b = [2u8; 32];
         let tx1 = [10u8; 32];
         let tx2 = [11u8; 32];
+        let block_hash_a = [0xB1u8; 32];
+        let block_hash_b = [0xB2u8; 32];
         let nft = [3u8; 32];
 
-        acc.record(&coll_a, &tx1, &nft, 100, 0, 1000, true);
-        acc.record(&coll_b, &tx2, &nft, 200, 1, 2000, true);
+        acc.record(&coll_a, &tx1, &nft, &block_hash_a, 100, 0, 1000, true);
+        acc.record(&coll_b, &tx2, &nft, &block_hash_b, 200, 1, 2000, true);
 
         let mut batch = StoreBatch::new(&store);
         acc.flush(&mut batch);

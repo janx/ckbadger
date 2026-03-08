@@ -8,6 +8,7 @@ use crate::store::CkbadgerStore;
 use crate::types::TxIndexEntry;
 
 pub(crate) type TxByHashBatchEntry = (Vec<u8>, Option<(i64, i32, TxIndexEntry)>);
+pub(crate) type CanonicalTxIdentityBatchEntry = (Vec<u8>, Option<(i64, i32, Vec<u8>)>);
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -154,6 +155,49 @@ impl CkbadgerStore {
         Ok(out)
     }
 
+    /// Batch-fetch canonical transaction identity by tx hash:
+    /// `(block_num, tx_idx, canonical_block_hash)`.
+    pub fn get_canonical_tx_identities_by_hash_batch(
+        &self,
+        tx_hashes: &[Vec<u8>],
+    ) -> anyhow::Result<Vec<CanonicalTxIdentityBatchEntry>> {
+        let tx_rows = self.get_txs_by_hash_batch(tx_hashes)?;
+        if tx_rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut block_numbers = Vec::new();
+        let mut seen_blocks = std::collections::HashSet::new();
+        for (_, row_opt) in &tx_rows {
+            if let Some((block_num, _, _)) = row_opt {
+                if seen_blocks.insert(*block_num) {
+                    block_numbers.push(*block_num);
+                }
+            }
+        }
+
+        let headers_by_block = self.get_block_headers_batch(&block_numbers)?;
+        let mut out = Vec::with_capacity(tx_rows.len());
+        for (tx_hash, row_opt) in tx_rows {
+            let identity = match row_opt {
+                Some((block_num, tx_idx, _)) => {
+                    let header = headers_by_block.get(&block_num).ok_or_else(|| {
+                        anyhow!(
+                            "missing block header while resolving canonical tx identity: tx_hash=0x{}, block_num={}, tx_idx={}",
+                            bytes_to_hex(&tx_hash),
+                            block_num,
+                            tx_idx
+                        )
+                    })?;
+                    Some((block_num, tx_idx, header.hash.clone()))
+                }
+                None => None,
+            };
+            out.push((tx_hash, identity));
+        }
+        Ok(out)
+    }
+
     /// Update cycles for a transaction identified by tx hash.
     pub fn update_tx_cycles_by_hash(&self, tx_hash: &[u8], cycles: i64) -> anyhow::Result<()> {
         let (block_num, tx_idx) = self
@@ -225,6 +269,18 @@ mod tests {
 
     use super::*;
     use crate::StoreBatch;
+
+    fn make_header(hash_byte: u8) -> crate::types::CachedBlockHeader {
+        crate::types::CachedBlockHeader {
+            hash: vec![hash_byte; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        }
+    }
 
     #[test]
     fn test_update_tx_cycles_by_hash() {
@@ -337,5 +393,39 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid tx_hash_map value length in get_txs_by_hash_batch"));
+    }
+
+    #[test]
+    fn test_get_canonical_tx_identities_by_hash_batch_reads_block_hashes() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let tx_hash = [0x55u8; 32];
+        let missing_tx = [0x66u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_hash_map(&tx_hash, 200, 3);
+        batch.put_tx_index(
+            200,
+            3,
+            &TxIndexEntry {
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+            },
+        );
+        batch.put_block_header(200, &make_header(0xAB));
+        batch.commit().unwrap();
+
+        let rows = store
+            .get_canonical_tx_identities_by_hash_batch(&[tx_hash.to_vec(), missing_tx.to_vec()])
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, tx_hash.to_vec());
+        assert_eq!(rows[0].1, Some((200, 3, vec![0xAB; 32])));
+        assert_eq!(rows[1], (missing_tx.to_vec(), None));
     }
 }

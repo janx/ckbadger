@@ -62,7 +62,8 @@ impl CkbadgerStore {
                 break;
             }
             if key.len() == keys::ACTIVITY_KEY_SIZE {
-                let (_, block_num, tx_idx, tx_hash_from_key) = keys::decode_activity_key(&key);
+                let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
+                    keys::decode_activity_key(&key);
                 let entry: ActivityEntry = bincode::deserialize(&value)?;
                 if entry.tx_hash != tx_hash_from_key {
                     anyhow::bail!(
@@ -72,6 +73,26 @@ impl CkbadgerStore {
                         tx_idx,
                         bytes_to_hex(&tx_hash_from_key),
                         bytes_to_hex(&entry.tx_hash)
+                    );
+                }
+                if entry.block_hash != block_hash_from_key {
+                    anyhow::bail!(
+                        "activity key/value block_hash mismatch in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, key_block_hash=0x{}, value_block_hash=0x{}",
+                        bytes_to_hex(prefix),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&block_hash_from_key),
+                        bytes_to_hex(&entry.block_hash)
+                    );
+                }
+                if entry.block_number != block_num || entry.tx_index != tx_idx {
+                    anyhow::bail!(
+                        "activity key/value location mismatch in list_activities: lock_hash=0x{}, key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
+                        bytes_to_hex(prefix),
+                        block_num,
+                        entry.block_number,
+                        tx_idx,
+                        entry.tx_index
                     );
                 }
                 if Self::matches_activity_filter(&entry, filter) {
@@ -119,6 +140,7 @@ mod tests {
     fn make_activity_with_hash(tx_hash: &[u8], block_num: i64, tx_idx: i32) -> ActivityEntry {
         ActivityEntry {
             tx_hash: tx_hash.to_vec(),
+            block_hash: vec![0x40 | (block_num as u8); 32],
             block_number: block_num,
             tx_index: tx_idx,
             timestamp: 1_700_000_000 + block_num,

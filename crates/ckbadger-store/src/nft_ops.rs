@@ -411,7 +411,7 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let (_, block_num, tx_idx, tx_hash_from_key) =
+            let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
                 keys::decode_nft_collection_activity_key(&key);
             let entry: NftCollectionActivityEntry = bincode::deserialize(&value)?;
             if entry.tx_hash != tx_hash_from_key {
@@ -422,6 +422,16 @@ impl CkbadgerStore {
                     tx_idx,
                     bytes_to_hex(&tx_hash_from_key),
                     bytes_to_hex(&entry.tx_hash)
+                );
+            }
+            if entry.block_hash != block_hash_from_key {
+                anyhow::bail!(
+                    "nft_collection_activities key/value block_hash mismatch in list_nft_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_block_hash=0x{}, value_block_hash=0x{}",
+                    bytes_to_hex(&prefix),
+                    block_num,
+                    tx_idx,
+                    bytes_to_hex(&block_hash_from_key),
+                    bytes_to_hex(&entry.block_hash)
                 );
             }
 
@@ -815,6 +825,7 @@ mod tests {
     ) -> NftCollectionActivityEntry {
         NftCollectionActivityEntry {
             tx_hash: tx_hash.to_vec(),
+            block_hash: vec![0x71; 32],
             timestamp_ms: ts_ms,
             actions,
         }

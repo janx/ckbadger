@@ -461,9 +461,12 @@ mod tests {
         let (_dir, store, append_store, writer) = setup();
         let lock_hash = vec![0xDD; 32];
         let tx_hash = vec![0xAB; 32];
+        let second_tx_hash = vec![0xCD; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(0, &make_header(0x30, 1_700_000_000_000));
+        let mut header0 = make_header(0x30, 1_700_000_000_000);
+        header0.transactions_count = 2;
+        batch.put_block_header(0, &header0);
         batch.put_block_header(1, &make_header(0x31, 1_700_000_010_000));
         batch.put_cell(
             &tx_hash,
@@ -497,11 +500,15 @@ mod tests {
                 last_activity_tx: tx_hash.clone(),
             },
         );
+        batch.put_tx_hash_map(&tx_hash, 0, 0);
+        batch.put_tx_index(0, 0, &make_tx_index_entry());
+        batch.put_tx_hash_map(&second_tx_hash, 0, 1);
+        batch.put_tx_index(0, 1, &make_tx_index_entry());
         batch.commit().unwrap();
 
         let mut append_batch = StoreBatch::new(&append_store);
         append_batch.put_addr_tx(&lock_hash, 0, 0, &tx_hash);
-        append_batch.put_addr_tx(&lock_hash, 0, 1, &[0xCD; 32]);
+        append_batch.put_addr_tx(&lock_hash, 0, 1, &second_tx_hash);
         append_batch.commit().unwrap();
 
         writer

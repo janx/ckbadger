@@ -3877,6 +3877,42 @@ async fn test_spore_cluster_activities_supports_action_filter() {
             cycles: None,
         },
     );
+    core_batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: vec![0xA1; 32],
+            timestamp: 1_700_000_100,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0xA2; 32],
+            timestamp: 1_700_000_200,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.put_block_header(
+        300,
+        &CachedBlockHeader {
+            hash: vec![0xA3; 32],
+            timestamp: 1_700_000_300,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
     core_batch.commit().unwrap();
 
     let mut append_batch = StoreBatch::new(append_only_store.as_ref());
@@ -3886,6 +3922,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         0,
         &NftCollectionActivityEntry {
             tx_hash: mint_tx.clone(),
+            block_hash: vec![0xA1; 32],
             timestamp_ms: 1_700_000_100,
             actions: vec![AssetAction::Mint],
         },
@@ -3896,6 +3933,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         0,
         &NftCollectionActivityEntry {
             tx_hash: transfer_tx.clone(),
+            block_hash: vec![0xA2; 32],
             timestamp_ms: 1_700_000_200,
             actions: vec![AssetAction::Transfer],
         },
@@ -3906,6 +3944,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
         0,
         &NftCollectionActivityEntry {
             tx_hash: burn_tx.clone(),
+            block_hash: vec![0xA3; 32],
             timestamp_ms: 1_700_000_300,
             actions: vec![AssetAction::Burn],
         },
@@ -5939,6 +5978,42 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             cycles: None,
         },
     );
+    core_batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: vec![0xB1; 32],
+            timestamp: 1_700_000_100,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0xB2; 32],
+            timestamp: 1_700_000_200,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.put_block_header(
+        300,
+        &CachedBlockHeader {
+            hash: vec![0xB3; 32],
+            timestamp: 1_700_000_300,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
     core_batch.commit().unwrap();
 
     let mut append_batch = StoreBatch::new(append_only_store.as_ref());
@@ -5948,6 +6023,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &NftCollectionActivityEntry {
             tx_hash: mint_tx.clone(),
+            block_hash: vec![0xB1; 32],
             timestamp_ms: 1_700_000_100,
             actions: vec![AssetAction::Mint],
         },
@@ -5958,6 +6034,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &NftCollectionActivityEntry {
             tx_hash: transfer_tx.clone(),
+            block_hash: vec![0xB2; 32],
             timestamp_ms: 1_700_000_200,
             actions: vec![AssetAction::Transfer],
         },
@@ -5968,6 +6045,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &NftCollectionActivityEntry {
             tx_hash: burn_tx.clone(),
+            block_hash: vec![0xB3; 32],
             timestamp_ms: 1_700_000_300,
             actions: vec![AssetAction::Burn],
         },
@@ -6709,6 +6787,7 @@ async fn test_address_activities_reads_from_derived_store() {
     let lock_hash = vec![0x22; 32];
     let activity = ActivityEntry {
         tx_hash: vec![0xaa; 32],
+        block_hash: vec![0xba; 32],
         block_number: 10,
         tx_index: 0,
         timestamp: 1_700_000_000_000,
@@ -6732,6 +6811,18 @@ async fn test_address_activities_reads_from_derived_store() {
             fee: 0,
             tx_size: 100,
             cycles: None,
+        },
+    );
+    core_batch.put_block_header(
+        10,
+        &CachedBlockHeader {
+            hash: activity.block_hash.clone(),
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
         },
     );
     core_batch.commit().unwrap();

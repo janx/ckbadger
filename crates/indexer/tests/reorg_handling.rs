@@ -274,6 +274,7 @@ fn test_rollback_preserves_activities_history() {
         let block = i * 100;
         let entry = ActivityEntry {
             tx_hash: vec![i as u8; 32],
+            block_hash: vec![0xD0 | (i as u8); 32],
             block_number: block,
             tx_index: 0,
             timestamp: 1_700_000_000 + block,
@@ -284,7 +285,8 @@ fn test_rollback_preserves_activities_history() {
             peers: vec![],
         };
         append_batch.put_activity(&lock_hash, block, 0, &entry);
-        let activity_key = keys::encode_activity_key(&lock_hash, block, 0, &entry.tx_hash);
+        let activity_key =
+            keys::encode_activity_key(&lock_hash, block, 0, &entry.block_hash, &entry.tx_hash);
         domain_batch.put_reorg_undo_log_by_block(
             block,
             rollback_seq as u64,

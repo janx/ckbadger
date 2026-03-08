@@ -153,7 +153,13 @@ pub(crate) fn put_activity_with_undo_log(
     tx_idx: i32,
     entry: &ckbadger_store::types::ActivityEntry,
 ) {
-    let append_key = keys::encode_activity_key(lock_hash, block_num, tx_idx, &entry.tx_hash);
+    let append_key = keys::encode_activity_key(
+        lock_hash,
+        block_num,
+        tx_idx,
+        &entry.block_hash,
+        &entry.tx_hash,
+    );
     activity_batch.put_activity(lock_hash, block_num, tx_idx, entry);
     put_append_delete_undo_entry(
         domain_batch,
@@ -285,8 +291,8 @@ mod tests {
             .put_cf(append_store.cf_addr_txs(), &addr_drop, &[0x02])
             .unwrap();
 
-        let act_keep = keys::encode_activity_key(&lock_hash, 11, 0, &[0xB1; 32]);
-        let act_drop = keys::encode_activity_key(&lock_hash, 21, 0, &[0xB2; 32]);
+        let act_keep = keys::encode_activity_key(&lock_hash, 11, 0, &[0x11; 32], &[0xB1; 32]);
+        let act_drop = keys::encode_activity_key(&lock_hash, 21, 0, &[0x21; 32], &[0xB2; 32]);
         append_store
             .put_cf(append_store.cf_activities(), &act_keep, &[0x03])
             .unwrap();
@@ -294,8 +300,20 @@ mod tests {
             .put_cf(append_store.cf_activities(), &act_drop, &[0x04])
             .unwrap();
 
-        let nft_keep = keys::encode_nft_collection_activity_key(&collection_id, 12, 0, &[0xC1; 32]);
-        let nft_drop = keys::encode_nft_collection_activity_key(&collection_id, 22, 0, &[0xC2; 32]);
+        let nft_keep = keys::encode_nft_collection_activity_key(
+            &collection_id,
+            12,
+            0,
+            &[0x12; 32],
+            &[0xC1; 32],
+        );
+        let nft_drop = keys::encode_nft_collection_activity_key(
+            &collection_id,
+            22,
+            0,
+            &[0x22; 32],
+            &[0xC2; 32],
+        );
         append_store
             .put_cf(
                 append_store.cf_nft_collection_activities(),
@@ -378,6 +396,7 @@ mod tests {
         let lock_hash = [0x44; 32];
         let entry = ckbadger_store::types::ActivityEntry {
             tx_hash: vec![0xAB; 32],
+            block_hash: vec![0xBC; 32],
             block_number: 42,
             tx_index: 3,
             timestamp: 1_700_000_000,
@@ -431,7 +450,7 @@ mod tests {
         assert!(append_store
             .get_cf(
                 append_store.cf_activities(),
-                &keys::encode_activity_key(&lock_hash, 42, 3, &entry.tx_hash)
+                &keys::encode_activity_key(&lock_hash, 42, 3, &entry.block_hash, &entry.tx_hash)
             )
             .unwrap()
             .is_some());

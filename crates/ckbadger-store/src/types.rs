@@ -854,6 +854,8 @@ pub struct MemoryStats {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub tx_hash: Vec<u8>,
+    #[serde(default)]
+    pub block_hash: Vec<u8>,
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: i64,
@@ -918,6 +920,8 @@ pub enum AssetAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NftCollectionActivityEntry {
     pub tx_hash: Vec<u8>,
+    #[serde(default)]
+    pub block_hash: Vec<u8>,
     pub timestamp_ms: i64,
     pub actions: Vec<AssetAction>,
 }
@@ -1194,6 +1198,7 @@ mod tests {
     fn test_activity_entry_roundtrip() {
         let entry = ActivityEntry {
             tx_hash: vec![0x01u8; 32],
+            block_hash: vec![0xF1; 32],
             block_number: 12345,
             tx_index: 3,
             timestamp: 1_700_000_000,
@@ -1216,6 +1221,7 @@ mod tests {
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.tx_hash, entry.tx_hash);
+        assert_eq!(decoded.block_hash, entry.block_hash);
         assert_eq!(decoded.block_number, 12345);
         assert_eq!(decoded.ckb_delta, -500_00000000);
         assert_eq!(decoded.occupied_delta, 610_000_000_000);
@@ -1228,6 +1234,7 @@ mod tests {
     fn test_activity_entry_all_asset_change_variants() {
         let entry = ActivityEntry {
             tx_hash: vec![0x02u8; 32],
+            block_hash: vec![0xF2; 32],
             block_number: 100,
             tx_index: 0,
             timestamp: 1_700_000_000,
@@ -1295,6 +1302,7 @@ mod tests {
     fn test_activity_entry_empty_roundtrip() {
         let entry = ActivityEntry {
             tx_hash: vec![0x00; 32],
+            block_hash: vec![],
             block_number: 0,
             tx_index: 0,
             timestamp: 0,

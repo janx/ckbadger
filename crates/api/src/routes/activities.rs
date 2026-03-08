@@ -146,6 +146,8 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
 }
 
 const ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
+type CanonicalActivityLocation = (i64, i32, Vec<u8>);
+type CanonicalActivityLocationMap = HashMap<Vec<u8>, CanonicalActivityLocation>;
 
 fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
@@ -171,7 +173,7 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
 fn canonical_activity_locations(
     store: &CkbadgerStore,
     rows: &[(i64, i32, ActivityEntry)],
-) -> anyhow::Result<HashMap<Vec<u8>, (i64, i32)>> {
+) -> anyhow::Result<CanonicalActivityLocationMap> {
     if rows.is_empty() {
         return Ok(HashMap::new());
     }
@@ -179,11 +181,11 @@ fn canonical_activity_locations(
         .iter()
         .map(|(_, _, entry)| entry.tx_hash.clone())
         .collect();
-    let tx_batch = store.get_txs_by_hash_batch(&tx_hashes)?;
+    let tx_batch = store.get_canonical_tx_identities_by_hash_batch(&tx_hashes)?;
     let mut out = HashMap::with_capacity(tx_batch.len());
     for (tx_hash, tx_row_opt) in tx_batch {
-        if let Some((block_num, tx_idx, _)) = tx_row_opt {
-            out.insert(tx_hash, (block_num, tx_idx));
+        if let Some((block_num, tx_idx, block_hash)) = tx_row_opt {
+            out.insert(tx_hash, (block_num, tx_idx, block_hash));
         }
     }
     Ok(out)
@@ -217,7 +219,8 @@ fn list_canonical_activities_page(
             last_seen = Some((block_num, tx_idx));
             if entry.block_number == block_num
                 && entry.tx_index == tx_idx
-                && canonical_locations.get(&entry.tx_hash) == Some(&(block_num, tx_idx))
+                && canonical_locations.get(&entry.tx_hash)
+                    == Some(&(block_num, tx_idx, entry.block_hash.clone()))
             {
                 out.push((block_num, tx_idx, entry));
                 if out.len() >= limit {
@@ -313,11 +316,29 @@ async fn get_address_activities(
 mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::TxIndexEntry;
+    use ckbadger_store::types::{CachedBlockHeader, TxIndexEntry};
 
-    fn make_activity(tx_hash: &[u8], block_number: i64, tx_index: i32) -> ActivityEntry {
+    fn make_header(hash_byte: u8) -> CachedBlockHeader {
+        CachedBlockHeader {
+            hash: vec![hash_byte; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        }
+    }
+
+    fn make_activity_with_block_hash(
+        tx_hash: &[u8],
+        block_hash: &[u8],
+        block_number: i64,
+        tx_index: i32,
+    ) -> ActivityEntry {
         ActivityEntry {
             tx_hash: tx_hash.to_vec(),
+            block_hash: block_hash.to_vec(),
             block_number,
             tx_index,
             timestamp: 1_700_000_000 + block_number,
@@ -327,6 +348,15 @@ mod tests {
             asset_changes: vec![],
             peers: vec![],
         }
+    }
+
+    fn make_activity(tx_hash: &[u8], block_number: i64, tx_index: i32) -> ActivityEntry {
+        make_activity_with_block_hash(
+            tx_hash,
+            &[0x60 | (block_number as u8); 32],
+            block_number,
+            tx_index,
+        )
     }
 
     #[test]
@@ -389,6 +419,9 @@ mod tests {
         domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
         domain_batch.put_tx_index(20, 0, &tx_index);
         domain_batch.put_tx_index(10, 0, &tx_index);
+        domain_batch.put_block_header(30, &make_header(0x60 | 30));
+        domain_batch.put_block_header(20, &make_header(0x60 | 20));
+        domain_batch.put_block_header(10, &make_header(0x60 | 10));
         domain_batch.commit().unwrap();
 
         let rows =
@@ -398,5 +431,51 @@ mod tests {
         assert_eq!(rows[1].0, 10);
         assert_eq!(rows[0].2.tx_hash, canonical_tx_new);
         assert_eq!(rows[1].2.tx_hash, canonical_tx_old);
+    }
+
+    #[test]
+    fn test_list_canonical_activities_page_filters_competing_block_hash_history() {
+        let root = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
+        let lock_hash = [0x44; 32];
+        let tx_hash = vec![0x77; 32];
+
+        let mut append_activity_batch = StoreBatch::new(&append);
+        append_activity_batch.put_activity(
+            &lock_hash,
+            20,
+            0,
+            &make_activity_with_block_hash(&tx_hash, &[0xAA; 32], 20, 0),
+        );
+        append_activity_batch.put_activity(
+            &lock_hash,
+            20,
+            0,
+            &make_activity_with_block_hash(&tx_hash, &[0xBB; 32], 20, 0),
+        );
+        append_activity_batch.commit().unwrap();
+
+        let tx_index = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_tx_hash_map(&tx_hash, 20, 0);
+        domain_batch.put_tx_index(20, 0, &tx_index);
+        domain_batch.put_block_header(20, &make_header(0xBB));
+        domain_batch.commit().unwrap();
+
+        let rows =
+            list_canonical_activities_page(&append, &domain, &lock_hash, 10, None, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.tx_hash, tx_hash);
+        assert_eq!(rows[0].2.block_hash, vec![0xBB; 32]);
     }
 }

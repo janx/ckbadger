@@ -66,6 +66,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
     created_account_ids: &HashSet<Vec<u8>>,
     consumed_account_ids: &HashSet<Vec<u8>>,
     tx_hash: &[u8],
+    block_hash: &[u8],
     block_number: i64,
     tx_idx: i32,
     timestamp_ms: i64,
@@ -128,6 +129,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
 
     let entry = NftCollectionActivityEntry {
         tx_hash: tx_hash.to_vec(),
+        block_hash: block_hash.to_vec(),
         timestamp_ms,
         actions,
     };

@@ -1507,7 +1507,7 @@ impl CkbadgerStore {
                     key.len()
                 );
             }
-            let (collection_id, block_num, tx_idx, tx_hash) =
+            let (collection_id, block_num, tx_idx, block_hash, tx_hash) =
                 keys::decode_nft_collection_activity_key(&key);
             let Some((canonical_block_num, canonical_tx_idx)) = self.get_tx_location(&tx_hash)?
             else {
@@ -1520,6 +1520,17 @@ impl CkbadgerStore {
                 .get_tx_index(canonical_block_num, canonical_tx_idx)?
                 .is_none()
             {
+                continue;
+            }
+            let Some(canonical_header) = self.get_block_header(canonical_block_num)? else {
+                anyhow::bail!(
+                    "missing block header while repairing rollback state from nft_collection_activities: block_num={}, tx_idx={}, tx_hash=0x{}",
+                    canonical_block_num,
+                    canonical_tx_idx,
+                    bytes_to_hex(&tx_hash)
+                );
+            };
+            if canonical_header.hash != block_hash {
                 continue;
             }
             let total = nft_activity_totals
@@ -2077,6 +2088,7 @@ mod tests {
             0,
             &NftCollectionActivityEntry {
                 tx_hash: vec![0xA1; 32],
+                block_hash: header0.hash.clone(),
                 timestamp_ms: 1_700_000_000_000,
                 actions: vec![AssetAction::Mint],
             },
@@ -2087,6 +2099,7 @@ mod tests {
             0,
             &NftCollectionActivityEntry {
                 tx_hash: vec![0xB2; 32],
+                block_hash: vec![0xC2; 32],
                 timestamp_ms: 1_700_000_000_001,
                 actions: vec![AssetAction::Transfer],
             },

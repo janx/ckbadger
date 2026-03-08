@@ -53,6 +53,7 @@ pub(crate) struct PreParsedNftData {
 pub(crate) struct DotbitConsumptionEvent {
     pub(crate) account_id: Vec<u8>,
     pub(crate) block_number: i64,
+    pub(crate) block_hash: Vec<u8>,
     pub(crate) consuming_tx_hash: [u8; 32],
     pub(crate) tx_idx: i32,
     pub(crate) ts_ms: i64,
@@ -64,6 +65,7 @@ pub(crate) struct DotbitTxActivityData {
     pub(crate) created_account_ids: HashSet<Vec<u8>>,
     pub(crate) consumed_account_ids: HashSet<Vec<u8>>,
     pub(crate) block_number: i64,
+    pub(crate) block_hash: Vec<u8>,
     pub(crate) tx_idx: i32,
     pub(crate) timestamp_ms: i64,
 }

@@ -690,20 +690,27 @@ pub fn encode_spore_by_cluster_key(cluster_id: &[u8], spore_id: &[u8]) -> [u8; 6
     key
 }
 
-/// Activity key: lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
+/// Activity key:
+/// lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B)
 /// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
-pub const ACTIVITY_KEY_SIZE: usize = 76;
+pub const ACTIVITY_KEY_SIZE: usize = 108;
 
 pub fn encode_activity_key(
     lock_hash: &[u8],
     block_num: i64,
     tx_idx: i32,
+    block_hash: &[u8],
     tx_hash: &[u8],
 ) -> Vec<u8> {
     assert!(
         lock_hash.len() >= 32,
         "encode_activity_key: lock_hash must be >= 32 bytes, got {}",
         lock_hash.len()
+    );
+    assert!(
+        block_hash.len() >= 32,
+        "encode_activity_key: block_hash must be >= 32 bytes, got {}",
+        block_hash.len()
     );
     assert!(
         tx_hash.len() >= 32,
@@ -714,6 +721,7 @@ pub fn encode_activity_key(
     key.extend_from_slice(&lock_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
+    key.extend_from_slice(&block_hash[..32]);
     key.extend_from_slice(&tx_hash[..32]);
     key
 }
@@ -728,12 +736,12 @@ pub fn encode_activity_seek_after_key(lock_hash: &[u8], block_num: i64, tx_idx: 
     key.extend_from_slice(&lock_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
-    key.extend_from_slice(&[0xFF; 32]);
+    key.extend_from_slice(&[0xFF; 64]);
     key
 }
 
-/// Decode block_num, tx_idx, and tx_hash from an activity key.
-pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
+/// Decode block_num, tx_idx, block_hash, and tx_hash from an activity key.
+pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>, Vec<u8>) {
     assert!(
         key.len() == ACTIVITY_KEY_SIZE,
         "decode_activity_key: expected {} bytes, got {}",
@@ -743,8 +751,9 @@ pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>) {
     let lock_hash = key[..32].to_vec();
     let block_num = decode_desc_block_num(&key[32..40]);
     let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    let tx_hash = key[44..76].to_vec();
-    (lock_hash, block_num, tx_idx, tx_hash)
+    let block_hash = key[44..76].to_vec();
+    let tx_hash = key[76..108].to_vec();
+    (lock_hash, block_num, tx_idx, block_hash, tx_hash)
 }
 
 /// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
@@ -878,16 +887,23 @@ pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
         .expect("timestamp_ms_to_date: formatted date must parse into u32")
 }
 
-/// NFT collection activity key: collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
+/// NFT collection activity key:
+/// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B)
 /// Uses descending block_num and tx_idx so newest activities come first in prefix scan.
-pub const NFT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 76;
+pub const NFT_COLLECTION_ACTIVITY_KEY_SIZE: usize = 108;
 
 pub fn encode_nft_collection_activity_key(
     collection_id: &[u8],
     block_num: i64,
     tx_idx: i32,
+    block_hash: &[u8],
     tx_hash: &[u8],
 ) -> [u8; NFT_COLLECTION_ACTIVITY_KEY_SIZE] {
+    assert!(
+        block_hash.len() >= 32,
+        "encode_nft_collection_activity_key: block_hash must be >= 32 bytes, got {}",
+        block_hash.len()
+    );
     assert!(
         tx_hash.len() >= 32,
         "encode_nft_collection_activity_key: tx_hash must be >= 32 bytes, got {}",
@@ -897,7 +913,8 @@ pub fn encode_nft_collection_activity_key(
     key[..32].copy_from_slice(&pad_id_32(collection_id));
     key[32..40].copy_from_slice(&encode_desc_block_num(block_num));
     key[40..44].copy_from_slice(&encode_desc_tx_idx(tx_idx));
-    key[44..76].copy_from_slice(&tx_hash[..32]);
+    key[44..76].copy_from_slice(&block_hash[..32]);
+    key[76..108].copy_from_slice(&tx_hash[..32]);
     key
 }
 
@@ -917,7 +934,7 @@ pub fn encode_nft_collection_activity_seek_after_key(
     key
 }
 
-pub fn decode_nft_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Vec<u8>) {
+pub fn decode_nft_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Vec<u8>, Vec<u8>) {
     assert!(
         key.len() == NFT_COLLECTION_ACTIVITY_KEY_SIZE,
         "decode_nft_collection_activity_key: expected {} bytes, got {}",
@@ -928,8 +945,9 @@ pub fn decode_nft_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32, Ve
     collection_id.copy_from_slice(&key[..32]);
     let block_num = decode_desc_block_num(&key[32..40]);
     let tx_idx = decode_desc_tx_idx(&key[40..44]);
-    let tx_hash = key[44..76].to_vec();
-    (collection_id, block_num, tx_idx, tx_hash)
+    let block_hash = key[44..76].to_vec();
+    let tx_hash = key[76..108].to_vec();
+    (collection_id, block_num, tx_idx, block_hash, tx_hash)
 }
 
 /// Sync meta keys
@@ -1311,14 +1329,16 @@ mod tests {
             (1_000_000, 42),
             (i64::MAX, 0),
         ] {
+            let block_hash = [idx as u8; 32];
             let tx_hash = [block as u8; 32];
-            let key = encode_activity_key(&lock_hash, block, idx, &tx_hash);
+            let key = encode_activity_key(&lock_hash, block, idx, &block_hash, &tx_hash);
             assert_eq!(key.len(), ACTIVITY_KEY_SIZE);
-            let (decoded_hash, decoded_block, decoded_idx, decoded_tx_hash) =
+            let (decoded_hash, decoded_block, decoded_idx, decoded_block_hash, decoded_tx_hash) =
                 decode_activity_key(&key);
             assert_eq!(decoded_hash, lock_hash.to_vec());
             assert_eq!(decoded_block, block);
             assert_eq!(decoded_idx, idx);
+            assert_eq!(decoded_block_hash, block_hash.to_vec());
             assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         }
     }
@@ -1326,23 +1346,24 @@ mod tests {
     #[test]
     fn test_activity_key_descending_sort_order() {
         let lock_hash = [0xBBu8; 32];
+        let block_hash = [0x55u8; 32];
         let tx_hash = [0x44u8; 32];
-        let k1 = encode_activity_key(&lock_hash, 300, 0, &tx_hash);
-        let k2 = encode_activity_key(&lock_hash, 200, 0, &tx_hash);
-        let k3 = encode_activity_key(&lock_hash, 100, 0, &tx_hash);
+        let k1 = encode_activity_key(&lock_hash, 300, 0, &block_hash, &tx_hash);
+        let k2 = encode_activity_key(&lock_hash, 200, 0, &block_hash, &tx_hash);
+        let k3 = encode_activity_key(&lock_hash, 100, 0, &block_hash, &tx_hash);
         // Higher block_num should produce SMALLER key (descending)
         assert!(k1 < k2);
         assert!(k2 < k3);
 
-        let k4 = encode_activity_key(&lock_hash, 100, 10, &tx_hash);
-        let k5 = encode_activity_key(&lock_hash, 100, 5, &tx_hash);
+        let k4 = encode_activity_key(&lock_hash, 100, 10, &block_hash, &tx_hash);
+        let k5 = encode_activity_key(&lock_hash, 100, 5, &block_hash, &tx_hash);
         assert!(k4 < k5);
     }
 
     #[test]
     fn test_activity_key_prefix_is_lock_hash() {
         let lock_hash = [0xCCu8; 32];
-        let key = encode_activity_key(&lock_hash, 500, 3, &[0x55; 32]);
+        let key = encode_activity_key(&lock_hash, 500, 3, &[0x66; 32], &[0x55; 32]);
         assert!(key.starts_with(&lock_hash));
     }
 
@@ -1351,21 +1372,24 @@ mod tests {
         let lock_a = [0x01u8; 32];
         let lock_b = [0x02u8; 32];
         assert_ne!(
-            encode_activity_key(&lock_a, 100, 0, &[0x66; 32]),
-            encode_activity_key(&lock_b, 100, 0, &[0x66; 32])
+            encode_activity_key(&lock_a, 100, 0, &[0x77; 32], &[0x66; 32]),
+            encode_activity_key(&lock_b, 100, 0, &[0x77; 32], &[0x66; 32])
         );
     }
 
     #[test]
-    fn test_encode_activity_key_includes_tx_hash() {
+    fn test_encode_activity_key_includes_block_hash_and_tx_hash() {
         let lock_hash = [0x22u8; 32];
+        let block_hash = [0xAAu8; 32];
         let tx_hash = [0xBBu8; 32];
-        let key = encode_activity_key(&lock_hash, 200, 7, &tx_hash);
-        assert_eq!(key.len(), 76);
-        let (decoded_hash, decoded_block, decoded_idx, decoded_tx_hash) = decode_activity_key(&key);
+        let key = encode_activity_key(&lock_hash, 200, 7, &block_hash, &tx_hash);
+        assert_eq!(key.len(), ACTIVITY_KEY_SIZE);
+        let (decoded_hash, decoded_block, decoded_idx, decoded_block_hash, decoded_tx_hash) =
+            decode_activity_key(&key);
         assert_eq!(decoded_hash, lock_hash.to_vec());
         assert_eq!(decoded_block, 200);
         assert_eq!(decoded_idx, 7);
+        assert_eq!(decoded_block_hash, block_hash.to_vec());
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
     }
 
@@ -1576,14 +1600,22 @@ mod tests {
             (1_000_000, 42),
             (i64::MAX, i32::MAX),
         ] {
+            let block_hash = [idx as u8; 32];
             let tx_hash = [block as u8; 32];
-            let key = encode_nft_collection_activity_key(&collection_id, block, idx, &tx_hash);
+            let key = encode_nft_collection_activity_key(
+                &collection_id,
+                block,
+                idx,
+                &block_hash,
+                &tx_hash,
+            );
             assert_eq!(key.len(), NFT_COLLECTION_ACTIVITY_KEY_SIZE);
-            let (decoded_cid, decoded_block, decoded_idx, decoded_tx_hash) =
+            let (decoded_cid, decoded_block, decoded_idx, decoded_block_hash, decoded_tx_hash) =
                 decode_nft_collection_activity_key(&key);
             assert_eq!(decoded_cid, collection_id);
             assert_eq!(decoded_block, block);
             assert_eq!(decoded_idx, idx);
+            assert_eq!(decoded_block_hash, block_hash.to_vec());
             assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         }
     }
@@ -1591,17 +1623,18 @@ mod tests {
     #[test]
     fn test_nft_collection_activity_key_descending_sort() {
         let cid = [0xBBu8; 32];
+        let block_hash = [0x66u8; 32];
         let tx_hash = [0x77u8; 32];
-        let k1 = encode_nft_collection_activity_key(&cid, 300, 5, &tx_hash);
-        let k2 = encode_nft_collection_activity_key(&cid, 200, 5, &tx_hash);
-        let k3 = encode_nft_collection_activity_key(&cid, 100, 5, &tx_hash);
+        let k1 = encode_nft_collection_activity_key(&cid, 300, 5, &block_hash, &tx_hash);
+        let k2 = encode_nft_collection_activity_key(&cid, 200, 5, &block_hash, &tx_hash);
+        let k3 = encode_nft_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
         // Higher block_num => smaller key (descending)
         assert!(k1 < k2);
         assert!(k2 < k3);
 
         // Same block, higher tx_idx => smaller key (descending)
-        let k4 = encode_nft_collection_activity_key(&cid, 100, 10, &tx_hash);
-        let k5 = encode_nft_collection_activity_key(&cid, 100, 5, &tx_hash);
+        let k4 = encode_nft_collection_activity_key(&cid, 100, 10, &block_hash, &tx_hash);
+        let k5 = encode_nft_collection_activity_key(&cid, 100, 5, &block_hash, &tx_hash);
         assert!(k4 < k5);
     }
 
@@ -1609,24 +1642,26 @@ mod tests {
     fn test_nft_collection_activity_prefix_matching() {
         let cid = [0xCCu8; 32];
         let prefix = encode_nft_collection_activity_prefix(&cid);
-        let key = encode_nft_collection_activity_key(&cid, 500, 3, &[0x88; 32]);
+        let key = encode_nft_collection_activity_key(&cid, 500, 3, &[0x77; 32], &[0x88; 32]);
         assert!(key.starts_with(&prefix));
 
         let other_cid = [0xDDu8; 32];
-        let other_key = encode_nft_collection_activity_key(&other_cid, 500, 3, &[0x99; 32]);
+        let other_key =
+            encode_nft_collection_activity_key(&other_cid, 500, 3, &[0x78; 32], &[0x99; 32]);
         assert!(!other_key.starts_with(&prefix));
     }
 
     #[test]
     fn test_nft_collection_activity_padded_short_id() {
         let short_id = [0xEEu8; 20];
-        let key = encode_nft_collection_activity_key(&short_id, 100, 0, &[0xAA; 32]);
-        let (decoded_cid, decoded_block, _, decoded_tx_hash) =
+        let key = encode_nft_collection_activity_key(&short_id, 100, 0, &[0xAB; 32], &[0xAA; 32]);
+        let (decoded_cid, decoded_block, _, decoded_block_hash, decoded_tx_hash) =
             decode_nft_collection_activity_key(&key);
         // First 20 bytes match, rest is zero-padded
         assert_eq!(&decoded_cid[..20], &short_id);
         assert_eq!(&decoded_cid[20..], &[0u8; 12]);
         assert_eq!(decoded_block, 100);
+        assert_eq!(decoded_block_hash, vec![0xAB; 32]);
         assert_eq!(decoded_tx_hash, vec![0xAA; 32]);
     }
 
@@ -1645,16 +1680,23 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_nft_collection_activity_key_includes_tx_hash() {
+    fn test_encode_nft_collection_activity_key_includes_block_hash_and_tx_hash() {
         let collection_id = [0x33u8; 32];
+        let block_hash = [0xABu8; 32];
         let tx_hash = [0xCCu8; 32];
-        let key = encode_nft_collection_activity_key(&collection_id, 300, 9, &tx_hash);
-        assert_eq!(key.len(), 76);
-        let (decoded_collection_id, decoded_block, decoded_idx, decoded_tx_hash) =
-            decode_nft_collection_activity_key(&key);
+        let key = encode_nft_collection_activity_key(&collection_id, 300, 9, &block_hash, &tx_hash);
+        assert_eq!(key.len(), NFT_COLLECTION_ACTIVITY_KEY_SIZE);
+        let (
+            decoded_collection_id,
+            decoded_block,
+            decoded_idx,
+            decoded_block_hash,
+            decoded_tx_hash,
+        ) = decode_nft_collection_activity_key(&key);
         assert_eq!(decoded_collection_id, collection_id);
         assert_eq!(decoded_block, 300);
         assert_eq!(decoded_idx, 9);
+        assert_eq!(decoded_block_hash, block_hash.to_vec());
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
     }
 }
