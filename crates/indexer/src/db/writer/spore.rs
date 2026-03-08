@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
 use ckbadger_store::batch::StoreBatch;
@@ -23,18 +23,12 @@ const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection_____________
 pub(crate) struct SporeBatchState {
     spores: HashMap<Vec<u8>, Option<DobEntry>>,
     cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
-    dirty_cluster_aggs: HashSet<Vec<u8>>,
     cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
-    dirty_cluster_owner_counts: HashSet<(Vec<u8>, Vec<u8>)>,
     spore_hourly_transfers: HashMap<Vec<u8>, i64>,
-    dirty_spore_hourly_transfers: HashSet<Vec<u8>>,
     did_collection_agg_loaded: bool,
     did_collection_agg: Option<NftCollectionAggregate>,
-    did_collection_agg_dirty: bool,
     did_owner_counts: HashMap<Vec<u8>, i64>,
-    dirty_did_owner_counts: HashSet<Vec<u8>>,
     did_hourly_transfers: HashMap<Vec<u8>, i64>,
-    dirty_did_hourly_transfers: HashSet<Vec<u8>>,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
 }
 
@@ -66,8 +60,13 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: ClusterAggregate) {
-        self.dirty_cluster_aggs.insert(cluster_id.to_vec());
+    fn put_cluster_aggregate(
+        &mut self,
+        cluster_id: &[u8],
+        agg: ClusterAggregate,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_cluster_aggregate(cluster_id, &agg);
         self.cluster_aggs.insert(cluster_id.to_vec(), agg);
     }
 
@@ -95,16 +94,27 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_cluster_owner_count(&mut self, cluster_id: &[u8], lock_hash: &[u8], count: i64) {
-        let key = (cluster_id.to_vec(), lock_hash.to_vec());
-        self.dirty_cluster_owner_counts.insert(key.clone());
-        self.cluster_owner_counts.insert(key, count);
+    fn put_cluster_owner_count(
+        &mut self,
+        cluster_id: &[u8],
+        lock_hash: &[u8],
+        count: i64,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_cluster_owner_count(cluster_id, lock_hash, count);
+        self.cluster_owner_counts
+            .insert((cluster_id.to_vec(), lock_hash.to_vec()), count);
     }
 
-    fn delete_cluster_owner(&mut self, cluster_id: &[u8], lock_hash: &[u8]) {
-        let key = (cluster_id.to_vec(), lock_hash.to_vec());
-        self.dirty_cluster_owner_counts.insert(key.clone());
-        self.cluster_owner_counts.insert(key, 0);
+    fn delete_cluster_owner(
+        &mut self,
+        cluster_id: &[u8],
+        lock_hash: &[u8],
+        batch: &mut StoreBatch,
+    ) {
+        batch.delete_cluster_owner(cluster_id, lock_hash);
+        self.cluster_owner_counts
+            .insert((cluster_id.to_vec(), lock_hash.to_vec()), 0);
     }
 
     fn get_spore_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
@@ -134,7 +144,6 @@ impl SporeBatchState {
     }
 
     fn put_spore_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
-        self.dirty_spore_hourly_transfers.insert(key.clone());
         self.spore_hourly_transfers.insert(key, count);
     }
 
@@ -151,10 +160,14 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_did_collection_aggregate(&mut self, agg: NftCollectionAggregate) {
+    fn put_did_collection_aggregate(
+        &mut self,
+        agg: NftCollectionAggregate,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_nft_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION, &agg);
         self.did_collection_agg = Some(agg);
         self.did_collection_agg_loaded = true;
-        self.did_collection_agg_dirty = true;
     }
 
     fn get_did_owner_count(&mut self, store: &CkbadgerStore, lock_hash: &[u8]) -> Result<i64> {
@@ -167,13 +180,13 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_did_owner_count(&mut self, lock_hash: &[u8], count: i64) {
-        self.dirty_did_owner_counts.insert(lock_hash.to_vec());
+    fn put_did_owner_count(&mut self, lock_hash: &[u8], count: i64, batch: &mut StoreBatch) {
+        batch.put_nft_collection_owner_count(&DID_CKB_SENTINEL_COLLECTION, lock_hash, count);
         self.did_owner_counts.insert(lock_hash.to_vec(), count);
     }
 
-    fn delete_did_owner(&mut self, lock_hash: &[u8]) {
-        self.dirty_did_owner_counts.insert(lock_hash.to_vec());
+    fn delete_did_owner(&mut self, lock_hash: &[u8], batch: &mut StoreBatch) {
+        batch.delete_nft_collection_owner(&DID_CKB_SENTINEL_COLLECTION, lock_hash);
         self.did_owner_counts.insert(lock_hash.to_vec(), 0);
     }
 
@@ -204,57 +217,7 @@ impl SporeBatchState {
     }
 
     fn put_did_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
-        self.dirty_did_hourly_transfers.insert(key.clone());
         self.did_hourly_transfers.insert(key, count);
-    }
-
-    pub(crate) fn flush_to_batch(&self, batch: &mut StoreBatch) {
-        // Cluster aggregates
-        for id in &self.dirty_cluster_aggs {
-            if let Some(agg) = self.cluster_aggs.get(id) {
-                batch.put_cluster_aggregate(id, agg);
-            }
-        }
-        // Cluster owner counts
-        for (cid, lh) in &self.dirty_cluster_owner_counts {
-            let count = self
-                .cluster_owner_counts
-                .get(&(cid.clone(), lh.clone()))
-                .copied()
-                .unwrap_or(0);
-            if count > 0 {
-                batch.put_cluster_owner_count(cid, lh, count);
-            } else {
-                batch.delete_cluster_owner(cid, lh);
-            }
-        }
-        // Spore hourly transfers
-        for key in &self.dirty_spore_hourly_transfers {
-            if let Some(&count) = self.spore_hourly_transfers.get(key) {
-                batch.put_stats(key, &count.to_le_bytes());
-            }
-        }
-        // did:ckb collection aggregate
-        if self.did_collection_agg_dirty {
-            if let Some(agg) = &self.did_collection_agg {
-                batch.put_nft_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION, agg);
-            }
-        }
-        // did:ckb owner counts
-        for lh in &self.dirty_did_owner_counts {
-            let count = self.did_owner_counts.get(lh).copied().unwrap_or(0);
-            if count > 0 {
-                batch.put_nft_collection_owner_count(&DID_CKB_SENTINEL_COLLECTION, lh, count);
-            } else {
-                batch.delete_nft_collection_owner(&DID_CKB_SENTINEL_COLLECTION, lh);
-            }
-        }
-        // did:ckb hourly transfers
-        for key in &self.dirty_did_hourly_transfers {
-            if let Some(&count) = self.did_hourly_transfers.get(key) {
-                batch.put_stats(key, &count.to_le_bytes());
-            }
-        }
     }
 
     pub(crate) fn put_spore_outpoint(
@@ -289,6 +252,7 @@ impl BatchWriter {
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
         agg: &mut ClusterAggregate,
+        batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
         if old_owner == new_owner {
@@ -313,10 +277,10 @@ impl BatchWriter {
                         agg.owner_count
                     );
                 }
-                state.delete_cluster_owner(cluster_id, old_lock);
+                state.delete_cluster_owner(cluster_id, old_lock, batch);
                 agg.owner_count -= 1;
             } else {
-                state.put_cluster_owner_count(cluster_id, old_lock, old_count - 1);
+                state.put_cluster_owner_count(cluster_id, old_lock, old_count - 1, batch);
             }
         }
 
@@ -332,7 +296,7 @@ impl BatchWriter {
             let next = cur_count
                 .checked_add(1)
                 .ok_or_else(|| anyhow::anyhow!("spore owner count overflow"))?;
-            state.put_cluster_owner_count(cluster_id, new_lock, next);
+            state.put_cluster_owner_count(cluster_id, new_lock, next, batch);
         }
 
         Ok(())
@@ -343,6 +307,7 @@ impl BatchWriter {
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
         agg: &mut NftCollectionAggregate,
+        batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
         if old_owner == new_owner {
@@ -364,10 +329,10 @@ impl BatchWriter {
                         agg.holders_count
                     );
                 }
-                state.delete_did_owner(old_lock);
+                state.delete_did_owner(old_lock, batch);
                 agg.holders_count -= 1;
             } else {
-                state.put_did_owner_count(old_lock, old_count - 1);
+                state.put_did_owner_count(old_lock, old_count - 1, batch);
             }
         }
 
@@ -388,7 +353,7 @@ impl BatchWriter {
                     current
                 )
             })?;
-            state.put_did_owner_count(new_lock, next);
+            state.put_did_owner_count(new_lock, next, batch);
         }
 
         Ok(())
@@ -475,7 +440,7 @@ impl BatchWriter {
         let mut agg = state.get_cluster_aggregate(self.store.as_ref(), &cluster.cluster_id)?;
         agg.name = cluster.name.clone();
         agg.description = cluster.description.clone();
-        state.put_cluster_aggregate(&cluster.cluster_id, agg);
+        state.put_cluster_aggregate(&cluster.cluster_id, agg, batch);
 
         Ok(())
     }
@@ -629,6 +594,7 @@ impl BatchWriter {
                     None,
                     Some(spore.owner_lock_hash.as_slice()),
                     &mut agg,
+                    batch,
                     state,
                 )?;
             } else if !was_live {
@@ -642,6 +608,7 @@ impl BatchWriter {
                     None,
                     Some(spore.owner_lock_hash.as_slice()),
                     &mut agg,
+                    batch,
                     state,
                 )?;
             } else {
@@ -655,6 +622,7 @@ impl BatchWriter {
                     old_owner.as_deref(),
                     Some(spore.owner_lock_hash.as_slice()),
                     &mut agg,
+                    batch,
                     state,
                 )?;
                 let hour_bucket = timestamp_ms / 3_600_000;
@@ -670,10 +638,11 @@ impl BatchWriter {
                         current
                     )
                 })?;
+                batch.put_nft_hourly_transfer(&DID_CKB_SENTINEL_COLLECTION, hour_bucket, next);
                 state.put_did_hourly_transfer(key, next);
             }
 
-            state.put_did_collection_aggregate(agg);
+            state.put_did_collection_aggregate(agg, batch);
             return Ok(());
         }
 
@@ -704,9 +673,10 @@ impl BatchWriter {
                         old_owner.as_deref(),
                         None,
                         &mut old_agg,
+                        batch,
                         state,
                     )?;
-                    state.put_cluster_aggregate(old_cluster_id, old_agg);
+                    state.put_cluster_aggregate(old_cluster_id, old_agg, batch);
                 }
             }
         }
@@ -776,6 +746,7 @@ impl BatchWriter {
                         hex::encode(&spore.spore_id)
                     )
                 })?;
+                batch.put_spore_hourly_transfer(cluster_id, hour_bucket, next);
                 state.put_spore_hourly_transfer(key, next);
                 if old_live_tier != new_live_tier {
                     self.adjust_cluster_tier_count(
@@ -805,9 +776,10 @@ impl BatchWriter {
                 owner_from,
                 Some(spore.owner_lock_hash.as_slice()),
                 &mut agg,
+                batch,
                 state,
             )?;
-            state.put_cluster_aggregate(cluster_id, agg);
+            state.put_cluster_aggregate(cluster_id, agg, batch);
         }
 
         Ok(())
@@ -858,8 +830,14 @@ impl BatchWriter {
                     );
                 }
                 agg.live_count -= 1;
-                self.apply_did_owner_transition(old_owner.as_deref(), None, &mut agg, state)?;
-                state.put_did_collection_aggregate(agg);
+                self.apply_did_owner_transition(
+                    old_owner.as_deref(),
+                    None,
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
+                state.put_did_collection_aggregate(agg, batch);
                 return Ok(Some(DID_CKB_SENTINEL_COLLECTION.to_vec()));
             }
 
@@ -875,8 +853,15 @@ impl BatchWriter {
                 }
                 agg.live_count -= 1;
                 self.adjust_cluster_tier_count(cid, &mut agg, old_tier, -1, "consume spore")?;
-                self.apply_owner_transition(cid, old_owner.as_deref(), None, &mut agg, state)?;
-                state.put_cluster_aggregate(cid, agg);
+                self.apply_owner_transition(
+                    cid,
+                    old_owner.as_deref(),
+                    None,
+                    &mut agg,
+                    batch,
+                    state,
+                )?;
+                state.put_cluster_aggregate(cid, agg, batch);
             }
             return Ok(cluster_id);
         }
@@ -1237,7 +1222,6 @@ mod tests {
                 &mut state,
             )
             .unwrap();
-        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
@@ -1424,7 +1408,6 @@ mod tests {
                 &mut state,
             )
             .unwrap();
-        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let old_agg = store.get_cluster_aggregate(&old_cluster).unwrap().unwrap();
@@ -1512,7 +1495,6 @@ mod tests {
                 &mut state,
             )
             .unwrap();
-        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let agg = store
@@ -1604,7 +1586,6 @@ mod tests {
                     &mut state,
                 )
                 .unwrap();
-            state.flush_to_batch(&mut batch);
             batch.commit().unwrap();
         }
 
@@ -1613,7 +1594,6 @@ mod tests {
         writer
             .consume_spore(&did_id, 301, &[0x23; 32], &mut batch, &mut state)
             .unwrap();
-        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let agg = store
