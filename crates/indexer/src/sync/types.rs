@@ -53,10 +53,9 @@ pub(crate) struct PreParsedNftData {
 pub(crate) struct DotbitConsumptionEvent {
     pub(crate) account_id: Vec<u8>,
     pub(crate) block_number: i64,
-    pub(crate) block_hash: Vec<u8>,
     pub(crate) consuming_tx_hash: [u8; 32],
-    pub(crate) tx_idx: i32,
-    pub(crate) ts_ms: i64,
+    /// Pre-computed index into the flat tx array, avoids O(n) search in writer.
+    pub(crate) tx_global_index: usize,
 }
 
 /// Per-tx .bit activity data for direct collection activity writes.

@@ -69,17 +69,15 @@ pub(super) fn collect_missing_input_outpoints<T>(
 }
 
 fn build_activity_input_views(
-    store: &CkbadgerStore,
     tx_data: &TxData,
     block_number: i64,
     input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
     batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
 ) -> Result<Vec<crate::db::writer::activities::InputCellView>> {
     if tx_data.is_cellbase {
         return Ok(Vec::new());
     }
-
-    let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
 
     tx_data
         .inputs
@@ -112,28 +110,8 @@ fn build_activity_input_views(
                         previous_output_index
                     )
                 })?;
-            let outpoint_key = keys::encode_outpoint(&input.previous_tx_hash, previous_output_index);
-            let is_dao_withdraw_request = if info.type_code_hash.as_deref()
-                == Some(dao_code_hash.as_slice())
-            {
-                store
-                    .get_cf(store.cf_dao_by_withdraw_tx(), &outpoint_key)
-                    .map_err(|e| {
-                        anyhow!(
-                            "failed to check DAO withdraw index while building activities: block={}, tx_hash=0x{}, tx_index={}, input_index={}, prev_outpoint=0x{}:{}, error={}",
-                            block_number,
-                            hex::encode(tx_data.hash),
-                            tx_data.tx_index,
-                            input_index,
-                            hex::encode(input.previous_tx_hash),
-                            previous_output_index,
-                            e
-                        )
-                    })?
-                    .is_some()
-            } else {
-                false
-            };
+            let is_dao_withdraw_request =
+                dao_withdraw_outpoints.contains(&key);
 
             Ok(crate::db::writer::activities::InputCellView {
                 lock_script_hash: info.lock_script_hash.clone(),
@@ -147,6 +125,18 @@ fn build_activity_input_views(
                 is_dao_withdraw_request,
             })
         })
+        .collect()
+}
+
+/// Extract outpoints whose DAO status == 1 (withdraw request) from consumed_dao_map.
+/// The returned set lets T_ACT classify inputs without per-input RocksDB reads.
+fn dao_withdraw_outpoints_from_map(
+    consumed_dao_map: &HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>,
+) -> HashSet<(Vec<u8>, i16)> {
+    consumed_dao_map
+        .iter()
+        .filter(|(_, row)| row.5 == 1) // status == 1 means withdraw request
+        .map(|(k, _)| k.clone())
         .collect()
 }
 
@@ -3322,7 +3312,12 @@ impl Indexer {
         let (
             (
                 consumed_dao_map,
-                (prefetched_input_udt_info, prefetched_batch_udt_cells, prefetched_udt_tx_infos),
+                (
+                    prefetched_input_udt_info,
+                    prefetched_batch_udt_cells,
+                    prefetched_udt_tx_infos,
+                    prefetched_activity_token_cache,
+                ),
             ),
             (prefetched_addr_balances, prefetched_script_info),
         ) = if bulk_sync_mode {
@@ -3398,7 +3393,10 @@ impl Indexer {
                                     crate::parser::ParsedUdtCell,
                                 > = HashMap::new();
 
-                                // Pre-collect unique type hashes across all blocks for batch lookup
+                                // Pre-collect unique type hashes across all blocks for batch lookup.
+                                // Includes both outputs (for UDT parsing) and consumed inputs
+                                // (for activity token enrichment) so a single get_tokens_batch
+                                // call serves both consumers.
                                 let mut unique_type_hashes: HashSet<Vec<u8>> = HashSet::new();
                                 for block_response in blocks.iter() {
                                     for tx in &block_response.block.transactions {
@@ -3413,16 +3411,60 @@ impl Indexer {
                                         }
                                     }
                                 }
+                                for tx_data in all_tx_data.iter() {
+                                    if tx_data.is_cellbase {
+                                        continue;
+                                    }
+                                    for input in &tx_data.inputs {
+                                        let key = (
+                                            input.previous_tx_hash.to_vec(),
+                                            parsed_input_outpoint_index_i16(
+                                                input.previous_output_index,
+                                                "sync_indexer",
+                                            ),
+                                        );
+                                        let info = input_cell_info
+                                            .get(&key)
+                                            .or_else(|| batch_cell_infos.get(&key));
+                                        if let Some(info) = info {
+                                            if let Some(tsh) = &info.type_script_hash {
+                                                unique_type_hashes.insert(tsh.clone());
+                                            }
+                                        }
+                                    }
+                                }
                                 let type_hash_vec: Vec<Vec<u8>> =
                                     unique_type_hashes.into_iter().collect();
-                                let token_standard_map: HashMap<Vec<u8>, Option<String>> = writer
+                                let token_batch_result = writer
                                     .store()
                                     .get_tokens_batch(&type_hash_vec)
                                     .unwrap_or_else(|e| {
                                         panic!("UDT batch token prefetch failed: {}", e)
-                                    })
+                                    });
+                                // Build standard-only map for UDT parsing
+                                let token_standard_map: HashMap<Vec<u8>, Option<String>> =
+                                    token_batch_result
+                                        .iter()
+                                        .map(|(hash, info)| {
+                                            (
+                                                hash.clone(),
+                                                info.as_ref().map(|t| t.standard.clone()),
+                                            )
+                                        })
+                                        .collect();
+                                // Build symbol+decimals cache for activity enrichment
+                                let prefetched_activity_token_cache: HashMap<
+                                    Vec<u8>,
+                                    (Option<String>, Option<u8>),
+                                > = token_batch_result
                                     .into_iter()
-                                    .map(|(hash, info)| (hash, info.map(|t| t.standard)))
+                                    .filter_map(|(hash, info)| {
+                                        let info = info?;
+                                        let decimals =
+                                            info.decimals.and_then(|d| u8::try_from(d).ok());
+                                        let symbol = info.symbol.or(info.name);
+                                        Some((hash, (symbol, decimals)))
+                                    })
                                     .collect();
 
                                 let mut block_tx_idx = 0usize;
@@ -3549,7 +3591,12 @@ impl Indexer {
                                     }
                                 }
 
-                                (input_udt_info, batch_udt_cells, udt_tx_contexts)
+                                (
+                                    input_udt_info,
+                                    batch_udt_cells,
+                                    udt_tx_contexts,
+                                    prefetched_activity_token_cache,
+                                )
                             },
                         )
                     },
@@ -3599,7 +3646,10 @@ impl Indexer {
             })?
         } else {
             (
-                (HashMap::new(), (HashMap::new(), HashMap::new(), Vec::new())),
+                (
+                    HashMap::new(),
+                    (HashMap::new(), HashMap::new(), Vec::new(), HashMap::new()),
+                ),
                 (HashMap::new(), HashMap::new()),
             )
         };
@@ -3621,6 +3671,7 @@ impl Indexer {
             let store = self.writer.store();
             let append_only_store = &self.append_only_store;
             let writer = &self.writer;
+            let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
             let tt;
             (batch_stats, tt, write_commit_ms) = std::thread::scope(
@@ -4270,26 +4321,24 @@ impl Indexer {
                             &mut batch,
                             &mut dotbit_state,
                         )?.is_some() {
+                            let tx_gi = event.tx_global_index;
                             let activity = dotbit_pipeline_activity
                                 .entry(event.consuming_tx_hash)
                                 .or_insert_with(|| {
-                                    // Find the tx_global_index for this consume event
-                                    let tx_gi = tx_lookup.iter().position(|(tx_idx, bn, ts, _)| {
-                                        *bn == event.block_number
-                                            && checked_usize_to_i32(*tx_idx, "tx_idx") == event.tx_idx
-                                            && *ts == event.ts_ms
-                                    });
-                                    let das_action = tx_gi.and_then(|gi| {
-                                        pre_parsed_nft_data.dotbit_tx_actions.get(&gi).cloned()
-                                    });
+                                    let (tx_idx, block_number, ts_ms, ref block_hash) =
+                                        tx_lookup[tx_gi];
+                                    let das_action = pre_parsed_nft_data
+                                        .dotbit_tx_actions
+                                        .get(&tx_gi)
+                                        .cloned();
                                     DotbitTxActivityData {
                                         das_action,
                                         created_account_ids: HashSet::new(),
                                         consumed_account_ids: HashSet::new(),
-                                        block_number: event.block_number,
-                                        block_hash: event.block_hash.clone(),
-                                        tx_idx: event.tx_idx,
-                                        timestamp_ms: event.ts_ms,
+                                        block_number,
+                                        block_hash: block_hash.clone(),
+                                        tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
+                                        timestamp_ms: ts_ms,
                                     }
                                 });
                             activity.consumed_account_ids.insert(event.account_id.clone());
@@ -4589,12 +4638,9 @@ impl Indexer {
                             let t = Instant::now();
                             // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                             let mut activity_batch = StoreBatch::new(append_only_store);
-                            let token_info_cache = load_activity_token_info_cache(
-                                store,
-                                &all_tx_data,
-                                &input_cell_info,
-                                &batch_cell_infos,
-                            )?;
+                            // Use pre-fetched token cache from bulk prefetch (eliminates
+                            // a separate get_tokens_batch call that duplicated the UDT prefetch).
+                            let token_info_cache = &prefetched_activity_token_cache;
                             let mut block_tx_idx = 0usize;
                             for parsed in all_parsed_blocks {
                                 let tx_count = parsed.transactions_count as usize;
@@ -4609,11 +4655,11 @@ impl Indexer {
                                                 crate::db::writer::activities::TxView<'_>,
                                             > {
                                                 let inputs = build_activity_input_views(
-                                                    store,
                                                     td,
                                                     parsed.number,
                                                     &input_cell_info,
                                                     &batch_cell_infos,
+                                                    &dao_withdraw_outpoints,
                                                 )?;
                                                 Ok(crate::db::writer::activities::TxView {
                                                     tx_hash: &td.hash,
@@ -4633,7 +4679,7 @@ impl Indexer {
                                 let activities =
                                     crate::db::writer::activities::build_activities_for_block(
                                         &tx_views,
-                                        &token_info_cache,
+                                        token_info_cache,
                                     );
                                 for (lock_hash, entry) in activities {
                                     activity_batch.put_activity(
@@ -4834,6 +4880,9 @@ impl Indexer {
                 );
             }
 
+            // DAO withdraw-request outpoints for activity classification (no per-input DB reads).
+            let dao_withdraw_outpoints: HashSet<(Vec<u8>, i16)>;
+
             // Group A: DAO processing
             {
                 let mut all_dao_deposits: Vec<(
@@ -4901,6 +4950,7 @@ impl Indexer {
                 } else {
                     HashMap::new()
                 };
+                dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
                 // Build a same-batch deposit map for deposits created in this
                 // batch that may also be consumed within the same batch.
@@ -5740,11 +5790,11 @@ impl Indexer {
                         .iter()
                         .map(|td| -> Result<crate::db::writer::activities::TxView<'_>> {
                             let inputs = build_activity_input_views(
-                                self.writer.store(),
                                 td,
                                 parsed.number,
                                 &input_cell_info,
                                 &batch_cell_infos,
+                                &dao_withdraw_outpoints,
                             )?;
                             Ok(crate::db::writer::activities::TxView {
                                 tx_hash: &td.hash,
@@ -6606,8 +6656,6 @@ mod tests {
 
     #[test]
     fn test_build_activity_input_views_errors_when_input_cell_is_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let previous_tx_hash = [0x44; 32];
         let tx = dummy_tx_data(
             [0x11; 32],
@@ -6622,11 +6670,16 @@ mod tests {
             vec![],
         );
 
-        let err =
-            match build_activity_input_views(&store, &tx, 99, &HashMap::new(), &HashMap::new()) {
-                Ok(_) => panic!("missing input cell info should fail fast"),
-                Err(err) => err,
-            };
+        let err = match build_activity_input_views(
+            &tx,
+            99,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+        ) {
+            Ok(_) => panic!("missing input cell info should fail fast"),
+            Err(err) => err,
+        };
         assert!(err
             .to_string()
             .contains("missing input cell info while building activities"));
@@ -6635,8 +6688,6 @@ mod tests {
 
     #[test]
     fn test_build_activity_input_views_uses_batch_fallback_cell_info() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let previous_tx_hash = [0x55; 32];
         let tx = dummy_tx_data(
             [0x22; 32],
@@ -6660,9 +6711,14 @@ mod tests {
         let mut batch_cell_infos = HashMap::new();
         batch_cell_infos.insert((previous_tx_hash.to_vec(), 3), info.clone());
 
-        let inputs =
-            build_activity_input_views(&store, &tx, 100, &HashMap::new(), &batch_cell_infos)
-                .expect("input lookup should fall back to same-batch cell cache");
+        let inputs = build_activity_input_views(
+            &tx,
+            100,
+            &HashMap::new(),
+            &batch_cell_infos,
+            &HashSet::new(),
+        )
+        .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].capacity, info.capacity);
         assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity);
@@ -6671,8 +6727,6 @@ mod tests {
 
     #[test]
     fn test_build_activity_input_views_marks_dao_withdraw_request_inputs() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let previous_tx_hash = [0x66; 32];
         let tx = dummy_tx_data(
             [0x33; 32],
@@ -6694,14 +6748,18 @@ mod tests {
         let mut input_cell_info = HashMap::new();
         input_cell_info.insert((previous_tx_hash.to_vec(), 1), info);
 
-        let mut seed = StoreBatch::new(&store);
-        let deposit_outpoint_key = keys::encode_outpoint(&[0x77; 32], 0);
-        seed.put_dao_by_withdraw_tx(&previous_tx_hash, 1, &deposit_outpoint_key);
-        seed.commit().unwrap();
+        // Populate dao_withdraw_outpoints with the withdraw request outpoint
+        let mut dao_withdraw_outpoints = HashSet::new();
+        dao_withdraw_outpoints.insert((previous_tx_hash.to_vec(), 1i16));
 
-        let inputs =
-            build_activity_input_views(&store, &tx, 200, &input_cell_info, &HashMap::new())
-                .unwrap();
+        let inputs = build_activity_input_views(
+            &tx,
+            200,
+            &input_cell_info,
+            &HashMap::new(),
+            &dao_withdraw_outpoints,
+        )
+        .unwrap();
         assert_eq!(inputs.len(), 1);
         assert!(inputs[0].is_dao_withdraw_request);
     }

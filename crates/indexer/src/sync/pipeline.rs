@@ -226,10 +226,8 @@ fn run_nft_precompute(
                         consumed_dotbit.push(DotbitConsumptionEvent {
                             account_id: account_id.clone(),
                             block_number: parsed.number,
-                            block_hash: parsed.hash.clone(),
                             consuming_tx_hash: tx_data.hash,
-                            tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
-                            ts_ms: parsed.timestamp.timestamp_millis(),
+                            tx_global_index,
                         });
                     }
                     continue;
@@ -257,10 +255,8 @@ fn run_nft_precompute(
                         consumed_dotbit.push(DotbitConsumptionEvent {
                             account_id,
                             block_number: parsed.number,
-                            block_hash: parsed.hash.clone(),
                             consuming_tx_hash: tx_data.hash,
-                            tx_idx: checked_usize_to_i32(tx_idx, "tx_idx"),
-                            ts_ms: parsed.timestamp.timestamp_millis(),
+                            tx_global_index,
                         });
                     }
                 }
