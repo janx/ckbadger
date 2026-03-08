@@ -575,4 +575,39 @@ mod tests {
             .to_string()
             .contains("non-cellbase tx contains cellbase sentinel input"));
     }
+
+    #[test]
+    fn test_no_undo_entries_written_when_bulk_skip_pattern_used() {
+        // Demonstrates the bulk-sync pattern: write data without undo log.
+        // During bulk sync, callers use put_addr_tx/put_activity directly
+        // instead of put_addr_tx_with_undo_log/put_activity_with_undo_log.
+        let domain_dir = tempfile::tempdir().unwrap();
+        let append_dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let lock_hash = [0x44; 32];
+
+        // Bulk pattern: write directly to append store without undo log
+        let mut append_batch = StoreBatch::new(&append_store);
+        append_batch.put_addr_tx(&lock_hash, 100, 0, &[0xAA; 32]);
+        append_batch.commit().unwrap();
+
+        // Verify data was written
+        let key = keys::encode_addr_tx_key(&lock_hash, 100, 0, &[0xAA; 32]);
+        assert!(append_store
+            .get_cf(append_store.cf_addr_txs(), &key)
+            .unwrap()
+            .is_some());
+
+        // Verify NO undo entries in domain store
+        let iter = domain_store.iterator_cf(
+            domain_store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::Start,
+        );
+        assert_eq!(
+            iter.count(),
+            0,
+            "bulk sync should produce zero undo entries"
+        );
+    }
 }
