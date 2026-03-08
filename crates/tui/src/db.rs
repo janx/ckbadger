@@ -43,9 +43,6 @@ fn parse_epoch_string(epoch: &str) -> (i64, i32, i32) {
 pub struct SyncStatusRow {
     pub tip_block: i64,
     pub chain_tip: i64,
-    pub derived_tip_block: Option<i64>,
-    pub derived_lag_blocks: Option<i64>,
-    pub derived_sync_in_progress: bool,
     pub is_syncing: bool,
     pub is_bulk_sync: bool,
     pub progress: f64,
@@ -120,7 +117,6 @@ pub struct ApiServiceInfo {
     pub reachable: bool,
     pub latency_ms: Option<f64>,
     pub status_code: Option<u16>,
-    pub derived_syncing: bool,
     pub latest_block: Option<i64>,
     pub tps: Option<String>,
     pub avg_block_time: Option<String>,
@@ -147,53 +143,14 @@ fn chain_info_from_api_stats(stats: &ApiNetworkStats) -> ChainInfoData {
 const LEGACY_BULK_SYNC_THRESHOLD_BLOCKS: i64 = 1000;
 const SYNC_PROGRESS_STALE_SECS: i64 = 60;
 
-fn derive_sync_status_fields(
-    tip_block: i64,
-    status_data: Option<&SyncStatusData>,
-) -> (Option<i64>, Option<i64>, bool) {
-    let Some(status) = status_data else {
-        return (None, None, false);
-    };
-
-    let derived_tip = status
-        .derived_tip_block_number
-        .unwrap_or(status.tip_block_number);
-    let lag = (tip_block - derived_tip).max(0);
-    let in_progress = status.derived_sync_in_progress || lag > 0;
-    (Some(derived_tip), Some(lag), in_progress)
-}
-
 fn sync_modes_from_progress(
     _progress: &SyncProgressData,
-    status_data: Option<&SyncStatusData>,
+    _status_data: Option<&SyncStatusData>,
     blocks_behind: i64,
 ) -> (bool, bool) {
-    let is_syncing = blocks_behind > 0
-        || status_data
-            .map(|status| status.derived_sync_in_progress)
-            .unwrap_or(false);
-    let is_bulk_sync = status_data
-        .map(|status| status.derived_sync_in_progress)
-        .unwrap_or(blocks_behind > LEGACY_BULK_SYNC_THRESHOLD_BLOCKS);
+    let is_syncing = blocks_behind > 0;
+    let is_bulk_sync = blocks_behind > LEGACY_BULK_SYNC_THRESHOLD_BLOCKS;
     (is_syncing, is_bulk_sync)
-}
-
-fn response_indicates_derived_syncing(status_code: u16, body: &str) -> bool {
-    if status_code != 503 {
-        return false;
-    }
-    if body.contains("derived_syncing") {
-        return true;
-    }
-
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.as_str().map(str::to_string))
-        })
-        .is_some_and(|error| error == "derived_syncing")
 }
 
 fn sync_progress_is_stale(progress: &SyncProgressData, now_ts: i64) -> bool {
@@ -371,14 +328,11 @@ impl TuiDb {
         Some(SyncStatusData {
             tip_block_number: tip,
             tip_block_hash: format!("0x{}", hex::encode(&sync.tip_block_hash)),
-            derived_tip_block_number: Some(sync.derived_tip_block_number),
             total_transactions: total_tx,
             total_cells,
             total_live_cells,
             total_addresses: 0,
             last_synced_at: sync.last_synced_at,
-            derived_last_synced_at: Some(sync.derived_last_synced_at),
-            derived_sync_in_progress: sync.derived_sync_in_progress,
             sync_started_at: sync.sync_started_at,
             sync_started_block: sync.sync_started_block,
             sync_ema_rate: sync.sync_ema_rate,
@@ -392,13 +346,13 @@ impl TuiDb {
         progress: &SyncProgressData,
         status_data: &Option<SyncStatusData>,
     ) -> SyncStatusRow {
-        let tip_block = progress.current_block as i64;
+        let progress_tip = progress.current_block as i64;
+        let status_tip = status_data.as_ref().map(|s| s.tip_block_number).unwrap_or(0);
+        let tip_block = progress_tip.max(status_tip);
         let chain_tip = progress.target_block as i64;
         let blocks_behind = chain_tip - tip_block;
         let (is_syncing, is_bulk_sync) =
             sync_modes_from_progress(progress, status_data.as_ref(), blocks_behind);
-        let (derived_tip_block, derived_lag_blocks, derived_sync_in_progress) =
-            derive_sync_status_fields(tip_block, status_data.as_ref());
 
         let elapsed_time = status_data.as_ref().and_then(|s| {
             s.sync_started_at.map(|started| {
@@ -412,9 +366,6 @@ impl TuiDb {
         SyncStatusRow {
             tip_block,
             chain_tip,
-            derived_tip_block,
-            derived_lag_blocks,
-            derived_sync_in_progress,
             is_syncing,
             is_bulk_sync,
             progress: progress.progress_percentage,
@@ -448,11 +399,9 @@ impl TuiDb {
     fn build_from_status(&self, status: &SyncStatusData) -> Result<SyncStatusRow> {
         let tip_block = status.tip_block_number;
         let chain_tip = tip_block;
-        let (derived_tip_block, derived_lag_blocks, derived_sync_in_progress) =
-            derive_sync_status_fields(tip_block, Some(status));
 
         let blocks_behind = chain_tip - tip_block;
-        let is_syncing = blocks_behind > 0 || status.derived_sync_in_progress;
+        let is_syncing = blocks_behind > 0;
 
         let progress = if chain_tip > 0 {
             (tip_block as f64 / chain_tip as f64 * 100.0).min(100.0)
@@ -482,11 +431,8 @@ impl TuiDb {
         Ok(SyncStatusRow {
             tip_block,
             chain_tip,
-            derived_tip_block,
-            derived_lag_blocks,
-            derived_sync_in_progress,
             is_syncing,
-            is_bulk_sync: status.derived_sync_in_progress,
+            is_bulk_sync: false,
             progress,
             elapsed_time,
             eta,
@@ -622,15 +568,8 @@ impl TuiDb {
         api_info.reachable = true;
         api_info.status_code = Some(response.status().as_u16());
         if !response.status().is_success() {
-            let status_code = response.status().as_u16();
             let status_text = response.status().to_string();
-            let body = response.text().await.unwrap_or_default();
-            api_info.derived_syncing = response_indicates_derived_syncing(status_code, &body);
-            if api_info.derived_syncing {
-                api_info.error = Some("derived_syncing".to_string());
-            } else {
-                api_info.error = Some(format!("http {}", status_text));
-            }
+            api_info.error = Some(format!("http {}", status_text));
             return (None, api_info);
         }
 
@@ -720,11 +659,10 @@ fn read_last_non_empty_line(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_sync_status_fields, parse_epoch_string, response_indicates_derived_syncing,
-        sync_modes_from_progress, sync_progress_is_stale, TuiDb, TuiPathConfig,
+        parse_epoch_string, sync_modes_from_progress, sync_progress_is_stale, TuiDb, TuiPathConfig,
         LEGACY_BULK_SYNC_THRESHOLD_BLOCKS, SYNC_PROGRESS_STALE_SECS,
     };
-    use ckbadger_common::{SyncProgressData, SyncStatusData};
+    use ckbadger_common::SyncProgressData;
     use ckbadger_ipc::{
         IpcHandler, IpcRequest, IpcResponse, IpcServer, ServiceInfo, ServiceStatus,
     };
@@ -783,28 +721,6 @@ mod tests {
     }
 
     #[test]
-    fn derive_sync_status_fields_maps_lag_and_progress() {
-        let status = SyncStatusData {
-            tip_block_number: 120,
-            derived_tip_block_number: Some(100),
-            derived_sync_in_progress: false,
-            ..Default::default()
-        };
-        let (derived_tip, lag, in_progress) = derive_sync_status_fields(120, Some(&status));
-        assert_eq!(derived_tip, Some(100));
-        assert_eq!(lag, Some(20));
-        assert!(in_progress);
-    }
-
-    #[test]
-    fn derive_sync_status_fields_handles_missing_status() {
-        let (derived_tip, lag, in_progress) = derive_sync_status_fields(120, None);
-        assert_eq!(derived_tip, None);
-        assert_eq!(lag, None);
-        assert!(!in_progress);
-    }
-
-    #[test]
     fn sync_modes_from_progress_uses_lag_when_status_missing() {
         let progress = sample_progress();
         let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, None, 10_000);
@@ -813,38 +729,13 @@ mod tests {
     }
 
     #[test]
-    fn sync_modes_from_progress_falls_back_to_status_or_legacy_lag() {
+    fn sync_modes_from_progress_uses_legacy_lag_threshold() {
         let progress = sample_progress();
-
-        let status_hint = SyncStatusData {
-            derived_sync_in_progress: true,
-            ..Default::default()
-        };
-        let (is_syncing, is_bulk_sync) = sync_modes_from_progress(&progress, Some(&status_hint), 8);
-        assert!(is_syncing);
-        assert!(is_bulk_sync);
 
         let (is_syncing_legacy, is_bulk_sync_legacy) =
             sync_modes_from_progress(&progress, None, 1001);
         assert!(is_syncing_legacy);
         assert!(is_bulk_sync_legacy);
-    }
-
-    #[test]
-    fn response_indicates_derived_syncing_detects_marker() {
-        assert!(response_indicates_derived_syncing(
-            503,
-            r#"{"error":"derived_syncing","message":"derived store syncing"}"#
-        ));
-        assert!(response_indicates_derived_syncing(503, "derived_syncing"));
-        assert!(!response_indicates_derived_syncing(
-            500,
-            r#"{"error":"derived_syncing"}"#
-        ));
-        assert!(!response_indicates_derived_syncing(
-            503,
-            r#"{"error":"internal"}"#
-        ));
     }
 
     #[test]
@@ -909,13 +800,10 @@ mod tests {
             .set_sync_status(&ckbadger_store::types::SyncStatus {
                 tip_block_number: progress.current_block as i64,
                 tip_block_hash: vec![0x11; 32],
-                derived_tip_block_number: progress.current_block as i64,
                 total_transactions: 1,
                 total_cells_created: 1,
                 total_cells_consumed: 0,
                 last_synced_at: 1_700_000_000,
-                derived_last_synced_at: 1_700_000_000,
-                derived_sync_in_progress: true,
                 sync_started_at: Some(1_700_000_000),
                 sync_started_block: 0,
                 sync_ema_rate: Some(95.0),
@@ -970,13 +858,10 @@ mod tests {
             .set_sync_status(&ckbadger_store::types::SyncStatus {
                 tip_block_number: 150,
                 tip_block_hash: vec![0x22; 32],
-                derived_tip_block_number: 150,
                 total_transactions: 9000,
                 total_cells_created: 20000,
                 total_cells_consumed: 10000,
                 last_synced_at: chrono::Utc::now().timestamp(),
-                derived_last_synced_at: chrono::Utc::now().timestamp(),
-                derived_sync_in_progress: false,
                 sync_started_at: Some(1_700_000_000),
                 sync_started_block: 1,
                 sync_ema_rate: Some(42.0),
