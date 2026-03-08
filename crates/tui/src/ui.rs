@@ -3869,11 +3869,11 @@ fn draw_system_params_compact(
 mod tests {
     use super::{
         adaptive_control_line, adaptive_state_label, api_health_state, chart_height_warning,
-        compact_overview_layout, compact_sync_layout, dense_right_lines,
-        detail_right_lines, diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label,
-        footer_hint_line, footer_status_message, format_age_secs, format_num, format_num_commas,
-        format_rate_pair, format_stage_commit_gap_ms, header_right_line, header_title_line,
-        heartbeat_is_on, io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
+        compact_overview_layout, compact_sync_layout, dense_right_lines, detail_right_lines,
+        diagnostics_dense_panel, direct_io_reads_label, eta_confidence_label, footer_hint_line,
+        footer_status_message, format_age_secs, format_num, format_num_commas, format_rate_pair,
+        format_stage_commit_gap_ms, header_right_line, header_title_line, heartbeat_is_on,
+        io_fetch_write_jitter_line, is_rate_drop, overview_log_min_height,
         overview_services_min_height, pipeline_bottleneck, pipeline_flow_state,
         pipeline_reset_line, rate_jitter, runtime_health_state, service_log_tails_line, sparkline,
         stack_sync_charts, stale_age_secs, stale_status, startup_phase_label,

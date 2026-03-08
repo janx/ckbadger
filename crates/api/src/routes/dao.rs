@@ -561,7 +561,6 @@ async fn get_address_dao_summary(
     State(state): State<Arc<AppState>>,
     Path(lock_hash): Path<String>,
 ) -> ApiResult<AddressDaoSummaryResponse> {
-
     let hash = hex::decode(lock_hash.strip_prefix("0x").unwrap_or(&lock_hash))
         .map_err(|_| ApiError::bad_request("Invalid lock script hash"))?;
     if hash.len() != 32 {
@@ -690,7 +689,6 @@ async fn get_address_dao_summary(
 }
 
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
-
     let (latest_block_number, latest_ar) = resolve_latest_block_and_ar(&state, "statistics")?;
     if let Some(latest) = state
         .store
@@ -953,7 +951,6 @@ fn build_total_depositors_series(
 }
 
 async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-
     let cache_key = "chart:dao-total-deposit";
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
         return ok(cached);
@@ -993,7 +990,6 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 }
 
 async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
-
     let cache_key = "chart:dao-daily-deposit";
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
         return ok(cached);
@@ -1055,7 +1051,6 @@ async fn get_daily_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
 async fn get_circulation_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-
     let cache_key = "chart:dao-circulation-ratio";
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
         return ok(cached);

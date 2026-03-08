@@ -1888,7 +1888,6 @@ async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
-
     let limit = params.limit.clamp(1, 100) as usize;
 
     let code_hash_bytes = hex::decode(
@@ -2092,7 +2091,6 @@ async fn get_address(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
 ) -> ApiResult<AddressResponse> {
-
     // Check cache first
     let cache_key = CacheKeys::address_balance(&addr);
     if let Some(cached) = state.cache.get::<AddressResponse>(&cache_key).await {
@@ -2370,7 +2368,6 @@ async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
 ) -> ApiResult<CellDetailResponse> {
-
     let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
 

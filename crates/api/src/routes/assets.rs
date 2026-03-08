@@ -328,7 +328,6 @@ async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
-
     let limit = params.limit.clamp(1, 100);
 
     let search_lower = params.search.as_ref().map(|s| s.to_lowercase());
@@ -1646,7 +1645,6 @@ async fn get_nft_collection(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
 ) -> ApiResult<NftCollectionDetailResponse> {
-
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
     let agg = state
@@ -2217,7 +2215,6 @@ async fn list_nft_collection_holders(
     Path(collection_id): Path<String>,
     Query(params): Query<NftCollectionHoldersParams>,
 ) -> ApiResult<CursorPaginatedResponse<NftCollectionHolderResponse>> {
-
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
     let cursor = params
@@ -2290,7 +2287,6 @@ async fn list_nft_collection_activities(
     Path(collection_id): Path<String>,
     Query(params): Query<NftCollectionActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<NftCollectionActivityResponse>> {
-
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
     let cursor = params
@@ -2464,7 +2460,6 @@ async fn get_nft_collection_occupation_chart(
     Path(collection_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
-
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 

@@ -347,7 +347,10 @@ impl TuiDb {
         status_data: &Option<SyncStatusData>,
     ) -> SyncStatusRow {
         let progress_tip = progress.current_block as i64;
-        let status_tip = status_data.as_ref().map(|s| s.tip_block_number).unwrap_or(0);
+        let status_tip = status_data
+            .as_ref()
+            .map(|s| s.tip_block_number)
+            .unwrap_or(0);
         let tip_block = progress_tip.max(status_tip);
         let chain_tip = progress.target_block as i64;
         let blocks_behind = chain_tip - tip_block;

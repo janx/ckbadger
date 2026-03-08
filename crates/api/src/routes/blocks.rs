@@ -83,7 +83,6 @@ async fn list_blocks(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<BlockResponse>> {
-
     let limit = params.limit.clamp(1, 100);
 
     let cache_key = format!("{}:{}", CacheKeys::LATEST_BLOCKS, limit);
@@ -340,7 +339,6 @@ async fn get_block(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> ApiResult<BlockResponse> {
-
     let store = state.store.clone();
     let ckb_store = state.ckb_store.clone();
 
