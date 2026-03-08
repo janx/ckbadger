@@ -4670,7 +4670,6 @@ impl Indexer {
                                                     is_cellbase: td.is_cellbase,
                                                     inputs,
                                                     outputs: &td.cells,
-                                                    outputs_data: &td.outputs_data,
                                                 })
                                             },
                                         )
@@ -5805,7 +5804,6 @@ impl Indexer {
                                 is_cellbase: td.is_cellbase,
                                 inputs,
                                 outputs: &td.cells,
-                                outputs_data: &td.outputs_data,
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;

@@ -1,11 +1,18 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange};
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
+
+static CODE_HASHES: OnceLock<CodeHashes> = OnceLock::new();
+
+fn code_hashes() -> &'static CodeHashes {
+    CODE_HASHES.get_or_init(CodeHashes::new)
+}
 
 /// Pre-computed code hashes for asset detection.
 struct CodeHashes {
@@ -91,7 +98,6 @@ pub struct TxView<'a> {
     pub is_cellbase: bool,
     pub inputs: Vec<InputCellView>,
     pub outputs: &'a [ParsedCell],
-    pub outputs_data: &'a [String],
 }
 
 /// Build activities for all transactions in a block.
@@ -101,11 +107,11 @@ pub fn build_activities_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Vec<(Vec<u8>, ActivityEntry)> {
-    let hashes = CodeHashes::new();
+    let hashes = code_hashes();
     let mut all_activities = Vec::new();
 
     for tx in txs {
-        let activities = build_tx_activities(tx, &hashes, token_info_cache);
+        let activities = build_tx_activities(tx, hashes, token_info_cache);
         all_activities.extend(activities);
     }
 
@@ -180,7 +186,7 @@ fn build_tx_activities(
     }
 
     // Process outputs
-    for (idx, cell) in tx.outputs.iter().enumerate() {
+    for cell in tx.outputs {
         let accum = owners.entry(cell.lock_script_hash.clone()).or_default();
         accum.output_capacity += cell.capacity as i128;
 
@@ -202,27 +208,21 @@ fn build_tx_activities(
                 cell.type_script_hash.as_deref(),
                 cell.type_args.as_deref(),
                 &cell.data,
-                cell.data_size,
                 hashes,
-                idx,
-                tx.outputs_data,
                 cell.capacity,
             );
         }
     }
 
-    // Collect all lock hashes for peer computation
-    let all_lock_hashes: Vec<Vec<u8>> = owners.keys().cloned().collect();
-
     let mut result = Vec::with_capacity(owners.len());
 
-    for (lock_hash, accum) in owners {
+    for (lock_hash, accum) in &owners {
         let ckb_delta = accum.output_capacity - accum.input_capacity;
         let occupied_delta = accum.output_occupied - accum.input_occupied;
 
         // Peers = all other lock_hashes in this tx
-        let peers: Vec<Vec<u8>> = all_lock_hashes
-            .iter()
+        let peers: Vec<Vec<u8>> = owners
+            .keys()
             .filter(|h| h.as_slice() != lock_hash.as_slice())
             .cloned()
             .collect();
@@ -319,7 +319,7 @@ fn build_tx_activities(
             peers,
         };
 
-        result.push((lock_hash, entry));
+        result.push((lock_hash.clone(), entry));
     }
 
     result
@@ -380,48 +380,32 @@ fn classify_output(
     type_script_hash: Option<&[u8]>,
     type_args: Option<&[u8]>,
     cell_data: &[u8],
-    data_size: i32,
     hashes: &CodeHashes,
-    output_idx: usize,
-    outputs_data: &[String],
     capacity: i64,
 ) {
     if hashes.is_udt(type_code_hash) {
         if let Some(tsh) = type_script_hash {
-            // Parse output data for UDT amount
-            if let Some(data_hex) = outputs_data.get(output_idx) {
-                let data = crate::rpc::parse_hex_to_bytes(data_hex);
-                if let Some(amount) = UdtParser::parse_amount(&data) {
-                    let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
-                    entry.1 += amount as i128;
-                }
+            if let Some(amount) = UdtParser::parse_amount(cell_data) {
+                let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
+                entry.1 += amount as i128;
             }
         }
     } else if type_code_hash == hashes.dao {
         // DAO output: deposit vs withdraw request
-        if data_size == 8 {
-            if let Some(data_hex) = outputs_data.get(output_idx) {
-                let data_bytes = crate::rpc::parse_hex_to_bytes(data_hex);
-                if data_bytes.len() != 8 {
-                    panic!(
-                        "invalid DAO output data length while classifying activity: expected=8, got={}",
-                        data_bytes.len()
-                    );
-                }
-                let bytes: [u8; 8] = data_bytes.as_slice().try_into().unwrap_or_else(|_| {
-                    panic!(
-                        "failed to decode DAO output data while classifying activity: len={}",
-                        data_bytes.len()
-                    )
-                });
-                let deposit_block = u64::from_le_bytes(bytes);
-                if deposit_block == 0 {
-                    accum.dao_deposits.push(capacity);
-                } else {
-                    accum
-                        .dao_withdraw_requests
-                        .push((capacity, deposit_block as i64));
-                }
+        if cell_data.len() == 8 {
+            let bytes: [u8; 8] = cell_data.try_into().unwrap_or_else(|_| {
+                panic!(
+                    "failed to decode DAO output data while classifying activity: len={}",
+                    cell_data.len()
+                )
+            });
+            let deposit_block = u64::from_le_bytes(bytes);
+            if deposit_block == 0 {
+                accum.dao_deposits.push(capacity);
+            } else {
+                accum
+                    .dao_withdraw_requests
+                    .push((capacity, deposit_block as i64));
             }
         }
     } else if type_code_hash == hashes.spore_did {
@@ -580,7 +564,7 @@ mod tests {
             make_output(bob, 100_00000000, None, None, None, vec![]),
             make_output(alice, 200_00000000, None, None, None, vec![]),
         ];
-        let outputs_data = vec!["0x".to_string(), "0x".to_string()];
+
         let tx = TxView {
             tx_hash: &[0x01; 32],
             block_hash: &[0xA1; 32],
@@ -590,7 +574,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -620,7 +603,7 @@ mod tests {
     fn test_cellbase_reward() {
         let miner = 0xCC;
         let outputs = vec![make_output(miner, 5000_00000000, None, None, None, vec![])];
-        let outputs_data = vec!["0x".to_string()];
+
         let tx = TxView {
             tx_hash: &[0x02; 32],
             block_hash: &[0xA2; 32],
@@ -630,7 +613,6 @@ mod tests {
             is_cellbase: true,
             inputs: vec![],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -653,7 +635,7 @@ mod tests {
             None,
             vec![0u8; 100], // 100 bytes of data
         )];
-        let outputs_data = vec!["0x".to_string()];
+
         let tx = TxView {
             tx_hash: &[0x03; 32],
             block_hash: &[0xA3; 32],
@@ -663,7 +645,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -686,7 +667,7 @@ mod tests {
             make_output(carol, 100_00000000, None, None, None, vec![]),
             make_output(alice, 100_00000000, None, None, None, vec![]),
         ];
-        let outputs_data = vec!["0x".to_string(); 3];
+
         let tx = TxView {
             tx_hash: &[0x04; 32],
             block_hash: &[0xA4; 32],
@@ -696,7 +677,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -714,7 +694,7 @@ mod tests {
         let bob = 0xBB;
 
         let outputs1 = vec![make_output(alice, 500_00000000, None, None, None, vec![])];
-        let outputs_data1 = vec!["0x".to_string()];
+
         let tx1 = TxView {
             tx_hash: &[0x01; 32],
             block_hash: &[0xB1; 32],
@@ -724,11 +704,10 @@ mod tests {
             is_cellbase: true,
             inputs: vec![],
             outputs: &outputs1,
-            outputs_data: &outputs_data1,
         };
 
         let outputs2 = vec![make_output(bob, 200_00000000, None, None, None, vec![])];
-        let outputs_data2 = vec!["0x".to_string()];
+
         let tx2 = TxView {
             tx_hash: &[0x02; 32],
             block_hash: &[0xB1; 32],
@@ -738,7 +717,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![make_input(alice, 200_00000000, 61_00000000)],
             outputs: &outputs2,
-            outputs_data: &outputs_data2,
         };
 
         let activities = build_activities_for_block(&[tx1, tx2], &HashMap::new());
@@ -781,10 +759,7 @@ mod tests {
                 4000u128.to_le_bytes().to_vec(),
             ),
         ];
-        let outputs_data = vec![
-            format!("0x{}", hex::encode(1000u128.to_le_bytes())),
-            format!("0x{}", hex::encode(4000u128.to_le_bytes())),
-        ];
+
         let tx = TxView {
             tx_hash: &[0x05; 32],
             block_hash: &[0xA5; 32],
@@ -794,7 +769,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let mut token_cache = HashMap::new();
@@ -879,10 +853,7 @@ mod tests {
                 4000u128.to_le_bytes().to_vec(),
             ),
         ];
-        let outputs_data = vec![
-            format!("0x{}", hex::encode(1000u128.to_le_bytes())),
-            format!("0x{}", hex::encode(4000u128.to_le_bytes())),
-        ];
+
         let tx = TxView {
             tx_hash: &[0x06; 32],
             block_hash: &[0xA6; 32],
@@ -892,7 +863,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![alice_input],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let mut token_cache = HashMap::new();
@@ -942,7 +912,7 @@ mod tests {
             None,
             dotbit_data,
         )];
-        let outputs_data = vec!["0x".to_string()];
+
         let tx = TxView {
             tx_hash: &[0x07; 32],
             block_hash: &[0xA7; 32],
@@ -952,7 +922,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -993,7 +962,7 @@ mod tests {
             Some(did_id.clone()),
             vec![0u8; 16],
         )];
-        let outputs_data = vec!["0x".to_string()];
+
         let tx = TxView {
             tx_hash: &[0x08; 32],
             block_hash: &[0xA8; 32],
@@ -1003,7 +972,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
@@ -1039,7 +1007,7 @@ mod tests {
         dao_input.is_dao_withdraw_request = true;
 
         let outputs: Vec<ParsedCell> = vec![];
-        let outputs_data: Vec<String> = vec![];
+
         let tx = TxView {
             tx_hash: &[0x09; 32],
             block_hash: &[0xA9; 32],
@@ -1049,7 +1017,6 @@ mod tests {
             is_cellbase: false,
             inputs: vec![dao_input],
             outputs: &outputs,
-            outputs_data: &outputs_data,
         };
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
