@@ -1358,7 +1358,7 @@ impl Indexer {
         // Block proposals are sourced from ckb-store-reader; only update cache indices here.
         let mut batch_proposals: Vec<(Vec<u8>, i64, i16)> = Vec::new();
         for parsed_block in &all_parsed_blocks {
-            if !parsed_block.proposals.is_empty() && !self.is_bulk_sync_active() {
+            if !parsed_block.proposals.is_empty() && !is_bulk {
                 for (idx, proposal_id) in parsed_block.proposals.iter().enumerate() {
                     let proposal_index = checked_usize_to_i16(
                         idx,
@@ -2705,7 +2705,6 @@ impl Indexer {
         }
 
         // Spore consumption runs in live sync mode only, DotBit consumption runs in all sync modes.
-        let bulk_sync_active = self.is_bulk_sync_active();
         let mut consume_batch = StoreBatch::new(self.writer.store());
         let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
         let mut spore_state = self.writer.new_spore_batch_state();
@@ -2739,7 +2738,7 @@ impl Indexer {
                         )
                     })?;
 
-                    if !bulk_sync_active {
+                    if !is_bulk {
                         let consumed_spore_id = self
                             .writer
                             .get_spore_id_by_outpoint(&prev_tx_hash, prev_index)?;
@@ -4299,7 +4298,7 @@ impl Indexer {
 
                     // Write .bit collection activities directly (bypassing accumulator)
                     for (tx_hash, activity) in &dotbit_pipeline_activity {
-                        let inserted = resolve_dotbit_tx_activity(
+                        let _inserted = resolve_dotbit_tx_activity(
                             activity.das_action.as_deref(),
                             &activity.created_account_ids,
                             &activity.consumed_account_ids,
@@ -4310,8 +4309,6 @@ impl Indexer {
                             activity.timestamp_ms,
                             &mut activity_batch,
                         );
-                        // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
-                        let _ = inserted;
                     }
                     // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                     nft_activity_acc.flush(&mut activity_batch);
