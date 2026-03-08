@@ -178,8 +178,11 @@ pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<NftEntry>>,
     collection_agg_loaded: bool,
     collection_agg: Option<NftCollectionAggregate>,
+    collection_agg_dirty: bool,
     collection_owner_counts: HashMap<Vec<u8>, i64>,
+    dirty_owner_counts: HashSet<Vec<u8>>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
+    dirty_hourly_transfers: HashSet<Vec<u8>>,
 }
 
 impl DotbitBatchState {
@@ -213,10 +216,10 @@ impl DotbitBatchState {
         Ok(loaded)
     }
 
-    fn put_collection_aggregate(&mut self, agg: NftCollectionAggregate, batch: &mut StoreBatch) {
-        batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, &agg);
+    fn put_collection_aggregate(&mut self, agg: NftCollectionAggregate) {
         self.collection_agg = Some(agg);
         self.collection_agg_loaded = true;
+        self.collection_agg_dirty = true;
     }
 
     pub(crate) fn extend_pending_collection_aggregates(
@@ -243,14 +246,14 @@ impl DotbitBatchState {
         Ok(loaded)
     }
 
-    fn put_collection_owner_count(&mut self, lock_hash: &[u8], count: i64, batch: &mut StoreBatch) {
-        batch.put_nft_collection_owner_count(&DOTBIT_SENTINEL_COLLECTION, lock_hash, count);
+    fn put_collection_owner_count(&mut self, lock_hash: &[u8], count: i64) {
+        self.dirty_owner_counts.insert(lock_hash.to_vec());
         self.collection_owner_counts
             .insert(lock_hash.to_vec(), count);
     }
 
-    fn delete_collection_owner(&mut self, lock_hash: &[u8], batch: &mut StoreBatch) {
-        batch.delete_nft_collection_owner(&DOTBIT_SENTINEL_COLLECTION, lock_hash);
+    fn delete_collection_owner(&mut self, lock_hash: &[u8]) {
+        self.dirty_owner_counts.insert(lock_hash.to_vec());
         self.collection_owner_counts.insert(lock_hash.to_vec(), 0);
     }
 
@@ -281,7 +284,29 @@ impl DotbitBatchState {
     }
 
     fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
+        self.dirty_hourly_transfers.insert(key.clone());
         self.hourly_transfers.insert(key, count);
+    }
+
+    pub(crate) fn flush_to_batch(&self, batch: &mut StoreBatch) {
+        if self.collection_agg_dirty {
+            if let Some(agg) = &self.collection_agg {
+                batch.put_nft_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION, agg);
+            }
+        }
+        for lh in &self.dirty_owner_counts {
+            let count = self.collection_owner_counts.get(lh).copied().unwrap_or(0);
+            if count > 0 {
+                batch.put_nft_collection_owner_count(&DOTBIT_SENTINEL_COLLECTION, lh, count);
+            } else {
+                batch.delete_nft_collection_owner(&DOTBIT_SENTINEL_COLLECTION, lh);
+            }
+        }
+        for key in &self.dirty_hourly_transfers {
+            if let Some(&count) = self.hourly_transfers.get(key) {
+                batch.put_stats(key, &count.to_le_bytes());
+            }
+        }
     }
 }
 
@@ -295,7 +320,6 @@ impl BatchWriter {
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
         agg: &mut NftCollectionAggregate,
-        batch: &mut StoreBatch,
         state: &mut DotbitBatchState,
     ) -> Result<()> {
         if old_owner == new_owner {
@@ -317,10 +341,10 @@ impl BatchWriter {
                         agg.holders_count
                     );
                 }
-                state.delete_collection_owner(old_lock, batch);
+                state.delete_collection_owner(old_lock);
                 agg.holders_count -= 1;
             } else {
-                state.put_collection_owner_count(old_lock, old_count - 1, batch);
+                state.put_collection_owner_count(old_lock, old_count - 1);
             }
         }
 
@@ -341,7 +365,7 @@ impl BatchWriter {
                     current
                 )
             })?;
-            state.put_collection_owner_count(new_lock, next, batch);
+            state.put_collection_owner_count(new_lock, next);
         }
 
         Ok(())
@@ -363,7 +387,9 @@ impl BatchWriter {
             timestamp_ms,
             batch,
             &mut state,
-        )
+        )?;
+        state.flush_to_batch(batch);
+        Ok(())
     }
 
     pub(crate) fn insert_dotbit_account_with_state(
@@ -438,10 +464,9 @@ impl BatchWriter {
                 None,
                 Some(account.owner_lock_hash.as_slice()),
                 &mut agg,
-                batch,
                 state,
             )?;
-            state.put_collection_aggregate(agg, batch);
+            state.put_collection_aggregate(agg);
         } else if !was_live {
             let Some(mut agg) = state.get_collection_aggregate(self.store.as_ref())? else {
                 bail!(
@@ -459,10 +484,9 @@ impl BatchWriter {
                 None,
                 Some(account.owner_lock_hash.as_slice()),
                 &mut agg,
-                batch,
                 state,
             )?;
-            state.put_collection_aggregate(agg, batch);
+            state.put_collection_aggregate(agg);
         } else {
             let Some(mut agg) = state.get_collection_aggregate(self.store.as_ref())? else {
                 bail!(
@@ -480,10 +504,9 @@ impl BatchWriter {
                 old_owner.as_deref(),
                 Some(account.owner_lock_hash.as_slice()),
                 &mut agg,
-                batch,
                 state,
             )?;
-            state.put_collection_aggregate(agg, batch);
+            state.put_collection_aggregate(agg);
 
             // Re-insert (transfer) — increment hourly bucket for 24h tracking
             let hour_bucket = timestamp_ms / 3_600_000;
@@ -493,7 +516,6 @@ impl BatchWriter {
             );
             let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
             let next = current + 1;
-            batch.put_nft_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, next);
             state.put_hourly_transfer(key, next);
         }
         batch.put_dotbit_account_outpoint(
@@ -512,13 +534,15 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
         let mut state = self.new_dotbit_batch_state();
-        self.consume_dotbit_account_with_state(
+        let result = self.consume_dotbit_account_with_state(
             account_id,
             _block_number,
             _tx_hash,
             batch,
             &mut state,
-        )
+        )?;
+        state.flush_to_batch(batch);
+        Ok(result)
     }
 
     /// Consume a .bit account. Returns `Some(DOTBIT_SENTINEL_COLLECTION)` if consumed.
@@ -560,8 +584,8 @@ impl BatchWriter {
                 );
             }
             agg.live_count -= 1;
-            self.apply_dotbit_owner_transition(old_owner.as_deref(), None, &mut agg, batch, state)?;
-            state.put_collection_aggregate(agg, batch);
+            self.apply_dotbit_owner_transition(old_owner.as_deref(), None, &mut agg, state)?;
+            state.put_collection_aggregate(agg);
             return Ok(Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
         }
         Ok(None)
@@ -773,6 +797,7 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
@@ -786,6 +811,7 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
@@ -800,6 +826,7 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let agg = writer
@@ -851,6 +878,7 @@ mod tests {
                 &mut seed_state,
             )
             .unwrap();
+        seed_state.flush_to_batch(&mut seed);
         seed.commit().unwrap();
 
         let mut transfer_batch = StoreBatch::new(writer.store());
@@ -865,6 +893,7 @@ mod tests {
                 &mut transfer_state,
             )
             .unwrap();
+        transfer_state.flush_to_batch(&mut transfer_batch);
         transfer_batch.commit().unwrap();
 
         let agg = writer
@@ -922,6 +951,7 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        state.flush_to_batch(&mut batch);
         batch.commit().unwrap();
 
         let entry = writer
