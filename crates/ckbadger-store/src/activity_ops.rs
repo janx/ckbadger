@@ -158,7 +158,7 @@ impl CkbadgerStore {
             tx_hash: envelope.tx_hash,
             block_number: envelope.block_number,
             tx_index: envelope.tx_index,
-            timestamp: envelope.timestamp,
+            timestamp: 0,
             ckb_delta: owner_view.ckb_delta,
             occupied_delta: owner_view.occupied_delta,
             is_cellbase: envelope.is_cellbase,
@@ -236,7 +236,6 @@ mod tests {
                 tx_hash: entry.tx_hash.clone(),
                 block_number: entry.block_number,
                 tx_index: entry.tx_index,
-                timestamp: entry.timestamp,
                 is_cellbase: entry.is_cellbase,
                 participants: vec![lock_hash.to_vec()],
                 owner_views: vec![OwnerActivityViewStored {
@@ -310,7 +309,6 @@ mod tests {
                 tx_hash: entry.tx_hash.clone(),
                 block_number: entry.block_number,
                 tx_index: entry.tx_index,
-                timestamp: entry.timestamp,
                 is_cellbase: entry.is_cellbase,
                 participants: vec![lock.to_vec(), peer.clone()],
                 owner_views: vec![

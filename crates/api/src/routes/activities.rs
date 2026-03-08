@@ -370,7 +370,6 @@ mod tests {
                     tx_hash: tx_hash.clone(),
                     block_number: block,
                     tx_index: tx_idx,
-                    timestamp: entry.timestamp,
                     is_cellbase: entry.is_cellbase,
                     participants: vec![lock_hash.to_vec()],
                     owner_views: vec![OwnerActivityViewStored {

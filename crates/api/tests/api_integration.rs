@@ -61,7 +61,6 @@ fn put_normalized_activity(batch: &mut StoreBatch<'_>, lock_hash: &[u8], entry: 
         tx_hash: entry.tx_hash.clone(),
         block_number: entry.block_number,
         tx_index: entry.tx_index,
-        timestamp: entry.timestamp,
         is_cellbase: entry.is_cellbase,
         participants: vec![lock_hash.to_vec()],
         owner_views: vec![OwnerActivityViewStored {

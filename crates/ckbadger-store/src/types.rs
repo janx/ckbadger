@@ -937,7 +937,6 @@ pub struct ActivityTxEnvelope {
     pub tx_hash: Vec<u8>,
     pub block_number: i64,
     pub tx_index: i32,
-    pub timestamp: i64,
     pub is_cellbase: bool,
     pub participants: Vec<Vec<u8>>,
     pub owner_views: Vec<OwnerActivityViewStored>,

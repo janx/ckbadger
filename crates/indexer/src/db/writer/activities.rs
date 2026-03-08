@@ -145,7 +145,6 @@ pub fn normalize_activities_for_storage(
             if entry.block_number != block_number
                 || entry.tx_index != tx_index
                 || entry.tx_hash != tx_hash
-                || entry.timestamp != first.timestamp
                 || entry.is_cellbase != first.is_cellbase
             {
                 bail!(
@@ -195,7 +194,6 @@ pub fn normalize_activities_for_storage(
                 tx_hash,
                 block_number,
                 tx_index,
-                timestamp: first.timestamp,
                 is_cellbase: first.is_cellbase,
                 participants,
                 owner_views,

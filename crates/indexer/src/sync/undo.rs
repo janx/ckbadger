@@ -453,7 +453,6 @@ mod tests {
                 tx_hash: vec![0xAB; 32],
                 block_number: 42,
                 tx_index: 3,
-                timestamp: 1_700_000_000,
                 is_cellbase: false,
                 participants: vec![vec![0x44; 32], vec![0x55; 32]],
                 owner_views: vec![

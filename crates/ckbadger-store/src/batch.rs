@@ -1062,7 +1062,6 @@ mod tests {
             tx_hash: vec![0x55; 32],
             block_number: 100,
             tx_index: 1,
-            timestamp: 1_700_000_000,
             is_cellbase: false,
             participants: vec![vec![0x66; 32], vec![0x77; 32]],
             owner_views: vec![OwnerActivityViewStored {
@@ -1082,7 +1081,6 @@ mod tests {
             tx_hash: entry.tx_hash.clone(),
             block_number: entry.block_number,
             tx_index: entry.tx_index,
-            timestamp: entry.timestamp,
             is_cellbase: entry.is_cellbase,
             participants: vec![lock_hash.to_vec()],
             owner_views: vec![OwnerActivityViewStored {
