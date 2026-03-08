@@ -1333,11 +1333,12 @@ impl Indexer {
 
         // Write txs/cells first; block headers are committed in finalization as
         // the per-batch progress marker.
+        let is_bulk = self.is_bulk_sync_active();
         let t_headers = Instant::now();
         {
             let mut batch = StoreBatch::new(self.writer.store());
             let mut tx_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
-            if !all_tx_data.is_empty() {
+            if !is_bulk && !all_tx_data.is_empty() {
                 put_tx_context_undo_entries(&mut batch, &mut tx_undo_seq_by_block, &all_tx_data)?;
             }
             if !txs_for_batch.is_empty() {
@@ -1536,15 +1537,24 @@ impl Indexer {
                 entry.6 += occupied_change;
 
                 // Index address → transaction
-                put_addr_tx_with_undo_log(
-                    &mut consume_addr_batch,
-                    &mut append_history_batch,
-                    &mut append_undo_seq_by_block,
-                    &lock_hash,
-                    tx_data.block_number,
-                    tx_data.tx_index,
-                    &tx_data.hash,
-                );
+                if is_bulk {
+                    append_history_batch.put_addr_tx(
+                        &lock_hash,
+                        tx_data.block_number,
+                        tx_data.tx_index,
+                        &tx_data.hash,
+                    );
+                } else {
+                    put_addr_tx_with_undo_log(
+                        &mut consume_addr_batch,
+                        &mut append_history_batch,
+                        &mut append_undo_seq_by_block,
+                        &lock_hash,
+                        tx_data.block_number,
+                        tx_data.tx_index,
+                        &tx_data.hash,
+                    );
+                }
             }
         }
 
@@ -2823,14 +2833,16 @@ impl Indexer {
                     &activity.block_hash,
                     _tx_hash,
                 );
-                put_append_delete_undo_entry(
-                    &mut consume_batch,
-                    &mut append_undo_seq_by_block,
-                    UndoSeqScope::AppendNftCollectionActivity,
-                    activity.block_number,
-                    ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
-                    &append_key,
-                );
+                if !is_bulk {
+                    put_append_delete_undo_entry(
+                        &mut consume_batch,
+                        &mut append_undo_seq_by_block,
+                        UndoSeqScope::AppendNftCollectionActivity,
+                        activity.block_number,
+                        ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                        &append_key,
+                    );
+                }
                 let delta = nft_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -2849,14 +2861,16 @@ impl Indexer {
                 &block_hash,
                 &tx_hash,
             );
-            put_append_delete_undo_entry(
-                &mut consume_batch,
-                &mut append_undo_seq_by_block,
-                UndoSeqScope::AppendNftCollectionActivity,
-                block_number,
-                ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
-                &append_key,
-            );
+            if !is_bulk {
+                put_append_delete_undo_entry(
+                    &mut consume_batch,
+                    &mut append_undo_seq_by_block,
+                    UndoSeqScope::AppendNftCollectionActivity,
+                    block_number,
+                    ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                    &append_key,
+                );
+            }
             let delta = nft_activity_count_deltas.entry(collection_id).or_insert(0);
             *delta = delta
                 .checked_add(1)
