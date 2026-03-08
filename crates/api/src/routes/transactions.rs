@@ -17,7 +17,7 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
-use crate::utils::{ensure_derived_ready, script_to_address};
+use crate::utils::script_to_address;
 use crate::AppState;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
@@ -603,7 +603,6 @@ async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
     Path(hash): Path<String>,
 ) -> ApiResult<TransactionDetailResponse> {
-    ensure_derived_ready(state.as_ref())?;
 
     let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap_or(&hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;

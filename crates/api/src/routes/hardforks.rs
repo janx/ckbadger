@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
-use crate::utils::ensure_derived_ready;
 use crate::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -69,8 +68,6 @@ async fn list_hardforks(
             network
         ))
     })?;
-    ensure_derived_ready(state.as_ref())?;
-
     let (tip_block, tip_epoch) = state
         .store
         .get_sync_tip_block()

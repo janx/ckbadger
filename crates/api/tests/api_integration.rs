@@ -199,30 +199,6 @@ async fn test_hardforks_endpoint_rejects_unknown_network() {
 }
 
 #[tokio::test]
-async fn test_hardforks_endpoint_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/hardforks")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_forks_recent_fails_on_deep_fork_invariant_violation() {
     let store = test_store();
     store
@@ -336,54 +312,6 @@ async fn test_recent_blocks_endpoint_empty_db() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert!(json["blocks"].as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn test_statistics_network_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/statistics/network")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_statistics_tx_stats_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/statistics/tx-stats")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -730,54 +658,6 @@ async fn test_blocks_list_empty_db() {
 }
 
 #[tokio::test]
-async fn test_blocks_list_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/blocks")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_get_block_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/blocks/1")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_get_block_includes_hardfork_activation() {
     let core_store = test_store();
     let append_only_store = test_store();
@@ -994,54 +874,6 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
 }
 
 #[tokio::test]
-async fn test_get_cell_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!("/api/v1/cells/0x{}/0", "11".repeat(32)))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_address_detail_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!("/api/v1/addresses/0x{}", "22".repeat(32)))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
     let store = test_store();
     let tx_hash = vec![0xab; 32];
@@ -1139,30 +971,6 @@ async fn test_search_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn test_search_script_scope_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/search?q=script:alpha")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -1378,30 +1186,6 @@ async fn test_dao_stats_empty_db() {
 }
 
 #[tokio::test]
-async fn test_dao_stats_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/dao/statistics")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
     let store = test_store();
 
@@ -1425,7 +1209,6 @@ async fn test_dao_stats_uses_precomputed_latest_stats_when_tip_matches() {
     store
         .update_sync_status(|s| {
             s.tip_block_number = 10;
-            s.derived_tip_block_number = 10;
         })
         .unwrap();
 
@@ -1488,7 +1271,6 @@ async fn test_dao_stats_ignores_stale_precomputed_latest_stats() {
     store
         .update_sync_status(|s| {
             s.tip_block_number = 10;
-            s.derived_tip_block_number = 10;
         })
         .unwrap();
 
@@ -1609,102 +1391,6 @@ async fn test_dao_stats_cached_response_is_stable_within_ttl() {
 
     // Expect cached response within TTL; without cache this would become 50000000000.
     assert_eq!(second_json["totalDeposited"], "20000000000");
-}
-
-#[tokio::test]
-async fn test_dao_total_deposit_chart_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/dao/charts/total-deposit")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_dao_summary_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!("/api/v1/dao/summary/0x{}", "11".repeat(32)))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_dao_daily_deposit_chart_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/dao/charts/daily-deposit")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_dao_circulation_ratio_chart_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/dao/charts/circulation-ratio")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -2294,31 +1980,6 @@ async fn test_transaction_not_found() {
 }
 
 #[tokio::test]
-async fn test_transaction_detail_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let hash = format!("0x{}", "ab".repeat(32));
-    let request = Request::builder()
-        .uri(format!("/api/v1/transactions/{}/detail", hash))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_scripts_list_empty_db() {
     let store = test_store();
     let config = test_config(store);
@@ -2331,30 +1992,6 @@ async fn test_scripts_list_empty_db() {
 
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn test_scripts_list_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/scripts")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -2831,33 +2468,6 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["total"], 0);
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
-}
-
-#[tokio::test]
-async fn test_cells_by_script_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!(
-            "/api/v1/cells/by-script?code_hash=0x{}&hash_type=type&script_kind=lock&limit=20",
-            "33".repeat(32)
-        ))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -3573,33 +3183,6 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
 }
 
 #[tokio::test]
-async fn test_token_occupation_chart_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!(
-            "/api/v1/tokens/{}/charts/occupation",
-            "11".repeat(32)
-        ))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_token_occupation_chart_rejects_invalid_date_range() {
     let store = test_store();
     let type_hash = vec![0x45; 32];
@@ -3976,30 +3559,6 @@ async fn test_spore_cluster_activities_supports_action_filter() {
 }
 
 #[tokio::test]
-async fn test_spore_cluster_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!("/api/v1/spore/clusters/0x{}", "11".repeat(32)))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let store = test_store();
     let spore_id = [0x77u8; 32];
@@ -4092,30 +3651,6 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
     assert_eq!(json["liveOccupiedCapacity"], "50");
-}
-
-#[tokio::test]
-async fn test_spore_nft_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!("/api/v1/spore/nfts/0x{}", "22".repeat(32)))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -4254,30 +3789,6 @@ async fn test_assets_rejects_legacy_dob_type_filter() {
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
-async fn test_assets_list_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri("/api/v1/assets?type=token")
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -4852,57 +4363,6 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     assert_eq!(json["standard"], "m-nft");
     assert_eq!(json["liveCapacity"], "80");
     assert_eq!(json["liveOccupiedCapacity"], "50");
-}
-
-#[tokio::test]
-async fn test_assets_nft_collection_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!("/api/v1/assets/nfts/0x{}", "44".repeat(24)))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
-async fn test_assets_nft_collection_chart_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!(
-            "/api/v1/assets/nfts/0x{}/charts/occupation",
-            "55".repeat(24)
-        ))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
 }
 
 #[tokio::test]
@@ -6976,33 +6436,6 @@ async fn test_hodl_wave_chart_with_data() {
 }
 
 #[tokio::test]
-async fn test_address_activities_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!(
-            "/api/v1/addresses/0x{}/activities",
-            "11".repeat(32)
-        ))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_address_activities_reads_from_derived_store() {
     let core_store = test_store();
     let append_only_store = test_store();
@@ -7038,7 +6471,6 @@ async fn test_address_activities_reads_from_derived_store() {
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 10;
-            s.derived_tip_block_number = 10;
         })
         .unwrap();
 
@@ -7082,7 +6514,6 @@ async fn test_address_activities_rejects_unknown_filter() {
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 10;
-            s.derived_tip_block_number = 10;
         })
         .unwrap();
 
@@ -7489,33 +6920,6 @@ async fn test_dao_deposits_by_lock_hash_cursor_mismatch_returns_bad_request() {
 }
 
 #[tokio::test]
-async fn test_address_transactions_returns_503_when_derived_store_lags() {
-    let core_store = test_store();
-    let append_only_store = test_store();
-    core_store
-        .update_sync_status(|s| {
-            s.tip_block_number = 100;
-            s.derived_tip_block_number = 80;
-        })
-        .unwrap();
-
-    let config = test_config_with_append_only(core_store, append_only_store);
-    let app = create_router(config).await;
-    let request = Request::builder()
-        .uri(format!(
-            "/api/v1/addresses/0x{}/transactions",
-            "11".repeat(32)
-        ))
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = response.into_body().collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "derived_syncing");
-}
-
-#[tokio::test]
 async fn test_address_transactions_reads_from_derived_store() {
     let core_store = test_store();
     let append_only_store = test_store();
@@ -7542,7 +6946,6 @@ async fn test_address_transactions_reads_from_derived_store() {
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 10;
-            s.derived_tip_block_number = 10;
         })
         .unwrap();
 

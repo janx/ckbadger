@@ -14,7 +14,7 @@ use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedA
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{
-    apply_live_capacity_delta, date_keys_inclusive, ensure_derived_ready, parse_chart_date_range,
+    apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range,
     resolve_nft_collection_name,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
@@ -328,7 +328,6 @@ async fn list_assets(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<AssetResponse>> {
-    ensure_derived_ready(state.as_ref())?;
 
     let limit = params.limit.clamp(1, 100);
 
@@ -1449,7 +1448,6 @@ fn build_nft_item_activities_response(
     cursor: Option<(i64, i32)>,
     action_filter: Option<&str>,
 ) -> Result<CursorPaginatedResponse<MnftItemActivityResponse>, ApiRouteError> {
-    ensure_derived_ready(state.as_ref())?;
     let lifecycle_standard = match standard {
         ckbadger_store::types::NftStandard::MnftToken => NftLifecycleStandard::MnftToken,
         ckbadger_store::types::NftStandard::DotBit => NftLifecycleStandard::DotBit,
@@ -1648,7 +1646,6 @@ async fn get_nft_collection(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
 ) -> ApiResult<NftCollectionDetailResponse> {
-    ensure_derived_ready(state.as_ref())?;
 
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
@@ -2220,7 +2217,6 @@ async fn list_nft_collection_holders(
     Path(collection_id): Path<String>,
     Query(params): Query<NftCollectionHoldersParams>,
 ) -> ApiResult<CursorPaginatedResponse<NftCollectionHolderResponse>> {
-    ensure_derived_ready(state.as_ref())?;
 
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
@@ -2294,7 +2290,6 @@ async fn list_nft_collection_activities(
     Path(collection_id): Path<String>,
     Query(params): Query<NftCollectionActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<NftCollectionActivityResponse>> {
-    ensure_derived_ready(state.as_ref())?;
 
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
@@ -2469,7 +2464,6 @@ async fn get_nft_collection_occupation_chart(
     Path(collection_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    ensure_derived_ready(state.as_ref())?;
 
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;

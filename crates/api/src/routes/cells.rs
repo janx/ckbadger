@@ -20,7 +20,7 @@ use crate::response::{
 };
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    ensure_derived_ready, is_ckb_address, is_known_script_name, merge_script_info_for_reference,
+    is_ckb_address, is_known_script_name, merge_script_info_for_reference,
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::warmup::{
@@ -1888,7 +1888,6 @@ async fn list_cells_by_script(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListCellsByScriptParams>,
 ) -> ApiResult<CursorPaginatedResponse<CellResponse>> {
-    ensure_derived_ready(state.as_ref())?;
 
     let limit = params.limit.clamp(1, 100) as usize;
 
@@ -2093,7 +2092,6 @@ async fn get_address(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(addr): axum::extract::Path<String>,
 ) -> ApiResult<AddressResponse> {
-    ensure_derived_ready(state.as_ref())?;
 
     // Check cache first
     let cache_key = CacheKeys::address_balance(&addr);
@@ -2372,7 +2370,6 @@ async fn get_cell(
     State(state): State<Arc<AppState>>,
     axum::extract::Path((tx_hash, output_index)): axum::extract::Path<(String, i32)>,
 ) -> ApiResult<CellDetailResponse> {
-    ensure_derived_ready(state.as_ref())?;
 
     let hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(&tx_hash))
         .map_err(|_| ApiError::bad_request("Invalid transaction hash"))?;
@@ -2719,8 +2716,6 @@ async fn get_address_transactions(
     axum::extract::Path(addr): axum::extract::Path<String>,
     Query(params): Query<AddressTxParams>,
 ) -> ApiResult<CursorPaginatedResponse<AddressTransactionResponse>> {
-    ensure_derived_ready(&state)?;
-
     let lock_hash = if is_ckb_address(&addr) {
         address_to_lock_script_hash(&addr)
             .map_err(|e| ApiError::bad_request(format!("Invalid CKB address: {}", e)))?

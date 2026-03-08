@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{address::address_to_lock_script_hash, ensure_derived_ready};
+use crate::utils::address::address_to_lock_script_hash;
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
@@ -242,7 +242,6 @@ async fn get_address_activities(
     Path(addr): Path<String>,
     Query(params): Query<ActivityParams>,
 ) -> ApiResult<CursorPaginatedResponse<ActivityResponse>> {
-    ensure_derived_ready(&state)?;
     validate_activity_filter(params.filter.as_deref())?;
     let lock_hash = if addr.starts_with("ckb1") || addr.starts_with("ckt1") {
         address_to_lock_script_hash(&addr)
