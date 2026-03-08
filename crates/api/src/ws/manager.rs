@@ -66,6 +66,8 @@ pub enum BroadcastMessage {
         fork_point: i64,
         timestamp: String,
     },
+    #[serde(rename = "latest_activities")]
+    LatestActivities { activities: Vec<serde_json::Value> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +81,7 @@ pub struct WsManager {
     block_sender: broadcast::Sender<BroadcastMessage>,
     tx_sender: broadcast::Sender<BroadcastMessage>,
     reorg_sender: broadcast::Sender<BroadcastMessage>,
+    activity_sender: broadcast::Sender<BroadcastMessage>,
     address_subscriptions: Arc<RwLock<HashMap<String, broadcast::Sender<BroadcastMessage>>>>,
 }
 
@@ -87,11 +90,13 @@ impl WsManager {
         let (block_sender, _) = broadcast::channel(1024);
         let (tx_sender, _) = broadcast::channel(1024);
         let (reorg_sender, _) = broadcast::channel(64);
+        let (activity_sender, _) = broadcast::channel(256);
 
         Self {
             block_sender,
             tx_sender,
             reorg_sender,
+            activity_sender,
             address_subscriptions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -132,6 +137,14 @@ impl WsManager {
 
     pub fn broadcast_reorg(&self, msg: BroadcastMessage) {
         let _ = self.reorg_sender.send(msg);
+    }
+
+    pub fn subscribe_activities(&self) -> broadcast::Receiver<BroadcastMessage> {
+        self.activity_sender.subscribe()
+    }
+
+    pub fn broadcast_activities(&self, msg: BroadcastMessage) {
+        let _ = self.activity_sender.send(msg);
     }
 }
 

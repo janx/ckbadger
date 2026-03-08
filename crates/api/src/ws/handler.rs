@@ -24,6 +24,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut block_rx: Option<broadcast::Receiver<BroadcastMessage>> = None;
     let mut tx_rx: Option<broadcast::Receiver<BroadcastMessage>> = None;
     let mut reorg_rx: Option<broadcast::Receiver<BroadcastMessage>> = None;
+    let mut activity_rx: Option<broadcast::Receiver<BroadcastMessage>> = None;
 
     info!("WebSocket client connected");
 
@@ -55,6 +56,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                                     r#"{"status":"subscribed","channel":"reorg"}"#.into()
                                                 )).await;
                                             }
+                                            "latest_activity" => {
+                                                activity_rx = Some(ws_manager.subscribe_activities());
+                                                let _ = sender.send(Message::Text(
+                                                    r#"{"status":"subscribed","channel":"latest_activity"}"#.into()
+                                                )).await;
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -65,6 +72,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                             "new_block" => block_rx = None,
                                             "new_transaction" => tx_rx = None,
                                             "reorg" => reorg_rx = None,
+                                            "latest_activity" => activity_rx = None,
                                             _ => {}
                                         }
                                     }
@@ -115,6 +123,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
             msg = async {
                 if let Some(ref mut rx) = reorg_rx {
+                    rx.recv().await.ok()
+                } else {
+                    std::future::pending::<Option<BroadcastMessage>>().await
+                }
+            } => {
+                if let Some(broadcast_msg) = msg {
+                    if let Ok(json) = serde_json::to_string(&broadcast_msg) {
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            msg = async {
+                if let Some(ref mut rx) = activity_rx {
                     rx.recv().await.ok()
                 } else {
                     std::future::pending::<Option<BroadcastMessage>>().await

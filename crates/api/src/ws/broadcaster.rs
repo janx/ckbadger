@@ -168,6 +168,9 @@ pub async fn start_block_broadcaster(
                 broadcast_block_transactions(&store, &ws_manager, &ckb_store, num);
                 last_block_number = Some(num);
             }
+
+            // Broadcast latest activities after new blocks
+            broadcast_latest_activities(&store, &ws_manager);
         }
     }
 }
@@ -238,6 +241,81 @@ fn broadcast_block_transactions(
             timestamp: timestamp_str.clone(),
         };
         ws_manager.broadcast_transaction(msg);
+    }
+}
+
+fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager>) {
+    match store.get_latest_activities() {
+        Ok(items) if !items.is_empty() => {
+            let activities: Vec<serde_json::Value> = items
+                .into_iter()
+                .take(8)
+                .map(|item| {
+                    let address = if !item.lock_code_hash.is_empty() {
+                        crate::utils::address::script_to_address(
+                            &item.lock_code_hash,
+                            item.lock_hash_type,
+                            &item.lock_args,
+                            "mainnet", // TODO: derive from config if needed
+                        )
+                        .unwrap_or_else(|_| format!("0x{}", hex::encode(&item.lock_hash)))
+                    } else {
+                        format!("0x{}", hex::encode(&item.lock_hash))
+                    };
+                    serde_json::json!({
+                        "address": address,
+                        "txHash": format!("0x{}", hex::encode(&item.entry.tx_hash)),
+                        "blockNumber": item.entry.block_number,
+                        "txIndex": item.entry.tx_index,
+                        "timestamp": item.entry.timestamp.to_string(),
+                        "ckbDelta": item.entry.ckb_delta.to_string(),
+                        "occupiedDelta": item.entry.occupied_delta.to_string(),
+                        "isCellbase": item.entry.is_cellbase,
+                        "assetChanges": item.entry.asset_changes.iter().map(|c| {
+                            match c {
+                                ckbadger_store::types::AssetChange::Token { type_script_hash, delta, symbol, decimals } => {
+                                    serde_json::json!({
+                                        "type": "token",
+                                        "typeScriptHash": format!("0x{}", hex::encode(type_script_hash)),
+                                        "delta": delta.to_string(),
+                                        "symbol": symbol,
+                                        "decimals": decimals,
+                                    })
+                                },
+                                ckbadger_store::types::AssetChange::Dob { dob_id, standard, action } => {
+                                    serde_json::json!({
+                                        "type": "dob",
+                                        "dobId": format!("0x{}", hex::encode(dob_id)),
+                                        "standard": standard,
+                                        "action": format!("{:?}", action).to_lowercase(),
+                                    })
+                                },
+                                ckbadger_store::types::AssetChange::Nft { nft_id, standard, action } => {
+                                    serde_json::json!({
+                                        "type": "nft",
+                                        "nftId": format!("0x{}", hex::encode(nft_id)),
+                                        "standard": standard,
+                                        "action": format!("{:?}", action).to_lowercase(),
+                                    })
+                                },
+                                ckbadger_store::types::AssetChange::DaoDeposit { capacity } => {
+                                    serde_json::json!({"type": "daoDeposit", "capacity": capacity.to_string()})
+                                },
+                                ckbadger_store::types::AssetChange::DaoWithdrawRequest { capacity, deposit_block } => {
+                                    serde_json::json!({"type": "daoWithdrawRequest", "capacity": capacity.to_string(), "depositBlock": deposit_block})
+                                },
+                                ckbadger_store::types::AssetChange::DaoWithdrawComplete { capacity, compensation } => {
+                                    serde_json::json!({"type": "daoWithdrawComplete", "capacity": capacity.to_string(), "compensation": compensation.to_string()})
+                                },
+                            }
+                        }).collect::<Vec<_>>(),
+                        "peers": item.entry.peers.iter().map(|h| format!("0x{}", hex::encode(h))).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            ws_manager.broadcast_activities(BroadcastMessage::LatestActivities { activities });
+        }
+        _ => {}
     }
 }
 
