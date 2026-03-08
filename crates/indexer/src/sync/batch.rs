@@ -37,6 +37,7 @@ use super::indexer::{
     next_start_block_from_db_tip, require_non_negative_block_number, Indexer,
     CACHE_INVALIDATION_INTERVAL,
 };
+use super::latest_activities::{collect_lock_scripts_from_outputs, to_latest_items};
 use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
@@ -3671,6 +3672,7 @@ impl Indexer {
             let store = self.writer.store();
             let append_only_store = &self.append_only_store;
             let writer = &self.writer;
+            let latest_activities_buf = &self.latest_activities;
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
             let tt;
@@ -4680,6 +4682,19 @@ impl Indexer {
                                         &tx_views,
                                         token_info_cache,
                                     );
+
+                                // Collect lock scripts from output cells for address display
+                                let mut lock_scripts = std::collections::HashMap::new();
+                                for td in tx_slice {
+                                    let block_scripts =
+                                        collect_lock_scripts_from_outputs(&td.cells);
+                                    lock_scripts.extend(block_scripts);
+                                }
+                                let latest_items = to_latest_items(&activities, &lock_scripts);
+                                if !latest_items.is_empty() {
+                                    latest_activities_buf.push_batch(latest_items);
+                                }
+
                                 for (lock_hash, entry) in activities {
                                     activity_batch.put_activity(
                                         &lock_hash,
@@ -5812,6 +5827,18 @@ impl Indexer {
                         &tx_views,
                         &token_info_cache,
                     );
+
+                    // Collect lock scripts from output cells for address display
+                    let mut lock_scripts = std::collections::HashMap::new();
+                    for td in tx_slice {
+                        let block_scripts = collect_lock_scripts_from_outputs(&td.cells);
+                        lock_scripts.extend(block_scripts);
+                    }
+                    let latest_items = to_latest_items(&activities, &lock_scripts);
+                    if !latest_items.is_empty() {
+                        self.latest_activities.push_batch(latest_items);
+                    }
+
                     for (lock_hash, entry) in activities {
                         put_activity_with_undo_log(
                             &mut data_batch,
@@ -6210,6 +6237,13 @@ impl Indexer {
                     "Batch finalize commit done"
                 );
             }
+        }
+
+        // Persist latest activities ring buffer snapshot to sync_meta
+        if !skip_activities {
+            self.writer
+                .store()
+                .put_latest_activities(&self.latest_activities.snapshot())?;
         }
 
         // HODL wave tracker update
