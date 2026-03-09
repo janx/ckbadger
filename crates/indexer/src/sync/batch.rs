@@ -45,8 +45,7 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
     BatchWriteMetrics, CachedCellInfo, CachedUdtCellInfo, DotbitTxActivityData, PreParsedNftData,
-    ReorgAction, SyncAction, TxData, UndoSeqScope, UnresolvedLocalProbeSummary,
-    UnresolvedRpcProbeSummary,
+    ReorgAction, SyncAction, TxData, UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 
@@ -1596,7 +1595,6 @@ impl Indexer {
                     );
                 } else {
                     put_addr_tx_with_undo_log(
-                        &mut consume_addr_batch,
                         &mut append_history_batch,
                         &mut append_undo_seq_by_block,
                         &lock_hash,
@@ -2768,7 +2766,6 @@ impl Indexer {
 
         // Spore consumption runs in live sync mode only, DotBit consumption runs in all sync modes.
         let mut consume_batch = StoreBatch::new(self.writer.store());
-        let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
         let mut spore_state = self.writer.new_spore_batch_state();
         let mut dotbit_state = self.writer.new_dotbit_batch_state();
         let mut block_tx_idx = 0usize;
@@ -2889,23 +2886,8 @@ impl Indexer {
                 &mut identity_activity_batch,
             );
             if inserted {
-                let append_key = keys::encode_nft_collection_activity_key(
-                    &DOTBIT_SENTINEL_COLLECTION,
-                    activity.block_number,
-                    activity.tx_idx,
-                    &activity.block_hash,
-                    _tx_hash,
-                );
-                if !is_bulk {
-                    put_append_delete_undo_entry(
-                        &mut consume_batch,
-                        &mut append_undo_seq_by_block,
-                        UndoSeqScope::AppendIdentityCollectionActivity,
-                        activity.block_number,
-                        ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
-                        &append_key,
-                    );
-                }
+                // identity collection activities are now in domain store;
+                // rollback deletes entries directly (no undo log needed)
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -2914,26 +2896,11 @@ impl Indexer {
                 })?;
             }
         }
-        for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
+        // Object/identity collection activities are now in domain store;
+        // rollback deletes entries directly (no undo log needed)
+        for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
             object_activity_acc.flush(&mut object_activity_batch)
         {
-            let append_key = keys::encode_nft_collection_activity_key(
-                &collection_id,
-                block_number,
-                tx_idx,
-                &block_hash,
-                &tx_hash,
-            );
-            if !is_bulk {
-                put_append_delete_undo_entry(
-                    &mut consume_batch,
-                    &mut append_undo_seq_by_block,
-                    UndoSeqScope::AppendObjectCollectionActivity,
-                    block_number,
-                    ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
-                    &append_key,
-                );
-            }
             let delta = object_activity_count_deltas
                 .entry(collection_id)
                 .or_insert(0);
@@ -2941,26 +2908,9 @@ impl Indexer {
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("nft activity delta overflow while writing batch"))?;
         }
-        for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
+        for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
             identity_activity_acc.flush_identity(&mut identity_activity_batch)
         {
-            let append_key = keys::encode_nft_collection_activity_key(
-                &collection_id,
-                block_number,
-                tx_idx,
-                &block_hash,
-                &tx_hash,
-            );
-            if !is_bulk {
-                put_append_delete_undo_entry(
-                    &mut consume_batch,
-                    &mut append_undo_seq_by_block,
-                    UndoSeqScope::AppendIdentityCollectionActivity,
-                    block_number,
-                    ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
-                    &append_key,
-                );
-            }
             let delta = identity_activity_count_deltas
                 .entry(collection_id)
                 .or_insert(0);
@@ -5098,7 +5048,6 @@ impl Indexer {
             // Write addr_txs entries
             for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
                 put_addr_tx_with_undo_log(
-                    &mut data_batch,
                     &mut append_history_batch,
                     &mut append_undo_seq_by_block,
                     lock_hash,
@@ -5946,22 +5895,9 @@ impl Indexer {
                         activity.timestamp_ms,
                         &mut identity_activity_batch,
                     );
+                    // identity collection activities are now in domain store;
+                    // rollback deletes entries directly (no undo log needed)
                     if inserted {
-                        let append_key = keys::encode_nft_collection_activity_key(
-                            &DOTBIT_SENTINEL_COLLECTION,
-                            activity.block_number,
-                            activity.tx_idx,
-                            &activity.block_hash,
-                            tx_hash,
-                        );
-                        put_append_delete_undo_entry(
-                            &mut data_batch,
-                            &mut append_undo_seq_by_block,
-                            UndoSeqScope::AppendIdentityCollectionActivity,
-                            activity.block_number,
-                            ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
-                            &append_key,
-                        );
                         let delta = identity_activity_count_deltas
                             .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                             .or_insert(0);
@@ -5972,24 +5908,11 @@ impl Indexer {
                         })?;
                     }
                 }
-                for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
+                // Object/identity collection activities are now in domain store;
+                // rollback deletes entries directly (no undo log needed)
+                for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
                     object_activity_acc.flush(&mut object_activity_batch)
                 {
-                    let append_key = keys::encode_nft_collection_activity_key(
-                        &collection_id,
-                        block_number,
-                        tx_idx,
-                        &block_hash,
-                        &tx_hash,
-                    );
-                    put_append_delete_undo_entry(
-                        &mut data_batch,
-                        &mut append_undo_seq_by_block,
-                        UndoSeqScope::AppendObjectCollectionActivity,
-                        block_number,
-                        ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
-                        &append_key,
-                    );
                     let delta = object_activity_count_deltas
                         .entry(collection_id)
                         .or_insert(0);
@@ -5997,24 +5920,9 @@ impl Indexer {
                         anyhow!("nft activity delta overflow while writing grouped batch")
                     })?;
                 }
-                for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
+                for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
                     identity_activity_acc.flush_identity(&mut identity_activity_batch)
                 {
-                    let append_key = keys::encode_nft_collection_activity_key(
-                        &collection_id,
-                        block_number,
-                        tx_idx,
-                        &block_hash,
-                        &tx_hash,
-                    );
-                    put_append_delete_undo_entry(
-                        &mut data_batch,
-                        &mut append_undo_seq_by_block,
-                        UndoSeqScope::AppendIdentityCollectionActivity,
-                        block_number,
-                        ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
-                        &append_key,
-                    );
                     let delta = identity_activity_count_deltas
                         .entry(collection_id)
                         .or_insert(0);
@@ -6106,7 +6014,6 @@ impl Indexer {
                         }
 
                         put_activity_with_undo_log(
-                            &mut data_batch,
                             &mut activity_batch,
                             &mut append_undo_seq_by_block,
                             &lock_hash,

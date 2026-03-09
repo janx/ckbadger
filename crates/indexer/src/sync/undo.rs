@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use anyhow::{anyhow, bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys;
 use ckbadger_store::CkbadgerStore;
 
 use super::types::{TxData, UndoSeqScope, UNDO_SEQ_LOCAL_MAX, UNDO_SEQ_SCOPE_SHIFT};
@@ -28,6 +27,7 @@ pub(crate) fn next_undo_seq(
     ((scope as u64) << UNDO_SEQ_SCOPE_SHIFT) | local_seq
 }
 
+#[cfg(test)]
 pub(crate) fn put_append_delete_undo_entry(
     domain_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -47,6 +47,7 @@ pub(crate) fn put_append_delete_undo_entry(
     );
 }
 
+#[cfg(test)]
 fn put_delete_undo_entry(
     domain_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -124,51 +125,27 @@ pub(crate) fn put_tx_context_undo_entries(
 }
 
 pub(crate) fn put_addr_tx_with_undo_log(
-    domain_batch: &mut StoreBatch<'_>,
-    append_batch: &mut StoreBatch<'_>,
-    undo_seq_by_block: &mut HashMap<i64, u64>,
+    batch: &mut StoreBatch<'_>,
+    _undo_seq_by_block: &mut HashMap<i64, u64>,
     lock_hash: &[u8],
     block_num: i64,
     tx_idx: i32,
     tx_hash: &[u8],
 ) {
-    let append_key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
-    append_batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
-    put_append_delete_undo_entry(
-        domain_batch,
-        undo_seq_by_block,
-        UndoSeqScope::AppendAddrTx,
-        block_num,
-        ckbadger_store::CF_ADDR_TXS,
-        &append_key,
-    );
+    // addr_txs is now in domain store; rollback deletes entries directly (no undo log needed)
+    batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
 }
 
 pub(crate) fn put_activity_with_undo_log(
-    domain_batch: &mut StoreBatch<'_>,
-    activity_batch: &mut StoreBatch<'_>,
-    undo_seq_by_block: &mut HashMap<i64, u64>,
+    batch: &mut StoreBatch<'_>,
+    _undo_seq_by_block: &mut HashMap<i64, u64>,
     lock_hash: &[u8],
     block_num: i64,
     tx_idx: i32,
     entry: &ckbadger_store::types::ActivityEntry,
 ) {
-    let append_key = keys::encode_activity_key(
-        lock_hash,
-        block_num,
-        tx_idx,
-        &entry.block_hash,
-        &entry.tx_hash,
-    );
-    activity_batch.put_activity(lock_hash, block_num, tx_idx, entry);
-    put_append_delete_undo_entry(
-        domain_batch,
-        undo_seq_by_block,
-        UndoSeqScope::AppendActivity,
-        block_num,
-        ckbadger_store::CF_ACTIVITIES,
-        &append_key,
-    );
+    // activities is now in domain store; rollback deletes entries directly (no undo log needed)
+    batch.put_activity(lock_hash, block_num, tx_idx, entry);
 }
 
 pub(crate) fn rollback_undo_log_after_batch_cleanup(
@@ -408,11 +385,9 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain_store);
-        let mut activity_batch = StoreBatch::new(&append_store);
         let mut undo_seq_by_block = HashMap::new();
         put_activity_with_undo_log(
             &mut domain_batch,
-            &mut activity_batch,
             &mut undo_seq_by_block,
             &lock_hash,
             42,
@@ -420,7 +395,6 @@ mod tests {
             &entry,
         );
         domain_batch.commit().unwrap();
-        activity_batch.commit().unwrap();
 
         let iter = domain_store.iterator_cf(
             domain_store.cf_reorg_undo_log_by_block(),

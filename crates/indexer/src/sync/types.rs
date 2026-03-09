@@ -16,10 +16,13 @@ pub(crate) const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 #[repr(u16)]
 pub(crate) enum UndoSeqScope {
     TxContext = 0x0001,
+    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
     AppendAddrTx = 0x0002,
+    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
     AppendActivity = 0x0003,
+    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
     AppendObjectCollectionActivity = 0x0004,
-    #[allow(dead_code)] // Used in upcoming identity collection activity writer
+    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
     AppendIdentityCollectionActivity = 0x0005,
 }
 
