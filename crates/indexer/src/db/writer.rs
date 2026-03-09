@@ -11,31 +11,40 @@ use crate::cache::CacheInvalidator;
 #[derive(Clone)]
 pub struct BatchWriter {
     pub(super) store: Arc<CkbadgerStore>,
+    pub(super) append_only_store: Arc<CkbadgerStore>,
     pub(super) cache_invalidator: Option<CacheInvalidator>,
 }
 
 impl BatchWriter {
-    pub fn new(store: Arc<CkbadgerStore>) -> Self {
+    pub fn new(store: Arc<CkbadgerStore>, append_only_store: Arc<CkbadgerStore>) -> Self {
         Self {
             store,
+            append_only_store,
             cache_invalidator: None,
         }
     }
 
-    pub fn with_fast_sync_mode(store: Arc<CkbadgerStore>, _fast_sync_mode: bool) -> Self {
+    pub fn with_fast_sync_mode(
+        store: Arc<CkbadgerStore>,
+        append_only_store: Arc<CkbadgerStore>,
+        _fast_sync_mode: bool,
+    ) -> Self {
         Self {
             store,
+            append_only_store,
             cache_invalidator: None,
         }
     }
 
     pub fn with_cache(
         store: Arc<CkbadgerStore>,
+        append_only_store: Arc<CkbadgerStore>,
         _fast_sync_mode: bool,
         cache_invalidator: CacheInvalidator,
     ) -> Self {
         Self {
             store,
+            append_only_store,
             cache_invalidator: Some(cache_invalidator),
         }
     }
@@ -46,6 +55,10 @@ impl BatchWriter {
 
     pub fn store(&self) -> &Arc<CkbadgerStore> {
         &self.store
+    }
+
+    pub fn append_only_store(&self) -> &CkbadgerStore {
+        &self.append_only_store
     }
 }
 

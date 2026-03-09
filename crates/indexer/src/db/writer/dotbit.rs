@@ -418,7 +418,8 @@ mod tests {
     fn test_dotbit_outpoint_lookups_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let account = ParsedDotbitAccountOutput {
             output_index: 6,
@@ -466,7 +467,8 @@ mod tests {
     fn test_consume_dotbit_account_errors_on_double_consume() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let account = ParsedDotbitAccountOutput {
             output_index: 6,
@@ -506,7 +508,8 @@ mod tests {
     fn test_reactivate_dotbit_account() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let account = ParsedDotbitAccountOutput {
             output_index: 6,
@@ -578,7 +581,8 @@ mod tests {
     fn test_consume_dotbit_account_reads_uncommitted_insert_from_state() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let account = ParsedDotbitAccountOutput {
             output_index: 6,
@@ -623,7 +627,8 @@ mod tests {
     fn test_get_hourly_transfer_errors_on_invalid_existing_value_length() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let mut state = writer.new_dotbit_batch_state();
 
         let key = ckbadger_store::keys::encode_nft_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);

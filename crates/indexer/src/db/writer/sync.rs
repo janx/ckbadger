@@ -377,7 +377,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append_store =
             Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
         (dir, store, append_store, writer)
     }
 

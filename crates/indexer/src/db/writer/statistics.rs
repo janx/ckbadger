@@ -1025,7 +1025,7 @@ mod tests {
     fn test_get_dao_deposits_at_block_tracks_lifecycle_exactly() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         // deposit A: active from block 10, withdrawn at block 20
         let outpoint_a = keys::encode_outpoint(&[0x11; 32], 0);
@@ -1083,7 +1083,7 @@ mod tests {
     fn test_get_last_epoch_start_returns_latest_start_before_block() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let mut batch = StoreBatch::new(&store);
         let ts0 = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
@@ -1110,7 +1110,7 @@ mod tests {
     fn test_refresh_latest_dao_statistics_persists_latest_entry() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let mut dao = vec![0u8; 32];
         dao[8..16].copy_from_slice(&2u64.to_le_bytes());
@@ -1205,7 +1205,7 @@ mod tests {
     fn test_refresh_mnft_24h_transfers_cleans_only_mnft_collections() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let now_ms = chrono::Utc::now().timestamp_millis();
         let current_hour = now_ms / 3_600_000;
@@ -1250,7 +1250,7 @@ mod tests {
     fn test_update_hourly_statistics_errors_on_corrupt_existing_entry() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let hour = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
         let key = keys::encode_stats_key(
@@ -1274,7 +1274,7 @@ mod tests {
     fn test_get_previous_block_timestamp_errors_on_invalid_millis() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(
@@ -1301,7 +1301,7 @@ mod tests {
     fn test_daily_stats_new_day_carries_forward_cumulative_totals() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let day2 = NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
@@ -1356,7 +1356,7 @@ mod tests {
         // (not the DB, which hasn't been committed yet).
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let day1 = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
         let day2 = NaiveDate::from_ymd_opt(2024, 3, 2).unwrap();
@@ -1418,7 +1418,7 @@ mod tests {
     fn test_daily_stats_errors_when_previous_day_missing_but_earlier_exists() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let day1 = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
         let day3 = NaiveDate::from_ymd_opt(2024, 1, 3).unwrap();

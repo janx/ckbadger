@@ -599,7 +599,7 @@ mod tests {
     fn test_update_script_daily_deltas_batch_accumulates_and_deletes_zero_net() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let code_hash = vec![0xBB; 32];
         let date = 20240115u32;
 
@@ -644,7 +644,7 @@ mod tests {
     fn test_apply_script_usage_deltas_rejects_live_capacity_underflow() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0xAA; 32];
         let existing_info = ScriptInfo {
@@ -677,7 +677,7 @@ mod tests {
     fn test_apply_script_usage_deltas_rejects_live_occupied_over_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0xBB; 32];
         let existing_info = ScriptInfo {
@@ -710,7 +710,7 @@ mod tests {
     fn test_apply_script_usage_deltas_allows_capacity_sum_above_i64_max() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0xCC; 32];
         let existing_info = ScriptInfo {
@@ -750,7 +750,7 @@ mod tests {
     fn test_apply_script_usage_deltas_accepts_capacity_delta_exceeding_i64() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0xDD; 32];
         let existing_info = ScriptInfo {
@@ -789,7 +789,7 @@ mod tests {
     fn test_read_script_info_errors_on_deserialize_failure() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let code_hash = vec![0xEE; 32];
 
         store
@@ -807,7 +807,7 @@ mod tests {
     fn test_read_address_balances_errors_on_deserialize_failure() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let lock_hash = vec![0xEF; 32];
 
         store
@@ -825,7 +825,7 @@ mod tests {
     fn test_apply_script_usage_deltas_rejects_negative_delta_for_unseen_script() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0xAB; 32];
         let existing = HashMap::new();

@@ -229,6 +229,7 @@ impl Indexer {
         let repo = Repository::with_cache(store.clone(), cache_invalidator.clone());
         let writer = BatchWriter::with_cache(
             store.clone(),
+            append_only_store.clone(),
             config.fast_sync_mode,
             cache_invalidator.clone(),
         );
@@ -944,6 +945,7 @@ impl Indexer {
 
         // Periodic 24h transfer refresh
         let store_for_task = Arc::clone(self.writer.store());
+        let append_store_for_task = Arc::clone(&self.append_only_store);
         let fast_sync_mode = self.config.fast_sync_mode;
         let progress_for_task = Arc::clone(&self.progress);
         let bulk_sync_threshold = self.config.bulk_sync_threshold;
@@ -959,8 +961,11 @@ impl Indexer {
                     );
                     continue;
                 }
-                let writer =
-                    BatchWriter::with_fast_sync_mode(store_for_task.clone(), fast_sync_mode);
+                let writer = BatchWriter::with_fast_sync_mode(
+                    store_for_task.clone(),
+                    append_store_for_task.clone(),
+                    fast_sync_mode,
+                );
                 match writer.refresh_token_24h_transfers() {
                     Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
                     Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),

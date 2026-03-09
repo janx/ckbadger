@@ -1108,7 +1108,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx_hash = vec![0xAA; 32];
         let deposit_output_index: i16 = 0;
@@ -1165,7 +1165,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(100, &header_with_ar(10));
@@ -1225,7 +1225,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let original_tx_hash = vec![0xAA; 32];
         let original_output_index = 0i16;
@@ -1284,7 +1284,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let original_tx_hash = vec![0xAB; 32];
         let original_output_index = 1i16;
@@ -1344,7 +1344,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(100, &header_with_ar(10));
@@ -1432,7 +1432,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         // A deposit that exists only in pending_deposits, NOT in the committed store
         let deposit_tx_hash = vec![0xAA; 32];
@@ -1549,7 +1549,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_a_tx = vec![0xA1; 32];
         let capacity: i64 = 500_00000000;
@@ -1636,7 +1636,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx_hash = vec![0xAA; 32];
         let deposit_output_index: i16 = 0;
@@ -1695,7 +1695,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx_hash = vec![0xA1; 32];
         let deposit_output_index: i16 = 0;
@@ -1770,7 +1770,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_a_tx = vec![0xA1; 32];
         let deposit_b_tx = vec![0xA2; 32];
@@ -1936,7 +1936,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store);
+        let writer = super::super::BatchWriter::new(store.clone(), store);
 
         let tx_hash = [0xAB; 32];
         let err = writer
@@ -1954,7 +1954,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store);
+        let writer = super::super::BatchWriter::new(store.clone(), store);
 
         let tx_hash = [0xCD; 32];
         let err = writer
@@ -1973,7 +1973,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx = vec![0xA1; 32];
         let capacity: i64 = 500_00000000;
@@ -2060,7 +2060,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx = vec![0xA5; 32];
         let deposit_output_index: i16 = 0;
@@ -2140,7 +2140,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx = vec![0xA7; 32];
         let capacity: i64 = 120_00000000;
@@ -2218,7 +2218,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
 
         let deposit_tx = vec![0xA8; 32];
         let deposit_output_index: i16 = 0;
@@ -2292,7 +2292,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = super::super::BatchWriter::new(store.clone());
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(&store);
 
         let deposits = vec![(

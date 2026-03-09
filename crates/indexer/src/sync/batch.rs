@@ -1387,8 +1387,17 @@ impl Indexer {
                     .insert_transactions_batch(&txs_for_batch, &mut batch)?;
             }
             if !all_cells.is_empty() {
-                self.writer
-                    .insert_cells_batch(&all_cells, &batch_cell_infos, &mut batch, false)?;
+                let mut cells_batch = StoreBatch::new(&self.append_only_store);
+                self.writer.insert_cells_batch(
+                    &all_cells,
+                    &batch_cell_infos,
+                    &mut batch,
+                    &mut cells_batch,
+                    false,
+                )?;
+                if !cells_batch.is_empty() {
+                    cells_batch.commit()?;
+                }
             }
             let commit_started = Instant::now();
             batch.commit()?;
@@ -1485,7 +1494,7 @@ impl Indexer {
         // Single batch for consume + address balances + script usage
         let mut consume_addr_batch = StoreBatch::new(self.writer.store());
         let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
-        let mut append_history_batch = StoreBatch::new(&self.append_only_store);
+        let mut append_history_batch = StoreBatch::new(self.writer.store());
         let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
         if !all_consumptions.is_empty() {
             self.writer.consume_cells_batch_preloaded(
@@ -2862,9 +2871,9 @@ impl Indexer {
             }
             block_tx_idx += tx_count_for_block;
         }
-        let mut object_activity_batch = StoreBatch::new(&self.append_only_store);
+        let mut object_activity_batch = StoreBatch::new(self.writer.store());
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
-        let mut identity_activity_batch = StoreBatch::new(&self.append_only_store);
+        let mut identity_activity_batch = StoreBatch::new(self.writer.store());
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Write .bit collection activities directly (bypassing accumulator)
         for (_tx_hash, activity) in &dotbit_tx_activity_data {
@@ -3794,15 +3803,17 @@ impl Indexer {
                     HashMap<String, HashSet<[u8; 32]>>,
                 )> {
                     // T1: Cells + Consumption (cell data only)
-                    // CFs: CELLS, LIVE_CELLS, CONSUMED_CELLS
+                    // CFs: CELLS (append-only), LIVE_CELLS, CONSUMED_CELLS (domain)
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
-                        let mut batch = StoreBatch::new(store);
+                        let mut domain_batch = StoreBatch::new(store);
+                        let mut cells_batch = StoreBatch::new(append_only_store);
                         if !all_cells.is_empty() {
                             writer.insert_cells_batch(
                                 &all_cells,
                                 &batch_cell_infos,
-                                &mut batch,
+                                &mut domain_batch,
+                                &mut cells_batch,
                                 true,
                             )?;
                         }
@@ -3811,13 +3822,26 @@ impl Indexer {
                                 &all_consumptions,
                                 &input_cell_info,
                                 &batch_cell_infos,
-                                &mut batch,
+                                &mut domain_batch,
                                 true,
                             )?;
                         }
-                        let commit_ms =
-                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                        let commit_ms = commit_phase_no_wal(
+                            "T1_cells_domain",
+                            first_block,
+                            last_block,
+                            domain_batch,
+                        )?;
+                        let cells_commit_ms = commit_phase_no_wal(
+                            "T1_cells_append",
+                            first_block,
+                            last_block,
+                            cells_batch,
+                        )?;
+                        Ok((
+                            t.elapsed().as_secs_f64() * 1000.0,
+                            commit_ms + cells_commit_ms,
+                        ))
                     });
 
                     // T1b: Cell Indexes (lock + type, puts + deletes)
@@ -3855,7 +3879,7 @@ impl Indexer {
                     let h2 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
-                        let mut append_history_batch = StoreBatch::new(append_only_store);
+                        let mut append_history_batch = StoreBatch::new(store);
                         // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                         if !txs_for_batch.is_empty() {
                             writer.insert_transactions_batch(&txs_for_batch, &mut batch)?;
@@ -4241,11 +4265,11 @@ impl Indexer {
                         }
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
-                        let mut activity_batch = StoreBatch::new(append_only_store);
+                        let mut activity_batch = StoreBatch::new(store);
                         let mut spore_state = writer.new_spore_batch_state();
                         let mut spore_activity_acc = ObjectCollectionActivityAccumulator::new();
                         let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
-                        let mut identity_activity_batch = StoreBatch::new(append_only_store);
+                        let mut identity_activity_batch = StoreBatch::new(store);
                         let mut block_tx_idx = 0usize;
                         for (block_idx, _block_response) in blocks.iter().enumerate() {
                             let parsed = &all_parsed_blocks[block_idx];
@@ -4346,7 +4370,7 @@ impl Indexer {
                     let h6b = s.spawn(|| -> Result<(f64, f64)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
-                    let mut activity_batch = StoreBatch::new(append_only_store);
+                    let mut activity_batch = StoreBatch::new(store);
                     // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut mnft_state = writer.new_mnft_batch_state();
@@ -4790,7 +4814,7 @@ impl Indexer {
                         Some(s.spawn(|| -> Result<ActResult> {
                             let t = Instant::now();
                             // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
-                            let mut activity_batch = StoreBatch::new(append_only_store);
+                            let mut activity_batch = StoreBatch::new(store);
                             // Use pre-fetched token cache from bulk prefetch (eliminates
                             // a separate get_tokens_batch call that duplicated the UDT prefetch).
                             let token_info_cache = &prefetched_activity_token_cache;
@@ -4946,12 +4970,17 @@ impl Indexer {
                     .insert_transactions_batch(&txs_for_batch, &mut data_batch)?;
             }
             if !all_cells.is_empty() {
+                let mut cells_batch = StoreBatch::new(&self.append_only_store);
                 self.writer.insert_cells_batch(
                     &all_cells,
                     &batch_cell_infos,
                     &mut data_batch,
+                    &mut cells_batch,
                     false,
                 )?;
+                if !cells_batch.is_empty() {
+                    cells_batch.commit()?;
+                }
             }
             if !all_consumptions.is_empty() {
                 self.writer.consume_cells_batch_preloaded(
@@ -4990,7 +5019,7 @@ impl Indexer {
             let need_balances = !lock_hash_keys.is_empty();
             let need_scripts = !code_hash_refs.is_empty();
             let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
-            let mut append_history_batch = StoreBatch::new(&self.append_only_store);
+            let mut append_history_batch = StoreBatch::new(self.writer.store());
 
             if need_balances || need_scripts {
                 let writer = &self.writer;
@@ -5484,9 +5513,9 @@ impl Indexer {
                 }
             }
 
-            let mut object_activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut object_activity_batch = StoreBatch::new(self.writer.store());
             let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
-            let mut identity_activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut identity_activity_batch = StoreBatch::new(self.writer.store());
             let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
             let mut pending_object_collection_aggs = HashMap::new();
@@ -6010,7 +6039,7 @@ impl Indexer {
             )?;
 
             // Activity writes (live sync)
-            let mut activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut activity_batch = StoreBatch::new(self.writer.store());
             {
                 let token_info_cache = load_activity_token_info_cache(
                     self.writer.store(),
@@ -7170,7 +7199,7 @@ mod tests {
     fn test_resolve_input_udt_info_ignores_stale_cache_entry_for_non_live_outpoint() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store);
+        let writer = BatchWriter::new(store.clone(), store);
         let cache = DashMap::new();
 
         let tx_hash = vec![0xAA; 32];
@@ -7201,8 +7230,8 @@ mod tests {
     #[test]
     fn test_resolve_input_udt_info_reads_live_cells_and_refreshes_cache() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let cache = DashMap::new();
 
         let type_hash = vec![0x11; 32];
@@ -7291,7 +7320,7 @@ mod tests {
     fn test_classify_unresolved_local_probe_marks_missing_everywhere() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store);
+        let writer = BatchWriter::new(store.clone(), store);
 
         let unresolved = vec![(vec![0x12; 32], 0i16)];
         let summary = classify_unresolved_local_probe(&writer, &unresolved, 5);
@@ -7308,7 +7337,7 @@ mod tests {
     fn test_classify_unresolved_local_probe_marks_tx_location_exists_without_cell() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let tx_hash = vec![0x34; 32];
 
         let mut batch = StoreBatch::new(&store);

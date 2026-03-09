@@ -694,7 +694,8 @@ mod tests {
     fn test_update_object_type_index_and_daily_deltas_batch_and_delete_zero_net() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let type_script_hash = vec![0x11; 32];
         let collection_id = vec![0x22; 24];
@@ -753,7 +754,8 @@ mod tests {
     fn test_mnft_outpoint_lookups_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token = sample_token(0x12, class.class_id.clone(), 0x42);
@@ -797,7 +799,8 @@ mod tests {
     fn test_insert_mnft_tokens_with_state_accumulates_collection_counts_in_same_batch() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token_a = sample_token(0x12, class.class_id.clone(), 0x42);
@@ -831,7 +834,8 @@ mod tests {
     fn test_insert_mnft_token_with_state_accumulates_hourly_transfers_in_same_batch() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token = sample_token(0x12, class.class_id.clone(), 0x42);
@@ -885,7 +889,8 @@ mod tests {
     fn test_insert_mnft_class_with_state_preserves_inflight_collection_counts() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token_a = sample_token(0x12, class.class_id.clone(), 0x42);
@@ -929,7 +934,8 @@ mod tests {
     fn test_get_hourly_transfer_errors_on_invalid_existing_value_length() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
         let mut state = writer.new_mnft_batch_state();
 
         let collection_id = vec![0x88; 24];
@@ -948,7 +954,8 @@ mod tests {
     fn test_consume_mnft_tokens_with_state_decrements_live_count_in_same_batch() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token_a = sample_token(0x12, class.class_id.clone(), 0x42);
@@ -992,7 +999,8 @@ mod tests {
     fn test_consume_mnft_token_errors_on_live_count_underflow() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token = sample_token(0x12, class.class_id.clone(), 0x42);
@@ -1028,7 +1036,8 @@ mod tests {
     fn test_consume_mnft_token_errors_on_double_consume() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let writer = BatchWriter::new(Arc::new(store));
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let class = sample_class();
         let token = sample_token(0x12, class.class_id.clone(), 0x42);
