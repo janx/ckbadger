@@ -428,6 +428,62 @@ impl CkbadgerStore {
         )
     }
 
+    // ---- Daily activity stats ----
+
+    pub fn get_daily_activity_stats(
+        &self,
+        date: &str,
+    ) -> anyhow::Result<Option<DailyActivityStats>> {
+        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
+        match self.get_cf(self.cf_stats_chain(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_daily_activity_stats(
+        &self,
+        date: &str,
+        stats: &DailyActivityStats,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(stats)?;
+        self.put_cf(self.cf_stats_chain(), &key, &value)
+    }
+
+    pub fn list_daily_activity_stats(&self) -> anyhow::Result<Vec<(String, DailyActivityStats)>> {
+        let prefix = [keys::stats_prefix::ACTIVITY_DAILY];
+        let iter = self.prefix_iterator_cf(self.cf_stats_chain(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_daily_activity_stats: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let date_bytes = &key[1..]; // skip prefix byte
+            let date_str = std::str::from_utf8(date_bytes)
+                .map_err(|e| {
+                    anyhow::anyhow!("invalid UTF-8 date in daily activity stats key: {}", e)
+                })?
+                .to_string();
+            let stats: DailyActivityStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize daily activity stats: date={}, error={}",
+                    date_str,
+                    e
+                )
+            })?;
+            results.push((date_str, stats));
+        }
+        Ok(results)
+    }
+
     // ---- Script daily deltas ----
 
     pub fn get_script_daily_delta(
@@ -1048,5 +1104,68 @@ mod tests {
         // Miner should only account for the positive portion
         assert!(total_miner >= 0);
         assert!(total_dao >= 0);
+    }
+}
+
+#[cfg(test)]
+mod daily_activity_stats_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn open_test_store() -> (TempDir, CkbadgerStore) {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn test_get_daily_activity_stats_missing_returns_none() {
+        let (_dir, store) = open_test_store();
+        let result = store.get_daily_activity_stats("20260309").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_put_and_get_daily_activity_stats_roundtrip() {
+        let (_dir, store) = open_test_store();
+        let stats = DailyActivityStats {
+            transfer_count: 100,
+            dao_deposit_count: 10,
+            dao_withdraw_request_count: 3,
+            dao_withdraw_complete_count: 2,
+            token_count: 50,
+            nft_count: 20,
+            coinbase_count: 8640,
+            unique_address_count: 500,
+            total_ckb_moved: 100_000_000_000_000,
+        };
+        store.put_daily_activity_stats("20260309", &stats).unwrap();
+        let loaded = store.get_daily_activity_stats("20260309").unwrap().unwrap();
+        assert_eq!(loaded.transfer_count, 100);
+        assert_eq!(loaded.coinbase_count, 8640);
+        assert_eq!(loaded.unique_address_count, 500);
+        assert_eq!(loaded.total_ckb_moved, 100_000_000_000_000);
+    }
+
+    #[test]
+    fn test_list_daily_activity_stats_returns_all_dates() {
+        let (_dir, store) = open_test_store();
+        let s1 = DailyActivityStats {
+            transfer_count: 10,
+            ..Default::default()
+        };
+        let s2 = DailyActivityStats {
+            transfer_count: 20,
+            ..Default::default()
+        };
+        store.put_daily_activity_stats("20260308", &s1).unwrap();
+        store.put_daily_activity_stats("20260309", &s2).unwrap();
+
+        let all = store.list_daily_activity_stats().unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].0, "20260308");
+        assert_eq!(all[0].1.transfer_count, 10);
+        assert_eq!(all[1].0, "20260309");
+        assert_eq!(all[1].1.transfer_count, 20);
     }
 }
