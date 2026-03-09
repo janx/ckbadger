@@ -2315,6 +2315,7 @@ impl Indexer {
                     let fetcher_finished = fetcher.is_finished();
                     let writer_queue_depth = parse_tx_for_writer_depth.max_capacity()
                         - parse_tx_for_writer_depth.capacity();
+                    let blocks_remaining = self.progress.blocks_remaining();
                     let pipeline = self.pipeline_perf.snapshot();
                     let fetch_fill_pct = queue_fill_percentage(
                         pipeline.as_ref().and_then(|p| p.fetch_queue_depth),
@@ -2324,7 +2325,13 @@ impl Indexer {
                         pipeline.as_ref().and_then(|p| p.parse_queue_depth),
                         pipeline.as_ref().and_then(|p| p.parse_queue_capacity),
                     );
-                    if should_log_pipeline_idle_timeout(consecutive_idle_timeouts) {
+                    // When caught up (blocks_remaining == 0) and both workers are alive,
+                    // idle is the expected state — don't warn.
+                    let caught_up_and_idle =
+                        blocks_remaining == 0 && !parser_finished && !fetcher_finished;
+                    if !caught_up_and_idle
+                        && should_log_pipeline_idle_timeout(consecutive_idle_timeouts)
+                    {
                         if let Some(repeat) = self.repeated_warning_snapshot(
                             "pipeline_idle_timeout",
                             Duration::from_secs(10),
