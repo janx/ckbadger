@@ -112,12 +112,13 @@ Block N arrives
 │  3. Build same-batch LiveCellInfo map from ParsedCell data    │
 │  4. 4-way prefetch: DAO + UDT + addr balances + script info   │
 │  5. Parallel write threads:                                   │
-│     T1: Cells + consumption (preloaded, zero DB reads)        │
-│     T2: Txs + addr deltas + script deltas + addr_tx index     │
-│     T4: DAO deposits/withdrawals                              │
-│     T5: Token transfers (UDT/NFT/Spore)                       │
-│     T6: Spore NFT data                                        │
-│     T7: Statistics + block-level aggregation                   │
+│     T1:  Cell data + consumption (CELLS, LIVE/CONSUMED)       │
+│     T1b: Cell indexes (BY_LOCK, BY_TYPE, BY_*_CODE)           │
+│     T2:  Txs + addr deltas + script deltas + addr_tx index    │
+│     T4:  DAO deposits/withdrawals                             │
+│     T5:  Token transfers (UDT/NFT/Spore)                      │
+│     T6:  Spore NFT data                                       │
+│     T7:  Statistics + block-level aggregation                  │
 │     T_ACT: Per-owner activity entries (see ACTIVITY_SYSTEM.md)│
 │  6. Finalize: block headers + stats commit                    │
 │  7. Update sync_status (LAST - crash recovery)                │

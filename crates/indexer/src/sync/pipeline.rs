@@ -2249,6 +2249,7 @@ impl Indexer {
                             nft_precompute_ms: parser_perf_sample.nft_precompute_ms,
                             write_ms: write_metrics.write_ms,
                             t1_ms: write_metrics.t1_ms,
+                            t1b_ms: write_metrics.t1b_ms,
                             t2_ms: write_metrics.t2_ms,
                             t4_ms: write_metrics.t4_ms,
                             t5_ms: write_metrics.t5_ms,

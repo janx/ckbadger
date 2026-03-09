@@ -137,6 +137,7 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) cells: u64,
     pub(crate) inputs: u64,
     pub(crate) t1_ms: f64,
+    pub(crate) t1b_ms: f64,
     pub(crate) t2_ms: f64,
     pub(crate) t4_ms: f64,
     pub(crate) t5_ms: f64,

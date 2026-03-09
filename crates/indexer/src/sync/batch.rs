@@ -886,6 +886,7 @@ impl Indexer {
                 inputs: write_metrics.inputs,
                 write_ms: write_metrics.write_ms,
                 t1_ms: write_metrics.t1_ms,
+                t1b_ms: write_metrics.t1b_ms,
                 t2_ms: write_metrics.t2_ms,
                 t4_ms: write_metrics.t4_ms,
                 t5_ms: write_metrics.t5_ms,
@@ -3671,7 +3672,7 @@ impl Indexer {
         let t_write = Instant::now();
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
-        let mut thread_times: Option<[f64; 8]> = None;
+        let mut thread_times: Option<[f64; 9]> = None;
         let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         if bulk_sync_mode {
@@ -3695,15 +3696,13 @@ impl Indexer {
             ) = std::thread::scope(
                 |s| -> Result<(
                     BatchStats,
-                    [f64; 8],
+                    [f64; 9],
                     f64,
                     HashMap<String, DailyActivityStats>,
                     HashMap<String, HashSet<[u8; 32]>>,
                 )> {
-                    // T1: Cells + Consumption + Cell Indexes (merged T1a+T1b)
-                    // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE,
-                    //       CELL_BY_LOCK_CODE, CELL_BY_TYPE_CODE
-                    // Single batch + single commit reduces atomic flush trigger frequency.
+                    // T1: Cells + Consumption (cell data only)
+                    // CFs: CELLS, LIVE_CELLS, CONSUMED_CELLS
                     let h1 = s.spawn(|| -> Result<(f64, f64)> {
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
@@ -3724,6 +3723,16 @@ impl Indexer {
                                 true,
                             )?;
                         }
+                        let commit_ms =
+                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
+                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                    });
+
+                    // T1b: Cell Indexes (lock + type, puts + deletes)
+                    // CFs: CELL_BY_LOCK, CELL_BY_LOCK_CODE, CELL_BY_TYPE, CELL_BY_TYPE_CODE
+                    let h1b = s.spawn(|| -> Result<(f64, f64)> {
+                        let t = Instant::now();
+                        let mut batch = StoreBatch::new(store);
                         for op in &cell_index_puts {
                             batch.put_cell_by_lock_raw(&op.lock_hash_key);
                             batch.put_cell_by_lock_code_raw(&op.lock_code_hash_key);
@@ -3745,7 +3754,7 @@ impl Indexer {
                             }
                         }
                         let commit_ms =
-                            commit_phase_no_wal("T1_cells", first_block, last_block, batch)?;
+                            commit_phase_no_wal("T1b_cell_idx", first_block, last_block, batch)?;
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
                     });
 
@@ -4770,6 +4779,7 @@ impl Indexer {
                     };
 
                     let (t1_ms, t1_commit_ms) = h1.join().expect("T1 panicked")?;
+                    let (t1b_ms, t1b_commit_ms) = h1b.join().expect("T1b panicked")?;
                     let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
                     let (t4_ms, t4_commit_ms) = h4.join().expect("T4 panicked")?;
                     let (t5_ms, t5_commit_ms) = h5.join().expect("T5 panicked")?;
@@ -4785,6 +4795,7 @@ impl Indexer {
                         None => (0.0, 0.0, HashMap::new(), HashMap::new()),
                     };
                     let commit_total_ms = t1_commit_ms
+                        + t1b_commit_ms
                         + t2_commit_ms
                         + t4_commit_ms
                         + t5_commit_ms
@@ -4793,7 +4804,9 @@ impl Indexer {
                         + t_act_commit_ms;
                     Ok((
                         stats,
-                        [t1_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms],
+                        [
+                            t1_ms, t1b_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms,
+                        ],
                         commit_total_ms,
                         act_accum,
                         act_addrs,
@@ -6368,7 +6381,7 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        let thread_ms = if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
+        let thread_ms = if let Some([t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
@@ -6376,6 +6389,7 @@ impl Indexer {
                 write_commit_ms = format!("{:.1}", write_commit_ms),
                 finalize_ms = format!("{:.1}", finalize_ms),
                 t1_ms = format!("{:.1}", t1),
+                t1b_ms = format!("{:.1}", t1b),
                 t2_ms = format!("{:.1}", t2),
                 t4_ms = format!("{:.1}", t4),
                 t5_ms = format!("{:.1}", t5),
@@ -6388,7 +6402,7 @@ impl Indexer {
                 inputs = batch_input_count,
                 "Batch write breakdown"
             );
-            [t1, t2, t4, t5, t6a, t6b, t7, t_act]
+            [t1, t1b, t2, t4, t5, t6a, t6b, t7, t_act]
         } else {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
@@ -6400,7 +6414,7 @@ impl Indexer {
                 inputs = batch_input_count,
                 "Batch write breakdown"
             );
-            [0.0; 8]
+            [0.0; 9]
         };
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
@@ -6409,13 +6423,14 @@ impl Indexer {
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
             t1_ms: thread_ms[0],
-            t2_ms: thread_ms[1],
-            t4_ms: thread_ms[2],
-            t5_ms: thread_ms[3],
-            t6a_ms: thread_ms[4],
-            t6b_ms: thread_ms[5],
-            t7_ms: thread_ms[6],
-            t_act_ms: thread_ms[7],
+            t1b_ms: thread_ms[1],
+            t2_ms: thread_ms[2],
+            t4_ms: thread_ms[3],
+            t5_ms: thread_ms[4],
+            t6a_ms: thread_ms[5],
+            t6b_ms: thread_ms[6],
+            t7_ms: thread_ms[7],
+            t_act_ms: thread_ms[8],
         })
     }
 
