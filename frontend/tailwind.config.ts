@@ -6,39 +6,6 @@ export default {
   theme: {
     extend: {
       colors: {
-        ckb: {
-          primary: '#00c389',
-          secondary: '#3cc68a',
-          dark: '#0a0f1a',
-          darker: '#060b14',
-        },
-        // Fallout-style phosphor green palette
-        terminal: {
-          green: '#00ff41', // Bright phosphor green (primary glow)
-          dim: '#00cc33', // Dimmed green for secondary text
-          dark: '#00801f', // Dark green for borders/accents
-          glow: '#00ff4180', // Green with 50% opacity for glow effects
-          bg: '#0a100a', // Near-black with green tint
-          'bg-light': '#0d140d', // Slightly lighter terminal background
-        },
-        // Fallout amber accent palette
-        amber: {
-          DEFAULT: '#ffb000', // Primary amber (Pip-Boy style)
-          bright: '#ffc832', // Highlight amber
-          dim: '#cc8c00', // Muted amber
-          glow: '#ffb00080', // Amber with 50% opacity
-          dark: '#805800', // Dark amber for borders
-        },
-        // Japanese poster inspired slate/blue-gray
-        slate: {
-          950: '#0a0d12', // Deepest background
-          900: '#0f1318', // Card backgrounds
-          850: '#141a21', // Elevated surfaces
-          800: '#1a222c', // Borders, dividers
-          700: '#2a3544', // Muted text
-          600: '#3d4a5c', // Secondary text
-          500: '#5a6a7f', // Tertiary elements
-        },
         // Role-based Argonaut palette
         base: {
           bg: '#0d0f18',
@@ -92,11 +59,6 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        'terminal-glow': '0 0 6px #00ff4130, 0 0 12px #00ff4118',
-        'terminal-glow-strong': '0 0 4px #00ff4160, 0 0 10px #00ff4130',
-        'terminal-inset': 'inset 0 0 15px #00ff4108',
-        'amber-glow': '0 0 6px #ffb00030, 0 0 12px #ffb00018',
-        'amber-glow-strong': '0 0 4px #ffb00060, 0 0 10px #ffb00030',
         glow: '0 0 4px #8ce00a25, 0 0 10px #8ce00a15',
         'glow-strong': '0 0 3px #8ce00a50, 0 0 8px #8ce00a25',
         'glow-inset': 'inset 0 1px 4px #8ce00a10',
