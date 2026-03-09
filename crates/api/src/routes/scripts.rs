@@ -178,6 +178,7 @@ pub struct ScriptLookupInfo {
 fn resolve_code_cell(
     info: &ckbadger_store::ScriptInfo,
     store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
 ) -> (Option<String>, Option<i32>) {
     // 1. hash_type="type": code_hash IS the type_script_hash
     // 2. hash_type="data*" with dep_type_hash: look up by type index
@@ -188,7 +189,7 @@ fn resolve_code_cell(
     };
 
     if let Some(th) = type_hash_for_lookup {
-        if let Ok(cells) = store.list_cells_by_type(th, 1, None) {
+        if let Ok(cells) = store.list_cells_by_type(th, 1, None, cells_store) {
             if let Some((tx_hash, idx, _)) = cells.first() {
                 return (
                     Some(format!("0x{}", hex::encode(tx_hash))),
@@ -213,6 +214,7 @@ fn resolve_code_cell(
 
 fn resolve_deployed_at(
     store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
     code_cell_tx_hash: Option<&str>,
     code_cell_output_index: Option<i32>,
 ) -> Option<i64> {
@@ -222,12 +224,12 @@ fn resolve_deployed_at(
     let tx_hash_bytes = hex::decode(tx_hash.strip_prefix("0x").unwrap_or(tx_hash)).ok()?;
 
     let created_at_block = store
-        .get_cell(&tx_hash_bytes, output_index)
+        .get_cell(&tx_hash_bytes, output_index, cells_store)
         .ok()
         .flatten()
         .or_else(|| {
             store
-                .get_consumed_cell(&tx_hash_bytes, output_index)
+                .get_consumed_cell(&tx_hash_bytes, output_index, cells_store)
                 .ok()
                 .flatten()
         })
@@ -407,9 +409,11 @@ fn script_info_to_response(
     // For hash_type="type": code_hash IS the type_script_hash of the deployment cell.
     // For hash_type="data"/"data1"/"data2": use dep_type_hash, then fall back to
     // scanning early blocks via dep_data_hash.
-    let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(info, &state.store);
+    let (code_cell_tx_hash, code_cell_output_index) =
+        resolve_code_cell(info, &state.store, &state.append_only_store);
     let deployed_at = resolve_deployed_at(
         &state.store,
+        &state.append_only_store,
         code_cell_tx_hash.as_deref(),
         code_cell_output_index,
     );
@@ -506,7 +510,7 @@ async fn lookup_scripts(
                 .to_string();
 
             let (code_cell_tx_hash, code_cell_output_index) =
-                resolve_code_cell(&info, &state.store);
+                resolve_code_cell(&info, &state.store, &state.append_only_store);
             let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&info);
 
             result.insert(
@@ -597,7 +601,8 @@ async fn get_code_cell(
             ..Default::default()
         });
 
-    let (tx_hash, output_index) = resolve_code_cell(&script_info, &state.store);
+    let (tx_hash, output_index) =
+        resolve_code_cell(&script_info, &state.store, &state.append_only_store);
 
     ok(CodeCellResponse {
         tx_hash,

@@ -93,6 +93,7 @@ impl CkbadgerStore {
     pub fn get_live_mnft_token_outpoints_by_token_ids(
         &self,
         token_ids: &[Vec<u8>],
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<MnftLiveOutpointMap> {
         let targets: HashSet<Vec<u8>> = token_ids.iter().cloned().collect();
         if targets.is_empty() {
@@ -125,7 +126,10 @@ impl CkbadgerStore {
             }
 
             let (tx_hash, output_index) = keys::decode_outpoint(&key[1..35]);
-            if self.get_cell(&tx_hash, output_index)?.is_none() {
+            if self
+                .get_cell(&tx_hash, output_index, cells_store)?
+                .is_none()
+            {
                 continue;
             }
 
@@ -284,7 +288,7 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = store
-            .get_live_mnft_token_outpoints_by_token_ids(std::slice::from_ref(&token_id))
+            .get_live_mnft_token_outpoints_by_token_ids(std::slice::from_ref(&token_id), &store)
             .unwrap();
         let (tx_hash, output_index) = outpoints.get(&token_id).unwrap();
         assert_eq!(tx_hash, &live_tx);

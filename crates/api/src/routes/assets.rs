@@ -1318,7 +1318,10 @@ async fn get_nft_item_detail(
     let live_outpoint = if entry.is_live {
         let map = state
             .store
-            .get_live_mnft_token_outpoints_by_token_ids(std::slice::from_ref(&nft_id_bytes))
+            .get_live_mnft_token_outpoints_by_token_ids(
+                std::slice::from_ref(&nft_id_bytes),
+                &state.append_only_store,
+            )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (tx_hash, output_index) = map.get(&nft_id_bytes).ok_or_else(|| {
             ApiError::internal(format!(
@@ -1430,7 +1433,7 @@ fn collect_nft_item_lifecycle_actions(
         .collect();
     let consumed_meta = state
         .store
-        .get_consumed_cell_meta_batch(&outpoint_refs)
+        .get_consumed_cell_meta_batch(&outpoint_refs, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     for (tx_hash, output_index) in outpoints {
@@ -1953,7 +1956,7 @@ async fn list_nft_collection_items(
             .collect();
         let live_outpoints = state
             .store
-            .get_live_dotbit_outpoints_by_account_ids(&live_account_ids)
+            .get_live_dotbit_outpoints_by_account_ids(&live_account_ids, &state.append_only_store)
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
         let mut rows = Vec::with_capacity(page_items.len());
@@ -2241,7 +2244,7 @@ async fn list_nft_collection_items(
         .collect();
     let mnft_live_outpoints = state
         .store
-        .get_live_mnft_token_outpoints_by_token_ids(&mnft_live_token_ids)
+        .get_live_mnft_token_outpoints_by_token_ids(&mnft_live_token_ids, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut rows = Vec::with_capacity(page_items.len());
@@ -2557,7 +2560,10 @@ async fn get_dotbit_item_detail(
     let (tx_hash, output_index) = if entry.is_live {
         let outpoint_map = state
             .store
-            .get_live_dotbit_outpoints_by_account_ids(std::slice::from_ref(&nft_id_bytes))
+            .get_live_dotbit_outpoints_by_account_ids(
+                std::slice::from_ref(&nft_id_bytes),
+                &state.append_only_store,
+            )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (tx_hash, output_index) = outpoint_map.get(&nft_id_bytes).ok_or_else(|| {
             ApiError::internal(format!(

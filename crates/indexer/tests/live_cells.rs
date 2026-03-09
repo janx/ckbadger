@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
     std::mem::forget(dir);
     store
 }
@@ -79,7 +79,7 @@ fn test_consume_cell_moves_to_consumed() {
     batch.commit().unwrap();
 
     // Verify it exists in live_cells
-    let live_result = store.get_cell(&tx_hash, 0).unwrap();
+    let live_result = store.get_cell(&tx_hash, 0, &store).unwrap();
     assert!(live_result.is_some(), "cell should be live after insertion");
 
     // Consume: move to consumed_cells and delete from live_cells
@@ -89,14 +89,14 @@ fn test_consume_cell_moves_to_consumed() {
     batch.commit().unwrap();
 
     // Verify live_cells no longer has it
-    let live_after = store.get_cell(&tx_hash, 0).unwrap();
+    let live_after = store.get_cell(&tx_hash, 0, &store).unwrap();
     assert!(
         live_after.is_none(),
         "cell should no longer be in live_cells after consumption"
     );
 
     // Verify consumed_cells has it
-    let consumed = store.get_consumed_cell(&tx_hash, 0).unwrap();
+    let consumed = store.get_consumed_cell(&tx_hash, 0, &store).unwrap();
     assert!(
         consumed.is_some(),
         "cell should be present in consumed_cells"
@@ -125,15 +125,15 @@ fn test_batch_insert_multiple_cells() {
     batch.commit().unwrap();
 
     // Verify all three exist
-    let r1 = store.get_cell(&tx1, 0).unwrap();
+    let r1 = store.get_cell(&tx1, 0, &store).unwrap();
     assert!(r1.is_some());
     assert_eq!(r1.unwrap().capacity, 100_00000000);
 
-    let r2 = store.get_cell(&tx2, 0).unwrap();
+    let r2 = store.get_cell(&tx2, 0, &store).unwrap();
     assert!(r2.is_some());
     assert_eq!(r2.unwrap().capacity, 200_00000000);
 
-    let r3 = store.get_cell(&tx3, 0).unwrap();
+    let r3 = store.get_cell(&tx3, 0, &store).unwrap();
     assert!(r3.is_some());
     assert_eq!(r3.unwrap().capacity, 300_00000000);
 }
@@ -162,7 +162,9 @@ fn test_list_cells_by_lock_prefix_scan() {
     batch.put_cell_by_lock(&lock_hash, 3000, &tx3, 0);
     batch.commit().unwrap();
 
-    let results = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    let results = store
+        .list_cells_by_lock(&lock_hash, 100, None, &store)
+        .unwrap();
     assert_eq!(results.len(), 3, "should find all 3 cells by lock hash");
 
     // Results should be ordered by block_num (ascending from prefix iterator)
@@ -171,7 +173,9 @@ fn test_list_cells_by_lock_prefix_scan() {
     assert_eq!(results[2].2.capacity, 300_00000000);
 
     // Verify limit works
-    let limited = store.list_cells_by_lock(&lock_hash, 2, None).unwrap();
+    let limited = store
+        .list_cells_by_lock(&lock_hash, 2, None, &store)
+        .unwrap();
     assert_eq!(limited.len(), 2, "limit should restrict result count");
 }
 
@@ -207,11 +211,15 @@ fn test_list_cells_by_lock_cursor_pagination() {
     batch.commit().unwrap();
 
     // All 5 cells should be returned without cursor
-    let all = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    let all = store
+        .list_cells_by_lock(&lock_hash, 100, None, &store)
+        .unwrap();
     assert_eq!(all.len(), 5, "should find all 5 cells");
 
     // Paginate with limit=2: page 1
-    let page1 = store.list_cells_by_lock(&lock_hash, 2, None).unwrap();
+    let page1 = store
+        .list_cells_by_lock(&lock_hash, 2, None, &store)
+        .unwrap();
     assert_eq!(page1.len(), 2, "page 1 should have 2 cells");
 
     // Build cursor from last result of page 1
@@ -221,7 +229,7 @@ fn test_list_cells_by_lock_cursor_pagination() {
 
     // Page 2: should continue from after cursor
     let page2 = store
-        .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key))
+        .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key), &store)
         .unwrap();
     assert_eq!(page2.len(), 2, "page 2 should have 2 cells");
 
@@ -230,7 +238,7 @@ fn test_list_cells_by_lock_cursor_pagination() {
     let cursor_key2 =
         keys::encode_cell_index_key(&lock_hash, last_info2.created_at_block, last_tx2, last_idx2);
     let page3 = store
-        .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key2))
+        .list_cells_by_lock(&lock_hash, 2, Some(&cursor_key2), &store)
         .unwrap();
     assert_eq!(page3.len(), 1, "page 3 should have 1 remaining cell");
 
@@ -270,7 +278,9 @@ fn test_list_cells_by_type_prefix_scan() {
     batch.put_cell_by_type(&type_hash, 600, &tx2, 1);
     batch.commit().unwrap();
 
-    let results = store.list_cells_by_type(&type_hash, 100, None).unwrap();
+    let results = store
+        .list_cells_by_type(&type_hash, 100, None, &store)
+        .unwrap();
     assert_eq!(results.len(), 2, "should find both cells by type hash");
 
     assert_eq!(results[0].2.capacity, 150_00000000);
@@ -283,7 +293,9 @@ fn test_list_cells_by_type_prefix_scan() {
     batch.delete_cell_by_type(&type_hash, 500, &tx1, 0);
     batch.commit().unwrap();
 
-    let after_consume = store.list_cells_by_type(&type_hash, 100, None).unwrap();
+    let after_consume = store
+        .list_cells_by_type(&type_hash, 100, None, &store)
+        .unwrap();
     assert_eq!(
         after_consume.len(),
         1,

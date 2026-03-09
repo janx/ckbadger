@@ -1490,7 +1490,7 @@ mod tests {
         batch.commit().unwrap();
 
         // Verify readable via standard get_cell (which encodes the key internally)
-        let cell = store.get_cell(&tx_hash, output_index).unwrap();
+        let cell = store.get_cell(&tx_hash, output_index, &store).unwrap();
         assert!(cell.is_some());
         let cell = cell.unwrap();
         assert_eq!(cell.capacity, 50000);
@@ -1542,8 +1542,14 @@ mod tests {
         batch_b.commit().unwrap();
 
         // Both should be readable and produce identical cell info
-        let cell_a = store.get_cell(&tx_hash_a, output_index).unwrap().unwrap();
-        let cell_b = store.get_cell(&tx_hash_b, output_index).unwrap().unwrap();
+        let cell_a = store
+            .get_cell(&tx_hash_a, output_index, &store)
+            .unwrap()
+            .unwrap();
+        let cell_b = store
+            .get_cell(&tx_hash_b, output_index, &store)
+            .unwrap()
+            .unwrap();
         assert_eq!(cell_a.capacity, cell_b.capacity);
         assert_eq!(cell_a.created_at_block, cell_b.created_at_block);
         assert_eq!(cell_a.lock_script_hash, cell_b.lock_script_hash);

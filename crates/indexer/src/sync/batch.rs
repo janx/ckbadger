@@ -401,7 +401,7 @@ pub(super) fn classify_unresolved_local_probe(
         summary.sampled += 1;
         let outpoint_label = format!("0x{}:{}", short_tx_hash(tx_hash), output_index);
 
-        let live_exists = match store.get_cell(tx_hash, *output_index) {
+        let live_exists = match store.get_cell(tx_hash, *output_index, store) {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => {
@@ -420,7 +420,7 @@ pub(super) fn classify_unresolved_local_probe(
             continue;
         }
 
-        let consumed_exists = match store.get_consumed_cell(tx_hash, *output_index) {
+        let consumed_exists = match store.get_consumed_cell(tx_hash, *output_index, store) {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(_) => {

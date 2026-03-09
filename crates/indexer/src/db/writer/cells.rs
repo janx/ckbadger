@@ -302,7 +302,7 @@ impl BatchWriter {
 
         let mut result = HashMap::with_capacity(outpoints.len());
 
-        let live_cells = self.store.get_cells_batch(outpoints)?;
+        let live_cells = self.store.get_cells_batch(outpoints, &self.store)?;
         for ((tx_hash, output_index), info) in live_cells {
             result.insert(
                 (tx_hash, output_index),
@@ -321,7 +321,10 @@ impl BatchWriter {
             if result.contains_key(&key) {
                 continue;
             }
-            if let Some(info) = self.store.get_consumed_cell_info(tx_hash, *output_index)? {
+            if let Some(info) =
+                self.store
+                    .get_consumed_cell_info(tx_hash, *output_index, &self.store)?
+            {
                 result.insert(
                     key,
                     (
@@ -417,7 +420,7 @@ impl BatchWriter {
             .collect();
 
         if !missing.is_empty() {
-            let consumed = self.store.get_consumed_cells_batch(&missing)?;
+            let consumed = self.store.get_consumed_cells_batch(&missing, &self.store)?;
             for ((tx_hash, output_index), live) in consumed {
                 validate_input_cell_occupied_capacity(
                     &live,
@@ -587,7 +590,7 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let stored = store.get_cell(&tx_hash, 0).unwrap().unwrap();
+        let stored = store.get_cell(&tx_hash, 0, &store).unwrap().unwrap();
         assert_eq!(stored.udt_amount, None);
     }
 
@@ -632,7 +635,10 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let stored = store.get_cell(&tx_hash, output_index).unwrap().unwrap();
+        let stored = store
+            .get_cell(&tx_hash, output_index, &store)
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.udt_amount, Some(7));
     }
 

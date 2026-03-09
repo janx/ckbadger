@@ -446,13 +446,21 @@ async fn search(
         if let Some(outpoint) = parse_outpoint(scoped_query) {
             let live = state
                 .store
-                .get_cell(&outpoint.tx_hash_bytes, outpoint.output_index)
+                .get_cell(
+                    &outpoint.tx_hash_bytes,
+                    outpoint.output_index,
+                    &state.append_only_store,
+                )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
             let consumed = if live.is_none() {
                 state
                     .store
-                    .get_consumed_cell(&outpoint.tx_hash_bytes, outpoint.output_index)
+                    .get_consumed_cell(
+                        &outpoint.tx_hash_bytes,
+                        outpoint.output_index,
+                        &state.append_only_store,
+                    )
                     .map_err(|e| ApiError::internal(e.to_string()))?
             } else {
                 None

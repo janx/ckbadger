@@ -38,29 +38,32 @@ impl CkbadgerStore {
     pub fn get_live_cell_by_outpoint_key(
         &self,
         outpoint_key: &[u8],
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         if self.get_cf(self.cf_live_cells(), outpoint_key)?.is_none() {
             return Ok(None);
         }
-        self.get_cell_by_outpoint_key(outpoint_key)
+        cells_store.get_cell_by_outpoint_key(outpoint_key)
     }
 
     pub fn get_cell(
         &self,
         tx_hash: &[u8],
         output_index: i16,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.get_live_cell_by_outpoint_key(&key)
+        self.get_live_cell_by_outpoint_key(&key, cells_store)
     }
 
     pub fn get_cells_batch(
         &self,
         outpoints: &[(&[u8], i16)],
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<HashMap<(Vec<u8>, i16), LiveCellInfo>> {
         let mut result = HashMap::with_capacity(outpoints.len());
         let live_cf = self.cf_live_cells();
-        let cells_cf = self.cf_cells();
+        let cells_cf = cells_store.cf_cells();
 
         let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
@@ -90,7 +93,7 @@ impl CkbadgerStore {
             }
         }
 
-        let cell_values = self.multi_get_cf(cell_cf_keys);
+        let cell_values = cells_store.multi_get_cf(cell_cf_keys);
         for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             let outpoint_idx = present_indices[batch_idx];
             let outpoint_key = &keys[outpoint_idx];
@@ -128,9 +131,10 @@ impl CkbadgerStore {
         &self,
         tx_hash: &[u8],
         output_index: i16,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         Ok(self
-            .get_consumed_cell_info(tx_hash, output_index)?
+            .get_consumed_cell_info(tx_hash, output_index, cells_store)?
             .map(|c| c.to_live_cell_info()))
     }
 
@@ -138,6 +142,7 @@ impl CkbadgerStore {
         &self,
         tx_hash: &[u8],
         output_index: i16,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Option<ConsumedCellInfo>> {
         let key = keys::encode_outpoint(tx_hash, output_index);
         let Some(value) = self.get_cf(self.cf_consumed_cells(), &key)? else {
@@ -151,7 +156,7 @@ impl CkbadgerStore {
                 output_index
             )
         })?;
-        let cell = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+        let cell = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "missing canonical cell for consumed outpoint: outpoint=0x{}:{}",
                 bytes_to_hex(tx_hash),
@@ -168,6 +173,7 @@ impl CkbadgerStore {
     pub fn get_consumed_cells_batch(
         &self,
         outpoints: &[(&[u8], i16)],
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<HashMap<(Vec<u8>, i16), LiveCellInfo>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
@@ -175,7 +181,7 @@ impl CkbadgerStore {
 
         let mut result = HashMap::with_capacity(outpoints.len());
         let consumed_cf = self.cf_consumed_cells();
-        let cells_cf = self.cf_cells();
+        let cells_cf = cells_store.cf_cells();
 
         let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
@@ -211,7 +217,7 @@ impl CkbadgerStore {
             }
         }
 
-        let cell_values = self.multi_get_cf(cell_cf_keys);
+        let cell_values = cells_store.multi_get_cf(cell_cf_keys);
         for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             let outpoint_idx = present_indices[batch_idx];
             let outpoint_key = &keys[outpoint_idx];
@@ -248,6 +254,7 @@ impl CkbadgerStore {
     pub fn get_consumed_cell_meta_batch(
         &self,
         outpoints: &[(&[u8], i16)],
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<HashMap<(Vec<u8>, i16), ConsumedCellMeta>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
@@ -255,7 +262,7 @@ impl CkbadgerStore {
 
         let mut result = HashMap::with_capacity(outpoints.len());
         let consumed_cf = self.cf_consumed_cells();
-        let cells_cf = self.cf_cells();
+        let cells_cf = cells_store.cf_cells();
 
         let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
@@ -293,7 +300,7 @@ impl CkbadgerStore {
             }
         }
 
-        let cell_values = self.multi_get_cf(cell_cf_keys);
+        let cell_values = cells_store.multi_get_cf(cell_cf_keys);
         for (batch_idx, value_result) in cell_values.into_iter().enumerate() {
             let outpoint_idx = present_indices[batch_idx];
             let outpoint_key = &keys[outpoint_idx];
@@ -334,8 +341,15 @@ impl CkbadgerStore {
         lock_hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_hash_cf(self.cf_cell_by_lock(), lock_hash, limit, after_key)
+        self.list_cells_by_hash_cf(
+            self.cf_cell_by_lock(),
+            lock_hash,
+            limit,
+            after_key,
+            cells_store,
+        )
     }
 
     /// List live cells by type script hash (prefix scan).
@@ -345,8 +359,15 @@ impl CkbadgerStore {
         type_hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_hash_cf(self.cf_cell_by_type(), type_hash, limit, after_key)
+        self.list_cells_by_hash_cf(
+            self.cf_cell_by_type(),
+            type_hash,
+            limit,
+            after_key,
+            cells_store,
+        )
     }
 
     fn list_cells_by_hash_cf(
@@ -355,6 +376,7 @@ impl CkbadgerStore {
         hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
         let mut results = Vec::new();
 
@@ -388,7 +410,7 @@ impl CkbadgerStore {
             // Key: hash(32) + block_num(8) + outpoint(34)
             if key.len() >= 74 {
                 let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
-                if let Some(cell) = self.get_cell(&tx_hash, output_index)? {
+                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
                     results.push((tx_hash, output_index, cell));
                     if results.len() >= limit {
                         break;
@@ -406,8 +428,15 @@ impl CkbadgerStore {
         code_hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_code_hash_cf(self.cf_cell_by_lock_code(), code_hash, limit, after_key)
+        self.list_cells_by_code_hash_cf(
+            self.cf_cell_by_lock_code(),
+            code_hash,
+            limit,
+            after_key,
+            cells_store,
+        )
     }
 
     /// List live cells by type code hash (prefix scan on cell_by_type_code).
@@ -417,8 +446,15 @@ impl CkbadgerStore {
         code_hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
-        self.list_cells_by_code_hash_cf(self.cf_cell_by_type_code(), code_hash, limit, after_key)
+        self.list_cells_by_code_hash_cf(
+            self.cf_cell_by_type_code(),
+            code_hash,
+            limit,
+            after_key,
+            cells_store,
+        )
     }
 
     fn list_cells_by_code_hash_cf(
@@ -427,6 +463,7 @@ impl CkbadgerStore {
         code_hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, LiveCellInfo)>> {
         let mut results = Vec::new();
 
@@ -460,7 +497,7 @@ impl CkbadgerStore {
             // Key: code_hash(32) + block_num(8) + outpoint(34) = 74
             if key.len() >= 74 {
                 let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
-                if let Some(cell) = self.get_cell(&tx_hash, output_index)? {
+                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
                     results.push((tx_hash, output_index, cell));
                     if results.len() >= limit {
                         break;
@@ -486,7 +523,7 @@ impl CkbadgerStore {
     /// Backfill the cell_by_lock_code and cell_by_type_code indexes from live_cells.
     /// Call once after adding the new column families to populate them from existing data.
     /// Returns the number of index entries written.
-    pub fn backfill_code_hash_indexes(&self) -> anyhow::Result<u64> {
+    pub fn backfill_code_hash_indexes(&self, cells_store: &CkbadgerStore) -> anyhow::Result<u64> {
         let mut count = 0u64;
         let mut batch = rocksdb::WriteBatch::default();
         let batch_size = 10_000;
@@ -500,7 +537,7 @@ impl CkbadgerStore {
                 )
             })?;
             if key.len() == keys::OUTPOINT_KEY_SIZE {
-                let Some(info) = self.get_cell_by_outpoint_key(&key)? else {
+                let Some(info) = cells_store.get_cell_by_outpoint_key(&key)? else {
                     continue;
                 };
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
@@ -557,7 +594,11 @@ impl CkbadgerStore {
 
     /// Aggregate cell stats for a token (by type script hash).
     /// Prefix-scans `cell_by_type` and multi-gets each cell's capacity/occupied_capacity.
-    pub fn aggregate_token_cell_stats(&self, type_hash: &[u8]) -> anyhow::Result<TokenCellStats> {
+    pub fn aggregate_token_cell_stats(
+        &self,
+        type_hash: &[u8],
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<TokenCellStats> {
         let mut stats = TokenCellStats {
             cells_count: 0,
             total_capacity: 0,
@@ -590,7 +631,7 @@ impl CkbadgerStore {
                 outpoints.push((tx_hash, output_index));
 
                 if outpoints.len() >= batch_size {
-                    Self::accumulate_cell_stats(self, &outpoints, &mut stats)?;
+                    Self::accumulate_cell_stats(self, &outpoints, &mut stats, cells_store)?;
                     outpoints.clear();
                 }
             }
@@ -598,7 +639,7 @@ impl CkbadgerStore {
 
         // Flush remaining
         if !outpoints.is_empty() {
-            Self::accumulate_cell_stats(self, &outpoints, &mut stats)?;
+            Self::accumulate_cell_stats(self, &outpoints, &mut stats, cells_store)?;
         }
 
         Ok(stats)
@@ -608,9 +649,10 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(Vec<u8>, i16)],
         stats: &mut TokenCellStats,
+        cells_store: &CkbadgerStore,
     ) -> anyhow::Result<()> {
         let refs: Vec<(&[u8], i16)> = outpoints.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
-        let cells = self.get_cells_batch(&refs)?;
+        let cells = self.get_cells_batch(&refs, cells_store)?;
         for cell in cells.values() {
             stats.cells_count += 1;
             stats.total_capacity += cell.capacity as i128;
@@ -680,7 +722,9 @@ mod tests {
     fn test_aggregate_token_cell_stats_empty() {
         let (_dir, store) = test_store();
         let type_hash = [0x01u8; 32];
-        let stats = store.aggregate_token_cell_stats(&type_hash).unwrap();
+        let stats = store
+            .aggregate_token_cell_stats(&type_hash, &store)
+            .unwrap();
         assert_eq!(stats.cells_count, 0);
         assert_eq!(stats.total_capacity, 0);
         assert_eq!(stats.total_occupied_capacity, 0);
@@ -694,7 +738,9 @@ mod tests {
         let cell = make_cell(200_00000000, 61_00000000, &type_hash);
         insert_cell(&store, &tx_hash, 0, &type_hash, &cell);
 
-        let stats = store.aggregate_token_cell_stats(&type_hash).unwrap();
+        let stats = store
+            .aggregate_token_cell_stats(&type_hash, &store)
+            .unwrap();
         assert_eq!(stats.cells_count, 1);
         assert_eq!(stats.total_capacity, 200_00000000);
         assert_eq!(stats.total_occupied_capacity, 61_00000000);
@@ -717,7 +763,9 @@ mod tests {
         let cell3 = make_cell(150_00000000, 61_00000000, &type_hash);
         insert_cell(&store, &tx3, 1, &type_hash, &cell3);
 
-        let stats = store.aggregate_token_cell_stats(&type_hash).unwrap();
+        let stats = store
+            .aggregate_token_cell_stats(&type_hash, &store)
+            .unwrap();
         assert_eq!(stats.cells_count, 3);
         assert_eq!(stats.total_capacity, 650_00000000);
         assert_eq!(stats.total_occupied_capacity, 202_00000000);
@@ -737,11 +785,11 @@ mod tests {
         let cell2 = make_cell(500_00000000, 100_00000000, &type_b);
         insert_cell(&store, &tx2, 0, &type_b, &cell2);
 
-        let stats_a = store.aggregate_token_cell_stats(&type_a).unwrap();
+        let stats_a = store.aggregate_token_cell_stats(&type_a, &store).unwrap();
         assert_eq!(stats_a.cells_count, 1);
         assert_eq!(stats_a.total_capacity, 200_00000000);
 
-        let stats_b = store.aggregate_token_cell_stats(&type_b).unwrap();
+        let stats_b = store.aggregate_token_cell_stats(&type_b, &store).unwrap();
         assert_eq!(stats_b.cells_count, 1);
         assert_eq!(stats_b.total_capacity, 500_00000000);
     }
@@ -766,7 +814,10 @@ mod tests {
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
-        let info = store.get_consumed_cell_info(&tx_hash, 0).unwrap().unwrap();
+        let info = store
+            .get_consumed_cell_info(&tx_hash, 0, &store)
+            .unwrap()
+            .unwrap();
         assert_eq!(info.consumed_at_block, 12345);
         assert_eq!(info.consumed_by_tx, Some(consumed_by_tx.to_vec()));
         assert_eq!(info.cell.capacity, consumed_cell.capacity);
@@ -782,7 +833,7 @@ mod tests {
             .unwrap();
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
-        let err = store.get_cells_batch(&refs).unwrap_err();
+        let err = store.get_cells_batch(&refs, &store).unwrap_err();
         assert!(err
             .to_string()
             .contains("missing canonical cell for live marker in get_cells_batch"));
@@ -802,7 +853,7 @@ mod tests {
             .unwrap();
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
-        let err = store.get_consumed_cells_batch(&refs).unwrap_err();
+        let err = store.get_consumed_cells_batch(&refs, &store).unwrap_err();
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta"));
@@ -824,7 +875,7 @@ mod tests {
             .unwrap();
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
-        let err = store.get_consumed_cells_batch(&refs).unwrap_err();
+        let err = store.get_consumed_cells_batch(&refs, &store).unwrap_err();
         assert!(err
             .to_string()
             .contains("missing canonical cell for consumed outpoint in get_consumed_cells_batch"));
@@ -851,7 +902,7 @@ mod tests {
         batch.commit().unwrap();
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
-        let metas = store.get_consumed_cell_meta_batch(&refs).unwrap();
+        let metas = store.get_consumed_cell_meta_batch(&refs, &store).unwrap();
         let meta = metas.get(&(tx_hash.to_vec(), 0)).unwrap();
         assert_eq!(meta.consumed_at_block, 12345);
         assert_eq!(meta.consumed_by_tx, Some(consumed_by_tx.to_vec()));
@@ -871,7 +922,9 @@ mod tests {
             .unwrap();
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
-        let err = store.get_consumed_cell_meta_batch(&refs).unwrap_err();
+        let err = store
+            .get_consumed_cell_meta_batch(&refs, &store)
+            .unwrap_err();
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta in get_consumed_cell_meta_batch"));
@@ -897,7 +950,9 @@ mod tests {
             .put_cf(store.cf_consumed_cells(), &outpoint_key, &legacy_payload)
             .unwrap();
 
-        let err = store.get_consumed_cell_info(&tx_hash, 0).unwrap_err();
+        let err = store
+            .get_consumed_cell_info(&tx_hash, 0, &store)
+            .unwrap_err();
         assert!(err
             .to_string()
             .contains("failed to decode consumed cell meta"));

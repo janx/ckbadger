@@ -1747,7 +1747,12 @@ async fn list_live_cells(
                 // Filter by lock first (usually more selective), then post-filter by type
                 let all = state
                     .store
-                    .list_cells_by_lock(lock_bytes, limit * 10 + 1, after_key_ref)
+                    .list_cells_by_lock(
+                        lock_bytes,
+                        limit * 10 + 1,
+                        after_key_ref,
+                        &state.append_only_store,
+                    )
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 all.into_iter()
                     .filter(|(_, _, info)| {
@@ -1764,7 +1769,12 @@ async fn list_live_cells(
                 if let Some(ref tch) = _type_code_hash_bytes {
                     let all = state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit * 10 + 1, after_key_ref)
+                        .list_cells_by_lock(
+                            lock_bytes,
+                            limit * 10 + 1,
+                            after_key_ref,
+                            &state.append_only_store,
+                        )
                         .map_err(|e| ApiError::internal(e.to_string()))?;
                     all.into_iter()
                         .filter(|(_, _, info)| {
@@ -1778,13 +1788,23 @@ async fn list_live_cells(
                 } else {
                     state
                         .store
-                        .list_cells_by_lock(lock_bytes, limit + 1, after_key_ref)
+                        .list_cells_by_lock(
+                            lock_bytes,
+                            limit + 1,
+                            after_key_ref,
+                            &state.append_only_store,
+                        )
                         .map_err(|e| ApiError::internal(e.to_string()))?
                 }
             }
             (None, Some(type_bytes)) => state
                 .store
-                .list_cells_by_type(type_bytes, limit + 1, after_key_ref)
+                .list_cells_by_type(
+                    type_bytes,
+                    limit + 1,
+                    after_key_ref,
+                    &state.append_only_store,
+                )
                 .map_err(|e| ApiError::internal(e.to_string()))?,
             (None, None) => {
                 // No filter: not practical for RocksDB full scan, return empty.
@@ -1905,21 +1925,41 @@ async fn list_cells_by_script(
     let results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind {
         "lock" => state
             .store
-            .list_cells_by_lock_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
+            .list_cells_by_lock_code_hash(
+                &resolved_code_hash,
+                fetch_limit,
+                after_key_ref,
+                &state.append_only_store,
+            )
             .map_err(|e| ApiError::internal(e.to_string()))?,
         "type" => state
             .store
-            .list_cells_by_type_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
+            .list_cells_by_type_code_hash(
+                &resolved_code_hash,
+                fetch_limit,
+                after_key_ref,
+                &state.append_only_store,
+            )
             .map_err(|e| ApiError::internal(e.to_string()))?,
         _ => {
             // "both": merge results from lock and type indexes
             let mut merged = state
                 .store
-                .list_cells_by_lock_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
+                .list_cells_by_lock_code_hash(
+                    &resolved_code_hash,
+                    fetch_limit,
+                    after_key_ref,
+                    &state.append_only_store,
+                )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             let type_results = state
                 .store
-                .list_cells_by_type_code_hash(&resolved_code_hash, fetch_limit, after_key_ref)
+                .list_cells_by_type_code_hash(
+                    &resolved_code_hash,
+                    fetch_limit,
+                    after_key_ref,
+                    &state.append_only_store,
+                )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
             for r in type_results {
                 if merged.len() >= fetch_limit {
@@ -2002,7 +2042,7 @@ async fn get_address(
     // Try to find a cell for this lock hash to get the lock script details
     let cells_for_script = state
         .store
-        .list_cells_by_lock(&lock_hash, 1, None)
+        .list_cells_by_lock(&lock_hash, 1, None, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (lock_script, lock_script_info, address) =
@@ -2247,14 +2287,14 @@ async fn get_cell(
     // Try live cells first
     let live_cell = state
         .store
-        .get_cell(&hash_bytes, output_idx)
+        .get_cell(&hash_bytes, output_idx, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Try consumed cells if not found in live
     let consumed_cell = if live_cell.is_none() {
         state
             .store
-            .get_consumed_cell_info(&hash_bytes, output_idx)
+            .get_consumed_cell_info(&hash_bytes, output_idx, &state.append_only_store)
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         None
@@ -2554,6 +2594,7 @@ fn list_canonical_addr_txs_page(
 fn load_cells_preferring_consumed(
     store: &CkbadgerStore,
     outpoints: &[(&[u8], i16)],
+    cells_store: &CkbadgerStore,
 ) -> Result<
     HashMap<(Vec<u8>, i16), ckbadger_store::LiveCellInfo>,
     (axum::http::StatusCode, axum::Json<ApiError>),
@@ -2563,10 +2604,10 @@ fn load_cells_preferring_consumed(
     }
 
     let mut cells = store
-        .get_cells_batch(outpoints)
+        .get_cells_batch(outpoints, cells_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let consumed_cells = store
-        .get_consumed_cells_batch(outpoints)
+        .get_consumed_cells_batch(outpoints, cells_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     for (outpoint, cell) in consumed_cells {
         cells.insert(outpoint, cell);
@@ -2651,7 +2692,7 @@ async fn get_address_transactions(
             let output_outpoints: Vec<(&[u8], i16)> = (0..outputs_count)
                 .map(|output_index| (tx_hash.as_slice(), output_index))
                 .collect();
-            let output_cells = load_cells_preferring_consumed(state.store.as_ref(), &output_outpoints)?;
+            let output_cells = load_cells_preferring_consumed(state.store.as_ref(), &output_outpoints, state.append_only_store.as_ref())?;
             for cell in output_cells.values() {
                 if let Some(ref tch) = cell.type_code_hash {
                     script_code_hashes.insert(tch.clone());
@@ -2694,7 +2735,7 @@ async fn get_address_transactions(
                                 .map(|(prev_hash, prev_index)| (prev_hash.as_slice(), *prev_index))
                                 .collect();
                             let input_cells =
-                                load_cells_preferring_consumed(state.store.as_ref(), &input_refs)?;
+                                load_cells_preferring_consumed(state.store.as_ref(), &input_refs, state.append_only_store.as_ref())?;
 
                             for (prev_hash, prev_index) in input_outpoints {
                                 // Check if this input is a DAO withdrawal request
@@ -3688,7 +3729,7 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints: Vec<(&[u8], i16)> = vec![(&tx_live, 0), (&tx_consumed, 0)];
-        let cells = load_cells_preferring_consumed(&store, &outpoints).unwrap();
+        let cells = load_cells_preferring_consumed(&store, &outpoints, &store).unwrap();
         assert_eq!(cells.len(), 2);
         assert_eq!(
             cells.get(&(tx_live.to_vec(), 0)).map(|c| c.capacity),

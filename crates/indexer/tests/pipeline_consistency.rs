@@ -32,7 +32,7 @@ fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
 
 fn setup_store() -> (Arc<CkbadgerStore>, BatchWriter) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
     let writer = BatchWriter::new(store.clone());
     // Leak the tempdir so it doesn't get cleaned up while store is open
     std::mem::forget(dir);
@@ -625,12 +625,12 @@ fn test_skip_cell_indices_omits_index_entries() {
     insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], true);
 
     // Live cell itself should exist
-    let live = store.get_cell(&tx_hash, 0).unwrap();
+    let live = store.get_cell(&tx_hash, 0, &store).unwrap();
     assert!(live.is_some(), "cell should be in live_cells");
 
     // But index entries should NOT exist
     let by_lock = store
-        .list_cells_by_lock(&cell.lock_script_hash, 100, None)
+        .list_cells_by_lock(&cell.lock_script_hash, 100, None, &store)
         .unwrap();
     assert!(
         by_lock.is_empty(),
@@ -638,7 +638,7 @@ fn test_skip_cell_indices_omits_index_entries() {
     );
 
     let by_type = store
-        .list_cells_by_type(cell.type_script_hash.as_ref().unwrap(), 100, None)
+        .list_cells_by_type(cell.type_script_hash.as_ref().unwrap(), 100, None, &store)
         .unwrap();
     assert!(
         by_type.is_empty(),
@@ -646,7 +646,7 @@ fn test_skip_cell_indices_omits_index_entries() {
     );
 
     let by_lock_code = store
-        .list_cells_by_lock_code_hash(&cell.lock_code_hash, 100, None)
+        .list_cells_by_lock_code_hash(&cell.lock_code_hash, 100, None, &store)
         .unwrap();
     assert!(
         by_lock_code.is_empty(),
@@ -654,7 +654,7 @@ fn test_skip_cell_indices_omits_index_entries() {
     );
 
     let by_type_code = store
-        .list_cells_by_type_code_hash(cell.type_code_hash.as_ref().unwrap(), 100, None)
+        .list_cells_by_type_code_hash(cell.type_code_hash.as_ref().unwrap(), 100, None, &store)
         .unwrap();
     assert!(
         by_type_code.is_empty(),

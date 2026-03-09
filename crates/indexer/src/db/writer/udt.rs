@@ -164,7 +164,7 @@ impl BatchWriter {
             // UDT transfer inputs must come from pre-batch live state.
             // Do not fall back to consumed_cells here: historical consumed entries
             // can reintroduce already-spent cells and produce false negative deltas.
-            let cell_info = self.store.get_cell(tx_hash, output_index)?;
+            let cell_info = self.store.get_cell(tx_hash, output_index, &self.store)?;
 
             if let Some(info) = cell_info {
                 // Only include cells that have a type script hash (UDT cells always have one).

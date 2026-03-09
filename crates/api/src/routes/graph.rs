@@ -187,13 +187,13 @@ async fn get_cell_graph(
     let output_idx = output_index as i16;
     let live_cell = state
         .store
-        .get_cell(&hash_bytes, output_idx)
+        .get_cell(&hash_bytes, output_idx, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let consumed_cell = if live_cell.is_none() {
         state
             .store
-            .get_consumed_cell_info(&hash_bytes, output_idx)
+            .get_consumed_cell_info(&hash_bytes, output_idx, &state.append_only_store)
             .map_err(|e| ApiError::internal(e.to_string()))?
     } else {
         None
@@ -254,7 +254,7 @@ async fn get_cell_graph(
                     inputs.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
                 let cell_map = state
                     .store
-                    .get_cells_batch(&outpoints)
+                    .get_cells_batch(&outpoints, &state.append_only_store)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in &inputs {
@@ -267,7 +267,11 @@ async fn get_cell_graph(
                             // Try consumed cells
                             state
                                 .store
-                                .get_consumed_cell(prev_tx_hash, *prev_idx)
+                                .get_consumed_cell(
+                                    prev_tx_hash,
+                                    *prev_idx,
+                                    &state.append_only_store,
+                                )
                                 .ok()
                                 .flatten()
                                 .map(|c| format!("{} CKB", parse_capacity(&c.capacity.to_string())))
@@ -356,11 +360,11 @@ async fn get_tx_graph(
 
                 let live_map = state
                     .store
-                    .get_cells_batch(&outpoints)
+                    .get_cells_batch(&outpoints, &state.append_only_store)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
                 let consumed_map = state
                     .store
-                    .get_consumed_cells_batch(&outpoints)
+                    .get_consumed_cells_batch(&outpoints, &state.append_only_store)
                     .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 for (prev_tx_hash, prev_idx) in inputs {
@@ -405,7 +409,7 @@ async fn get_tx_graph(
             // Check if cell is live or dead
             let is_live = state
                 .store
-                .get_cell(&hash_bytes, output_index)
+                .get_cell(&hash_bytes, output_index, &state.append_only_store)
                 .ok()
                 .flatten()
                 .is_some();

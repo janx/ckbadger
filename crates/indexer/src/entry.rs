@@ -103,7 +103,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     // One-time backfill: populate code_hash indexes if they are empty
     if !store.code_hash_indexes_populated() {
         info!("Code hash indexes empty -- running one-time backfill from live_cells...");
-        let count = store.backfill_code_hash_indexes()?;
+        let count = store.backfill_code_hash_indexes(&append_only_store)?;
         info!("Code hash index backfill complete: {} cells indexed", count);
     }
 

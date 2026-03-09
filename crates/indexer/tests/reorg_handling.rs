@@ -101,7 +101,7 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
 
 /// Write the derived CF records (addr_balance + script_info) that forward sync
 /// would have produced. Rollback's inline delta code reads these CFs, so they
-/// must exist before `rollback_to_block_with_tx_index_store` is called.
+/// must exist before `rollback_to_block_with_append_only_store` is called.
 fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i64) {
     let lock_code_hash = vec![0xAA; 32]; // matches make_cell
     let cap_per_cell: i128 = 10_000_000_000; // matches make_cell
@@ -157,7 +157,7 @@ fn test_rollback_removes_blocks() {
 
     // Rollback to block 5: blocks 6-10 should be removed
     let result: RollbackResult = store
-        .rollback_to_block_with_tx_index_store(5, Some(append_store.as_ref()))
+        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
         .unwrap();
     assert_eq!(result.blocks_removed, 5, "should remove blocks 6-10");
 
@@ -199,7 +199,7 @@ fn test_rollback_removes_transactions() {
 
     // Rollback to block 3
     let result = store
-        .rollback_to_block_with_tx_index_store(3, Some(append_store.as_ref()))
+        .rollback_to_block_with_append_only_store(3, Some(append_store.as_ref()))
         .unwrap();
     // Blocks 4, 5, 6 removed => 3 blocks, each with 2 txs => 6 txs removed
     assert_eq!(result.blocks_removed, 3);
@@ -225,7 +225,9 @@ fn test_rollback_removes_cells_and_indexes() {
     }
 
     // Verify cells exist via lock index (4 blocks, 1 cell each)
-    let cells_before = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    let cells_before = store
+        .list_cells_by_lock(&lock_hash, 100, None, &store)
+        .unwrap();
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
     // Populate derived CFs so inline delta code finds the records it needs.
@@ -233,13 +235,15 @@ fn test_rollback_removes_cells_and_indexes() {
 
     // Rollback to block 2: blocks 3-4 removed
     let result = store
-        .rollback_to_block_with_tx_index_store(2, Some(append_store.as_ref()))
+        .rollback_to_block_with_append_only_store(2, Some(append_store.as_ref()))
         .unwrap();
     assert_eq!(result.blocks_removed, 2);
     assert_eq!(result.cells_removed, 2, "cells from blocks 3-4 removed");
 
     // Cells from blocks 1-2 should survive via lock index
-    let cells_after = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
+    let cells_after = store
+        .list_cells_by_lock(&lock_hash, 100, None, &store)
+        .unwrap();
     assert_eq!(
         cells_after.len(),
         2,
@@ -262,7 +266,7 @@ fn test_rollback_result_counts() {
 
     // Rollback to block 5: remove blocks 6, 7, 8
     let result = store
-        .rollback_to_block_with_tx_index_store(5, Some(append_store.as_ref()))
+        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
         .unwrap();
 
     assert_eq!(result.blocks_removed, 3, "3 blocks removed (6, 7, 8)");
@@ -364,7 +368,7 @@ fn test_rollback_preserves_activities_history() {
     batch.commit().unwrap();
 
     domain
-        .rollback_to_block_with_tx_index_store(300, Some(&append))
+        .rollback_to_block_with_append_only_store(300, Some(&append))
         .unwrap();
     domain.rollback_via_undo_log(&append, 300).unwrap();
 
@@ -502,7 +506,7 @@ fn test_rollback_updates_derived_cfs_inline() {
     // 4. Rollback to block 2 — removes cells from blocks 3 and 4:
     //    2 regular cells + 2 UDT cells removed.
     let result = store
-        .rollback_to_block_with_tx_index_store(2, Some(append_store.as_ref()))
+        .rollback_to_block_with_append_only_store(2, Some(append_store.as_ref()))
         .unwrap();
     assert_eq!(result.blocks_removed, 2, "blocks 3 and 4 removed");
     // 2 regular cells + 2 UDT cells = 4 cells removed

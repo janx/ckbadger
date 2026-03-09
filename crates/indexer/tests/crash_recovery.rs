@@ -140,7 +140,7 @@ fn test_rollback_restores_consistency() {
 
     // Rollback to block 5 to restore consistency
     let result: RollbackResult = store
-        .rollback_to_block_with_tx_index_store(5, Some(append_store.as_ref()))
+        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
         .unwrap();
     assert_eq!(
         result.blocks_removed, 1,

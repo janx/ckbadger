@@ -1552,6 +1552,7 @@ const LIVE_CELL_SCAN_BATCH_SIZE: usize = 2_048;
 
 fn visit_live_cells_in_batches<F>(
     store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
     mut visit: F,
 ) -> Result<(), String>
 where
@@ -1569,7 +1570,7 @@ where
             .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
             .collect();
         let cells = store
-            .get_cells_batch(&outpoints)
+            .get_cells_batch(&outpoints, cells_store)
             .map_err(|e| e.to_string())?;
 
         for cell in cells.values() {
@@ -1637,7 +1638,7 @@ async fn get_cell_age_vs_occupied_capacity_chart(
     let mut d30_180d: i128 = 0;
     let mut gt_180d: i128 = 0;
 
-    visit_live_cells_in_batches(state.store.as_ref(), |cell| {
+    visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
         let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
             return Ok(());
         };
@@ -1818,7 +1819,7 @@ async fn get_cell_size_distribution_chart(
     let mut bucket_counts = vec![0_i128; bucket_labels.len()];
     let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
 
-    visit_live_cells_in_batches(state.store.as_ref(), |cell| {
+    visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
         let occupied = cell.occupied_capacity as i128;
         if occupied < 0 {
             return Err(format!(
@@ -3628,7 +3629,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut seen_blocks = Vec::new();
-        visit_live_cells_in_batches(&store, |cell| {
+        visit_live_cells_in_batches(&store, &store, |cell| {
             seen_blocks.push(cell.created_at_block);
             Ok(())
         })

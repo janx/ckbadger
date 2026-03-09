@@ -523,21 +523,21 @@ impl CkbadgerStore {
     ///
     /// This convenience method is only valid on unified/test stores that also
     /// expose append-only history CFs. Split-store callers must use
-    /// `rollback_to_block_with_tx_index_store` and pass the append-only store.
+    /// `rollback_to_block_with_append_only_store` and pass the append-only store.
     pub fn rollback_to_block(&self, rollback_to: i64) -> anyhow::Result<RollbackResult> {
         if !self.has_cf(CF_ADDR_TXS) || !self.has_cf(CF_OBJECT_COLLECTION_ACTIVITIES) {
             anyhow::bail!(
-                "rollback_to_block requires tx_index_store when store lacks append-only history CFs; \
-                 use rollback_to_block_with_tx_index_store(..., append_only_store)"
+                "rollback_to_block requires append_only_store when store lacks append-only history CFs; \
+                 use rollback_to_block_with_append_only_store(..., append_only_store)"
             );
         }
-        self.rollback_to_block_with_tx_index_store(rollback_to, None)
+        self.rollback_to_block_with_append_only_store(rollback_to, None)
     }
 
-    pub fn rollback_to_block_with_tx_index_store(
+    pub fn rollback_to_block_with_append_only_store(
         &self,
         rollback_to: i64,
-        tx_index_store: Option<&CkbadgerStore>,
+        append_only_store: Option<&CkbadgerStore>,
     ) -> anyhow::Result<RollbackResult> {
         if rollback_to < -1 {
             anyhow::bail!(
@@ -545,6 +545,7 @@ impl CkbadgerStore {
                 rollback_to
             );
         }
+        let cells_store = append_only_store.unwrap_or(self);
         // Persist a rollback marker so startup can force cleanup if interrupted.
         self.set_rollback_cleanup_in_progress(true)?;
         let mut batch = WriteBatch::default();
@@ -875,7 +876,11 @@ impl CkbadgerStore {
                         );
                     }
                     let outpoint_key = keys::encode_outpoint(&input.tx_hash, input.output_index);
-                    match self.get_consumed_cell_info(&input.tx_hash, input.output_index)? {
+                    match self.get_consumed_cell_info(
+                        &input.tx_hash,
+                        input.output_index,
+                        cells_store,
+                    )? {
                         Some(consumed) => {
                             if consumed.consumed_at_block <= rollback_to {
                                 anyhow::bail!(
@@ -1648,7 +1653,7 @@ impl CkbadgerStore {
             })?;
         }
 
-        let activity_store = tx_index_store.unwrap_or(self);
+        let activity_store = append_only_store.unwrap_or(self);
         let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
         let iter = activity_store.iterator_cf(
             activity_store.cf_object_collection_activities(),
@@ -2042,7 +2047,7 @@ mod tests {
         let err = store.rollback_to_block(0).unwrap_err();
         assert!(err
             .to_string()
-            .contains("rollback_to_block requires tx_index_store"));
+            .contains("rollback_to_block requires append_only_store"));
     }
 
     #[test]
@@ -2152,7 +2157,7 @@ mod tests {
         append_batch.commit().unwrap();
 
         domain
-            .rollback_to_block_with_tx_index_store(0, Some(&append))
+            .rollback_to_block_with_append_only_store(0, Some(&append))
             .unwrap();
 
         let rebuilt = domain
@@ -2226,12 +2231,15 @@ mod tests {
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
-        assert!(store.get_cell(&tx_hash, 0).unwrap().is_none());
-        assert!(store.get_consumed_cell(&tx_hash, 0).unwrap().is_some());
+        assert!(store.get_cell(&tx_hash, 0, &store).unwrap().is_none());
+        assert!(store
+            .get_consumed_cell(&tx_hash, 0, &store)
+            .unwrap()
+            .is_some());
 
         store.rollback_to_block(1).unwrap();
 
-        assert!(store.get_cell(&tx_hash, 0).unwrap().is_some());
+        assert!(store.get_cell(&tx_hash, 0, &store).unwrap().is_some());
 
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
         let consumed_raw = store
@@ -2350,15 +2358,21 @@ mod tests {
         );
         batch.commit().unwrap();
 
-        assert!(store.get_cell(&input_tx, 0).unwrap().is_none());
-        assert!(store.get_cell(&consuming_tx, 0).unwrap().is_some());
-        assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_some());
+        assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
+        assert!(store.get_cell(&consuming_tx, 0, &store).unwrap().is_some());
+        assert!(store
+            .get_consumed_cell(&input_tx, 0, &store)
+            .unwrap()
+            .is_some());
 
         store.rollback_to_block(1).unwrap();
 
-        assert!(store.get_cell(&input_tx, 0).unwrap().is_some());
-        assert!(store.get_cell(&consuming_tx, 0).unwrap().is_none());
-        assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_none());
+        assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_some());
+        assert!(store.get_cell(&consuming_tx, 0, &store).unwrap().is_none());
+        assert!(store
+            .get_consumed_cell(&input_tx, 0, &store)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -2500,17 +2514,35 @@ mod tests {
         );
         batch.commit().unwrap();
 
-        assert!(store.get_cell(&input_tx, 0).unwrap().is_none());
-        assert!(store.get_cell(&consuming_tx_a, 0).unwrap().is_some());
-        assert!(store.get_cell(&consuming_tx_b, 0).unwrap().is_some());
-        assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_some());
+        assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
+        assert!(store
+            .get_cell(&consuming_tx_a, 0, &store)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_cell(&consuming_tx_b, 0, &store)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .get_consumed_cell(&input_tx, 0, &store)
+            .unwrap()
+            .is_some());
 
         store.rollback_to_block(1).unwrap();
 
-        assert!(store.get_cell(&input_tx, 0).unwrap().is_some());
-        assert!(store.get_consumed_cell(&input_tx, 0).unwrap().is_none());
-        assert!(store.get_cell(&consuming_tx_a, 0).unwrap().is_none());
-        assert!(store.get_cell(&consuming_tx_b, 0).unwrap().is_none());
+        assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_some());
+        assert!(store
+            .get_consumed_cell(&input_tx, 0, &store)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cell(&consuming_tx_a, 0, &store)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_cell(&consuming_tx_b, 0, &store)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -2721,7 +2753,7 @@ mod tests {
 
         store.rollback_to_block(1).unwrap();
 
-        assert!(store.get_cell(&cellbase_tx, 0).unwrap().is_none());
+        assert!(store.get_cell(&cellbase_tx, 0, &store).unwrap().is_none());
         assert!(store.get_tx_index(2, 0).unwrap().is_none());
         assert_eq!(store.get_tx_location(&cellbase_tx).unwrap(), None);
     }
@@ -2844,11 +2876,14 @@ mod tests {
 
         store.rollback_to_block(1).unwrap();
 
-        assert!(store.get_cell(&keep_tx, 0).unwrap().is_some());
-        assert!(store.get_cell(&drop_live_tx, 0).unwrap().is_none());
-        assert!(store.get_cell(&drop_consumed_tx, 0).unwrap().is_none());
+        assert!(store.get_cell(&keep_tx, 0, &store).unwrap().is_some());
+        assert!(store.get_cell(&drop_live_tx, 0, &store).unwrap().is_none());
         assert!(store
-            .get_consumed_cell(&drop_consumed_tx, 0)
+            .get_cell(&drop_consumed_tx, 0, &store)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_consumed_cell(&drop_consumed_tx, 0, &store)
             .unwrap()
             .is_none());
     }
