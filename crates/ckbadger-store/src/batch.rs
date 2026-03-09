@@ -229,18 +229,53 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Live cells ----
 
+    /// Insert cell payload + live marker in one batch. Only valid for TestUnified stores
+    /// (domain + append-only CFs coexist). Production code should use separate batches:
+    /// `put_cell_payload` on append-only batch + `put_live_cell_marker` on domain batch.
     pub fn put_cell(&mut self, tx_hash: &[u8], output_index: i16, info: &LiveCellInfo) {
         let key = keys::encode_outpoint(tx_hash, output_index);
         self.put_cell_raw_key(&key, info);
     }
 
-    /// Insert a cell using pre-encoded outpoint key.
-    /// Writes to CF_CELLS (full data) and CF_LIVE_CELLS (empty marker).
+    /// Insert cell payload + live marker using pre-encoded outpoint key. Only valid for
+    /// TestUnified stores (domain + append-only CFs coexist). Production code should use
+    /// separate batches: `put_cell_payload` on append-only batch +
+    /// `put_live_cell_marker` on domain batch.
     pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
         let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
         self.put_cf(self.store.cf_cells(), raw_key, &value);
         self.put_cf(self.store.cf_live_cells(), raw_key, []);
+    }
+
+    // ---- Split cell methods for cross-store writes ----
+
+    /// Write cell payload to CF_CELLS. Call on append-only store batch.
+    pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
+        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        self.put_cf(self.store.cf_cells(), raw_key, &value);
+    }
+
+    /// Write cell payload using tx_hash + output_index. Call on append-only store batch.
+    pub fn put_cell_payload_by_outpoint(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        info: &LiveCellInfo,
+    ) {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        self.put_cell_payload(&key, info);
+    }
+
+    /// Write live cell marker to CF_LIVE_CELLS. Call on domain store batch.
+    pub fn put_live_cell_marker(&mut self, raw_key: &[u8]) {
+        self.put_cf(self.store.cf_live_cells(), raw_key, []);
+    }
+
+    /// Write live cell marker using tx_hash + output_index. Call on domain store batch.
+    pub fn put_live_cell_marker_by_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        self.put_live_cell_marker(&key);
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
@@ -253,6 +288,9 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_live_cells(), raw_key);
     }
 
+    /// Write consumed cell (payload + metadata) in one batch. Only valid for TestUnified
+    /// stores (domain + append-only CFs coexist). Production code should use separate batches:
+    /// `put_cell_payload` on append-only batch + `put_consumed_cell_meta` on domain batch.
     pub fn put_consumed_cell(
         &mut self,
         tx_hash: &[u8],
@@ -263,6 +301,10 @@ impl<'a> StoreBatch<'a> {
         self.put_consumed_cell_with_consumer(tx_hash, output_index, info, consumed_at_block, None);
     }
 
+    /// Write consumed cell with consumer tx (payload + metadata) in one batch. Only valid for
+    /// TestUnified stores (domain + append-only CFs coexist). Production code should use
+    /// separate batches: `put_cell_payload` on append-only batch +
+    /// `put_consumed_cell_meta` on domain batch.
     pub fn put_consumed_cell_with_consumer(
         &mut self,
         tx_hash: &[u8],
@@ -275,8 +317,9 @@ impl<'a> StoreBatch<'a> {
         self.put_consumed_cell_with_consumer_raw_key(&key, info, consumed_at_block, consumed_by_tx);
     }
 
-    /// Mark a cell as consumed using pre-encoded outpoint key.
-    /// Writes canonical payload to CF_CELLS and consumption metadata to CF_CONSUMED_CELLS.
+    /// Mark a cell as consumed using pre-encoded outpoint key. Only valid for TestUnified
+    /// stores (domain + append-only CFs coexist). Production code should use separate batches:
+    /// `put_cell_payload` on append-only batch + `put_consumed_cell_meta` on domain batch.
     pub fn put_consumed_cell_with_consumer_raw_key(
         &mut self,
         raw_key: &[u8],
@@ -287,6 +330,36 @@ impl<'a> StoreBatch<'a> {
         // Ensure canonical payload exists even when callers only write consumed entries.
         let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
         self.put_cf(self.store.cf_cells(), raw_key, &cell_value);
+        let consumed = ConsumedCellMeta {
+            consumed_at_block,
+            consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
+        };
+        let value = bincode::serialize(&consumed).expect("serialize ConsumedCellMeta");
+        self.put_cf(self.store.cf_consumed_cells(), raw_key, &value);
+    }
+
+    /// Write consumed cell metadata to CF_CONSUMED_CELLS. Call on domain store batch.
+    /// Does NOT write the cell payload — caller must separately write `put_cell_payload`
+    /// on the append-only store batch.
+    pub fn put_consumed_cell_meta(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        consumed_at_block: i64,
+        consumed_by_tx: Option<&[u8]>,
+    ) {
+        let key = keys::encode_outpoint(tx_hash, output_index);
+        self.put_consumed_cell_meta_raw_key(&key, consumed_at_block, consumed_by_tx);
+    }
+
+    /// Write consumed cell metadata using pre-encoded outpoint key to CF_CONSUMED_CELLS.
+    /// Call on domain store batch.
+    pub fn put_consumed_cell_meta_raw_key(
+        &mut self,
+        raw_key: &[u8],
+        consumed_at_block: i64,
+        consumed_by_tx: Option<&[u8]>,
+    ) {
         let consumed = ConsumedCellMeta {
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
