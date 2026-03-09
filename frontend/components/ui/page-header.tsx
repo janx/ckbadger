@@ -36,13 +36,13 @@ export function PageHeader({
   };
 
   return (
-    <div className={cn('mb-8', className)}>
+    <div className={cn('mb-4', className)}>
       <div className="flex flex-wrap items-start justify-between gap-4 sm:items-center">
         <div className="flex min-w-0 items-center gap-3">
           {navigation?.prev && (
             <Link
               href={navigation.prev.href}
-              className="hover:text-terminal-green hover:border-terminal-dark rounded border border-slate-800 p-1.5 text-slate-400 transition-colors"
+              className="hover:text-interactive hover:border-interactive-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
               title={navigation.prev.label || 'Previous'}
             >
               <ChevronLeftIcon className="h-4 w-4" />
@@ -51,16 +51,18 @@ export function PageHeader({
 
           <div>
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <h1 className="break-words font-mono text-2xl font-bold text-white">{title}</h1>
+              <h1 className="text-text-primary break-words font-mono text-2xl font-bold">
+                {title}
+              </h1>
               {badge}
             </div>
-            {subtitle && <div className="mt-1 break-words text-sm text-slate-500">{subtitle}</div>}
+            {subtitle && <div className="text-text-muted mt-1 break-words text-sm">{subtitle}</div>}
           </div>
 
           {navigation?.next && (
             <Link
               href={navigation.next.href}
-              className="hover:text-terminal-green hover:border-terminal-dark rounded border border-slate-800 p-1.5 text-slate-400 transition-colors"
+              className="hover:text-interactive hover:border-interactive-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
               title={navigation.next.label || 'Next'}
             >
               <ChevronRightIcon className="h-4 w-4" />
@@ -75,17 +77,17 @@ export function PageHeader({
 
       {hash && (
         <div
-          className="group mt-3 inline-flex cursor-pointer items-center gap-2 rounded border border-slate-800 bg-slate-900/50 px-3 py-1.5 transition-colors hover:border-slate-700"
+          className="border-base-border bg-base-surface/50 hover:border-base-border group mt-3 inline-flex cursor-pointer items-center gap-2 rounded border px-3 py-1.5 transition-colors"
           onClick={handleCopy}
           title="Click to copy"
         >
-          <span className="break-all font-mono text-sm text-slate-400 group-hover:text-slate-300">
+          <span className="text-text-secondary group-hover:text-text-secondary break-all font-mono text-sm">
             {hash}
           </span>
           {copied ? (
-            <CheckIcon className="text-terminal-green h-4 w-4 shrink-0" />
+            <CheckIcon className="text-emphasis h-4 w-4 shrink-0" />
           ) : (
-            <CopyIcon className="h-4 w-4 shrink-0 text-slate-500 group-hover:text-slate-400" />
+            <CopyIcon className="text-text-muted group-hover:text-text-secondary h-4 w-4 shrink-0" />
           )}
         </div>
       )}
@@ -101,13 +103,13 @@ interface BadgeProps {
 
 export function Badge({ children, variant = 'gray', className }: BadgeProps) {
   const variantClasses = {
-    green: 'bg-green-900/50 text-green-400 border-green-900/50',
-    amber: 'bg-amber-900/50 text-amber border-amber-900/50',
-    blue: 'bg-slate-800/70 text-slate-300 border-slate-700',
-    purple: 'bg-slate-800/70 text-slate-300 border-slate-700',
-    red: 'bg-red-900/50 text-red-400 border-red-900/50',
-    gray: 'bg-slate-800 text-slate-400 border-slate-700',
-    neutral: 'bg-slate-800/70 text-slate-300 border-slate-700',
+    green: 'bg-positive/10 text-positive border-positive/20',
+    amber: 'bg-warning/10 text-warning border-warning/20',
+    blue: 'bg-info/10 text-info border-info/20',
+    purple: 'bg-info/10 text-info-bright border-info/20',
+    red: 'bg-negative/10 text-negative border-negative/20',
+    gray: 'bg-base-elevated text-text-muted border-base-border',
+    neutral: 'bg-base-elevated/70 text-text-secondary border-base-border',
   };
 
   return (

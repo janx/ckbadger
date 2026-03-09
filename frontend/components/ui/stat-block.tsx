@@ -30,9 +30,9 @@ const sizeClasses = {
 };
 
 const colorClasses = {
-  green: 'text-terminal-green',
-  amber: 'text-amber',
-  white: 'text-white',
+  green: 'text-emphasis',
+  amber: 'text-warning',
+  white: 'text-text-primary',
 };
 
 export function StatBlock({
@@ -51,9 +51,9 @@ export function StatBlock({
   const config = sizeClasses[size];
 
   const trendColors: Record<TrendDirection, string> = {
-    up: 'text-terminal-green',
-    down: 'text-red-400',
-    neutral: 'text-slate-500',
+    up: 'text-positive',
+    down: 'text-negative',
+    neutral: 'text-text-muted',
   };
 
   const trendIcons: Record<TrendDirection, string> = {
@@ -74,7 +74,7 @@ export function StatBlock({
     <div className={cn('flex flex-col', config.gap, className)}>
       <div
         className={cn(
-          'font-mono uppercase tracking-wider text-slate-500',
+          'text-text-muted font-mono uppercase tracking-wider',
           config.label,
           labelClassName
         )}
@@ -99,12 +99,12 @@ export function StatBlock({
           <span className={cn('flex items-center gap-1', trendColors[trend.direction])}>
             <span>{trendIcons[trend.direction]}</span>
             <span className={cn('font-mono', config.trend)}>{trend.value}</span>
-            {trend.label && <span className="ml-1 text-slate-500">{trend.label}</span>}
+            {trend.label && <span className="text-text-muted ml-1">{trend.label}</span>}
           </span>
         )}
       </div>
 
-      {subtext && <div className="font-mono text-sm text-slate-500">{subtext}</div>}
+      {subtext && <div className="text-text-muted font-mono text-sm">{subtext}</div>}
     </div>
   );
 }
@@ -122,7 +122,7 @@ export function StatGrid({ children, columns = 3, className }: StatGridProps) {
     4: 'grid-cols-2 md:grid-cols-4',
   };
 
-  return <div className={cn('grid gap-6', columnClasses[columns], className)}>{children}</div>;
+  return <div className={cn('grid gap-4', columnClasses[columns], className)}>{children}</div>;
 }
 
 interface StatDividerProps {
@@ -135,7 +135,7 @@ export function StatDivider({ orientation = 'horizontal', className }: StatDivid
     return (
       <div
         className={cn(
-          'w-px self-stretch bg-gradient-to-b from-transparent via-slate-700 to-transparent',
+          'via-base-border w-px self-stretch bg-gradient-to-b from-transparent to-transparent',
           className
         )}
       />
@@ -145,7 +145,7 @@ export function StatDivider({ orientation = 'horizontal', className }: StatDivid
   return (
     <div
       className={cn(
-        'h-px w-full bg-gradient-to-r from-transparent via-slate-700 to-transparent',
+        'via-base-border h-px w-full bg-gradient-to-r from-transparent to-transparent',
         className
       )}
     />
@@ -161,15 +161,15 @@ interface MiniStatProps {
 
 export function MiniStat({ label, value, color = 'dim', className }: MiniStatProps) {
   const miniColorClasses = {
-    green: 'text-terminal-green',
-    amber: 'text-amber',
-    white: 'text-white',
-    dim: 'text-slate-400',
+    green: 'text-emphasis',
+    amber: 'text-warning',
+    white: 'text-text-primary',
+    dim: 'text-text-secondary',
   };
 
   return (
     <div className={cn('flex items-center justify-between gap-4', className)}>
-      <span className="font-mono text-xs uppercase tracking-wide text-slate-500">{label}</span>
+      <span className="text-text-muted font-mono text-xs uppercase tracking-wide">{label}</span>
       <span className={cn('font-mono text-sm tabular-nums', miniColorClasses[color])}>{value}</span>
     </div>
   );

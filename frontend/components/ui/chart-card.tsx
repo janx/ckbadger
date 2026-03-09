@@ -26,33 +26,33 @@ export function ChartCard({
   const content = (
     <div
       className={cn(
-        'overflow-hidden rounded-lg border border-slate-800 bg-slate-900',
+        'border-base-border bg-base-surface overflow-hidden rounded-lg border',
         'transition-all duration-200',
-        href && 'hover:bg-slate-850 cursor-pointer hover:border-slate-700',
+        href && 'hover:bg-base-elevated hover:border-base-border cursor-pointer',
         className
       )}
     >
-      <div className="from-slate-850/50 flex items-center justify-between border-b border-slate-800 bg-gradient-to-r to-transparent px-4 py-3">
-        <h3 className="font-mono text-sm uppercase tracking-wide text-slate-300">{title}</h3>
+      <div className="from-base-elevated/50 border-base-border flex items-center justify-between border-b bg-gradient-to-r to-transparent px-3 py-2">
+        <h3 className="text-text-secondary font-mono text-sm uppercase tracking-wide">{title}</h3>
         {href && (
-          <span className="text-terminal-green font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="text-interactive font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
             VIEW →
           </span>
         )}
       </div>
 
-      <div className="p-4" style={{ minHeight: height }}>
+      <div className="p-3" style={{ minHeight: height }}>
         {isLoading ? (
           <div className="flex h-full items-center justify-center">
             <div className="w-full space-y-3">
-              <div className="h-3 w-3/4 animate-pulse rounded bg-slate-800" />
-              <div className="h-3 w-1/2 animate-pulse rounded bg-slate-800" />
-              <div className="h-3 w-2/3 animate-pulse rounded bg-slate-800" />
-              <div className="mt-4 h-20 animate-pulse rounded bg-slate-800" />
+              <div className="bg-base-elevated h-3 w-3/4 animate-pulse rounded" />
+              <div className="bg-base-elevated h-3 w-1/2 animate-pulse rounded" />
+              <div className="bg-base-elevated h-3 w-2/3 animate-pulse rounded" />
+              <div className="bg-base-elevated mt-4 h-20 animate-pulse rounded" />
             </div>
           </div>
         ) : error ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-500">
+          <div className="text-text-muted flex h-full items-center justify-center text-sm">
             Failed to load data
           </div>
         ) : (
@@ -81,12 +81,12 @@ interface ChartSectionProps {
 
 export function ChartSection({ title, children, className }: ChartSectionProps) {
   return (
-    <section className={cn('mb-10', className)}>
-      <h2 className="mb-4 flex items-center gap-3 font-mono text-lg uppercase tracking-wider text-white">
-        <span className="bg-terminal-green h-2 w-2 rounded-full" />
+    <section className={cn('mb-6', className)}>
+      <h2 className="text-text-primary mb-4 flex items-center gap-3 font-mono text-lg uppercase tracking-wider">
+        <span className="bg-emphasis h-2 w-2 rounded-full" />
         {title}
       </h2>
-      <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-3">{children}</div>
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">{children}</div>
     </section>
   );
 }
@@ -104,9 +104,9 @@ interface StatCardProps {
 
 export function StatCard({ label, value, subValue, trend, className }: StatCardProps) {
   const trendColors = {
-    up: 'text-terminal-green',
-    down: 'text-red-400',
-    neutral: 'text-slate-500',
+    up: 'text-positive',
+    down: 'text-negative',
+    neutral: 'text-text-muted',
   };
 
   const trendIcons = {
@@ -117,9 +117,11 @@ export function StatCard({ label, value, subValue, trend, className }: StatCardP
 
   return (
     <div className={cn('text-center', className)}>
-      <div className="font-mono text-xs uppercase tracking-wider text-slate-500">{label}</div>
-      <div className="mt-2 font-mono text-2xl font-bold tabular-nums text-white">{value}</div>
-      {subValue && <div className="mt-1 text-sm text-slate-400">{subValue}</div>}
+      <div className="text-text-muted font-mono text-xs uppercase tracking-wider">{label}</div>
+      <div className="text-text-primary mt-2 font-mono text-2xl font-bold tabular-nums">
+        {value}
+      </div>
+      {subValue && <div className="text-text-secondary mt-1 text-sm">{subValue}</div>}
       {trend && (
         <div className={cn('mt-1 font-mono text-sm', trendColors[trend.direction])}>
           {trendIcons[trend.direction]} {trend.value}
@@ -151,8 +153,8 @@ export function FilterButtonGroup({
           className={cn(
             'rounded px-3 py-1 font-mono text-xs transition-colors',
             selected === option.value
-              ? 'bg-terminal-green text-slate-950'
-              : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-300'
+              ? 'bg-emphasis text-base-bg'
+              : 'bg-base-elevated text-text-muted hover:bg-base-border hover:text-text-secondary'
           )}
         >
           {option.label}

@@ -37,22 +37,27 @@ export function DataField({
     return (
       <div className={cn('flex flex-col gap-1', className)}>
         <div className={cn('flex items-center gap-2', labelClassName)}>
-          <span className="font-mono text-xs uppercase tracking-wider text-slate-500">{label}</span>
+          <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
+            {label}
+          </span>
           {helpText && (
-            <span className="cursor-help text-slate-500 hover:text-slate-400" title={helpText}>
+            <span
+              className="text-text-muted hover:text-text-secondary cursor-help"
+              title={helpText}
+            >
               <HelpIcon className="h-3.5 w-3.5" />
             </span>
           )}
         </div>
         <div
           className={cn(
-            'min-w-0 break-words font-mono text-sm text-white',
-            copyValue && 'hover:text-terminal-green cursor-pointer transition-colors',
+            'text-text-primary min-w-0 break-words font-mono text-sm',
+            copyValue && 'hover:text-interactive cursor-pointer transition-colors',
             valueClassName
           )}
           onClick={copyValue ? handleCopy : undefined}
         >
-          {copied ? <span className="text-terminal-green">Copied!</span> : children}
+          {copied ? <span className="text-emphasis">Copied!</span> : children}
         </div>
       </div>
     );
@@ -61,33 +66,33 @@ export function DataField({
   return (
     <div
       className={cn(
-        'flex flex-col gap-2 border-b border-slate-800/50 py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between',
+        'border-base-border/50 flex flex-col gap-2 border-b py-2 last:border-b-0 sm:flex-row sm:items-center sm:justify-between',
         className
       )}
     >
       <div className={cn('flex shrink-0 items-center gap-2', labelClassName)}>
-        <span className="text-sm text-slate-500">{label}</span>
+        <span className="text-text-muted text-sm">{label}</span>
         {helpText && (
-          <span className="cursor-help text-slate-500 hover:text-slate-400" title={helpText}>
+          <span className="text-text-muted hover:text-text-secondary cursor-help" title={helpText}>
             <HelpIcon className="h-4 w-4" />
           </span>
         )}
       </div>
       <div
         className={cn(
-          'flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm text-white sm:w-auto sm:justify-end sm:text-right',
-          copyValue && 'hover:text-terminal-green group cursor-pointer transition-colors',
+          'text-text-primary flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm sm:w-auto sm:justify-end sm:text-right',
+          copyValue && 'hover:text-interactive group cursor-pointer transition-colors',
           valueClassName
         )}
         onClick={copyValue ? handleCopy : undefined}
       >
         {copied ? (
-          <span className="text-terminal-green">Copied!</span>
+          <span className="text-emphasis">Copied!</span>
         ) : (
           <>
             {children}
             {copyValue && (
-              <CopyIcon className="group-hover:text-terminal-green h-3.5 w-3.5 text-slate-500 opacity-0 transition-opacity group-hover:opacity-100" />
+              <CopyIcon className="group-hover:text-interactive text-text-muted h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
             )}
           </>
         )}
@@ -122,7 +127,7 @@ export function DataSection({ title, children, className }: DataSectionProps) {
   return (
     <div className={cn('', className)}>
       {title && (
-        <h3 className="mb-3 border-b border-slate-800 pb-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+        <h3 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           {title}
         </h3>
       )}
