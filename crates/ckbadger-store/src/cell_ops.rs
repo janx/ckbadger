@@ -643,6 +643,7 @@ mod tests {
             lock_args: vec![],
             type_script_hash: Some(type_hash.to_vec()),
             type_code_hash: Some(vec![0xCC; 32]),
+            type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 0,
             occupied_capacity: occupied,

@@ -257,6 +257,7 @@ mod tests {
                 lock_args: vec![],
                 type_script_hash: Some(vec![0x03; 32]),
                 type_code_hash: Some(vec![0x04; 32]),
+                type_hash_type: Some(1),
                 type_args: Some(account_id.clone()),
                 data_size: 0,
                 occupied_capacity: 61_00000000,

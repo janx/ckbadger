@@ -559,6 +559,7 @@ mod tests {
                 lock_args: cell.lock_args.clone(),
                 type_script_hash: cell.type_script_hash.clone(),
                 type_code_hash: cell.type_code_hash.clone(),
+                type_hash_type: cell.type_hash_type,
                 type_args: cell.type_args.clone(),
                 data_size: cell.data_size,
                 occupied_capacity: occupied_capacity_from_parsed_cell(cell),

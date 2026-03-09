@@ -623,6 +623,7 @@ mod tests {
                 lock_args: vec![],
                 type_script_hash: None,
                 type_code_hash: None,
+                type_hash_type: None,
                 type_args: None,
                 data_size: 0,
                 occupied_capacity: 1,

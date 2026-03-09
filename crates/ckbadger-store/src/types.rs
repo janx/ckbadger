@@ -22,6 +22,8 @@ pub struct LiveCellInfo {
     pub type_script_hash: Option<Vec<u8>>,
     pub type_code_hash: Option<Vec<u8>>,
     #[serde(default)]
+    pub type_hash_type: Option<i16>,
+    #[serde(default)]
     pub type_args: Option<Vec<u8>>,
     pub data_size: i32,
     #[serde(default)]
@@ -1007,6 +1009,7 @@ mod tests {
             lock_args: vec![0x33; 20],
             type_script_hash: Some(vec![0x44; 32]),
             type_code_hash: Some(vec![0x55; 32]),
+            type_hash_type: Some(1),
             type_args: Some(vec![0x66; 8]),
             data_size: 16,
             occupied_capacity: 6_100_000_000,

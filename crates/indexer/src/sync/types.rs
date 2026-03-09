@@ -90,6 +90,7 @@ pub(crate) struct CachedCellInfo {
     pub(crate) lock_args: Vec<u8>,
     pub(crate) type_script_hash: Option<Vec<u8>>,
     pub(crate) type_code_hash: Option<Vec<u8>>,
+    pub(crate) type_hash_type: Option<i16>,
     pub(crate) type_args: Option<Vec<u8>>,
     pub(crate) data_size: i32,
     pub(crate) occupied_capacity: i64,
