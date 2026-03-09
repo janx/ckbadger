@@ -454,6 +454,12 @@ interface GlobalActivity {
   peers: string[];
 }
 
+interface ScriptCountEntry {
+  codeHash: string;
+  name: string | null;
+  count: number;
+}
+
 interface DailyActivityStats {
   date: string;
   transferCount: number;
@@ -465,6 +471,7 @@ interface DailyActivityStats {
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
+  scriptCounts: ScriptCountEntry[];
 }
 
 interface GraphNode {
@@ -1286,6 +1293,7 @@ export type {
   Activity,
   ActivityAssetChange,
   GlobalActivity,
+  ScriptCountEntry,
   DailyActivityStats,
 };
 

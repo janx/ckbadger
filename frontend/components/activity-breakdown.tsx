@@ -20,7 +20,6 @@ const ACTIVITY_COLORS: Record<string, string> = {
   'DAO Withdraw': '#ffb900',
   Token: '#a78bfa',
   NFT: '#f472b6',
-  Coinbase: '#64748b',
 };
 
 function buildChartData(stats: DailyActivityStats) {
@@ -34,8 +33,31 @@ function buildChartData(stats: DailyActivityStats) {
     },
     { label: 'Token', value: stats.tokenCount, color: ACTIVITY_COLORS.Token },
     { label: 'NFT', value: stats.nftCount, color: ACTIVITY_COLORS.NFT },
-    { label: 'Coinbase', value: stats.coinbaseCount, color: ACTIVITY_COLORS.Coinbase },
   ].filter((s) => s.value > 0);
+}
+
+const SCRIPT_COLORS = [
+  '#8ce00a',
+  '#00d7eb',
+  '#ffb900',
+  '#a78bfa',
+  '#f472b6',
+  '#64748b',
+  '#f59e0b',
+  '#10b981',
+  '#ef4444',
+  '#6366f1',
+];
+
+function buildScriptChartData(stats: DailyActivityStats) {
+  return stats.scriptCounts
+    .filter((s) => s.count > 0)
+    .sort((a, b) => b.count - a.count)
+    .map((s, i) => ({
+      label: s.name || `${s.codeHash.slice(0, 10)}...`,
+      value: s.count,
+      color: SCRIPT_COLORS[i % SCRIPT_COLORS.length],
+    }));
 }
 
 export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps) {
@@ -47,14 +69,14 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
 
   const today = stats?.[0];
   const chartData = today ? buildChartData(today) : [];
+  const scriptChartData = today ? buildScriptChartData(today) : [];
   const totalActivities = today
     ? today.transferCount +
       today.daoDepositCount +
       today.daoWithdrawRequestCount +
       today.daoWithdrawCompleteCount +
       today.tokenCount +
-      today.nftCount +
-      today.coinbaseCount
+      today.nftCount
     : 0;
 
   return (
@@ -78,6 +100,18 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
                 value={formatCkbCompact(today.totalCkbMoved).value + ' CKB'}
               />
             </div>
+            {scriptChartData.length > 0 && (
+              <>
+                <div className="text-text-muted mt-2 font-mono text-[10px] uppercase tracking-wider">
+                  Script Usage
+                </div>
+                <PieChart
+                  data={scriptChartData}
+                  size={200}
+                  formatValue={(v) => v.toLocaleString()}
+                />
+              </>
+            )}
           </div>
         )}
       </TerminalPanelContent>
