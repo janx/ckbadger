@@ -1303,8 +1303,8 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0xA1; 32], 0, &info);
-        batch.put_cell(&[0xA1; 32], 0, &info);
+        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
         let err = batch.commit().unwrap_err();
         assert!(err
             .to_string()
@@ -1333,11 +1333,14 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0x11; 32], 0, &info);
+        batch.put_cell_payload_by_outpoint(&[0x11; 32], 0, &info);
         batch.commit().unwrap();
 
+        // Overwrite with a DIFFERENT value should be rejected
+        let mut different_info = info.clone();
+        different_info.capacity = 99999;
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_cell(&[0x11; 32], 0, &info);
+        overwrite_batch.put_cell_payload_by_outpoint(&[0x11; 32], 0, &different_info);
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
@@ -1431,12 +1434,12 @@ mod tests {
         };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_cell(&[0xA1; 32], 0, &info);
+        first_batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
         first_batch.commit().unwrap();
 
         // Replay with identical value should succeed (idempotent)
         let mut replay_batch = StoreBatch::new(&store);
-        replay_batch.put_cell(&[0xA1; 32], 0, &info);
+        replay_batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
         replay_batch.commit().unwrap();
 
         // Cell should still be readable

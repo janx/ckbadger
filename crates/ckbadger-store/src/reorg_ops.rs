@@ -2127,7 +2127,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
-        let result = store.rollback_to_block(0).unwrap();
+        // Rollback to -1 (pre-genesis) on empty store succeeds trivially
+        let result = store.rollback_to_block(-1).unwrap();
         assert_eq!(result.blocks_removed, 0);
     }
 
