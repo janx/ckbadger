@@ -1120,6 +1120,140 @@ impl CkbadgerStore {
         }
         stage.finish(token_transfers_removed);
 
+        // 8b. Delete activity entries for rolled-back blocks.
+        // Activities are now in domain store, so we can delete directly.
+        {
+            let mut activities_removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_activities");
+            let iter = self.iterator_cf(self.cf_activities(), IteratorMode::Start);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate activities in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if key.len() != keys::ACTIVITY_KEY_SIZE {
+                    continue;
+                }
+                let (_lock_hash, block_num, _tx_idx, _block_hash, _tx_hash) =
+                    keys::decode_activity_key(&key);
+                if block_num <= rollback_to {
+                    stage.tick(activities_removed);
+                    continue;
+                }
+                batch.delete_cf(self.cf_activities(), &key);
+                activities_removed += 1;
+                stage.tick(activities_removed);
+            }
+            stage.finish(activities_removed);
+            if activities_removed > 0 {
+                info!(activities_removed, "rollback: deleted activity entries");
+            }
+        }
+
+        // 8c. Delete addr_txs entries for rolled-back blocks.
+        {
+            let mut addr_txs_removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_addr_txs");
+            let iter = self.iterator_cf(self.cf_addr_txs(), IteratorMode::Start);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate addr_txs in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if key.len() != keys::ADDR_TX_KEY_SIZE {
+                    continue;
+                }
+                let (_lock_hash, block_num, _tx_idx, _tx_hash) = keys::decode_addr_tx_key(&key);
+                if block_num <= rollback_to {
+                    stage.tick(addr_txs_removed);
+                    continue;
+                }
+                batch.delete_cf(self.cf_addr_txs(), &key);
+                addr_txs_removed += 1;
+                stage.tick(addr_txs_removed);
+            }
+            stage.finish(addr_txs_removed);
+            if addr_txs_removed > 0 {
+                info!(addr_txs_removed, "rollback: deleted addr_txs entries");
+            }
+        }
+
+        // 8d. Delete object_collection_activities entries for rolled-back blocks.
+        {
+            let mut removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_object_collection_activities");
+            let iter =
+                self.iterator_cf(self.cf_object_collection_activities(), IteratorMode::Start);
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate object_collection_activities in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                    continue;
+                }
+                let (_collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
+                    keys::decode_nft_collection_activity_key(&key);
+                if block_num <= rollback_to {
+                    stage.tick(removed);
+                    continue;
+                }
+                batch.delete_cf(self.cf_object_collection_activities(), &key);
+                removed += 1;
+                stage.tick(removed);
+            }
+            stage.finish(removed);
+            if removed > 0 {
+                info!(
+                    removed,
+                    "rollback: deleted object_collection_activity entries"
+                );
+            }
+        }
+
+        // 8e. Delete identity_collection_activities entries for rolled-back blocks.
+        {
+            let mut removed = 0u64;
+            let mut stage = RollbackStageProgress::new("delete_identity_collection_activities");
+            let iter = self.iterator_cf(
+                self.cf_identity_collection_activities(),
+                IteratorMode::Start,
+            );
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate identity_collection_activities in rollback_to_block cleanup: {}",
+                        e
+                    )
+                })?;
+                if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                    continue;
+                }
+                let (_collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
+                    keys::decode_nft_collection_activity_key(&key);
+                if block_num <= rollback_to {
+                    stage.tick(removed);
+                    continue;
+                }
+                batch.delete_cf(self.cf_identity_collection_activities(), &key);
+                removed += 1;
+                stage.tick(removed);
+            }
+            stage.finish(removed);
+            if removed > 0 {
+                info!(
+                    removed,
+                    "rollback: deleted identity_collection_activity entries"
+                );
+            }
+        }
+
         // 9. Apply derived-CF deltas (addr_balance, script_info, token_holders, token_info).
         let stage = RollbackStageProgress::new("apply_derived_cf_deltas");
         let mut addr_balances_updated = 0u64;
@@ -1653,52 +1787,22 @@ impl CkbadgerStore {
             })?;
         }
 
-        let activity_store = append_only_store.unwrap_or(self);
+        // Count collection activities — all remaining entries are canonical after
+        // rollback deletion in stages 8d/8e above.
         let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        let iter = activity_store.iterator_cf(
-            activity_store.cf_object_collection_activities(),
-            IteratorMode::Start,
-        );
+        let iter = self.iterator_cf(self.cf_object_collection_activities(), IteratorMode::Start);
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft_collection_activities while repairing rollback state: {}",
+                    "failed to iterate object_collection_activities while repairing rollback state: {}",
                     e
                 )
             })?;
             if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
-                anyhow::bail!(
-                    "invalid nft_collection_activities key length while repairing rollback state: expected {}, got {}",
-                    keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE,
-                    key.len()
-                );
+                continue;
             }
-            let (collection_id, block_num, tx_idx, block_hash, tx_hash) =
+            let (collection_id, _block_num, _tx_idx, _block_hash, _tx_hash) =
                 keys::decode_nft_collection_activity_key(&key);
-            let Some((canonical_block_num, canonical_tx_idx)) = self.get_tx_location(&tx_hash)?
-            else {
-                continue;
-            };
-            if canonical_block_num != block_num || canonical_tx_idx != tx_idx {
-                continue;
-            }
-            if self
-                .get_tx_index(canonical_block_num, canonical_tx_idx)?
-                .is_none()
-            {
-                continue;
-            }
-            let Some(canonical_header) = self.get_block_header(canonical_block_num)? else {
-                anyhow::bail!(
-                    "missing block header while repairing rollback state from nft_collection_activities: block_num={}, tx_idx={}, tx_hash=0x{}",
-                    canonical_block_num,
-                    canonical_tx_idx,
-                    bytes_to_hex(&tx_hash)
-                );
-            };
-            if canonical_header.hash != block_hash {
-                continue;
-            }
             let total = nft_activity_totals
                 .entry(collection_id.to_vec())
                 .or_insert(0);
@@ -1710,8 +1814,8 @@ impl CkbadgerStore {
         }
 
         let mut identity_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        let iter = activity_store.iterator_cf(
-            activity_store.cf_identity_collection_activities(),
+        let iter = self.iterator_cf(
+            self.cf_identity_collection_activities(),
             IteratorMode::Start,
         );
         for item in iter {
@@ -1724,32 +1828,8 @@ impl CkbadgerStore {
             if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
                 continue;
             }
-            let (collection_id, block_num, tx_idx, block_hash, tx_hash) =
+            let (collection_id, _block_num, _tx_idx, _block_hash, _tx_hash) =
                 keys::decode_nft_collection_activity_key(&key);
-            let Some((canonical_block_num, canonical_tx_idx)) = self.get_tx_location(&tx_hash)?
-            else {
-                continue;
-            };
-            if canonical_block_num != block_num || canonical_tx_idx != tx_idx {
-                continue;
-            }
-            if self
-                .get_tx_index(canonical_block_num, canonical_tx_idx)?
-                .is_none()
-            {
-                continue;
-            }
-            let Some(canonical_header) = self.get_block_header(canonical_block_num)? else {
-                anyhow::bail!(
-                    "missing block header while repairing rollback state from identity_collection_activities: block_num={}, tx_idx={}, tx_hash=0x{}",
-                    canonical_block_num,
-                    canonical_tx_idx,
-                    bytes_to_hex(&tx_hash)
-                );
-            };
-            if canonical_header.hash != block_hash {
-                continue;
-            }
             let total = identity_activity_totals
                 .entry(collection_id.to_vec())
                 .or_insert(0);
