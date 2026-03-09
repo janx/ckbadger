@@ -2369,7 +2369,12 @@ mod tests {
 
     #[test]
     fn test_historical_append_cfs_expected_members() {
-        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS, CF_OBJECT_COLLECTION_ACTIVITIES];
+        let expected = &[
+            CF_ACTIVITIES,
+            CF_ADDR_TXS,
+            CF_OBJECT_COLLECTION_ACTIVITIES,
+            CF_IDENTITY_COLLECTION_ACTIVITIES,
+        ];
         for cf in expected {
             assert!(
                 CkbadgerStore::is_historical_append_cf(cf),

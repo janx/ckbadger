@@ -210,6 +210,43 @@ fn apply_object_collection_activity_count_deltas_with_pending(
     Ok(())
 }
 
+fn apply_identity_collection_activity_count_deltas(
+    store: &CkbadgerStore,
+    batch: &mut StoreBatch,
+    deltas: HashMap<Vec<u8>, i64>,
+) -> Result<()> {
+    if deltas.is_empty() {
+        return Ok(());
+    }
+    for (collection_id, delta) in deltas {
+        if delta == 0 {
+            continue;
+        }
+        let mut agg = store
+            .get_identity_collection_aggregate(&collection_id)?
+            .unwrap_or_default();
+        let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
+            anyhow!(
+                "identity collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
+                hex::encode(&collection_id),
+                agg.activities_count,
+                delta
+            )
+        })?;
+        if next < 0 {
+            bail!(
+                "identity collection activities_count underflow: collection_id=0x{}, current={}, delta={}",
+                hex::encode(&collection_id),
+                agg.activities_count,
+                delta
+            );
+        }
+        agg.activities_count = next;
+        batch.put_identity_collection_aggregate(&collection_id, &agg);
+    }
+    Ok(())
+}
+
 fn should_consume_grouped_mnft_token(
     last_batch_output_tx_index: Option<usize>,
     consume_tx_index: usize,
@@ -2534,6 +2571,7 @@ impl Indexer {
         let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
 
         let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
+        let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
             let mut spore_state = self.writer.new_spore_batch_state();
@@ -2585,23 +2623,29 @@ impl Indexer {
                                 &mut nft_batch,
                                 &mut spore_state,
                             )?;
-                            let coll_id = if spore.is_did {
-                                &DID_CKB_SENTINEL_COLLECTION[..]
+                            if spore.is_did {
+                                identity_activity_acc.record(
+                                    &DID_CKB_SENTINEL_COLLECTION,
+                                    &tx_data.hash,
+                                    &spore.spore_id,
+                                    &parsed.hash,
+                                    parsed.number,
+                                    checked_usize_to_i32(tx_idx, "tx_idx"),
+                                    parsed.timestamp.timestamp_millis(),
+                                    true,
+                                );
                             } else if let Some(ref cid) = spore.cluster_id {
-                                cid.as_slice()
-                            } else {
-                                continue;
-                            };
-                            object_activity_acc.record(
-                                coll_id,
-                                &tx_data.hash,
-                                &spore.spore_id,
-                                &parsed.hash,
-                                parsed.number,
-                                checked_usize_to_i32(tx_idx, "tx_idx"),
-                                parsed.timestamp.timestamp_millis(),
-                                true,
-                            );
+                                object_activity_acc.record(
+                                    cid.as_slice(),
+                                    &tx_data.hash,
+                                    &spore.spore_id,
+                                    &parsed.hash,
+                                    parsed.number,
+                                    checked_usize_to_i32(tx_idx, "tx_idx"),
+                                    parsed.timestamp.timestamp_millis(),
+                                    true,
+                                );
+                            }
                         }
                     }
 
@@ -2817,6 +2861,8 @@ impl Indexer {
         }
         let mut object_activity_batch = StoreBatch::new(&self.append_only_store);
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut identity_activity_batch = StoreBatch::new(&self.append_only_store);
+        let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Write .bit collection activities directly (bypassing accumulator)
         for (_tx_hash, activity) in &dotbit_tx_activity_data {
             let inserted = resolve_dotbit_tx_activity(
@@ -2828,7 +2874,7 @@ impl Indexer {
                 activity.block_number,
                 activity.tx_idx,
                 activity.timestamp_ms,
-                &mut object_activity_batch,
+                &mut identity_activity_batch,
             );
             if inserted {
                 let append_key = keys::encode_nft_collection_activity_key(
@@ -2842,17 +2888,17 @@ impl Indexer {
                     put_append_delete_undo_entry(
                         &mut consume_batch,
                         &mut append_undo_seq_by_block,
-                        UndoSeqScope::AppendObjectCollectionActivity,
+                        UndoSeqScope::AppendIdentityCollectionActivity,
                         activity.block_number,
-                        ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
+                        ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
                         &append_key,
                     );
                 }
-                let delta = object_activity_count_deltas
+                let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
                 *delta = delta.checked_add(1).ok_or_else(|| {
-                    anyhow!("dotbit nft activity delta overflow while writing batch")
+                    anyhow!("dotbit identity activity delta overflow while writing batch")
                 })?;
             }
         }
@@ -2883,6 +2929,33 @@ impl Indexer {
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("nft activity delta overflow while writing batch"))?;
         }
+        for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
+            identity_activity_acc.flush_identity(&mut identity_activity_batch)
+        {
+            let append_key = keys::encode_nft_collection_activity_key(
+                &collection_id,
+                block_number,
+                tx_idx,
+                &block_hash,
+                &tx_hash,
+            );
+            if !is_bulk {
+                put_append_delete_undo_entry(
+                    &mut consume_batch,
+                    &mut append_undo_seq_by_block,
+                    UndoSeqScope::AppendIdentityCollectionActivity,
+                    block_number,
+                    ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
+                    &append_key,
+                );
+            }
+            let delta = identity_activity_count_deltas
+                .entry(collection_id)
+                .or_insert(0);
+            *delta = delta
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("identity activity delta overflow while writing batch"))?;
+        }
         let pending_object_collection_aggs = HashMap::new();
         apply_object_collection_activity_count_deltas_with_pending(
             self.writer.store(),
@@ -2890,12 +2963,22 @@ impl Indexer {
             object_activity_count_deltas,
             &pending_object_collection_aggs,
         )?;
+        apply_identity_collection_activity_count_deltas(
+            self.writer.store(),
+            &mut consume_batch,
+            identity_activity_count_deltas,
+        )?;
         let commit_started = Instant::now();
         consume_batch.commit()?;
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         if !object_activity_batch.is_empty() {
             let commit_started = Instant::now();
             object_activity_batch.commit()?;
+            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+        }
+        if !identity_activity_batch.is_empty() {
+            let commit_started = Instant::now();
+            identity_activity_batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
 
@@ -4158,6 +4241,8 @@ impl Indexer {
                         let mut activity_batch = StoreBatch::new(append_only_store);
                         let mut spore_state = writer.new_spore_batch_state();
                         let mut spore_activity_acc = ObjectCollectionActivityAccumulator::new();
+                        let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
+                        let mut identity_activity_batch = StoreBatch::new(append_only_store);
                         let mut block_tx_idx = 0usize;
                         for (block_idx, _block_response) in blocks.iter().enumerate() {
                             let parsed = &all_parsed_blocks[block_idx];
@@ -4200,28 +4285,35 @@ impl Indexer {
                                         &mut batch,
                                         &mut spore_state,
                                     )?;
-                                    let coll_id = if spore.is_did {
-                                        &DID_CKB_SENTINEL_COLLECTION[..]
+                                    if spore.is_did {
+                                        identity_activity_acc.record(
+                                            &DID_CKB_SENTINEL_COLLECTION,
+                                            &tx_data.hash,
+                                            &spore.spore_id,
+                                            &parsed.hash,
+                                            parsed.number,
+                                            checked_usize_to_i32(tx_idx, "tx_idx"),
+                                            ts_ms,
+                                            true,
+                                        );
                                     } else if let Some(ref cid) = spore.cluster_id {
-                                        cid.as_slice()
-                                    } else {
-                                        continue;
-                                    };
-                                    spore_activity_acc.record(
-                                        coll_id,
-                                        &tx_data.hash,
-                                        &spore.spore_id,
-                                        &parsed.hash,
-                                        parsed.number,
-                                        checked_usize_to_i32(tx_idx, "tx_idx"),
-                                        ts_ms,
-                                        true,
-                                    );
+                                        spore_activity_acc.record(
+                                            cid.as_slice(),
+                                            &tx_data.hash,
+                                            &spore.spore_id,
+                                            &parsed.hash,
+                                            parsed.number,
+                                            checked_usize_to_i32(tx_idx, "tx_idx"),
+                                            ts_ms,
+                                            true,
+                                        );
+                                    }
                                 }
                             }
                             block_tx_idx += tx_count_for_block;
                         }
                         spore_activity_acc.flush(&mut activity_batch);
+                        identity_activity_acc.flush_identity(&mut identity_activity_batch);
                         let mut commit_ms =
                             commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
                         if !activity_batch.is_empty() {
@@ -4230,6 +4322,14 @@ impl Indexer {
                                 first_block,
                                 last_block,
                                 activity_batch,
+                            )?;
+                        }
+                        if !identity_activity_batch.is_empty() {
+                            commit_ms += commit_phase_no_wal(
+                                "T6a_identity_activity",
+                                first_block,
+                                last_block,
+                                identity_activity_batch,
                             )?;
                         }
                         Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
@@ -5383,6 +5483,8 @@ impl Indexer {
 
             let mut object_activity_batch = StoreBatch::new(&self.append_only_store);
             let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+            let mut identity_activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
             let mut pending_object_collection_aggs = HashMap::new();
 
@@ -5398,6 +5500,7 @@ impl Indexer {
                 let mut dotbit_state = self.writer.new_dotbit_batch_state();
                 let mut mnft_state = self.writer.new_mnft_batch_state();
                 let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
+                let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
                 let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
                     HashMap::new();
                 let mut block_tx_idx = 0usize;
@@ -5445,23 +5548,29 @@ impl Indexer {
                                     &mut data_batch,
                                     &mut spore_state,
                                 )?;
-                                let coll_id = if spore.is_did {
-                                    &DID_CKB_SENTINEL_COLLECTION[..]
+                                if spore.is_did {
+                                    identity_activity_acc.record(
+                                        &DID_CKB_SENTINEL_COLLECTION,
+                                        &tx_data.hash,
+                                        &spore.spore_id,
+                                        &parsed.hash,
+                                        parsed.number,
+                                        checked_usize_to_i32(tx_idx, "tx_idx"),
+                                        ts_ms,
+                                        true,
+                                    );
                                 } else if let Some(ref cid) = spore.cluster_id {
-                                    cid.as_slice()
-                                } else {
-                                    continue;
-                                };
-                                object_activity_acc.record(
-                                    coll_id,
-                                    &tx_data.hash,
-                                    &spore.spore_id,
-                                    &parsed.hash,
-                                    parsed.number,
-                                    checked_usize_to_i32(tx_idx, "tx_idx"),
-                                    ts_ms,
-                                    true,
-                                );
+                                    object_activity_acc.record(
+                                        cid.as_slice(),
+                                        &tx_data.hash,
+                                        &spore.spore_id,
+                                        &parsed.hash,
+                                        parsed.number,
+                                        checked_usize_to_i32(tx_idx, "tx_idx"),
+                                        ts_ms,
+                                        true,
+                                    );
+                                }
                             }
                         }
                         for issuer in MnftParser::parse_issuers(tx) {
@@ -5803,7 +5912,7 @@ impl Indexer {
                         activity.block_number,
                         activity.tx_idx,
                         activity.timestamp_ms,
-                        &mut object_activity_batch,
+                        &mut identity_activity_batch,
                     );
                     if inserted {
                         let append_key = keys::encode_nft_collection_activity_key(
@@ -5816,17 +5925,17 @@ impl Indexer {
                         put_append_delete_undo_entry(
                             &mut data_batch,
                             &mut append_undo_seq_by_block,
-                            UndoSeqScope::AppendObjectCollectionActivity,
+                            UndoSeqScope::AppendIdentityCollectionActivity,
                             activity.block_number,
-                            ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
+                            ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
                             &append_key,
                         );
-                        let delta = object_activity_count_deltas
+                        let delta = identity_activity_count_deltas
                             .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                             .or_insert(0);
                         *delta = delta.checked_add(1).ok_or_else(|| {
                             anyhow!(
-                                "dotbit nft activity delta overflow while writing grouped batch"
+                                "dotbit identity activity delta overflow while writing grouped batch"
                             )
                         })?;
                     }
@@ -5856,6 +5965,31 @@ impl Indexer {
                         anyhow!("nft activity delta overflow while writing grouped batch")
                     })?;
                 }
+                for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
+                    identity_activity_acc.flush_identity(&mut identity_activity_batch)
+                {
+                    let append_key = keys::encode_nft_collection_activity_key(
+                        &collection_id,
+                        block_number,
+                        tx_idx,
+                        &block_hash,
+                        &tx_hash,
+                    );
+                    put_append_delete_undo_entry(
+                        &mut data_batch,
+                        &mut append_undo_seq_by_block,
+                        UndoSeqScope::AppendIdentityCollectionActivity,
+                        block_number,
+                        ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES,
+                        &append_key,
+                    );
+                    let delta = identity_activity_count_deltas
+                        .entry(collection_id)
+                        .or_insert(0);
+                    *delta = delta.checked_add(1).ok_or_else(|| {
+                        anyhow!("identity activity delta overflow while writing grouped batch")
+                    })?;
+                }
 
                 mnft_state
                     .extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
@@ -5865,6 +5999,11 @@ impl Indexer {
                 &mut data_batch,
                 object_activity_count_deltas,
                 &pending_object_collection_aggs,
+            )?;
+            apply_identity_collection_activity_count_deltas(
+                self.writer.store(),
+                &mut data_batch,
+                identity_activity_count_deltas,
             )?;
 
             // Activity writes (live sync)
@@ -5960,6 +6099,12 @@ impl Indexer {
                 let nft_activity_commit_started = Instant::now();
                 object_activity_batch.commit()?;
                 write_commit_ms += nft_activity_commit_started.elapsed().as_secs_f64() * 1000.0;
+            }
+            if !identity_activity_batch.is_empty() {
+                let identity_activity_commit_started = Instant::now();
+                identity_activity_batch.commit()?;
+                write_commit_ms +=
+                    identity_activity_commit_started.elapsed().as_secs_f64() * 1000.0;
             }
             if !append_history_batch.is_empty() {
                 let append_commit_started = Instant::now();
