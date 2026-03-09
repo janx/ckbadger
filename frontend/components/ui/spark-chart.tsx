@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
+import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
 
 interface SparkChartProps {
   data: number[];
@@ -10,7 +11,12 @@ interface SparkChartProps {
   className?: string;
 }
 
-export function SparkChart({ data, color = '#10b981', height = 40, className }: SparkChartProps) {
+export function SparkChart({
+  data,
+  color = CHART_PRIMARY_COLOR,
+  height = 40,
+  className,
+}: SparkChartProps) {
   const pathD = useMemo(() => {
     if (!data.length) return '';
 
@@ -40,7 +46,7 @@ export function SparkChart({ data, color = '#10b981', height = 40, className }: 
   if (!data.length) {
     return (
       <div
-        className={cn('flex items-center justify-center text-slate-500', className)}
+        className={cn('text-text-muted flex items-center justify-center', className)}
         style={{ height }}
       >
         No data

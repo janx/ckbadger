@@ -156,19 +156,19 @@ export default function DaoPage() {
       {
         label: 'Mining Reward',
         value: mining,
-        color: '#00ff41',
+        color: '#8ce00a',
         percent: ((mining / total) * 100).toFixed(1),
       },
       {
         label: 'Deposit Compensation',
         value: deposit,
-        color: '#ffb000',
+        color: '#ffb900',
         percent: ((deposit / total) * 100).toFixed(1),
       },
       {
         label: 'Burnt',
         value: burnt,
-        color: '#3d4a5c',
+        color: '#6b6860',
         percent: ((burnt / total) * 100).toFixed(1),
       },
     ];
@@ -184,13 +184,13 @@ export default function DaoPage() {
       {
         label: 'Claimed',
         value: claimed,
-        color: '#00ff41',
+        color: '#8ce00a',
         percent: ((claimed / total) * 100).toFixed(1),
       },
       {
         label: 'Unclaimed',
         value: unclaimed,
-        color: '#ffb000',
+        color: '#ffb900',
         percent: ((unclaimed / total) * 100).toFixed(1),
       },
     ];
@@ -217,12 +217,12 @@ export default function DaoPage() {
       const requestCellLabel = `${deposit.withdrawRequestTxHash}:${deposit.withdrawRequestOutputIndex}`;
       return (
         <div className="space-y-1">
-          <Link href={requestCellHref} className="text-terminal-green hover:underline">
+          <Link href={requestCellHref} className="text-emphasis hover:underline">
             <Hash hash={requestCellLabel} />
           </Link>
-          <div className="font-mono text-xs text-slate-500">
+          <div className="text-text-muted font-mono text-xs">
             Deposit cell:{' '}
-            <Link href={depositCellHref} className="hover:text-slate-300">
+            <Link href={depositCellHref} className="hover:text-text-secondary">
               <Hash hash={depositCellLabel} />
             </Link>
           </div>
@@ -239,12 +239,12 @@ export default function DaoPage() {
       const withdrawToCellLabel = `${deposit.withdrawTxHash}:${deposit.withdrawToOutputIndex}`;
       return (
         <div className="space-y-1">
-          <Link href={withdrawToCellHref} className="text-terminal-green hover:underline">
+          <Link href={withdrawToCellHref} className="text-emphasis hover:underline">
             <Hash hash={withdrawToCellLabel} />
           </Link>
-          <div className="font-mono text-xs text-slate-500">
+          <div className="text-text-muted font-mono text-xs">
             Deposit cell:{' '}
-            <Link href={depositCellHref} className="hover:text-slate-300">
+            <Link href={depositCellHref} className="hover:text-text-secondary">
               <Hash hash={depositCellLabel} />
             </Link>
           </div>
@@ -257,13 +257,13 @@ export default function DaoPage() {
         <div className="space-y-1">
           <Link
             href={`/tx/${deposit.withdrawRequestTxHash}`}
-            className="text-terminal-green hover:underline"
+            className="text-emphasis hover:underline"
           >
             <Hash hash={deposit.withdrawRequestTxHash} />
           </Link>
-          <div className="font-mono text-xs text-slate-500">
+          <div className="text-text-muted font-mono text-xs">
             Deposit cell:{' '}
-            <Link href={depositCellHref} className="hover:text-slate-300">
+            <Link href={depositCellHref} className="hover:text-text-secondary">
               <Hash hash={depositCellLabel} />
             </Link>
           </div>
@@ -274,15 +274,12 @@ export default function DaoPage() {
     if (deposit.status === 'withdrawn' && deposit.withdrawTxHash) {
       return (
         <div className="space-y-1">
-          <Link
-            href={`/tx/${deposit.withdrawTxHash}`}
-            className="text-terminal-green hover:underline"
-          >
+          <Link href={`/tx/${deposit.withdrawTxHash}`} className="text-emphasis hover:underline">
             <Hash hash={deposit.withdrawTxHash} />
           </Link>
-          <div className="font-mono text-xs text-slate-500">
+          <div className="text-text-muted font-mono text-xs">
             Deposit cell:{' '}
-            <Link href={depositCellHref} className="hover:text-slate-300">
+            <Link href={depositCellHref} className="hover:text-text-secondary">
               <Hash hash={depositCellLabel} />
             </Link>
           </div>
@@ -291,51 +288,51 @@ export default function DaoPage() {
     }
 
     return (
-      <Link href={depositCellHref} className="text-terminal-green hover:underline">
+      <Link href={depositCellHref} className="text-emphasis hover:underline">
         <Hash hash={depositCellLabel} />
       </Link>
     );
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-4">
         <PageHeader
           title="Nervos DAO"
           subtitle="Deposit CKB to earn compensation from secondary issuance"
           actions={
             <Link
               href="/charts"
-              className="rounded border border-slate-700 bg-slate-800 px-4 py-2 font-mono text-sm text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
+              className="border-base-border bg-base-elevated text-text-secondary hover:bg-base-elevated/80 hover:text-text-primary rounded border px-4 py-2 font-mono text-sm transition-colors"
             >
               View Charts
             </Link>
           }
         />
 
-        <TerminalPanel className="mb-6" glow>
+        <TerminalPanel className="mb-4" glow>
           <TerminalPanelContent>
-            <div className="mb-6 text-center">
-              <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
+            <div className="mb-4 text-center">
+              <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
                 Total Deposit
               </div>
-              <div className="text-terminal-green mt-2 font-mono text-4xl font-bold tabular-nums">
+              <div className="text-emphasis mt-2 font-mono text-4xl font-bold tabular-nums">
                 {stats
                   ? (() => {
                       const f = formatCkbValue(stats.totalDepositedCkb);
                       return (
                         <>
                           {f.integer}
-                          <span className="text-terminal-green/50 text-[0.85em]">.{f.decimal}</span>
-                          <span className="ml-2 text-[0.85em] text-slate-500">CKB</span>
+                          <span className="text-emphasis/50 text-[0.85em]">.{f.decimal}</span>
+                          <span className="text-text-muted ml-2 text-[0.85em]">CKB</span>
                         </>
                       );
                     })()
                   : '...'}
               </div>
             </div>
-            <div className="grid gap-6 border-t border-slate-800 pt-6 md:grid-cols-3">
+            <div className="border-base-border grid gap-6 border-t pt-6 md:grid-cols-3">
               <StatCard
                 label="Depositors"
                 value={stats ? formatNumber(stats.totalDepositors) : '...'}
@@ -349,11 +346,11 @@ export default function DaoPage() {
           </TerminalPanelContent>
         </TerminalPanel>
 
-        <TerminalPanel className="mb-6">
+        <TerminalPanel className="mb-4">
           <TerminalPanelContent>
-            <div className="grid gap-8 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <div className="mb-4 font-mono text-xs uppercase tracking-wider text-slate-500">
+                <div className="text-text-muted mb-4 font-mono text-xs uppercase tracking-wider">
                   Secondary Issuance
                 </div>
                 <div className="flex items-center gap-6">
@@ -380,12 +377,12 @@ export default function DaoPage() {
                         />
                         <div className="min-w-0">
                           <div
-                            className={`text-xs transition-colors duration-150 ${secondaryHover === idx ? 'text-white' : 'text-slate-500'}`}
+                            className={`text-xs transition-colors duration-150 ${secondaryHover === idx ? 'text-text-primary' : 'text-text-muted'}`}
                           >
                             {item.label}
                           </div>
                           <div
-                            className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${secondaryHover === idx ? 'text-white' : 'text-slate-300'}`}
+                            className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${secondaryHover === idx ? 'text-text-primary' : 'text-text-secondary'}`}
                           >
                             {(() => {
                               const f = formatCkbValue(item.value);
@@ -393,7 +390,7 @@ export default function DaoPage() {
                                 <>
                                   {f.integer}
                                   <span
-                                    className={`text-[0.85em] ${secondaryHover === idx ? 'text-slate-300' : 'text-slate-500'}`}
+                                    className={`text-[0.85em] ${secondaryHover === idx ? 'text-text-secondary' : 'text-text-muted'}`}
                                   >
                                     .{f.decimal}
                                   </span>
@@ -408,8 +405,8 @@ export default function DaoPage() {
                 </div>
               </div>
 
-              <div className="border-l border-slate-800 pl-8">
-                <div className="mb-4 font-mono text-xs uppercase tracking-wider text-slate-500">
+              <div className="border-base-border border-l pl-8">
+                <div className="text-text-muted mb-4 font-mono text-xs uppercase tracking-wider">
                   Compensation
                 </div>
                 <div className="flex items-center gap-6">
@@ -436,12 +433,12 @@ export default function DaoPage() {
                         />
                         <div className="min-w-0">
                           <div
-                            className={`text-xs transition-colors duration-150 ${compensationHover === idx ? 'text-white' : 'text-slate-500'}`}
+                            className={`text-xs transition-colors duration-150 ${compensationHover === idx ? 'text-text-primary' : 'text-text-muted'}`}
                           >
                             {item.label}
                           </div>
                           <div
-                            className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${compensationHover === idx ? 'text-white' : 'text-slate-300'}`}
+                            className={`truncate font-mono text-sm font-medium tabular-nums transition-colors duration-150 ${compensationHover === idx ? 'text-text-primary' : 'text-text-secondary'}`}
                           >
                             {(() => {
                               const f = formatCkbValue(item.value);
@@ -449,7 +446,7 @@ export default function DaoPage() {
                                 <>
                                   {f.integer}
                                   <span
-                                    className={`text-[0.85em] ${compensationHover === idx ? 'text-slate-300' : 'text-slate-500'}`}
+                                    className={`text-[0.85em] ${compensationHover === idx ? 'text-text-secondary' : 'text-text-muted'}`}
                                   >
                                     .{f.decimal}
                                   </span>
@@ -485,13 +482,13 @@ export default function DaoPage() {
           </TerminalPanelHeader>
           <TerminalPanelContent padding="none">
             {isLoading ? (
-              <div className="py-8 text-center text-slate-500">Loading...</div>
+              <div className="text-text-muted py-8 text-center">Loading...</div>
             ) : deposits?.data?.length ? (
               <>
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
-                      <tr className="border-b border-slate-800 text-left font-mono text-xs uppercase text-slate-500">
+                      <tr className="border-base-border text-text-muted border-b text-left font-mono text-xs uppercase">
                         <th className="px-4 py-3">Reference</th>
                         <th className="px-4 py-3">Address</th>
                         <th className="px-4 py-3 text-right">Amount</th>
@@ -502,7 +499,7 @@ export default function DaoPage() {
                       {deposits.data.map((deposit: DaoDeposit) => (
                         <tr
                           key={`${deposit.txHash}-${deposit.outputIndex}`}
-                          className="hover:bg-slate-850/50 border-b border-slate-800/50 transition-colors"
+                          className="hover:bg-base-elevated/50 border-base-border/50 border-b transition-colors"
                         >
                           <td className="px-4 py-3">{renderReferenceCell(deposit)}</td>
                           <td className="px-4 py-3">
@@ -513,7 +510,7 @@ export default function DaoPage() {
                                 <Link href={`/address/${deposit.lockScriptHash}`}>
                                   <Hash
                                     hash={deposit.lockScriptHash}
-                                    className="hover:text-terminal-green text-slate-400"
+                                    className="hover:text-emphasis text-text-secondary"
                                   />
                                 </Link>
                               )}
@@ -523,19 +520,21 @@ export default function DaoPage() {
                               />
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-right font-mono tabular-nums text-white">
+                          <td className="text-text-primary px-4 py-3 text-right font-mono tabular-nums">
                             {(() => {
                               const f = formatCkbAmount(deposit.capacity);
                               return (
                                 <>
                                   {f.integer}
-                                  <span className="text-[0.85em] text-slate-500">.{f.decimal}</span>
-                                  <span className="ml-1 text-[0.85em] text-slate-500">CKB</span>
+                                  <span className="text-text-muted text-[0.85em]">
+                                    .{f.decimal}
+                                  </span>
+                                  <span className="text-text-muted ml-1 text-[0.85em]">CKB</span>
                                 </>
                               );
                             })()}
                           </td>
-                          <td className="px-4 py-3 text-right text-sm text-slate-500">
+                          <td className="text-text-muted px-4 py-3 text-right text-sm">
                             {formatTimeAgo(deposit.depositTimestamp)}
                           </td>
                         </tr>
@@ -543,7 +542,7 @@ export default function DaoPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className="border-t border-slate-800 px-4 py-3">
+                <div className="border-base-border border-t px-4 py-3">
                   <CursorPagination
                     total={deposits.total ?? undefined}
                     totalLabel="deposits"
@@ -558,7 +557,7 @@ export default function DaoPage() {
                 </div>
               </>
             ) : (
-              <div className="py-8 text-center text-slate-500">No deposits found</div>
+              <div className="text-text-muted py-8 text-center">No deposits found</div>
             )}
           </TerminalPanelContent>
         </TerminalPanel>

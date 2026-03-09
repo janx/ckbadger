@@ -1,7 +1,13 @@
 'use client';
 
 import { useState, useRef, useCallback, useMemo } from 'react';
-import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
+import {
+  CHART_PRIMARY_COLOR,
+  CHART_GRID_COLOR,
+  CHART_HOVER_COLOR,
+  CHART_TOOLTIP_BG,
+  CHART_TOOLTIP_BORDER,
+} from '@/lib/chart-colors';
 
 export interface StackedAreaDataPoint {
   date: string;
@@ -340,7 +346,7 @@ export function StackedAreaChart({
 
   if (!fullData.length) {
     return (
-      <div className="flex h-64 items-center justify-center text-slate-500">No data available</div>
+      <div className="text-text-muted flex h-64 items-center justify-center">No data available</div>
     );
   }
 
@@ -385,7 +391,7 @@ export function StackedAreaChart({
       {interactive && isZoomed && (
         <button
           onClick={handleReset}
-          className="absolute right-2 top-2 z-10 rounded bg-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-600"
+          className="bg-base-elevated text-text-secondary hover:bg-base-elevated/80 absolute right-2 top-2 z-10 rounded px-2 py-1 text-xs"
         >
           Reset Zoom
         </button>
@@ -408,14 +414,14 @@ export function StackedAreaChart({
               x2={width - padding.right}
               y1={yScale(tick)}
               y2={yScale(tick)}
-              stroke="#374151"
+              stroke={CHART_GRID_COLOR}
               strokeDasharray="2,2"
             />
             <text
               x={padding.left - 8}
               y={yScale(tick)}
               textAnchor="end"
-              className="fill-slate-400 font-mono tabular-nums"
+              className="fill-text-muted font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -430,7 +436,7 @@ export function StackedAreaChart({
             x={xScale(idx)}
             y={height - padding.bottom + 20}
             textAnchor="middle"
-            className="fill-slate-500 font-mono tabular-nums"
+            className="fill-text-muted font-mono tabular-nums"
             fontSize={10}
           >
             {data[idx]?.date || ''}
@@ -465,7 +471,7 @@ export function StackedAreaChart({
               x={width - padding.right + 8}
               y={yScaleOverlay(tick)}
               textAnchor="start"
-              className="fill-slate-400 font-mono tabular-nums"
+              className="fill-text-muted font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -502,7 +508,7 @@ export function StackedAreaChart({
               x2={xScale(hoverIndex)}
               y1={padding.top}
               y2={padding.top + chartHeight}
-              stroke="#6b7280"
+              stroke={CHART_HOVER_COLOR}
               strokeDasharray="3,3"
             />
           </>
@@ -518,14 +524,14 @@ export function StackedAreaChart({
               width={TOOLTIP_WIDTH}
               height={20 + series.length * 14 + (overlayLine ? 14 : 0)}
               rx={4}
-              fill="#0f172a"
+              fill={CHART_TOOLTIP_BG}
               fillOpacity={0.95}
-              stroke="#334155"
+              stroke={CHART_TOOLTIP_BORDER}
             />
             <text
               x={8}
               y={14}
-              className="fill-slate-300 font-mono font-medium tabular-nums"
+              className="fill-text-secondary font-mono font-medium tabular-nums"
               fontSize={10}
             >
               {data[hoverIndex]?.date}
@@ -535,13 +541,13 @@ export function StackedAreaChart({
                 key={s.key}
                 x={8}
                 y={28 + i * 14}
-                className="fill-slate-400 font-mono tabular-nums"
+                className="fill-text-muted font-mono tabular-nums"
                 fontSize={10}
               >
                 <title>{s.label}</title>
                 <tspan fill={s.color}>● </tspan>
                 <tspan>{formatTooltipLabel(s.label)}: </tspan>
-                <tspan className="fill-white">
+                <tspan className="fill-text-primary">
                   {formatValue(stackedValues[hoverIndex][s.key], isPercentage)}
                 </tspan>
               </text>
@@ -550,20 +556,22 @@ export function StackedAreaChart({
               <text
                 x={8}
                 y={28 + series.length * 14}
-                className="fill-slate-400 font-mono tabular-nums"
+                className="fill-text-muted font-mono tabular-nums"
                 fontSize={10}
               >
                 <title>{overlayLine.label}</title>
                 <tspan fill={overlayLine.color}>━ </tspan>
                 <tspan>{formatTooltipLabel(overlayLine.label)}: </tspan>
-                <tspan className="fill-white">{formatValue(overlayValues[hoverIndex])}</tspan>
+                <tspan className="fill-text-primary">
+                  {formatValue(overlayValues[hoverIndex])}
+                </tspan>
               </text>
             )}
           </g>
         )}
       </svg>
       {interactive && isZoomed && (
-        <div className="mt-1 text-center font-mono text-xs tabular-nums text-slate-500">
+        <div className="text-text-muted mt-1 text-center font-mono text-xs tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}

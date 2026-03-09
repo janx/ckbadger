@@ -2,7 +2,14 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { ChartDataPoint } from '@/lib/api';
-import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
+import {
+  CHART_PRIMARY_COLOR,
+  CHART_SECONDARY_COLOR,
+  CHART_GRID_COLOR,
+  CHART_HOVER_COLOR,
+  CHART_TOOLTIP_BG,
+  CHART_TOOLTIP_BORDER,
+} from '@/lib/chart-colors';
 
 export type LineChartType = 'line' | 'bar';
 export interface LineChartMarker {
@@ -381,7 +388,7 @@ export function LineChart({
 
   if (!fullData.length) {
     return (
-      <div className="flex h-64 items-center justify-center text-slate-500">No data available</div>
+      <div className="text-text-muted flex h-64 items-center justify-center">No data available</div>
     );
   }
 
@@ -422,8 +429,8 @@ export function LineChart({
           onClick={handleToggleLogScale}
           className={`rounded border px-2 py-1 font-mono text-xs transition-colors ${
             useLogScale
-              ? 'border-terminal-green text-terminal-green bg-terminal-green/10'
-              : 'hover:border-terminal-green hover:text-terminal-green border-slate-700 bg-slate-800 text-slate-300'
+              ? 'border-interactive text-interactive bg-interactive/10'
+              : 'hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary'
           }`}
         >
           Log Scale
@@ -431,7 +438,7 @@ export function LineChart({
         {interactive && isZoomed && (
           <button
             onClick={handleReset}
-            className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-xs text-slate-300 transition-colors"
+            className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-2 py-1 font-mono text-xs transition-colors"
           >
             Reset Zoom
           </button>
@@ -455,14 +462,14 @@ export function LineChart({
               x2={width - padding.right}
               y1={yScale(tick)}
               y2={yScale(tick)}
-              stroke="#334155"
+              stroke={CHART_GRID_COLOR}
               strokeDasharray="2,2"
             />
             <text
               x={padding.left - 8}
               y={yScale(tick)}
               textAnchor="end"
-              className="fill-slate-400 font-mono tabular-nums"
+              className="fill-text-muted font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -478,7 +485,7 @@ export function LineChart({
               x={width - padding.right + 8}
               y={y2Scale(tick)}
               textAnchor="start"
-              className="fill-terminal-green font-mono tabular-nums"
+              className="fill-emphasis font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -492,7 +499,7 @@ export function LineChart({
             x={xScale(idx)}
             y={height - padding.bottom + 20}
             textAnchor="middle"
-            className="fill-slate-500 font-mono tabular-nums"
+            className="fill-text-muted font-mono tabular-nums"
             fontSize={10}
           >
             {data[idx]?.date || ''}
@@ -520,7 +527,7 @@ export function LineChart({
                     x={labelOnRight ? markerX - 6 : markerX + 6}
                     y={padding.top + 12}
                     textAnchor={labelOnRight ? 'end' : 'start'}
-                    className="hover:fill-terminal-green fill-slate-300 font-mono underline decoration-dotted"
+                    className="hover:fill-interactive fill-text-secondary font-mono underline decoration-dotted"
                     fontSize={9}
                     data-testid="line-chart-marker-label"
                   >
@@ -532,7 +539,7 @@ export function LineChart({
                   x={labelOnRight ? markerX - 6 : markerX + 6}
                   y={padding.top + 12}
                   textAnchor={labelOnRight ? 'end' : 'start'}
-                  className="fill-slate-300 font-mono"
+                  className="fill-text-secondary font-mono"
                   fontSize={9}
                   data-testid="line-chart-marker-label"
                 >
@@ -611,7 +618,7 @@ export function LineChart({
               x2={xScale(hoverIndex)}
               y1={padding.top}
               y2={padding.top + chartHeight}
-              stroke="#475569"
+              stroke={CHART_HOVER_COLOR}
               strokeDasharray="3,3"
             />
             {chartType === 'line' && (
@@ -661,33 +668,35 @@ export function LineChart({
               width={180}
               height={y2AxisLabel ? 60 : 44}
               rx={4}
-              fill="#0f172a"
+              fill={CHART_TOOLTIP_BG}
               fillOpacity={0.95}
-              stroke="#334155"
+              stroke={CHART_TOOLTIP_BORDER}
             />
             <text
               x={8}
               y={16}
-              className="fill-slate-300 font-mono font-medium tabular-nums"
+              className="fill-text-secondary font-mono font-medium tabular-nums"
               fontSize={10}
             >
               {data[hoverIndex]?.date}
             </text>
-            <text x={8} y={32} className="fill-slate-400 font-mono tabular-nums" fontSize={10}>
+            <text x={8} y={32} className="fill-text-muted font-mono tabular-nums" fontSize={10}>
               <tspan fill={primaryColor}>{yAxisLabel}: </tspan>
-              <tspan className="fill-white">{formatValue(values[hoverIndex], isPercent)}</tspan>
+              <tspan className="fill-text-primary">
+                {formatValue(values[hoverIndex], isPercent)}
+              </tspan>
             </text>
             {y2AxisLabel && values2.length > 0 && (
-              <text x={8} y={48} className="fill-slate-400 font-mono tabular-nums" fontSize={10}>
+              <text x={8} y={48} className="fill-text-muted font-mono tabular-nums" fontSize={10}>
                 <tspan fill={secondaryColor}>{y2AxisLabel}: </tspan>
-                <tspan className="fill-white">{formatValue(values2[hoverIndex])}</tspan>
+                <tspan className="fill-text-primary">{formatValue(values2[hoverIndex])}</tspan>
               </text>
             )}
           </g>
         )}
       </svg>
       {interactive && isZoomed && (
-        <div className="mt-1 text-center font-mono text-xs tabular-nums text-slate-500">
+        <div className="text-text-muted mt-1 text-center font-mono text-xs tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}

@@ -20,10 +20,10 @@ import {
 function ChartDataWarning({ show }: { show: boolean }) {
   if (!show) return null;
   return (
-    <div className="mb-6 rounded border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
+    <div className="border-warning/30 bg-warning/10 mb-4 rounded border px-4 py-3">
       <div className="flex items-center gap-2">
-        <span className="text-yellow-500">⚠</span>
-        <span className="font-mono text-sm text-yellow-500">
+        <span className="text-warning">⚠</span>
+        <span className="text-warning font-mono text-sm">
           Chart data may be incomplete. The indexer is still syncing historical statistics.
         </span>
       </div>
@@ -126,7 +126,7 @@ function MultiSeriesPreview({
           yAxisLabel={chartData.yAxisLabel}
           height={160}
           interactive={false}
-          primaryColor="#00c389"
+          primaryColor="#00d7eb"
         />
       )}
     </ChartCard>
@@ -377,15 +377,15 @@ export default function ChartsPage() {
       (hardforkTimeline?.events ?? []).map((event) => ({
         x: String(event.activationEpoch),
         label: event.shortName.toUpperCase(),
-        color: event.status === 'activated' ? '#f59e0b' : '#38bdf8',
+        color: event.status === 'activated' ? '#ffb900' : '#00d7eb',
       })),
     [hardforkTimeline?.events]
   );
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-4">
         <PageHeader title="Charts" subtitle="Historical charts and statistics for Nervos CKB" />
 
         <ChartDataWarning show={networkStats?.syncStatus?.chartDataMayBeIncomplete ?? false} />

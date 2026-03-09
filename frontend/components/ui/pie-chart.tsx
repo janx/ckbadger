@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { getChartPaletteColor } from '@/lib/chart-colors';
+import { getChartPaletteColor, CHART_TOOLTIP_BG } from '@/lib/chart-colors';
 
 interface PieChartDataPoint {
   label: string;
@@ -63,7 +63,7 @@ export function PieChart({
   if (!data.length || total === 0) {
     return (
       <div
-        className="flex items-center justify-center text-slate-500"
+        className="text-text-muted flex items-center justify-center"
         style={{ width: size, height: size }}
       >
         No data available
@@ -80,7 +80,7 @@ export function PieChart({
               key={i}
               d={slice.pathD}
               fill={slice.color}
-              stroke="#111827"
+              stroke={CHART_TOOLTIP_BG}
               strokeWidth={0.02}
               className="cursor-pointer transition-opacity"
               opacity={hoverIndex === null || hoverIndex === i ? 1 : 0.5}
@@ -90,14 +90,14 @@ export function PieChart({
               style={{ transformOrigin: 'center' }}
             />
           ))}
-          <circle cx={0} cy={0} r={0.6} fill="#111827" />
+          <circle cx={0} cy={0} r={0.6} fill={CHART_TOOLTIP_BG} />
           {hoverIndex !== null && slices[hoverIndex] && (
             <>
               <text
                 x={0}
                 y={-0.1}
                 textAnchor="middle"
-                className="fill-white text-[0.12px] font-medium"
+                className="fill-text-primary text-[0.12px] font-medium"
               >
                 {slices[hoverIndex].label.length > 12
                   ? slices[hoverIndex].label.slice(0, 12) + '...'
@@ -107,14 +107,14 @@ export function PieChart({
                 x={0}
                 y={0.15}
                 textAnchor="middle"
-                className="fill-slate-300 font-mono text-[0.14px] tabular-nums"
+                className="fill-text-secondary font-mono text-[0.14px] tabular-nums"
               >
                 {formatValue(slices[hoverIndex].percentage)}
               </text>
             </>
           )}
           {hoverIndex === null && (
-            <text x={0} y={0.05} textAnchor="middle" className="fill-slate-400 text-[0.1px]">
+            <text x={0} y={0.05} textAnchor="middle" className="fill-text-muted text-[0.1px]">
               Hover for details
             </text>
           )}
@@ -127,7 +127,7 @@ export function PieChart({
             <div
               key={i}
               className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm transition-colors ${
-                hoverIndex === i ? 'bg-slate-800' : 'hover:bg-slate-800/50'
+                hoverIndex === i ? 'bg-base-elevated' : 'hover:bg-base-elevated/50'
               }`}
               onMouseEnter={() => setHoverIndex(i)}
               onMouseLeave={() => setHoverIndex(null)}
@@ -136,18 +136,18 @@ export function PieChart({
                 className="h-3 w-3 flex-shrink-0 rounded"
                 style={{ backgroundColor: slice.color }}
               />
-              <span className="min-w-0 flex-1 truncate text-slate-300" title={slice.label}>
+              <span className="text-text-secondary min-w-0 flex-1 truncate" title={slice.label}>
                 {slice.label.length > 20
                   ? slice.label.slice(0, 8) + '...' + slice.label.slice(-6)
                   : slice.label}
               </span>
-              <span className="flex-shrink-0 font-mono tabular-nums text-white">
+              <span className="text-text-primary flex-shrink-0 font-mono tabular-nums">
                 {formatValue(slice.percentage)}
               </span>
             </div>
           ))}
           {slices.length > 15 && (
-            <div className="px-2 py-1 text-xs text-slate-500">+{slices.length - 15} more</div>
+            <div className="text-text-muted px-2 py-1 text-xs">+{slices.length - 15} more</div>
           )}
         </div>
       )}

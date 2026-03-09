@@ -2,6 +2,12 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { StackedAreaDataPoint, StackedAreaSeries } from '@/lib/api';
+import {
+  CHART_GRID_COLOR,
+  CHART_HOVER_COLOR,
+  CHART_TOOLTIP_BG,
+  CHART_TOOLTIP_BORDER,
+} from '@/lib/chart-colors';
 
 interface MultiSeriesLineChartProps {
   data: StackedAreaDataPoint[];
@@ -280,7 +286,7 @@ export function MultiSeriesLineChart({
 
   if (!fullData.length) {
     return (
-      <div className="flex h-64 items-center justify-center text-slate-500">No data available</div>
+      <div className="text-text-muted flex h-64 items-center justify-center">No data available</div>
     );
   }
 
@@ -302,13 +308,13 @@ export function MultiSeriesLineChart({
             onClick={() => toggleSeries(s.key)}
             className={`flex items-center gap-2 rounded border px-3 py-1.5 font-mono text-xs transition-colors ${
               visibleSeries.has(s.key)
-                ? 'border-slate-600 bg-slate-800 text-white'
-                : 'border-slate-700 bg-slate-900 text-slate-500'
+                ? 'border-base-border bg-base-elevated text-text-primary'
+                : 'border-base-border bg-base-surface text-text-muted'
             }`}
           >
             <span
               className="h-3 w-3 rounded"
-              style={{ backgroundColor: visibleSeries.has(s.key) ? s.color : '#475569' }}
+              style={{ backgroundColor: visibleSeries.has(s.key) ? s.color : CHART_HOVER_COLOR }}
             />
             {s.label}
           </button>
@@ -319,7 +325,7 @@ export function MultiSeriesLineChart({
         {isZoomed && (
           <button
             onClick={handleReset}
-            className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-2 py-1 font-mono text-xs text-slate-300 transition-colors"
+            className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-2 py-1 font-mono text-xs transition-colors"
           >
             Reset Zoom
           </button>
@@ -344,14 +350,14 @@ export function MultiSeriesLineChart({
               x2={width - padding.right}
               y1={yScale(tick)}
               y2={yScale(tick)}
-              stroke="#334155"
+              stroke={CHART_GRID_COLOR}
               strokeDasharray="2,2"
             />
             <text
               x={padding.left - 8}
               y={yScale(tick)}
               textAnchor="end"
-              className="fill-slate-400 font-mono tabular-nums"
+              className="fill-text-muted font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -366,7 +372,7 @@ export function MultiSeriesLineChart({
             x={xScale(idx)}
             y={height - padding.bottom + 20}
             textAnchor="middle"
-            className="fill-slate-500 font-mono tabular-nums"
+            className="fill-text-muted font-mono tabular-nums"
             fontSize={10}
           >
             {data[idx]?.date || ''}
@@ -408,7 +414,7 @@ export function MultiSeriesLineChart({
               x2={xScale(hoverIndex)}
               y1={padding.top}
               y2={padding.top + chartHeight}
-              stroke="#475569"
+              stroke={CHART_HOVER_COLOR}
               strokeDasharray="3,3"
             />
             {series.map((s) => {
@@ -439,14 +445,14 @@ export function MultiSeriesLineChart({
               width={180}
               height={20 + series.filter((s) => visibleSeries.has(s.key)).length * 16}
               rx={4}
-              fill="#0f172a"
+              fill={CHART_TOOLTIP_BG}
               fillOpacity={0.95}
-              stroke="#334155"
+              stroke={CHART_TOOLTIP_BORDER}
             />
             <text
               x={8}
               y={14}
-              className="fill-slate-300 font-mono font-medium tabular-nums"
+              className="fill-text-secondary font-mono font-medium tabular-nums"
               fontSize={10}
             >
               {data[hoverIndex]?.date}
@@ -458,11 +464,11 @@ export function MultiSeriesLineChart({
                   key={s.key}
                   x={8}
                   y={30 + i * 16}
-                  className="fill-slate-400 font-mono tabular-nums"
+                  className="fill-text-muted font-mono tabular-nums"
                   fontSize={10}
                 >
                   <tspan fill={s.color}>{s.label}: </tspan>
-                  <tspan className="fill-white">
+                  <tspan className="fill-text-primary">
                     {formatValue(seriesValues[s.key][hoverIndex])}
                   </tspan>
                 </text>
@@ -472,12 +478,12 @@ export function MultiSeriesLineChart({
       </svg>
 
       {isZoomed && (
-        <div className="mt-1 text-center font-mono text-xs tabular-nums text-slate-500">
+        <div className="text-text-muted mt-1 text-center font-mono text-xs tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}
 
-      <div className="mt-4 text-center font-mono text-xs text-slate-500">
+      <div className="text-text-muted mt-4 text-center font-mono text-xs">
         Drag to select range | Scroll to zoom | Middle-click drag to pan
       </div>
     </div>
