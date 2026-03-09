@@ -107,7 +107,7 @@ NFT/DOB action detection uses set comparison:
 
 ### Column Family
 
-`CF_ACTIVITIES` — registered in `ALL_CFS` and `HIGH_WRITE_CFS` (large batch optimization tier).
+`CF_ACTIVITIES` — registered in `DOMAIN_CFS` and `HIGH_WRITE_CFS` (large batch optimization tier). Lives in the domain store (mutable, supports delete on rollback).
 
 ### Key Encoding
 
@@ -115,7 +115,7 @@ NFT/DOB action detection uses set comparison:
 lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 76 bytes
 ```
 
-`block_num_desc = i64::MAX - block_num`, `tx_idx_desc = i32::MAX - tx_idx` — descending order so prefix scan returns newest activities first while remaining reorg-safe for append-only storage.
+`block_num_desc = i64::MAX - block_num`, `tx_idx_desc = i32::MAX - tx_idx` — descending order so prefix scan returns newest activities first.
 
 ```rust
 pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8>;
@@ -143,13 +143,13 @@ impl CkbadgerStore {
 
 ### Rollback
 
-Rollback for activity history is driven by the unified undo-log:
+Activities live in the domain store and are directly deleted during reorg rollback:
 
-- Forward write records append-store undo entry (`target_store=AppendOnly`, `cf_name=activities`, `previous_value=None`).
-- Reorg replay prunes append-target undo entries from `reorg_undo_log_by_block`.
-- Append-store keys remain immutable across all paths; reorg does not issue append put/delete.
+- Rollback performs a range scan on `CF_ACTIVITIES` for each affected lock_hash and deletes entries belonging to rolled-back blocks.
+- Same approach applies to `CF_ADDR_TXS` and collection activity CFs (`CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES`).
+- No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
 
-See `docs/prompts/REORG_HANDLING.md` for the authoritative rollback and write-intent boundary.
+See `docs/prompts/REORG_HANDLING.md` for the authoritative rollback boundary.
 
 ## Activity Builder Algorithm
 

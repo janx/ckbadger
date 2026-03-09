@@ -723,7 +723,7 @@ impl CkbadgerStore {
                     );
                 }
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                let info = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+                let info = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
                     anyhow::anyhow!(
                         "missing canonical cell for live outpoint during rollback fallback: outpoint=0x{}:{}",
                         bytes_to_hex(&tx_hash),
@@ -776,7 +776,7 @@ impl CkbadgerStore {
 
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
                 batch.delete_cf(self.cf_consumed_cells(), &key);
-                let info = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+                let info = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
                     anyhow::anyhow!(
                         "missing canonical cell for consumed outpoint during rollback fallback: outpoint=0x{}:{}",
                         bytes_to_hex(&tx_hash),
@@ -825,7 +825,7 @@ impl CkbadgerStore {
                     })?;
                     let outpoint_key = keys::encode_outpoint(&ctx.tx_hash, output_index);
                     if self.get_cf(self.cf_live_cells(), &outpoint_key)?.is_some() {
-                        let info = self.get_cell_by_outpoint_key(&outpoint_key)?.ok_or_else(|| {
+                        let info = cells_store.get_cell_by_outpoint_key(&outpoint_key)?.ok_or_else(|| {
                             anyhow::anyhow!(
                                 "missing canonical cell for live tx output during rollback: outpoint=0x{}:{}",
                                 bytes_to_hex(&ctx.tx_hash),

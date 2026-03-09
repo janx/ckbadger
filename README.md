@@ -575,7 +575,7 @@ ckbadger/
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)
 │   │       └── ws/         # WebSocket handlers
-│   ├── ckbadger-store/     # Embedded RocksDB storage engine (40 column families)
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine (41 domain + 1 append-only CFs)
 │   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 │   └── tui/                # Terminal monitoring UI (library)
 ├── frontend/               # Vite + React SPA

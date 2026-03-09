@@ -60,10 +60,19 @@ pub async fn create_router(config: AppConfig) -> Router {
 
     let cycles_client = CyclesClient::disabled();
 
-    let reader = CkbChainReader::open(&config.ckb_db_path)
-        .expect("Failed to open CKB RocksDB -- check [ckb].workdir in ckbadger.toml");
-    tracing::info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
-    let ckb_store = Some(Arc::new(reader));
+    let ckb_store = match CkbChainReader::open(&config.ckb_db_path) {
+        Ok(reader) => {
+            tracing::info!("CKB direct RocksDB reader opened at {}", config.ckb_db_path);
+            Some(Arc::new(reader))
+        }
+        Err(e) => {
+            tracing::warn!(
+                "CKB direct RocksDB reader unavailable ({}); spore decode will use RPC fallback",
+                e
+            );
+            None
+        }
+    };
 
     let mem_cache = InMemoryCache::new();
 

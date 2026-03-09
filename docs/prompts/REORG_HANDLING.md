@@ -40,9 +40,9 @@ For reorgs up to 36 blocks deep, the indexer:
 
 1. Records a reorg event in `CF_SYNC_META` (`reorg:<timestamp_ms>`)
 2. Calls `rollback_to_block(fork_point)` for atomic multi-CF rollback
-3. Removes rolled-back entries from mutable domain CFs (`block_headers`, `tx_index`, `live_cells`, `token_transfers`, mutable aggregates, etc.)
-4. Preserves append-only history CFs (`activities`, `addr_txs`, `nft_collection_activities`) and only prunes their undo-log journal entries
-5. Rebuilds `addr_balance` and collection activity counts from remaining canonical state, using append-only history only as candidate rows filtered by canonical tx location
+3. Removes rolled-back entries from all domain CFs: `block_headers`, `tx_index`, `live_cells`, `token_transfers`, `activities`, `addr_txs`, collection activity CFs, mutable aggregates, etc.
+4. Activity/addr_txs/collection activity entries are directly deleted via range scan (no ghost entries, no canonical filtering needed)
+5. Rebuilds `addr_balance` and collection activity counts from remaining canonical state
 6. Clears deep-fork flag if it was set
 7. Updates sync cache status and continues syncing
 8. Notifies pipeline fetcher via `reorg_notify_flag` and drains stale batches
@@ -147,5 +147,5 @@ CKBadger should use a unified rollback mechanism:
 Key Insights:
 
 1. CF ownership isolation alone is not enough; write semantics must also be isolated.
-2. In normal sync, append-store keys are expected to be first-write-only; if a key already exists, that is an upstream bug signal.
-3. If `block_number` and `block_hash` are identical, it is the same canonical block and should not trigger duplicate append writes. Duplicate append key writes are therefore treated as correctness violations and should fail immediately.
+2. The append-only store contains only `CF_CELLS` (immutable cell payloads). All other CFs (activities, addr_txs, collection activities, indexes, stats) are in the domain store and are directly deleted on rollback.
+3. In normal sync, append-store keys (`CF_CELLS`) are expected to be first-write-only; if a key already exists, that is an upstream bug signal. Duplicate append key writes are treated as correctness violations and should fail immediately.

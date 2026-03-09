@@ -21,20 +21,21 @@ use ckbadger_store::CkbadgerStore;
 
 fn test_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
     std::mem::forget(dir);
     store
 }
 
 fn test_append_only_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(CkbadgerStore::open_append_only(dir.path()).unwrap());
+    let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
     std::mem::forget(dir);
     store
 }
 
 fn split_test_stores() -> (Arc<CkbadgerStore>, Arc<CkbadgerStore>) {
-    (test_store(), test_append_only_store())
+    let store = test_store();
+    (store.clone(), store)
 }
 
 fn test_ckb_db_path() -> String {
@@ -66,7 +67,7 @@ fn test_config_with_append_only(
 }
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
-    test_config_with_append_only(store, test_append_only_store())
+    test_config_with_append_only(store.clone(), store)
 }
 
 #[tokio::test]

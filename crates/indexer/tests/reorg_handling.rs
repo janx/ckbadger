@@ -1,14 +1,9 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{
-    ActivityEntry, AddressBalance, ScriptInfo, TokenInfo, UndoLogEntry, UndoLogStoreTarget,
-};
+use ckbadger_store::types::{ActivityEntry, AddressBalance, ScriptInfo, TokenInfo};
 use ckbadger_store::CkbadgerStore;
-use ckbadger_store::{
-    keys, CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, TxIndexEntry,
-    CF_ACTIVITIES,
-};
+use ckbadger_store::{CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, TxIndexEntry};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
@@ -73,7 +68,15 @@ fn make_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
 }
 
 /// Insert a fully populated block (header + txs + cells + indexes).
-fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
+/// `domain_store` holds headers, tx indexes, live cell markers, lock indexes.
+/// `cells_store` holds cell payloads (CF_CELLS). If None, uses `domain_store`
+/// via the combined `put_cell` method (for unified test stores).
+fn insert_full_block(
+    domain_store: &CkbadgerStore,
+    cells_store: Option<&CkbadgerStore>,
+    block_num: i64,
+    lock_hash: &[u8],
+) {
     let header = make_header(block_num);
     let cellbase = make_tx_entry(true);
     let normal_tx = make_tx_entry(false);
@@ -88,15 +91,25 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
 
     let cell = make_cell(block_num, lock_hash);
 
-    let mut batch = StoreBatch::new(store);
-    batch.put_block_header(block_num, &header);
-    batch.put_tx_index(block_num, 0, &cellbase);
-    batch.put_tx_index(block_num, 1, &normal_tx);
-    batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
-    batch.put_tx_hash_map(&tx_hash, block_num, 1);
-    batch.put_cell(&tx_hash, 0, &cell);
-    batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
-    batch.commit().unwrap();
+    let mut domain_batch = StoreBatch::new(domain_store);
+    domain_batch.put_block_header(block_num, &header);
+    domain_batch.put_tx_index(block_num, 0, &cellbase);
+    domain_batch.put_tx_index(block_num, 1, &normal_tx);
+    domain_batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
+    domain_batch.put_tx_hash_map(&tx_hash, block_num, 1);
+
+    if let Some(cs) = cells_store {
+        // Split stores: payload to append-only, marker to domain
+        let mut cells_batch = StoreBatch::new(cs);
+        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell);
+        cells_batch.commit().unwrap();
+        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0);
+    } else {
+        // Unified test store: combined write
+        domain_batch.put_cell(&tx_hash, 0, &cell);
+    }
+    domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
+    domain_batch.commit().unwrap();
 }
 
 /// Write the derived CF records (addr_balance + script_info) that forward sync
@@ -140,7 +153,7 @@ fn test_rollback_removes_blocks() {
 
     // Insert blocks 1 through 10
     for i in 1..=10 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
     }
 
     // Verify all 10 blocks exist
@@ -187,7 +200,7 @@ fn test_rollback_removes_transactions() {
 
     // Insert blocks 1 through 6
     for i in 1..=6 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
     }
 
     // Verify txs in block 6 exist
@@ -221,12 +234,12 @@ fn test_rollback_removes_cells_and_indexes() {
 
     // Insert blocks 1 through 4
     for i in 1..=4 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
     }
 
     // Verify cells exist via lock index (4 blocks, 1 cell each)
     let cells_before = store
-        .list_cells_by_lock(&lock_hash, 100, None, &store)
+        .list_cells_by_lock(&lock_hash, 100, None, &append_store)
         .unwrap();
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
@@ -242,7 +255,7 @@ fn test_rollback_removes_cells_and_indexes() {
 
     // Cells from blocks 1-2 should survive via lock index
     let cells_after = store
-        .list_cells_by_lock(&lock_hash, 100, None, &store)
+        .list_cells_by_lock(&lock_hash, 100, None, &append_store)
         .unwrap();
     assert_eq!(
         cells_after.len(),
@@ -258,7 +271,7 @@ fn test_rollback_result_counts() {
 
     // Insert blocks 1 through 8
     for i in 1..=8 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
     }
 
     // Populate derived CFs so inline delta code finds the records it needs.
@@ -314,16 +327,15 @@ fn test_deep_fork_flag() {
 }
 
 #[test]
-fn test_rollback_preserves_activities_history() {
+fn test_rollback_deletes_activities_for_rolled_back_blocks() {
     let root = tempfile::tempdir().unwrap();
     let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
     let append = CkbadgerStore::open_append_only(root.path().join("append-only")).unwrap();
     let lock_hash = vec![0xAA; 32];
 
-    // Insert activities at blocks 100, 200, 300, 400, 500
-    let mut append_batch = StoreBatch::new(&append);
+    // Insert activities at blocks 100, 200, 300, 400, 500 into domain store
     let mut domain_batch = StoreBatch::new(&domain);
-    for (rollback_seq, i) in (1..=5).enumerate() {
+    for i in 1..=5i64 {
         let block = i * 100;
         let entry = ActivityEntry {
             tx_hash: vec![i as u8; 32],
@@ -337,49 +349,34 @@ fn test_rollback_preserves_activities_history() {
             asset_changes: vec![],
             peers: vec![],
         };
-        append_batch.put_activity(&lock_hash, block, 0, &entry);
-        let activity_key =
-            keys::encode_activity_key(&lock_hash, block, 0, &entry.block_hash, &entry.tx_hash);
-        domain_batch.put_reorg_undo_log_by_block(
-            block,
-            rollback_seq as u64,
-            &UndoLogEntry::KeyMutation {
-                target_store: UndoLogStoreTarget::AppendOnly,
-                cf_name: CF_ACTIVITIES.to_string(),
-                key: activity_key,
-                previous_value: None,
-            },
-        );
+        domain_batch.put_activity(&lock_hash, block, 0, &entry);
     }
-    append_batch.commit().unwrap();
+    // Also insert block headers so rollback_to_block works
+    for i in 1..=5i64 {
+        let block = i * 100;
+        domain_batch.put_block_header(block, &make_header(block));
+    }
     domain_batch.commit().unwrap();
 
     // Verify all 5 exist
-    let before = append.list_activities(&lock_hash, 100, None, None).unwrap();
+    let before = domain.list_activities(&lock_hash, 100, None, None).unwrap();
     assert_eq!(before.len(), 5);
 
-    // Rollback to block 300: append-only activities history is preserved.
-    // Need to also insert block headers so rollback_to_block works
-    let mut batch = StoreBatch::new(&domain);
-    for i in 1..=5 {
-        let block = i * 100;
-        batch.put_block_header(block, &make_header(block));
-    }
-    batch.commit().unwrap();
-
+    // Rollback to block 300: activities at blocks 400, 500 should be deleted
     domain
         .rollback_to_block_with_append_only_store(300, Some(&append))
         .unwrap();
-    domain.rollback_via_undo_log(&append, 300).unwrap();
 
-    let after = append.list_activities(&lock_hash, 100, None, None).unwrap();
-    assert_eq!(after.len(), 5, "append-only history should be preserved");
-    // Activities remain in descending block order.
-    assert_eq!(after[0].0, 500);
-    assert_eq!(after[1].0, 400);
-    assert_eq!(after[2].0, 300);
-    assert_eq!(after[3].0, 200);
-    assert_eq!(after[4].0, 100);
+    let after = domain.list_activities(&lock_hash, 100, None, None).unwrap();
+    assert_eq!(
+        after.len(),
+        3,
+        "activities at blocks > 300 should be deleted"
+    );
+    // Remaining activities in descending block order
+    assert_eq!(after[0].0, 300);
+    assert_eq!(after[1].0, 200);
+    assert_eq!(after[2].0, 100);
 }
 
 /// Create a UDT cell with type_script_hash, type_code_hash, and udt_amount set.
@@ -402,7 +399,12 @@ fn make_udt_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
 }
 
 /// Insert a UDT cell into the store with a distinct tx_hash (byte [8]=0xFF).
-fn insert_udt_cell(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
+fn insert_udt_cell(
+    domain_store: &CkbadgerStore,
+    cells_store: Option<&CkbadgerStore>,
+    block_num: i64,
+    lock_hash: &[u8],
+) {
     let mut tx_hash = vec![0u8; 32];
     tx_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     tx_hash[8] = 0xFF; // distinguish from regular tx hashes
@@ -411,12 +413,20 @@ fn insert_udt_cell(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
     let type_hash = cell.type_script_hash.as_ref().unwrap();
     let type_code_hash = cell.type_code_hash.as_ref().unwrap();
 
-    let mut batch = StoreBatch::new(store);
-    batch.put_cell(&tx_hash, 0, &cell);
-    batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
-    batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
-    batch.put_cell_by_type_code(type_code_hash, block_num, &tx_hash, 0);
-    batch.commit().unwrap();
+    let mut domain_batch = StoreBatch::new(domain_store);
+
+    if let Some(cs) = cells_store {
+        let mut cells_batch = StoreBatch::new(cs);
+        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell);
+        cells_batch.commit().unwrap();
+        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0);
+    } else {
+        domain_batch.put_cell(&tx_hash, 0, &cell);
+    }
+    domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
+    domain_batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
+    domain_batch.put_cell_by_type_code(type_code_hash, block_num, &tx_hash, 0);
+    domain_batch.commit().unwrap();
 }
 
 #[test]
@@ -433,12 +443,12 @@ fn test_rollback_updates_derived_cfs_inline() {
 
     // 1. Insert blocks 1-4 with regular cells for lock_hash.
     for i in 1..=4 {
-        insert_full_block(&store, i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
     }
 
     // 2. Insert UDT cells for blocks 3 and 4.
-    insert_udt_cell(&store, 3, &lock_hash);
-    insert_udt_cell(&store, 4, &lock_hash);
+    insert_udt_cell(&store, Some(append_store.as_ref()), 3, &lock_hash);
+    insert_udt_cell(&store, Some(append_store.as_ref()), 4, &lock_hash);
 
     // 3. Write initial derived CF state.
     let mut batch = StoreBatch::new(&store);

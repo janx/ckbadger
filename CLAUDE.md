@@ -67,14 +67,16 @@ For any non-trivial task, use this structure in the final summary or PR descript
 - **Indexer owns all RocksDB writes**: any operation that creates/updates/deletes persistent DB state must be executed by `ckbadger-indexer`.
 - **API is read-only for RocksDB**: `ckbadger-api` must only read from store (secondary/open_secondary path) and must not write persistent state.
 - If API needs missing derived data, API must trigger indexer to compute and write it, then wait/poll for result instead of writing DB directly.
-- **Domain store responsibility**: domain store (`[store].domain_data_path`) is the mutable canonical/query state and may perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
-- **Append-only store responsibility**: append-only store (`[store].append_only_data_path`) is immutable history/log storage. It may only append new records. Update/delete/overwrite of existing append-only records is forbidden.
-- **Append-only correction policy**: if append-only data is wrong, fix indexer logic and rebuild from genesis; do not patch history with in-place update/delete.
+- **Domain store responsibility**: domain store (`[store].domain_data_path`, 41 CFs) holds all mutable canonical/query state including activities, addr_txs, live/consumed cell markers, and all indexes. May perform create/update/delete as required by chain progression and reorg handling, but only via indexer.
+- **Append-only store responsibility**: append-only store (`[store].append_only_data_path`, 1 CF: `CF_CELLS`) holds only immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
+- **Append-only correction policy**: if cell payload data in the append-only store is wrong, fix indexer logic and rebuild from genesis; do not patch cell data with in-place update/delete.
+- **Cross-store cell reads**: live/consumed markers live in domain store; cell payloads live in append-only store. Reading a full cell requires both stores.
 
 ## Store Boundary Check Rules (MANDATORY)
 
+- `CF_CELLS` is the only append-only CF. All other CFs (41) are domain (canonical mutable view).
 - Every storage PR must explicitly state which logical store each new/changed write path targets (`domain` or `append-only`).
-- Any write path to append-only store must be reviewed as append-only semantics: new-key append only, no update, no delete, no overwrite.
+- Any write path to the append-only store (`CF_CELLS`) must be reviewed as append-only semantics: new-key append only, no update, no delete, no overwrite.
 - Do not add helper APIs that allow generic mutation on append-only store (for example update-by-key or delete-by-key operations).
 - If a feature requires mutable behavior, it belongs in domain store, not append-only store.
 - Validation for storage changes must include at least one check/test proving append-only invariants are enforced on touched paths.
@@ -156,7 +158,7 @@ crates/
   api/            # Axum REST/WebSocket server library (port 3001)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/verify/   #   Data integrity verification suite (54 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 42 canonical CFs)
+  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 41 domain + 1 append-only CFs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI library (sync/memory/throughput)
@@ -164,7 +166,7 @@ frontend/         # Vite + React SPA
 docs/ARCHITECTURE_MAP.md     # Module ownership and entry points
 docs/POSTMORTEM.md           # Historical bugs - READ BEFORE CKB/DAO WORK
 docs/INDEXER_PIPELINE.md     # Pipeline architecture and progress tracking
-docs/STORE_SCHEMA.md         # Column families reference (42 CFs)
+docs/STORE_SCHEMA.md         # Column families reference (41 domain + 1 append-only)
 docs/VERIFY.md               # Data integrity verification details
 ```
 
@@ -188,7 +190,7 @@ Sync progress and memory stats are stored in RocksDB (`get_sync_tip()`/`get_sync
 
 ## ckbadger-store (Embedded Storage Engine)
 
-Two logical RocksDB stores: domain (`[store].domain_data_path`, default `data/domain`) and append-only (`[store].append_only_data_path`, default `data/append-only`). Indexer opens read-write; API opens secondary (read-only). See `docs/STORE_SCHEMA.md` for full column family reference (42 CFs, including split stats CFs).
+Two logical RocksDB stores: domain (`[store].domain_data_path`, default `data/domain`, 41 CFs) and append-only (`[store].append_only_data_path`, default `data/append-only`, 1 CF: `CF_CELLS`). Indexer opens read-write; API opens secondary (read-only). The append-only store holds only immutable cell payloads keyed by outpoint; all other state (activities, indexes, stats, etc.) lives in the domain store. See `docs/STORE_SCHEMA.md` for full column family reference.
 
 Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
