@@ -467,6 +467,17 @@ pub struct ObjectCollectionAggregate {
     pub activities_count: i64,
 }
 
+/// Pre-aggregated Identity collection data, maintained inline by the indexer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IdentityCollectionAggregate {
+    pub name: Option<String>,
+    pub standard: IdentityStandard,
+    pub total_count: i64,
+    pub live_count: i64,
+    pub holders_count: i64,
+    pub activities_count: i64,
+}
+
 // ============================================
 // Group G: Statistics
 // ============================================

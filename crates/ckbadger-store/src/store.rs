@@ -305,6 +305,8 @@ pub const CF_ACTIVITIES: &str = "activities";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_OBJECT_COLLECTION_AGG: &str = "object_collection_agg";
 pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities";
+pub const CF_IDENTITY_AGG: &str = "identity_agg";
+pub const CF_IDENTITY_COLLECTION_ACTIVITIES: &str = "identity_collection_activities";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreClass {
@@ -365,6 +367,8 @@ pub const ALL_CFS: &[&str] = &[
     CF_CLUSTER_AGG,
     CF_OBJECT_COLLECTION_AGG,
     CF_OBJECT_COLLECTION_ACTIVITIES,
+    CF_IDENTITY_AGG,
+    CF_IDENTITY_COLLECTION_ACTIVITIES,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -406,10 +410,16 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_TOKEN_TRANSFERS,
     CF_CLUSTER_AGG,
     CF_OBJECT_COLLECTION_AGG,
+    CF_IDENTITY_AGG,
 ];
 
 /// Column families intended for append-only history/archive store.
-pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES];
+pub const APPEND_CFS: &[&str] = &[
+    CF_ADDR_TXS,
+    CF_ACTIVITIES,
+    CF_OBJECT_COLLECTION_ACTIVITIES,
+    CF_IDENTITY_COLLECTION_ACTIVITIES,
+];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -529,6 +539,9 @@ impl CkbadgerStore {
         }
         if std::ptr::eq(cf, self.cf_object_collection_activities()) {
             return Ok(CF_OBJECT_COLLECTION_ACTIVITIES);
+        }
+        if std::ptr::eq(cf, self.cf_identity_collection_activities()) {
+            return Ok(CF_IDENTITY_COLLECTION_ACTIVITIES);
         }
         anyhow::bail!(
             "unknown append-only column family handle in {:?} store",
@@ -892,8 +905,12 @@ impl CkbadgerStore {
     ///
     /// These indexes are primarily append writes during sync and large range scans on reads.
     /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
-    const HISTORICAL_APPEND_CFS: &'static [&'static str] =
-        &[CF_ACTIVITIES, CF_ADDR_TXS, CF_OBJECT_COLLECTION_ACTIVITIES];
+    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[
+        CF_ACTIVITIES,
+        CF_ADDR_TXS,
+        CF_OBJECT_COLLECTION_ACTIVITIES,
+        CF_IDENTITY_COLLECTION_ACTIVITIES,
+    ];
 
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
@@ -1163,6 +1180,12 @@ impl CkbadgerStore {
     }
     pub fn cf_object_collection_activities(&self) -> &ColumnFamily {
         self.cf(CF_OBJECT_COLLECTION_ACTIVITIES)
+    }
+    pub fn cf_identity_agg(&self) -> &ColumnFamily {
+        self.cf(CF_IDENTITY_AGG)
+    }
+    pub fn cf_identity_collection_activities(&self) -> &ColumnFamily {
+        self.cf(CF_IDENTITY_COLLECTION_ACTIVITIES)
     }
 
     // ---- Raw DB operations ----
