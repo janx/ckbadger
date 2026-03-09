@@ -68,7 +68,7 @@ export function LatestTransactions({
   const headerActions = (
     <Link
       href="/transactions"
-      className="hover:text-amber font-mono text-xs text-slate-500 transition-colors"
+      className="text-text-muted hover:text-interactive font-mono text-xs transition-colors"
     >
       VIEW ALL →
     </Link>
@@ -85,12 +85,12 @@ export function LatestTransactions({
               <TerminalRow key={i} hoverable={false}>
                 <div className="flex animate-pulse items-center justify-between">
                   <div className="space-y-2">
-                    <div className="h-4 w-32 rounded bg-slate-800" />
-                    <div className="h-3 w-20 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-4 w-32 rounded" />
+                    <div className="bg-base-elevated h-3 w-20 rounded" />
                   </div>
                   <div className="space-y-2 text-right">
-                    <div className="h-3 w-16 rounded bg-slate-800" />
-                    <div className="h-3 w-12 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-3 w-16 rounded" />
+                    <div className="bg-base-elevated h-3 w-12 rounded" />
                   </div>
                 </div>
               </TerminalRow>
@@ -100,7 +100,7 @@ export function LatestTransactions({
                 key={tx.hash}
                 className={cn(
                   'transition-all duration-500',
-                  newTxHash === tx.hash && 'bg-amber/10 shadow-amber-glow'
+                  newTxHash === tx.hash && 'bg-interactive/10 shadow-interactive-glow'
                 )}
               >
                 <div className="flex items-center justify-between gap-4">
@@ -117,10 +117,10 @@ export function LatestTransactions({
                       />
                     </Link>
                     <div className="mt-1.5 flex items-center gap-2 text-xs">
-                      <span className="text-slate-500">Block</span>
+                      <span className="text-text-muted">Block</span>
                       <Link
                         href={`/blocks/${tx.blockNumber}`}
-                        className="hover:text-terminal-green font-mono text-slate-400"
+                        className="text-text-muted hover:text-interactive font-mono"
                       >
                         #{tx.blockNumber.toLocaleString()}
                       </Link>
@@ -129,11 +129,11 @@ export function LatestTransactions({
 
                   <div className="shrink-0 text-right">
                     <div className="flex items-center gap-1.5 font-mono text-sm">
-                      <span className="text-terminal-dim">{tx.inputsCount}</span>
-                      <span className="text-slate-500">→</span>
-                      <span className="text-amber-dim">{tx.outputsCount}</span>
+                      <span className="text-emphasis-dim">{tx.inputsCount}</span>
+                      <span className="text-text-muted">→</span>
+                      <span className="text-warning-dim">{tx.outputsCount}</span>
                     </div>
-                    <div className="mt-1.5 text-xs text-slate-500">
+                    <div className="text-text-muted mt-1.5 text-xs">
                       {formatTimeAgo(tx.timestamp)}
                     </div>
                   </div>

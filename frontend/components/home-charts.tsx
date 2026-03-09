@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, ChartDataPoint, NetworkStats } from '@/lib/api';
 import { useMemo } from 'react';
 import Link from '@/components/ui/link';
-import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
+import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR, CHART_GRID_COLOR } from '@/lib/chart-colors';
 
 interface MiniChartProps {
   data: ChartDataPoint[];
@@ -79,7 +79,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
   };
 
   if (!data.length) {
-    return <div className="flex h-32 items-center justify-center text-slate-500">No data</div>;
+    return <div className="text-text-muted flex h-32 items-center justify-center">No data</div>;
   }
 
   return (
@@ -91,7 +91,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
             x2={width - padding.right}
             y1={yScale(tick)}
             y2={yScale(tick)}
-            stroke="#334155"
+            stroke={CHART_GRID_COLOR}
             strokeDasharray="2,2"
           />
           <text
@@ -99,7 +99,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
             y={yScale(tick)}
             textAnchor="end"
             dominantBaseline="middle"
-            className="fill-slate-500 font-mono tabular-nums"
+            className="fill-text-muted font-mono tabular-nums"
             fontSize="10"
           >
             {formatYTick(tick)}
@@ -113,7 +113,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
           x={x}
           y={height - 5}
           textAnchor="middle"
-          className="fill-slate-500 font-mono tabular-nums"
+          className="fill-text-muted font-mono tabular-nums"
           fontSize="10"
         >
           {formatXLabel(label)}
@@ -150,31 +150,31 @@ function ChartCard({
 }: ChartCardProps) {
   const content = (
     <div
-      className={`rounded-lg border border-slate-800 bg-slate-900 p-4 ${href ? 'cursor-pointer transition-colors hover:border-slate-700' : ''}`}
+      className={`border-base-border bg-base-surface rounded-lg border p-4 ${href ? 'hover:border-base-border cursor-pointer transition-colors' : ''}`}
     >
       <div className="mb-3 flex items-start justify-between">
         <div>
-          <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
+          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
             {leftLabel}
           </div>
           <div
-            className={`text-terminal-green font-mono text-xl font-bold tabular-nums ${isLoading ? 'animate-pulse' : ''}`}
+            className={`text-emphasis font-mono text-xl font-bold tabular-nums ${isLoading ? 'animate-pulse' : ''}`}
           >
             {leftValue}
           </div>
         </div>
         <div className="text-right">
-          <div className="font-mono text-xs uppercase tracking-wider text-slate-500">
+          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
             {rightLabel}
           </div>
           <div
-            className={`text-amber font-mono text-xl font-bold tabular-nums ${isLoading ? 'animate-pulse' : ''}`}
+            className={`text-warning font-mono text-xl font-bold tabular-nums ${isLoading ? 'animate-pulse' : ''}`}
           >
             {rightValue}
           </div>
         </div>
       </div>
-      <div className="mb-1 font-mono text-xs text-slate-500">{chartTitle}</div>
+      <div className="text-text-muted mb-1 font-mono text-xs">{chartTitle}</div>
       <MiniLineChart data={data} color={chartColor} />
     </div>
   );
@@ -233,7 +233,7 @@ export function HomeCharts({
   }, [hashRateChart]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="grid gap-3 lg:grid-cols-2">
       <ChartCard
         leftLabel="Latest Block"
         leftValue={stats?.latestBlock?.toLocaleString() ?? '-'}

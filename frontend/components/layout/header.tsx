@@ -21,7 +21,7 @@ export function Header() {
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <header className="sticky top-0 z-40 overflow-visible border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-md">
+    <header className="border-base-border/80 bg-base-bg/85 sticky top-0 z-40 overflow-visible border-b backdrop-blur-md">
       <div className="container relative mx-auto flex h-16 items-center justify-between gap-4 px-4 pl-[140px] md:pl-[220px] lg:pl-[260px]">
         <Logo />
 
@@ -38,8 +38,8 @@ export function Header() {
               href={link.href}
               className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                 isLinkActive(link.href)
-                  ? 'border-terminal-green/50 bg-terminal-green/12 text-terminal-green shadow-[inset_0_0_0_1px_rgba(74,222,128,0.18)]'
-                  : 'border-transparent text-slate-300/85 hover:border-slate-700/80 hover:bg-slate-800/35 hover:text-slate-100'
+                  ? 'border-interactive/50 bg-interactive/12 text-interactive shadow-[inset_0_0_0_1px_rgba(0,215,235,0.18)]'
+                  : 'text-text-secondary/85 hover:border-base-border/80 hover:bg-base-elevated/35 hover:text-text-primary border-transparent'
               }`}
             >
               {link.label}
@@ -51,7 +51,7 @@ export function Header() {
           <button
             type="button"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="hover:text-terminal-green flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-800"
+            className="text-text-muted hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
             aria-label="Toggle menu"
           >
             {isMenuOpen ? (
@@ -78,7 +78,7 @@ export function Header() {
       </div>
 
       {isMenuOpen && (
-        <div className="absolute z-50 w-full border-t border-slate-800/80 bg-slate-950/95 shadow-xl backdrop-blur-md md:hidden">
+        <div className="border-base-border/80 bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-md md:hidden">
           <nav className="container mx-auto px-4 py-4">
             <div className="mb-4">
               <SearchBar variant={isHomePage ? 'home' : 'compact'} />
@@ -90,8 +90,8 @@ export function Header() {
                 onClick={() => setIsMenuOpen(false)}
                 className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                   isLinkActive(link.href)
-                    ? 'border-terminal-green/50 bg-terminal-green/12 text-terminal-green'
-                    : 'border-transparent text-slate-300/85 hover:border-slate-700/80 hover:bg-slate-800/35 hover:text-slate-100'
+                    ? 'border-interactive/50 bg-interactive/12 text-interactive'
+                    : 'text-text-secondary/85 hover:border-base-border/80 hover:bg-base-elevated/35 hover:text-text-primary border-transparent'
                 }`}
               >
                 {link.label}

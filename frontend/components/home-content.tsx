@@ -36,10 +36,10 @@ export function HomeContent({ initialData }: HomeContentProps) {
   });
 
   return (
-    <main className="container mx-auto px-4 py-6 sm:py-8">
+    <main className="container mx-auto px-4 py-4 sm:py-6">
       {stats && <SyncBanner stats={stats} />}
 
-      <div className="mt-6">
+      <div className="mt-4">
         <HomeCharts
           stats={stats}
           isLoading={statsLoading}
@@ -48,7 +48,7 @@ export function HomeContent({ initialData }: HomeContentProps) {
         />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <EpochProgress
           epochNumber={parseEpochInfo(stats).epochNumber}
           epochIndex={parseEpochInfo(stats).epochIndex}
@@ -59,15 +59,15 @@ export function HomeContent({ initialData }: HomeContentProps) {
         <MiniStatsCards />
       </div>
 
-      <div className="mt-6">
+      <div className="mt-4">
         <PipelinePreview initialBlocks={initialData.blocks} />
       </div>
 
-      <div className="mt-6">
+      <div className="mt-4">
         <LatestActivities isRealtime={isConnected} />
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <LatestBlocks isRealtime={isConnected} initialBlocks={initialData.blocks} />
         <LatestTransactions
           isRealtime={isConnected}
@@ -85,9 +85,9 @@ function LiveIndicator({ isConnected }: { isConnected: boolean }) {
 
   return (
     <div className="fixed bottom-4 right-4 z-50">
-      <div className="border-terminal-dark/50 flex items-center gap-2 rounded-full border bg-slate-900/90 px-3 py-1.5 backdrop-blur-sm">
+      <div className="border-emphasis-dim/50 bg-base-surface/90 flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-sm">
         <div className="indicator-light" />
-        <span className="text-terminal-green font-mono text-xs uppercase tracking-wider">Live</span>
+        <span className="text-emphasis font-mono text-xs uppercase tracking-wider">Live</span>
       </div>
     </div>
   );

@@ -62,7 +62,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
   const headerActions = (
     <Link
       href="/blocks"
-      className="hover:text-terminal-green font-mono text-xs text-slate-500 transition-colors"
+      className="text-text-muted hover:text-interactive font-mono text-xs transition-colors"
     >
       VIEW ALL →
     </Link>
@@ -79,12 +79,12 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
               <TerminalRow key={i} hoverable={false}>
                 <div className="flex animate-pulse items-center justify-between">
                   <div className="space-y-2">
-                    <div className="h-4 w-20 rounded bg-slate-800" />
-                    <div className="h-3 w-16 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-4 w-20 rounded" />
+                    <div className="bg-base-elevated h-3 w-16 rounded" />
                   </div>
                   <div className="space-y-2 text-right">
-                    <div className="h-3 w-24 rounded bg-slate-800" />
-                    <div className="h-3 w-12 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-3 w-24 rounded" />
+                    <div className="bg-base-elevated h-3 w-12 rounded" />
                   </div>
                 </div>
               </TerminalRow>
@@ -94,7 +94,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                 key={block.number}
                 className={cn(
                   'transition-all duration-500',
-                  newBlockNumber === block.number && 'bg-terminal-green/10 shadow-terminal-glow'
+                  newBlockNumber === block.number && 'bg-emphasis/10 shadow-glow'
                 )}
               >
                 <div className="flex items-center justify-between gap-4">
@@ -103,18 +103,18 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                       href={`/blocks/${block.number}`}
                       className="group flex items-center gap-1 transition-opacity hover:opacity-80"
                     >
-                      <span className="text-xs text-slate-500">#</span>
-                      <span className="text-terminal-green font-mono font-bold tabular-nums">
+                      <span className="text-text-muted text-xs">#</span>
+                      <span className="text-interactive font-mono font-bold tabular-nums">
                         {block.number.toLocaleString()}
                       </span>
                     </Link>
                     <div className="mt-1.5 flex items-center gap-3 text-xs">
-                      <span className="text-slate-500">
-                        <span className="text-terminal-dim">{block.transactionsCount}</span> txs
+                      <span className="text-text-muted">
+                        <span className="text-emphasis-dim">{block.transactionsCount}</span> txs
                       </span>
                       {block.hardforkActivation && (
                         <span
-                          className="rounded border border-amber-900/60 bg-amber-900/30 px-1.5 py-0.5 font-mono text-[10px] text-amber-300"
+                          className="border-warning-dim/60 bg-warning/10 text-warning rounded border px-1.5 py-0.5 font-mono text-[10px]"
                           data-testid={`latest-block-hardfork-${block.number}`}
                         >
                           HF · {block.hardforkActivation.shortName.toUpperCase()}
@@ -133,7 +133,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                       size="sm"
                       showGroupHighlight={false}
                     />
-                    <div className="mt-1.5 text-xs text-slate-500">
+                    <div className="text-text-muted mt-1.5 text-xs">
                       {formatTimeAgo(block.timestamp)}
                     </div>
                   </div>
