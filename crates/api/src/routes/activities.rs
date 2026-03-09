@@ -50,22 +50,22 @@ pub struct ActivityResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(tag = "type")]
 pub enum AssetChangeResponse {
-    #[serde(rename = "token")]
+    #[serde(rename = "token", rename_all = "camelCase")]
     Token {
         type_script_hash: String,
         delta: String,
         symbol: Option<String>,
         decimals: Option<u8>,
     },
-    #[serde(rename = "object")]
+    #[serde(rename = "object", rename_all = "camelCase")]
     Object {
         object_id: String,
         standard: String,
         action: String,
     },
-    #[serde(rename = "identity")]
+    #[serde(rename = "identity", rename_all = "camelCase")]
     Identity {
         identity_id: String,
         standard: String,
@@ -73,7 +73,7 @@ pub enum AssetChangeResponse {
     },
     #[serde(rename = "daoDeposit")]
     DaoDeposit { capacity: String },
-    #[serde(rename = "daoWithdrawRequest")]
+    #[serde(rename = "daoWithdrawRequest", rename_all = "camelCase")]
     DaoWithdrawRequest {
         capacity: String,
         deposit_block: i64,
