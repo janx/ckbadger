@@ -15,7 +15,9 @@ use tracing::{debug, error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{DaoDailySnapshot, LiveCellInfo, NftTypeIndex, SporeTypeIndex};
+use ckbadger_store::types::{
+    DailyActivityStats, DaoDailySnapshot, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+};
 use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::BatchSample;
@@ -3670,6 +3672,8 @@ impl Indexer {
         let mut write_commit_ms = 0.0_f64;
         let mut batch_stats;
         let mut thread_times: Option<[f64; 8]> = None;
+        let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
+        let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
@@ -3682,8 +3686,20 @@ impl Indexer {
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
             let tt;
-            (batch_stats, tt, write_commit_ms) = std::thread::scope(
-                |s| -> Result<(BatchStats, [f64; 8], f64)> {
+            (
+                batch_stats,
+                tt,
+                write_commit_ms,
+                daily_activity_accum,
+                daily_activity_addrs,
+            ) = std::thread::scope(
+                |s| -> Result<(
+                    BatchStats,
+                    [f64; 8],
+                    f64,
+                    HashMap<String, DailyActivityStats>,
+                    HashMap<String, HashSet<[u8; 32]>>,
+                )> {
                     // T1: Cells + Consumption + Cell Indexes (merged T1a+T1b)
                     // CFs: LIVE_CELLS, CONSUMED_CELLS, CELL_BY_LOCK, CELL_BY_TYPE,
                     //       CELL_BY_LOCK_CODE, CELL_BY_TYPE_CODE
@@ -4639,16 +4655,26 @@ impl Indexer {
                     Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
                 });
 
-                    // T_ACT: Activity builder
+                    // T_ACT: Activity builder + daily activity stats accumulation
                     // CFs: ACTIVITIES
+                    type ActResult = (
+                        f64,
+                        f64,
+                        HashMap<String, DailyActivityStats>,
+                        HashMap<String, HashSet<[u8; 32]>>,
+                    );
                     let h_act = if !skip_activities {
-                        Some(s.spawn(|| -> Result<(f64, f64)> {
+                        Some(s.spawn(|| -> Result<ActResult> {
                             let t = Instant::now();
                             // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                             let mut activity_batch = StoreBatch::new(append_only_store);
                             // Use pre-fetched token cache from bulk prefetch (eliminates
                             // a separate get_tokens_batch call that duplicated the UDT prefetch).
                             let token_info_cache = &prefetched_activity_token_cache;
+                            let mut act_stats_accum: HashMap<String, DailyActivityStats> =
+                                HashMap::new();
+                            let mut act_stats_addrs: HashMap<String, HashSet<[u8; 32]>> =
+                                HashMap::new();
                             let mut block_tx_idx = 0usize;
                             for parsed in all_parsed_blocks {
                                 let tx_count = parsed.transactions_count as usize;
@@ -4702,6 +4728,19 @@ impl Indexer {
                                 }
 
                                 for (lock_hash, entry) in activities {
+                                    // Accumulate daily activity stats
+                                    let date = ckbadger_common::block_date_from_ms(entry.timestamp)
+                                        .format("%Y%m%d")
+                                        .to_string();
+                                    let day_stats =
+                                        act_stats_accum.entry(date.clone()).or_default();
+                                    BatchWriter::accumulate_activity_stats(&entry, day_stats);
+                                    if lock_hash.len() == 32 {
+                                        let mut hash = [0u8; 32];
+                                        hash.copy_from_slice(&lock_hash);
+                                        act_stats_addrs.entry(date).or_default().insert(hash);
+                                    }
+
                                     activity_batch.put_activity(
                                         &lock_hash,
                                         entry.block_number,
@@ -4719,7 +4758,12 @@ impl Indexer {
                                     activity_batch,
                                 )?;
                             }
-                            Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                            Ok((
+                                t.elapsed().as_secs_f64() * 1000.0,
+                                commit_ms,
+                                act_stats_accum,
+                                act_stats_addrs,
+                            ))
                         }))
                     } else {
                         None
@@ -4732,9 +4776,13 @@ impl Indexer {
                     let (t6a_ms, t6a_commit_ms) = h6a.join().expect("T6a panicked")?;
                     let (t6b_ms, t6b_commit_ms) = h6b.join().expect("T6b panicked")?;
                     let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                    let (t_act_ms, t_act_commit_ms) = match h_act {
-                        Some(h) => h.join().expect("T_ACT panicked")?,
-                        None => (0.0, 0.0),
+                    let (t_act_ms, t_act_commit_ms, act_accum, act_addrs) = match h_act {
+                        Some(h) => {
+                            let (ms, commit_ms, accum, addrs) =
+                                h.join().expect("T_ACT panicked")?;
+                            (ms, commit_ms, accum, addrs)
+                        }
+                        None => (0.0, 0.0, HashMap::new(), HashMap::new()),
                     };
                     let commit_total_ms = t1_commit_ms
                         + t2_commit_ms
@@ -4747,6 +4795,8 @@ impl Indexer {
                         stats,
                         [t1_ms, t2_ms, t4_ms, t5_ms, t6a_ms, t6b_ms, t7_ms, t_act_ms],
                         commit_total_ms,
+                        act_accum,
+                        act_addrs,
                     ))
                 },
             )?;
@@ -5846,6 +5896,18 @@ impl Indexer {
                     }
 
                     for (lock_hash, entry) in activities {
+                        // Accumulate daily activity stats
+                        let date = ckbadger_common::block_date_from_ms(entry.timestamp)
+                            .format("%Y%m%d")
+                            .to_string();
+                        let day_stats = daily_activity_accum.entry(date.clone()).or_default();
+                        BatchWriter::accumulate_activity_stats(&entry, day_stats);
+                        if lock_hash.len() == 32 {
+                            let mut hash = [0u8; 32];
+                            hash.copy_from_slice(&lock_hash);
+                            daily_activity_addrs.entry(date).or_default().insert(hash);
+                        }
+
                         put_activity_with_undo_log(
                             &mut data_batch,
                             &mut activity_batch,
@@ -6187,6 +6249,16 @@ impl Indexer {
                 .insert_blocks_batch(&block_refs, &mut core_batch)?;
             let mut stats_batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
+            // Write accumulated daily activity stats
+            for (date, stats) in &daily_activity_accum {
+                let unique_count = daily_activity_addrs.get(date).map_or(0, |s| s.len() as u32);
+                self.writer.update_daily_activity_stats(
+                    date,
+                    stats,
+                    unique_count,
+                    &mut stats_batch,
+                )?;
+            }
             debug!(
                 phase = "finalize_headers_stats",
                 batch_start = first_block,

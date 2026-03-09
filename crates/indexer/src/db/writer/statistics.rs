@@ -518,6 +518,97 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Classify an ActivityEntry and accumulate counts into DailyActivityStats.
+    /// Call once per (lock_hash, ActivityEntry) pair from build_activities_for_block().
+    pub fn accumulate_activity_stats(entry: &ActivityEntry, stats: &mut DailyActivityStats) {
+        // Total CKB moved (absolute value)
+        stats.total_ckb_moved = stats
+            .total_ckb_moved
+            .saturating_add(entry.ckb_delta.unsigned_abs());
+
+        // Classify by type
+        if entry.is_cellbase {
+            stats.coinbase_count += 1;
+            return;
+        }
+
+        // Check asset changes for specific types
+        let mut has_dao = false;
+        let mut has_token = false;
+        let mut has_nft = false;
+
+        for change in &entry.asset_changes {
+            match change {
+                AssetChange::DaoDeposit { .. } => {
+                    stats.dao_deposit_count += 1;
+                    has_dao = true;
+                }
+                AssetChange::DaoWithdrawRequest { .. } => {
+                    stats.dao_withdraw_request_count += 1;
+                    has_dao = true;
+                }
+                AssetChange::DaoWithdrawComplete { .. } => {
+                    stats.dao_withdraw_complete_count += 1;
+                    has_dao = true;
+                }
+                AssetChange::Token { .. } => {
+                    has_token = true;
+                }
+                AssetChange::Dob { .. } | AssetChange::Nft { .. } => {
+                    has_nft = true;
+                }
+            }
+        }
+
+        if has_token {
+            stats.token_count += 1;
+        }
+        if has_nft {
+            stats.nft_count += 1;
+        }
+        // Plain transfer: no asset changes, not coinbase
+        if !has_dao && !has_token && !has_nft {
+            stats.transfer_count += 1;
+        }
+    }
+
+    /// Write accumulated daily activity stats for a date.
+    /// Reads existing stats for the date, merges with accumulated, writes back.
+    pub fn update_daily_activity_stats(
+        &self,
+        date: &str,
+        accumulated: &DailyActivityStats,
+        unique_addresses: u32,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        let existing = self.store.get_daily_activity_stats(date)?;
+        let merged = match existing {
+            Some(mut e) => {
+                e.transfer_count += accumulated.transfer_count;
+                e.dao_deposit_count += accumulated.dao_deposit_count;
+                e.dao_withdraw_request_count += accumulated.dao_withdraw_request_count;
+                e.dao_withdraw_complete_count += accumulated.dao_withdraw_complete_count;
+                e.token_count += accumulated.token_count;
+                e.nft_count += accumulated.nft_count;
+                e.coinbase_count += accumulated.coinbase_count;
+                e.unique_address_count = unique_addresses;
+                e.total_ckb_moved = e
+                    .total_ckb_moved
+                    .saturating_add(accumulated.total_ckb_moved);
+                e
+            }
+            None => {
+                let mut s = accumulated.clone();
+                s.unique_address_count = unique_addresses;
+                s
+            }
+        };
+        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
+        let value = bincode::serialize(&merged)?;
+        batch.put_stats(&key, &value);
+        Ok(())
+    }
+
     pub fn refresh_token_24h_transfers(&self) -> Result<u64> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
