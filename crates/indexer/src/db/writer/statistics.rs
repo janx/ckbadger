@@ -519,7 +519,7 @@ impl BatchWriter {
     }
 
     /// Classify an ActivityEntry and accumulate counts into DailyActivityStats.
-    /// Call once per (lock_hash, ActivityEntry) pair from build_activities_for_block().
+    /// Call once per (lock_hash, scripts, ActivityEntry) triple from build_activities_for_block().
     pub fn accumulate_activity_stats(
         entry: &ActivityEntry,
         scripts: &[Vec<u8>],
@@ -1490,6 +1490,11 @@ mod activity_stats_tests {
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.transfer_count, 0);
         assert_eq!(stats.total_ckb_moved, 500_00000000);
+        // Script counted even for coinbase
+        assert_eq!(
+            *stats.script_counts.get(&hex::encode([0x11; 32])).unwrap(),
+            1
+        );
     }
 
     #[test]
