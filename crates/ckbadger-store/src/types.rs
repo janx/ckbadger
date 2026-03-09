@@ -2,6 +2,8 @@
 //!
 //! All types use `bincode` serialization for compact binary storage.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -940,6 +942,9 @@ pub struct DailyActivityStats {
     pub unique_address_count: u32,
     /// Sum of absolute CKB deltas in shannons
     pub total_ckb_moved: u128,
+    /// Per-script activity counts: hex code_hash -> count
+    #[serde(default)]
+    pub script_counts: HashMap<String, u32>,
 }
 
 // ============================================

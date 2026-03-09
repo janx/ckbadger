@@ -118,6 +118,7 @@ fn build_activity_input_views(
 
             Ok(crate::db::writer::activities::InputCellView {
                 lock_script_hash: info.lock_script_hash.clone(),
+                lock_code_hash: info.lock_code_hash.clone(),
                 capacity: info.capacity,
                 occupied_capacity: info.occupied_capacity,
                 type_code_hash: info.type_code_hash.clone(),
@@ -4736,14 +4737,16 @@ impl Indexer {
                                     latest_activities_buf.push_batch(latest_items);
                                 }
 
-                                for (lock_hash, entry) in activities {
+                                for (lock_hash, scripts, entry) in activities {
                                     // Accumulate daily activity stats
                                     let date = ckbadger_common::block_date_from_ms(entry.timestamp)
                                         .format("%Y%m%d")
                                         .to_string();
                                     let day_stats =
                                         act_stats_accum.entry(date.clone()).or_default();
-                                    BatchWriter::accumulate_activity_stats(&entry, day_stats);
+                                    BatchWriter::accumulate_activity_stats(
+                                        &entry, &scripts, day_stats,
+                                    );
                                     if lock_hash.len() == 32 {
                                         let mut hash = [0u8; 32];
                                         hash.copy_from_slice(&lock_hash);
@@ -5908,13 +5911,13 @@ impl Indexer {
                         self.latest_activities.push_batch(latest_items);
                     }
 
-                    for (lock_hash, entry) in activities {
+                    for (lock_hash, scripts, entry) in activities {
                         // Accumulate daily activity stats
                         let date = ckbadger_common::block_date_from_ms(entry.timestamp)
                             .format("%Y%m%d")
                             .to_string();
                         let day_stats = daily_activity_accum.entry(date.clone()).or_default();
-                        BatchWriter::accumulate_activity_stats(&entry, day_stats);
+                        BatchWriter::accumulate_activity_stats(&entry, &scripts, day_stats);
                         if lock_hash.len() == 32 {
                             let mut hash = [0u8; 32];
                             hash.copy_from_slice(&lock_hash);

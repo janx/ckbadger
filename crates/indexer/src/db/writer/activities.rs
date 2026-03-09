@@ -1,6 +1,6 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange};
@@ -77,6 +77,7 @@ impl CodeHashes {
 #[derive(Clone)]
 pub struct InputCellView {
     pub lock_script_hash: Vec<u8>,
+    pub lock_code_hash: Vec<u8>,
     pub capacity: i64,
     pub occupied_capacity: i64,
     pub type_code_hash: Option<Vec<u8>>,
@@ -99,13 +100,16 @@ pub struct TxView<'a> {
     pub outputs: &'a [ParsedCell],
 }
 
+/// `(lock_hash, involved_script_code_hashes, ActivityEntry)` — one per owner per transaction.
+pub type OwnerActivity = (Vec<u8>, Vec<Vec<u8>>, ActivityEntry);
+
 /// Build activities for all transactions in a block.
 ///
-/// Returns `(lock_hash, ActivityEntry)` pairs — one per owner per transaction.
+/// Returns `OwnerActivity` triples — one per owner per transaction.
 pub fn build_activities_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-) -> Vec<(Vec<u8>, ActivityEntry)> {
+) -> Vec<OwnerActivity> {
     let hashes = code_hashes();
     let mut all_activities = Vec::new();
 
@@ -148,6 +152,8 @@ struct OwnerAccum {
     did_ckb_inputs: Vec<Vec<u8>>,
     /// did:ckb IDs seen as outputs
     did_ckb_outputs: Vec<Vec<u8>>,
+    /// Distinct script code_hashes involved (lock + type)
+    involved_scripts: HashSet<Vec<u8>>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
@@ -157,7 +163,7 @@ fn build_tx_activities(
     tx: &TxView<'_>,
     hashes: &CodeHashes,
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-) -> Vec<(Vec<u8>, ActivityEntry)> {
+) -> Vec<OwnerActivity> {
     let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();
 
     // Process inputs (skip inputs with unknown cell info — empty lock_script_hash)
@@ -166,10 +172,12 @@ fn build_tx_activities(
             continue;
         }
         let accum = owners.entry(input.lock_script_hash.clone()).or_default();
+        accum.involved_scripts.insert(input.lock_code_hash.clone());
         accum.input_capacity += input.capacity as i128;
         accum.input_occupied += input.occupied_capacity;
 
         if let Some(ref type_code_hash) = input.type_code_hash {
+            accum.involved_scripts.insert(type_code_hash.clone());
             classify_input(
                 accum,
                 type_code_hash,
@@ -187,6 +195,7 @@ fn build_tx_activities(
     // Process outputs
     for cell in tx.outputs {
         let accum = owners.entry(cell.lock_script_hash.clone()).or_default();
+        accum.involved_scripts.insert(cell.lock_code_hash.clone());
         accum.output_capacity += cell.capacity as i128;
 
         // Compute occupied for output
@@ -201,6 +210,7 @@ fn build_tx_activities(
         accum.output_occupied += occupied;
 
         if let Some(ref type_code_hash) = cell.type_code_hash {
+            accum.involved_scripts.insert(type_code_hash.clone());
             classify_output(
                 accum,
                 type_code_hash,
@@ -318,7 +328,8 @@ fn build_tx_activities(
             peers,
         };
 
-        result.push((lock_hash.clone(), entry));
+        let scripts: Vec<Vec<u8>> = accum.involved_scripts.iter().cloned().collect();
+        result.push((lock_hash.clone(), scripts, entry));
     }
 
     result
@@ -555,6 +566,7 @@ mod tests {
     fn make_input(lock_hash_byte: u8, capacity: i64, occupied: i64) -> InputCellView {
         InputCellView {
             lock_script_hash: vec![lock_hash_byte; 32],
+            lock_code_hash: vec![0x11; 32],
             capacity,
             occupied_capacity: occupied,
             type_code_hash: None,
@@ -593,8 +605,8 @@ mod tests {
 
         let alice_act = activities
             .iter()
-            .find(|(lh, _)| lh == &vec![alice; 32])
-            .map(|(_, e)| e)
+            .find(|(lh, _, _)| lh == &vec![alice; 32])
+            .map(|(_, _, e)| e)
             .unwrap();
         assert_eq!(alice_act.ckb_delta, -100_00000000);
         assert_eq!(alice_act.peers.len(), 1);
@@ -603,8 +615,8 @@ mod tests {
 
         let bob_act = activities
             .iter()
-            .find(|(lh, _)| lh == &vec![bob; 32])
-            .map(|(_, e)| e)
+            .find(|(lh, _, _)| lh == &vec![bob; 32])
+            .map(|(_, _, e)| e)
             .unwrap();
         assert_eq!(bob_act.ckb_delta, 100_00000000);
         assert_eq!(bob_act.peers.len(), 1);
@@ -629,7 +641,7 @@ mod tests {
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 1);
-        let (lock_hash, entry) = &activities[0];
+        let (lock_hash, _, entry) = &activities[0];
         assert_eq!(lock_hash, &vec![miner; 32]);
         assert_eq!(entry.ckb_delta, 5000_00000000);
         assert!(entry.is_cellbase);
@@ -661,7 +673,7 @@ mod tests {
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 1);
-        let (_, entry) = &activities[0];
+        let (_, _, entry) = &activities[0];
         assert_eq!(entry.ckb_delta, 0);
         // Output occupied = (8 + (32+1+20) + 0 + 100) * 100_000_000 = 16_100_000_000
         // occupied_delta = 16_100_000_000 - 6_100_000_000 = 10_000_000_000
@@ -694,7 +706,7 @@ mod tests {
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 3);
 
-        for (lock_hash, entry) in &activities {
+        for (lock_hash, _, entry) in &activities {
             assert_eq!(entry.peers.len(), 2);
             assert!(!entry.peers.contains(lock_hash));
         }
@@ -736,7 +748,7 @@ mod tests {
 
         let alice_entries: Vec<_> = activities
             .iter()
-            .filter(|(lh, _)| lh == &vec![alice; 32])
+            .filter(|(lh, _, _)| lh == &vec![alice; 32])
             .collect();
         assert_eq!(alice_entries.len(), 2);
     }
@@ -793,8 +805,8 @@ mod tests {
 
         let alice_act = activities
             .iter()
-            .find(|(lh, _)| lh == &vec![alice; 32])
-            .map(|(_, e)| e)
+            .find(|(lh, _, _)| lh == &vec![alice; 32])
+            .map(|(_, _, e)| e)
             .unwrap();
         let token_change = alice_act
             .asset_changes
@@ -817,8 +829,8 @@ mod tests {
 
         let bob_act = activities
             .iter()
-            .find(|(lh, _)| lh == &vec![bob; 32])
-            .map(|(_, e)| e)
+            .find(|(lh, _, _)| lh == &vec![bob; 32])
+            .map(|(_, _, e)| e)
             .unwrap();
         let token_change = bob_act
             .asset_changes
@@ -886,8 +898,8 @@ mod tests {
         let activities = build_activities_for_block(&[tx], &token_cache);
         let alice_act = activities
             .iter()
-            .find(|(lh, _)| lh == &vec![alice; 32])
-            .map(|(_, e)| e)
+            .find(|(lh, _, _)| lh == &vec![alice; 32])
+            .map(|(_, _, e)| e)
             .unwrap();
         let token_change = alice_act
             .asset_changes
@@ -938,7 +950,7 @@ mod tests {
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 1);
-        let (_, entry) = &activities[0];
+        let (_, _, entry) = &activities[0];
 
         let dotbit_change = entry
             .asset_changes
@@ -988,7 +1000,7 @@ mod tests {
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 1);
-        let (_, entry) = &activities[0];
+        let (_, _, entry) = &activities[0];
 
         let did_change = entry
             .asset_changes
@@ -1033,10 +1045,45 @@ mod tests {
 
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 1);
-        let (_, entry) = &activities[0];
+        let (_, _, entry) = &activities[0];
         assert!(entry
             .asset_changes
             .iter()
             .any(|change| matches!(change, AssetChange::DaoWithdrawComplete { capacity, .. } if *capacity == 102_00000000)));
+    }
+
+    #[test]
+    fn test_scripts_tracked_for_transfer() {
+        let alice = 0xAA;
+        let bob = 0xBB;
+
+        let outputs = vec![
+            make_output(bob, 100_00000000, None, None, None, vec![]),
+            make_output(alice, 200_00000000, None, None, None, vec![]),
+        ];
+
+        let tx = TxView {
+            tx_hash: &[0x01; 32],
+            block_hash: &[0xA1; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
+            outputs: &outputs,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let (_, alice_scripts, _) = activities
+            .iter()
+            .find(|(lh, _, _)| lh == &vec![alice; 32])
+            .unwrap();
+        assert!(alice_scripts.contains(&vec![0x11; 32]));
+
+        let (_, bob_scripts, _) = activities
+            .iter()
+            .find(|(lh, _, _)| lh == &vec![bob; 32])
+            .unwrap();
+        assert!(bob_scripts.contains(&vec![0x11; 32]));
     }
 }

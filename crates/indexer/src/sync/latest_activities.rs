@@ -8,8 +8,11 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use ckbadger_store::types::{ActivityEntry, LatestActivityItem};
+#[cfg(test)]
+use ckbadger_store::types::ActivityEntry;
+use ckbadger_store::types::LatestActivityItem;
 
+use crate::db::writer::activities::OwnerActivity;
 use crate::parser::cell::ParsedCell;
 
 /// (code_hash, hash_type, args) tuple for lock script identification.
@@ -74,15 +77,15 @@ pub fn collect_lock_scripts_from_outputs(
     map
 }
 
-/// Convert activity pairs + lock script map into LatestActivityItems.
+/// Convert activity triples + lock script map into LatestActivityItems.
 pub fn to_latest_items(
-    activities: &[(Vec<u8>, ActivityEntry)],
+    activities: &[OwnerActivity],
     lock_scripts: &HashMap<Vec<u8>, LockScriptInfo>,
 ) -> Vec<LatestActivityItem> {
     activities
         .iter()
-        .filter(|(_, entry)| !entry.is_cellbase)
-        .map(|(lock_hash, entry)| {
+        .filter(|(_, _, entry)| !entry.is_cellbase)
+        .map(|(lock_hash, _, entry)| {
             let (code_hash, hash_type, args) = lock_scripts
                 .get(lock_hash)
                 .cloned()
@@ -190,6 +193,7 @@ mod tests {
     fn test_to_latest_items_with_missing_lock_script() {
         let activities = vec![(
             vec![0xFF; 32],
+            vec![vec![0x11; 32]],
             ActivityEntry {
                 tx_hash: vec![0x01; 32],
                 block_hash: vec![0x02; 32],
@@ -217,6 +221,7 @@ mod tests {
         let activities = vec![
             (
                 vec![0xAA; 32],
+                vec![vec![0x11; 32]],
                 ActivityEntry {
                     tx_hash: vec![0x01; 32],
                     block_hash: vec![0x02; 32],
@@ -232,6 +237,7 @@ mod tests {
             ),
             (
                 vec![0xBB; 32],
+                vec![vec![0x11; 32]],
                 ActivityEntry {
                     tx_hash: vec![0x03; 32],
                     block_hash: vec![0x02; 32],

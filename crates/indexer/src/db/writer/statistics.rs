@@ -520,11 +520,21 @@ impl BatchWriter {
 
     /// Classify an ActivityEntry and accumulate counts into DailyActivityStats.
     /// Call once per (lock_hash, ActivityEntry) pair from build_activities_for_block().
-    pub fn accumulate_activity_stats(entry: &ActivityEntry, stats: &mut DailyActivityStats) {
+    pub fn accumulate_activity_stats(
+        entry: &ActivityEntry,
+        scripts: &[Vec<u8>],
+        stats: &mut DailyActivityStats,
+    ) {
         // Total CKB moved (absolute value)
         stats.total_ckb_moved = stats
             .total_ckb_moved
             .saturating_add(entry.ckb_delta.unsigned_abs());
+
+        // Count each involved script
+        for code_hash in scripts {
+            let hex = hex::encode(code_hash);
+            *stats.script_counts.entry(hex).or_insert(0) += 1;
+        }
 
         // Classify by type
         if entry.is_cellbase {
@@ -595,6 +605,10 @@ impl BatchWriter {
                 e.total_ckb_moved = e
                     .total_ckb_moved
                     .saturating_add(accumulated.total_ckb_moved);
+                // Merge script counts
+                for (code_hash, count) in &accumulated.script_counts {
+                    *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
+                }
                 e
             }
             None => {
@@ -1470,8 +1484,9 @@ mod activity_stats_tests {
     #[test]
     fn test_coinbase_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(500_00000000, true, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.transfer_count, 0);
         assert_eq!(stats.total_ckb_moved, 500_00000000);
@@ -1480,8 +1495,9 @@ mod activity_stats_tests {
     #[test]
     fn test_plain_transfer_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(-100_00000000, false, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.coinbase_count, 0);
         assert_eq!(stats.total_ckb_moved, 100_00000000);
@@ -1490,6 +1506,7 @@ mod activity_stats_tests {
     #[test]
     fn test_dao_deposit_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             -200_00000000,
             false,
@@ -1497,7 +1514,7 @@ mod activity_stats_tests {
                 capacity: 200_00000000,
             }],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.dao_deposit_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1505,6 +1522,7 @@ mod activity_stats_tests {
     #[test]
     fn test_dao_withdraw_request_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             0,
             false,
@@ -1513,7 +1531,7 @@ mod activity_stats_tests {
                 deposit_block: 50,
             }],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.dao_withdraw_request_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1521,6 +1539,7 @@ mod activity_stats_tests {
     #[test]
     fn test_dao_withdraw_complete_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             200_00000000,
             false,
@@ -1529,7 +1548,7 @@ mod activity_stats_tests {
                 compensation: 5_00000000,
             }],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.dao_withdraw_complete_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1537,6 +1556,7 @@ mod activity_stats_tests {
     #[test]
     fn test_token_transfer_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             0,
             false,
@@ -1547,7 +1567,7 @@ mod activity_stats_tests {
                 decimals: Some(8),
             }],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.token_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1555,6 +1575,7 @@ mod activity_stats_tests {
     #[test]
     fn test_nft_dob_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             0,
             false,
@@ -1564,7 +1585,7 @@ mod activity_stats_tests {
                 action: AssetAction::Mint,
             }],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.nft_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1572,6 +1593,7 @@ mod activity_stats_tests {
     #[test]
     fn test_nft_legacy_classified_correctly() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             0,
             false,
@@ -1581,7 +1603,7 @@ mod activity_stats_tests {
                 action: AssetAction::Transfer,
             }],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.nft_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
@@ -1589,6 +1611,7 @@ mod activity_stats_tests {
     #[test]
     fn test_mixed_token_and_dao_counts_both() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             -500_00000000,
             false,
@@ -1604,7 +1627,7 @@ mod activity_stats_tests {
                 },
             ],
         );
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.dao_deposit_count, 1);
         assert_eq!(stats.token_count, 1);
         assert_eq!(stats.transfer_count, 0);
@@ -1613,13 +1636,23 @@ mod activity_stats_tests {
     #[test]
     fn test_multiple_activities_accumulate() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         // 2 transfers + 1 coinbase
         BatchWriter::accumulate_activity_stats(
             &make_entry(-50_00000000, false, vec![]),
+            &scripts,
             &mut stats,
         );
-        BatchWriter::accumulate_activity_stats(&make_entry(30_00000000, false, vec![]), &mut stats);
-        BatchWriter::accumulate_activity_stats(&make_entry(100_00000000, true, vec![]), &mut stats);
+        BatchWriter::accumulate_activity_stats(
+            &make_entry(30_00000000, false, vec![]),
+            &scripts,
+            &mut stats,
+        );
+        BatchWriter::accumulate_activity_stats(
+            &make_entry(100_00000000, true, vec![]),
+            &scripts,
+            &mut stats,
+        );
         assert_eq!(stats.transfer_count, 2);
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.total_ckb_moved, 180_00000000);
@@ -1628,8 +1661,36 @@ mod activity_stats_tests {
     #[test]
     fn test_negative_delta_uses_absolute_value() {
         let mut stats = DailyActivityStats::default();
+        let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(-999_00000000, false, vec![]);
-        BatchWriter::accumulate_activity_stats(&entry, &mut stats);
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.total_ckb_moved, 999_00000000);
+    }
+
+    #[test]
+    fn test_script_counts_accumulated() {
+        let mut stats = DailyActivityStats::default();
+        let lock_ch = vec![0xAA; 32];
+        let type_ch = vec![0xBB; 32];
+
+        let entry = make_entry(
+            -100_00000000,
+            false,
+            vec![AssetChange::DaoDeposit {
+                capacity: 100_00000000,
+            }],
+        );
+        let scripts = vec![lock_ch.clone(), type_ch.clone()];
+        BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
+
+        assert_eq!(*stats.script_counts.get(&hex::encode(&lock_ch)).unwrap(), 1);
+        assert_eq!(*stats.script_counts.get(&hex::encode(&type_ch)).unwrap(), 1);
+
+        let entry2 = make_entry(-50_00000000, false, vec![]);
+        let scripts2 = vec![lock_ch.clone()];
+        BatchWriter::accumulate_activity_stats(&entry2, &scripts2, &mut stats);
+
+        assert_eq!(*stats.script_counts.get(&hex::encode(&lock_ch)).unwrap(), 2);
+        assert_eq!(*stats.script_counts.get(&hex::encode(&type_ch)).unwrap(), 1);
     }
 }
