@@ -77,13 +77,44 @@ impl ObjectCollectionActivityAccumulator {
         entry.object_actions.push((object_id.to_vec(), action));
     }
 
-    /// Resolve raw actions into Mint/Transfer/Burn and write to the batch.
+    /// Resolve raw actions into Mint/Transfer/Burn and write to the batch
+    /// using the object collection activity CF.
     ///
     /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
     pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
+        Self::flush_inner(self.entries, batch, |b, cid, block_num, tx_idx, entry| {
+            b.put_object_collection_activity(cid, block_num, tx_idx, entry);
+        })
+    }
+
+    /// Resolve raw actions into Mint/Transfer/Burn and write to the batch
+    /// using the identity collection activity CF.
+    ///
+    /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
+    /// can update block-scoped reorg indexes in the domain store.
+    #[allow(dead_code)] // Will be used when DotBit writes are redirected to Identity CF
+    pub fn flush_identity(
+        self,
+        batch: &mut StoreBatch,
+    ) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
+        Self::flush_inner(self.entries, batch, |b, cid, block_num, tx_idx, entry| {
+            b.put_identity_collection_activity(cid, block_num, tx_idx, entry);
+        })
+    }
+
+    /// Shared flush logic: resolves per-object raw actions and writes via the
+    /// provided `write_fn`.
+    fn flush_inner<F>(
+        entries: HashMap<(Vec<u8>, Vec<u8>), AccEntry>,
+        batch: &mut StoreBatch,
+        write_fn: F,
+    ) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)>
+    where
+        F: Fn(&mut StoreBatch, &[u8], i64, i32, &ObjectCollectionActivityEntry),
+    {
         let mut inserted = Vec::new();
-        for ((collection_id, tx_hash), entry) in self.entries {
+        for ((collection_id, tx_hash), entry) in entries {
             // Group by object_id to detect transfers (create + consume of same object)
             let mut per_object: HashMap<Vec<u8>, (bool, bool)> = HashMap::new();
             for (object_id, action) in &entry.object_actions {
@@ -131,7 +162,8 @@ impl ObjectCollectionActivityAccumulator {
                 actions,
             };
 
-            batch.put_object_collection_activity(
+            write_fn(
+                batch,
                 &collection_id,
                 entry.block_number,
                 entry.tx_idx,
@@ -356,6 +388,49 @@ mod tests {
         assert_eq!(results[0].2.actions.len(), 2);
         assert!(matches!(results[0].2.actions[0], AssetAction::Mint));
         assert!(matches!(results[0].2.actions[1], AssetAction::Burn));
+    }
+
+    #[test]
+    fn test_flush_identity_mint() {
+        let (_dir, store) = test_store();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
+        let collection_id = *b"dotbit_collection_______________";
+        let tx_hash = [2u8; 32];
+        let block_hash = [0xA1u8; 32];
+        let nft_id = [3u8; 32];
+
+        acc.record(
+            &collection_id,
+            &tx_hash,
+            &nft_id,
+            &block_hash,
+            100,
+            1,
+            1000,
+            true,
+        );
+
+        let mut batch = StoreBatch::new(&store);
+        let inserted = acc.flush_identity(&mut batch);
+        batch.commit().unwrap();
+
+        assert_eq!(inserted.len(), 1);
+
+        // Verify it was written to identity CF, not object CF
+        let identity_results = store
+            .list_identity_collection_activities(&collection_id, 10, None, None)
+            .unwrap();
+        assert_eq!(identity_results.len(), 1);
+        assert!(matches!(
+            identity_results[0].2.actions[0],
+            AssetAction::Mint
+        ));
+
+        // Verify it was NOT written to object CF
+        let object_results = store
+            .list_object_collection_activities(&collection_id, 10, None, None)
+            .unwrap();
+        assert_eq!(object_results.len(), 0);
     }
 
     #[test]
