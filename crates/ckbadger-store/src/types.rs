@@ -917,6 +917,32 @@ pub enum AssetAction {
 }
 
 // ============================================
+// Group J: Daily Activity Stats
+// ============================================
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DailyActivityStats {
+    /// Plain CKB transfers (no asset changes, not coinbase)
+    pub transfer_count: u32,
+    /// DAO deposit activities
+    pub dao_deposit_count: u32,
+    /// DAO withdraw request activities
+    pub dao_withdraw_request_count: u32,
+    /// DAO withdraw completion activities
+    pub dao_withdraw_complete_count: u32,
+    /// Token (xUDT/sUDT) transfer activities
+    pub token_count: u32,
+    /// NFT activities (Spore + .bit + M-NFT + did:ckb)
+    pub nft_count: u32,
+    /// Coinbase (miner reward) activities
+    pub coinbase_count: u32,
+    /// Number of unique addresses active this day
+    pub unique_address_count: u32,
+    /// Sum of absolute CKB deltas in shannons
+    pub total_ckb_moved: u128,
+}
+
+// ============================================
 // Group I-b: NFT Collection Activities (pre-computed)
 // ============================================
 

@@ -259,6 +259,7 @@ pub mod stats_prefix {
     pub const SPORE_OUTPOINT_BY_ID: u8 = 0x1A;
     pub const DAO_LATEST_STATS: u8 = 0x1B;
     pub const NFT_COLLECTION_OWNER: u8 = 0x1C;
+    pub const ACTIVITY_DAILY: u8 = 0x1D;
 }
 
 // Flat re-exports for convenience
@@ -290,6 +291,7 @@ pub const STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT: u8 = stats_prefix::DOTBIT_ACCOUN
 pub const STATS_PREFIX_SPORE_OUTPOINT_BY_ID: u8 = stats_prefix::SPORE_OUTPOINT_BY_ID;
 pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
 pub const STATS_PREFIX_NFT_COLLECTION_OWNER: u8 = stats_prefix::NFT_COLLECTION_OWNER;
+pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
