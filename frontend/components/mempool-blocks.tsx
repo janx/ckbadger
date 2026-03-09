@@ -662,11 +662,11 @@ function TxBubbleLayer({
                 style={{ top: `calc(${ratio * 100}% - 0.5px)` }}
               />
             ))}
-            <div className="bg-base-border/25 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
-            <div className="bg-base-border/25 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
-            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7 opacity-20">
+            <div className="bg-base-border/50 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
+            <div className="bg-base-border/50 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
+            <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7">
               {Array.from({ length: 56 }, (_, idx) => (
-                <div key={idx} className="border-base-border/10 border" />
+                <div key={idx} className="border-base-border/40 border" />
               ))}
             </div>
           </>

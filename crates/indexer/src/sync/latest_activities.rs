@@ -81,6 +81,7 @@ pub fn to_latest_items(
 ) -> Vec<LatestActivityItem> {
     activities
         .iter()
+        .filter(|(_, entry)| !entry.is_cellbase)
         .map(|(lock_hash, entry)| {
             let (code_hash, hash_type, args) = lock_scripts
                 .get(lock_hash)
@@ -209,5 +210,45 @@ mod tests {
         assert_eq!(items[0].lock_hash_type, 0);
         assert!(items[0].lock_args.is_empty());
         assert_eq!(items[0].entry.block_number, 100);
+    }
+
+    #[test]
+    fn test_to_latest_items_filters_cellbase() {
+        let activities = vec![
+            (
+                vec![0xAA; 32],
+                ActivityEntry {
+                    tx_hash: vec![0x01; 32],
+                    block_hash: vec![0x02; 32],
+                    block_number: 100,
+                    tx_index: 0,
+                    timestamp: 1_700_000_000,
+                    ckb_delta: 1000,
+                    occupied_delta: 0,
+                    is_cellbase: true,
+                    asset_changes: vec![],
+                    peers: vec![],
+                },
+            ),
+            (
+                vec![0xBB; 32],
+                ActivityEntry {
+                    tx_hash: vec![0x03; 32],
+                    block_hash: vec![0x02; 32],
+                    block_number: 100,
+                    tx_index: 1,
+                    timestamp: 1_700_000_000,
+                    ckb_delta: 500,
+                    occupied_delta: 0,
+                    is_cellbase: false,
+                    asset_changes: vec![],
+                    peers: vec![],
+                },
+            ),
+        ];
+        let lock_scripts = HashMap::new();
+        let items = to_latest_items(&activities, &lock_scripts);
+        assert_eq!(items.len(), 1, "cellbase activity should be filtered out");
+        assert_eq!(items[0].lock_hash, vec![0xBB; 32]);
     }
 }

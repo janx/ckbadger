@@ -100,9 +100,17 @@ interface StatCardProps {
     value: string;
   };
   className?: string;
+  valueClassName?: string;
 }
 
-export function StatCard({ label, value, subValue, trend, className }: StatCardProps) {
+export function StatCard({
+  label,
+  value,
+  subValue,
+  trend,
+  className,
+  valueClassName,
+}: StatCardProps) {
   const trendColors = {
     up: 'text-positive',
     down: 'text-negative',
@@ -118,7 +126,12 @@ export function StatCard({ label, value, subValue, trend, className }: StatCardP
   return (
     <div className={cn('text-center', className)}>
       <div className="text-text-muted font-mono text-xs uppercase tracking-wider">{label}</div>
-      <div className="text-text-primary mt-2 font-mono text-2xl font-bold tabular-nums">
+      <div
+        className={cn(
+          'text-text-primary mt-2 font-mono text-2xl font-bold tabular-nums',
+          valueClassName
+        )}
+      >
         {value}
       </div>
       {subValue && <div className="text-text-secondary mt-1 text-sm">{subValue}</div>}

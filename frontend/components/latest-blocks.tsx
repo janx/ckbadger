@@ -124,15 +124,21 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                   </div>
 
                   <div className="min-w-0 text-right">
-                    <HexDisplay
-                      value={block.hash}
-                      truncate
-                      startChars={8}
-                      endChars={6}
-                      color="green"
-                      size="sm"
-                      showGroupHighlight={false}
-                    />
+                    <Link
+                      href={`/blocks/${block.number}`}
+                      className="inline-block transition-opacity hover:opacity-80"
+                    >
+                      <HexDisplay
+                        value={block.hash}
+                        truncate
+                        startChars={8}
+                        endChars={6}
+                        color="green"
+                        size="sm"
+                        showGroupHighlight={false}
+                        copyable={false}
+                      />
+                    </Link>
                     <div className="text-text-muted mt-1.5 text-xs">
                       {formatTimeAgo(block.timestamp)}
                     </div>

@@ -317,7 +317,7 @@ export default function DaoPage() {
               <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
                 Total Deposit
               </div>
-              <div className="text-emphasis mt-2 font-mono text-4xl font-bold tabular-nums">
+              <div className="text-emphasis font-display mt-2 text-4xl font-bold tabular-nums">
                 {stats
                   ? (() => {
                       const f = formatCkbValue(stats.totalDepositedCkb);
@@ -341,6 +341,7 @@ export default function DaoPage() {
               <StatCard
                 label="Estimated APC"
                 value={stats?.estimatedApc ? `${stats.estimatedApc}%` : '...'}
+                valueClassName="font-display"
               />
             </div>
           </TerminalPanelContent>

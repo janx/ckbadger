@@ -13,7 +13,7 @@
   --color-interactive: #00d7eb;
   --color-interactive-hover: #67ffef;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
-  --font-display: var(--font-mono);
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
 }
 
 body {
