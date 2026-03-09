@@ -1704,6 +1704,57 @@ impl CkbadgerStore {
             })?;
         }
 
+        let mut identity_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        let iter = activity_store.iterator_cf(
+            activity_store.cf_identity_collection_activities(),
+            IteratorMode::Start,
+        );
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate identity_collection_activities while repairing rollback state: {}",
+                    e
+                )
+            })?;
+            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
+                continue;
+            }
+            let (collection_id, block_num, tx_idx, block_hash, tx_hash) =
+                keys::decode_nft_collection_activity_key(&key);
+            let Some((canonical_block_num, canonical_tx_idx)) = self.get_tx_location(&tx_hash)?
+            else {
+                continue;
+            };
+            if canonical_block_num != block_num || canonical_tx_idx != tx_idx {
+                continue;
+            }
+            if self
+                .get_tx_index(canonical_block_num, canonical_tx_idx)?
+                .is_none()
+            {
+                continue;
+            }
+            let Some(canonical_header) = self.get_block_header(canonical_block_num)? else {
+                anyhow::bail!(
+                    "missing block header while repairing rollback state from identity_collection_activities: block_num={}, tx_idx={}, tx_hash=0x{}",
+                    canonical_block_num,
+                    canonical_tx_idx,
+                    bytes_to_hex(&tx_hash)
+                );
+            };
+            if canonical_header.hash != block_hash {
+                continue;
+            }
+            let total = identity_activity_totals
+                .entry(collection_id.to_vec())
+                .or_insert(0);
+            *total = total.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "identity collection activities_count overflow while repairing rollback state"
+                )
+            })?;
+        }
+
         for (collection_id, agg) in &mut nft_collection_aggs {
             agg.holders_count = nft_owner_totals.get(collection_id).copied().unwrap_or(0);
             agg.activities_count = nft_activity_totals.get(collection_id).copied().unwrap_or(0);
@@ -1717,6 +1768,23 @@ impl CkbadgerStore {
             batch.put_cf(self.cf_object_collection_agg(), collection_id, &encoded);
             aggregate_rows_written += 1;
         }
+
+        for (collection_id, total) in &identity_activity_totals {
+            let mut agg = self
+                .get_identity_collection_aggregate(collection_id)?
+                .unwrap_or_default();
+            agg.activities_count = *total;
+            let encoded = bincode::serialize(&agg).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to serialize identity collection aggregate during rollback repair: collection_id=0x{}, error={}",
+                    bytes_to_hex(collection_id),
+                    e
+                )
+            })?;
+            batch.put_cf(self.cf_identity_agg(), collection_id, &encoded);
+            aggregate_rows_written += 1;
+        }
+
         stage.finish(
             spore_deleted
                 + nft_deleted
