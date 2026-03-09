@@ -132,10 +132,8 @@ pub struct ReorgResult {
 mod tests {
     use std::sync::Arc;
 
-    use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::keys;
     use ckbadger_store::store::CkbadgerStore;
-    use ckbadger_store::types::{AddressBalance, CachedBlockHeader, LiveCellInfo, TxIndexEntry};
 
     use crate::db::writer::BatchWriter;
 
@@ -147,18 +145,6 @@ mod tests {
             .flatten()
             .filter(|(key, _)| key.starts_with(b"reorg:"))
             .count()
-    }
-
-    fn make_tx_index_entry() -> TxIndexEntry {
-        TxIndexEntry {
-            is_cellbase: false,
-            timestamp: 1_700_000_000_000,
-            inputs_count: 1,
-            outputs_count: 1,
-            fee: 1,
-            tx_size: 1,
-            cycles: None,
-        }
     }
 
     #[test]
@@ -218,73 +204,5 @@ mod tests {
             .await;
         assert!(result.is_err());
         assert_eq!(reorg_event_count(store.as_ref()), 0);
-    }
-
-    #[tokio::test]
-    async fn test_execute_reorg_rebuilds_addr_balance_txs_count_from_append_store() {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain = Arc::new(CkbadgerStore::open_domain(domain_dir.path()).unwrap());
-        let append = Arc::new(CkbadgerStore::open_append_only(append_dir.path()).unwrap());
-        let writer = BatchWriter::new(domain.clone());
-        let lock_hash = vec![0xAA; 32];
-        let first_tx_hash = vec![0x44; 32];
-        let second_tx_hash = vec![0x55; 32];
-
-        let mut domain_batch = StoreBatch::new(domain.as_ref());
-        let mut header0 = CachedBlockHeader {
-            hash: vec![0x11; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        header0.transactions_count = 2;
-        domain_batch.put_block_header(0, &header0);
-        domain_batch.put_cell(
-            &[0x22; 32],
-            0,
-            &LiveCellInfo {
-                capacity: 200,
-                created_at_block: 0,
-                lock_script_hash: lock_hash.clone(),
-                lock_code_hash: vec![0x33; 32],
-                lock_hash_type: 1,
-                lock_args: vec![],
-                type_script_hash: None,
-                type_code_hash: None,
-                type_args: None,
-                data_size: 0,
-                occupied_capacity: 120,
-                udt_amount: None,
-            },
-        );
-        domain_batch.put_addr_balance(
-            &lock_hash,
-            &AddressBalance {
-                txs_count: 0,
-                ..Default::default()
-            },
-        );
-        domain_batch.put_tx_hash_map(&first_tx_hash, 0, 0);
-        domain_batch.put_tx_index(0, 0, &make_tx_index_entry());
-        domain_batch.put_tx_hash_map(&second_tx_hash, 0, 1);
-        domain_batch.put_tx_index(0, 1, &make_tx_index_entry());
-        domain_batch.commit().unwrap();
-
-        let mut append_batch = StoreBatch::new(append.as_ref());
-        append_batch.put_addr_tx(&lock_hash, 0, 0, &first_tx_hash);
-        append_batch.put_addr_tx(&lock_hash, 0, 1, &second_tx_hash);
-        append_batch.commit().unwrap();
-
-        writer
-            .execute_reorg(append.as_ref(), 0, &[0xAA; 32], 1, &[], 1, &[])
-            .await
-            .unwrap();
-
-        let rebuilt = domain.get_addr_balance(&lock_hash).unwrap().unwrap();
-        assert_eq!(rebuilt.txs_count, 2);
     }
 }

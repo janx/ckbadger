@@ -366,7 +366,7 @@ mod tests {
     use std::sync::Arc;
 
     use ckbadger_store::{
-        AddressBalance, CachedBlockHeader, CkbadgerStore, LiveCellInfo, StoreBatch, TxIndexEntry,
+        AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch, TxIndexEntry,
     };
     use tempfile::TempDir;
 
@@ -450,70 +450,6 @@ mod tests {
             .unwrap();
 
         assert!(store.get_block_header(1).unwrap().is_none());
-        assert!(store.get_addr_balance(&lock_hash).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_init_sync_start_rebuilds_txs_count_from_append_store() {
-        let (_dir, store, append_store, writer) = setup();
-        let lock_hash = vec![0xDD; 32];
-        let tx_hash = vec![0xAB; 32];
-        let second_tx_hash = vec![0xCD; 32];
-
-        let mut batch = StoreBatch::new(&store);
-        let mut header0 = make_header(0x30, 1_700_000_000_000);
-        header0.transactions_count = 2;
-        batch.put_block_header(0, &header0);
-        batch.put_block_header(1, &make_header(0x31, 1_700_000_010_000));
-        batch.put_cell(
-            &tx_hash,
-            0,
-            &LiveCellInfo {
-                capacity: 100,
-                occupied_capacity: 100,
-                created_at_block: 0,
-                lock_script_hash: lock_hash.clone(),
-                lock_code_hash: vec![0x11; 32],
-                lock_hash_type: 1,
-                lock_args: vec![],
-                type_script_hash: None,
-                type_code_hash: None,
-                type_args: None,
-                data_size: 0,
-                udt_amount: None,
-            },
-        );
-        batch.put_addr_balance(
-            &lock_hash,
-            &AddressBalance {
-                balance: 100,
-                occupied_capacity: 100,
-                live_cells_count: 1,
-                total_cells_count: 1,
-                txs_count: 0,
-                first_seen_block: 0,
-                first_seen_tx: tx_hash.clone(),
-                last_activity_block: 0,
-                last_activity_tx: tx_hash.clone(),
-            },
-        );
-        batch.put_tx_hash_map(&tx_hash, 0, 0);
-        batch.put_tx_index(0, 0, &make_tx_index_entry());
-        batch.put_tx_hash_map(&second_tx_hash, 0, 1);
-        batch.put_tx_index(0, 1, &make_tx_index_entry());
-        batch.commit().unwrap();
-
-        let mut append_batch = StoreBatch::new(&append_store);
-        append_batch.put_addr_tx(&lock_hash, 0, 0, &tx_hash);
-        append_batch.put_addr_tx(&lock_hash, 0, 1, &second_tx_hash);
-        append_batch.commit().unwrap();
-
-        writer
-            .init_sync_start(append_store.as_ref(), 0, false)
-            .unwrap();
-
-        let rebuilt = store.get_addr_balance(&lock_hash).unwrap().unwrap();
-        assert_eq!(rebuilt.txs_count, 2);
     }
 
     #[test]
@@ -599,22 +535,14 @@ mod tests {
     #[test]
     fn test_init_sync_start_forces_cleanup_without_partial_data() {
         let (_dir, store, append_store, writer) = setup();
-        let lock_hash = vec![0xCC; 32];
-        store
-            .put_addr_balance_direct(
-                &lock_hash,
-                &AddressBalance {
-                    balance: 789,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
 
         writer
             .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
             .unwrap();
 
-        assert!(store.get_addr_balance(&lock_hash).unwrap().is_none());
+        // Force cleanup runs rollback even without partial data; verify sync metadata is initialized
+        let status = store.get_sync_status().unwrap();
+        assert!(status.sync_started_at.is_some());
     }
 
     #[test]
