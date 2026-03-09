@@ -101,6 +101,7 @@ enum CompactOverviewLayout {
 }
 
 pub struct App {
+    build_version: String,
     db: TuiDb,
     sync_status: Option<SyncStatusRow>,
     memory_stats: Option<MemoryStatsData>,
@@ -147,7 +148,7 @@ enum SyncBottleneck {
 }
 
 impl App {
-    pub fn new(db: TuiDb) -> Self {
+    pub fn new(db: TuiDb, build_version: String) -> Self {
         let mut log_entries = VecDeque::with_capacity(LOG_HISTORY_SIZE);
         log_entries.push_back(LogEntry {
             timestamp: Local::now(),
@@ -162,6 +163,7 @@ impl App {
         });
 
         Self {
+            build_version,
             db,
             sync_status: None,
             memory_stats: None,
@@ -624,6 +626,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let now = Local::now();
     let stale_secs = stale_age_secs(app.memory_stats.as_ref());
     let right = Paragraph::new(header_right_line(
+        &app.build_version,
         stale_secs,
         &now.format("%H:%M:%S").to_string(),
     ))
@@ -648,9 +651,11 @@ fn header_title_line(mode_text: &str, mode_color: Color) -> Line<'static> {
     ])
 }
 
-fn header_right_line(stale_secs: Option<i64>, clock_text: &str) -> Line<'static> {
+fn header_right_line(version: &str, stale_secs: Option<i64>, clock_text: &str) -> Line<'static> {
     let (stale_text, stale_color) = stale_status(stale_secs);
     Line::from(vec![
+        Span::styled(version.to_string(), Style::default().fg(SLATE_500)),
+        Span::styled(" │ ", Style::default().fg(SLATE_700)),
         Span::styled(stale_text, Style::default().fg(stale_color)),
         Span::styled(" │ ", Style::default().fg(SLATE_700)),
         Span::styled(clock_text.to_string(), Style::default().fg(FOREGROUND)),
@@ -3976,8 +3981,9 @@ mod tests {
 
     #[test]
     fn test_header_right_line_does_not_include_elapsed_ms() {
-        let line = header_right_line(Some(12), "10:23:45");
+        let line = header_right_line("0.1.0@abc123", Some(12), "10:23:45");
         let text = line_text(&line);
+        assert!(text.contains("0.1.0@abc123"));
         assert!(text.contains("stale 12s"));
         assert!(text.contains("10:23:45"));
         assert!(!text.contains("ago"));
@@ -3985,8 +3991,9 @@ mod tests {
 
     #[test]
     fn test_header_right_line_without_stale_data() {
-        let line = header_right_line(None, "10:23:45");
+        let line = header_right_line("0.1.0@abc123", None, "10:23:45");
         let text = line_text(&line);
+        assert!(text.contains("0.1.0@abc123"));
         assert!(text.contains("stale N/A"));
     }
 
@@ -4744,7 +4751,7 @@ mod tests {
             "/tmp/ckbadger-store-append-only",
         )
         .await;
-        let mut app = App::new(db);
+        let mut app = App::new(db, "test".to_string());
         app.refresh().await;
 
         assert!(app.sync_status.is_none());
@@ -4760,7 +4767,7 @@ mod tests {
         )
         .await;
 
-        let mut app = App::new(db);
+        let mut app = App::new(db, "test".to_string());
         let initial_logs = app.log_entries.len();
         app.log_warning("repeat warning".to_string());
         let after_first = app.log_entries.len();

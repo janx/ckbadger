@@ -25,6 +25,7 @@ pub struct TuiServiceConfig {
     pub supervisor_socket_path: Option<String>,
     pub service_log_dir: Option<String>,
     pub store_runtime_config: StoreRuntimeConfig,
+    pub build_version: String,
 }
 
 /// Run the TUI. Blocks until user exits.
@@ -50,7 +51,7 @@ pub async fn run_tui(config: TuiServiceConfig) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(db);
+    let mut app = App::new(db, config.build_version);
     let tick_rate = Duration::from_millis(config.refresh_ms);
     let res = run_app(&mut terminal, &mut app, tick_rate).await;
 
@@ -136,6 +137,7 @@ mod tests {
             supervisor_socket_path: Some("/run/indexer.sock".to_string()),
             service_log_dir: Some("/run/logs".to_string()),
             store_runtime_config: StoreRuntimeConfig::default(),
+            build_version: "0.1.0@abc123".to_string(),
         };
 
         assert_eq!(config.domain_data_path, "/data/domain");

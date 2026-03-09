@@ -125,6 +125,12 @@ async fn main() -> Result<()> {
         .workdir
         .unwrap_or_else(|| std::env::current_dir().expect("cannot determine current directory"));
 
+    // Print build version as the first line for all commands except TUI
+    // (TUI manages its own terminal and shows the version in the header).
+    if !matches!(cli.command, Command::Tui) {
+        println!("{BUILD_VERSION}");
+    }
+
     match cli.command {
         Command::Init => {
             // For init, set up tracing with default "info" level since
@@ -313,6 +319,7 @@ async fn cmd_tui(workdir: &Path) -> Result<()> {
         supervisor_socket_path: Some(work.indexer_sock.to_string_lossy().to_string()),
         service_log_dir: Some(work.log_dir.to_string_lossy().to_string()),
         store_runtime_config: store_runtime_config(&config.store),
+        build_version: BUILD_VERSION.to_string(),
     };
 
     run_tui(tui_config).await
