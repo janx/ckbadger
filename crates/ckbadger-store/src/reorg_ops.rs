@@ -1885,49 +1885,6 @@ impl CkbadgerStore {
             "Rollback cleanup write batch committed"
         );
 
-        // Rebuild addr_balance from live_cells after rollback. Reorg deletes
-        // created cells in rolled-back blocks, and historical drift can leave
-        // addr_balance inconsistent with live_cells otherwise.
-        info!("Rollback cleanup rebuilding addr_balance from live_cells");
-        let rebuilt_balances =
-            self.rebuild_addr_balances_from_live_cells_with_tx_index_store(tx_index_store)?;
-        info!(
-            rebuilt_balances,
-            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
-            "Rollback cleanup address balance rebuild complete"
-        );
-
-        // Rebuild script usage aggregates from live/consumed cells so script_info
-        // remains consistent after startup rollback/reorg replay.
-        info!("Rollback cleanup rebuilding script_info from cells");
-        let rebuilt_script_infos = self.rebuild_script_infos_from_cells()?;
-        info!(
-            rebuilt_script_infos,
-            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
-            "Rollback cleanup script info rebuild complete"
-        );
-
-        // Rebuild token state from transfer history to heal partial UDT writes
-        // that can survive crash windows before block-header commit markers.
-        info!("Rollback cleanup rebuilding token state from token_transfers");
-        let token_rebuild = self.rebuild_token_state_from_transfers()?;
-        info!(
-            token_holders_cleared = token_rebuild.token_holders_cleared,
-            token_transfer_stats_cleared = token_rebuild.token_transfer_stats_cleared,
-            token_hourly_stats_cleared = token_rebuild.token_hourly_stats_cleared,
-            tokens_written = token_rebuild.tokens_written,
-            tokens_deleted = token_rebuild.tokens_deleted,
-            token_holders_written = token_rebuild.token_holders_written,
-            token_transfer_stats_written = token_rebuild.token_transfer_stats_written,
-            token_hourly_stats_written = token_rebuild.token_hourly_stats_written,
-            elapsed_secs = format!("{:.1}", rollback_started_at.elapsed().as_secs_f64()),
-            "Rollback cleanup token state rebuild complete"
-        );
-
-        // Token daily deltas are date-scoped stats and are already truncated from
-        // replay cutoff onward in stage 7. Keep rollback cleanup single-pass and
-        // avoid full refill/rebuild from cells; replay will write fresh deltas.
-
         // Keep sync_status tip aligned with the rolled-back chain head.
         let tip_hash = if rollback_to >= 0 {
             let header = self.get_block_header(rollback_to)?.ok_or_else(|| {

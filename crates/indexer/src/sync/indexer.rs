@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
 use ckbadger_store::types::HodlTrackerState;
-use ckbadger_store::{CkbadgerStore, CF_ADDR_TXS};
+use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
 use crate::cache::CacheInvalidator;
@@ -936,19 +936,6 @@ impl Indexer {
                 rollback_to = actual_start,
                 "Startup undo-log rollback phase completed"
             );
-            if !self.writer.store().has_cf(CF_ADDR_TXS) {
-                let rebuilt = self
-                    .writer
-                    .store()
-                    .rebuild_addr_balances_from_live_cells_with_tx_index_store(Some(
-                        self.append_only_store.as_ref(),
-                    ))?;
-                info!(
-                    run_id = %self.run_id,
-                    rebuilt,
-                    "Address balances rebuilt from append-only addr_txs after startup cleanup"
-                );
-            }
         }
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
