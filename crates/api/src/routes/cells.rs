@@ -2550,7 +2550,7 @@ fn is_canonical_addr_tx(
 
 fn list_canonical_addr_txs_page(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
+    addr_tx_store: &CkbadgerStore,
     lock_hash: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
@@ -2564,7 +2564,7 @@ fn list_canonical_addr_txs_page(
     let mut scan_cursor = cursor;
 
     loop {
-        let rows = append_only_store.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
+        let rows = addr_tx_store.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
         if rows.is_empty() {
             break;
         }
@@ -2635,7 +2635,7 @@ async fn get_address_transactions(
     // Fetch canonical recent transactions for this address (newest first).
     let addr_txs = list_canonical_addr_txs_page(
         state.store.as_ref(),
-        state.append_only_store.as_ref(),
+        state.store.as_ref(),
         &lock_hash,
         limit + 1,
         cursor,

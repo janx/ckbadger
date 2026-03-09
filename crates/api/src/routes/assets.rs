@@ -855,7 +855,7 @@ fn canonical_nft_collection_activity_locations(
 
 pub(crate) fn list_canonical_nft_collection_activities_page(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
+    _append_only_store: &CkbadgerStore,
     collection_id: &[u8],
     limit: usize,
     cursor: Option<(i64, i32)>,
@@ -872,14 +872,14 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
 
     loop {
         let rows = if identity {
-            append_only_store.list_identity_collection_activities(
+            store.list_identity_collection_activities(
                 collection_id,
                 scan_limit,
                 scan_cursor,
                 action_filter,
             )?
         } else {
-            append_only_store.list_object_collection_activities(
+            store.list_object_collection_activities(
                 collection_id,
                 scan_limit,
                 scan_cursor,
@@ -917,7 +917,7 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
 
 pub(crate) fn count_canonical_nft_collection_activities(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
+    _append_only_store: &CkbadgerStore,
     collection_id: &[u8],
 ) -> anyhow::Result<i64> {
     let mut total = 0i64;
@@ -926,14 +926,14 @@ pub(crate) fn count_canonical_nft_collection_activities(
 
     loop {
         let rows = if identity {
-            append_only_store.list_identity_collection_activities(
+            store.list_identity_collection_activities(
                 collection_id,
                 NFT_ACTIVITY_SCAN_CHUNK_SIZE,
                 cursor,
                 None,
             )?
         } else {
-            append_only_store.list_object_collection_activities(
+            store.list_object_collection_activities(
                 collection_id,
                 NFT_ACTIVITY_SCAN_CHUNK_SIZE,
                 cursor,
@@ -2473,10 +2473,10 @@ async fn list_nft_collection_activities(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
-    // Fetch canonical rows only; skip orphaned append-only history entries.
+    // Fetch canonical rows only; skip orphaned history entries.
     let results = list_canonical_nft_collection_activities_page(
         state.store.as_ref(),
-        state.append_only_store.as_ref(),
+        state.store.as_ref(),
         &collection_id_bytes,
         (limit as usize) + 1,
         cursor,

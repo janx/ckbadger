@@ -289,7 +289,7 @@ async fn get_address_activities(
         .and_then(|c| parse_activity_cursor(c));
 
     let results = list_canonical_activities_page(
-        state.append_only_store.as_ref(),
+        state.store.as_ref(),
         state.store.as_ref(),
         &lock_hash,
         limit + 1,

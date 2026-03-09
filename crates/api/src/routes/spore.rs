@@ -1334,7 +1334,7 @@ async fn get_cluster_activities(
     // Use pre-computed collection activity index and drop orphaned history rows.
     let results = list_canonical_nft_collection_activities_page(
         state.store.as_ref(),
-        state.append_only_store.as_ref(),
+        state.store.as_ref(),
         &id,
         (limit as usize) + 1,
         cursor,
@@ -1465,7 +1465,7 @@ async fn get_cluster(
         .unwrap_or(0);
     let activities_count = count_nft_collection_activities_cached(
         state.store.as_ref(),
-        state.append_only_store.as_ref(),
+        state.store.as_ref(),
         &state.mem_cache,
         &id,
     )
