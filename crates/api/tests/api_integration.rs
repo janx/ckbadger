@@ -12,10 +12,10 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
     DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, EpochStats, HourlyStats,
-    IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
-    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
-    ObjectExtra, ObjectStandard, ReorgEvent, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
-    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo,
+    MinerStats, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta,
+    ObjectEntry, ObjectExtra, ObjectStandard, ReorgEvent, ScriptDailyDelta, ScriptInfo,
+    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -4081,11 +4081,11 @@ async fn test_nft_collection_items_supports_did_ckb_collection_from_spore_data()
             extra: IdentityExtra::DidCkb,
         },
     );
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &did_collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some("did:ckb".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DidCkb,
             total_count: 1,
             live_count: 1,
             holders_count: 0,
@@ -4400,11 +4400,11 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: None,
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 200,
             live_count: 120,
             holders_count: 0,
@@ -4477,11 +4477,11 @@ async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 200,
             live_count: 120,
             holders_count: 77,
@@ -4524,11 +4524,11 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
             extra: IdentityExtra::DidCkb,
         },
     );
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: None,
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DidCkb,
             total_count: 1,
             live_count: 1,
             holders_count: 0,
@@ -4765,11 +4765,11 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     let nft_a_output_index = 2i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 2,
             live_count: 1,
             holders_count: 0,
@@ -4943,11 +4943,11 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
     let output_index = 3i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 1,
             live_count: 1,
             holders_count: 0,
@@ -5018,11 +5018,11 @@ async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fas
     let nft_id = [0x67u8; 20];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 1,
             live_count: 1,
             holders_count: 0,
@@ -5188,11 +5188,11 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
     let owner_c = vec![0x33u8; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_object_collection_aggregate(
+    batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 4,
             live_count: 3,
             holders_count: 2,
@@ -5319,11 +5319,11 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     let burn_tx = vec![0xa3; 32];
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_object_collection_aggregate(
+    core_batch.put_identity_collection_aggregate(
         &collection_id,
-        &ObjectCollectionAggregate {
+        &IdentityCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: ObjectStandard::default(),
+            standard: IdentityStandard::DotBit,
             total_count: 1,
             live_count: 0,
             holders_count: 0,
@@ -5470,7 +5470,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     core_batch.commit().unwrap();
 
     let mut append_batch = StoreBatch::new(append_only_store.as_ref());
-    append_batch.put_object_collection_activity(
+    append_batch.put_identity_collection_activity(
         &collection_id,
         100,
         0,
@@ -5481,7 +5481,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             actions: vec![AssetAction::Mint],
         },
     );
-    append_batch.put_object_collection_activity(
+    append_batch.put_identity_collection_activity(
         &collection_id,
         200,
         0,
@@ -5492,7 +5492,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             actions: vec![AssetAction::Transfer],
         },
     );
-    append_batch.put_object_collection_activity(
+    append_batch.put_identity_collection_activity(
         &collection_id,
         300,
         0,
