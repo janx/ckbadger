@@ -762,6 +762,17 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_stats_object(), key);
     }
 
+    // ---- Identity collection aggregates ----
+
+    pub fn put_identity_collection_aggregate(
+        &mut self,
+        collection_id: &[u8],
+        agg: &IdentityCollectionAggregate,
+    ) {
+        let value = bincode::serialize(agg).expect("serialize IdentityCollectionAggregate");
+        self.put_cf(self.store.cf_identity_agg(), collection_id, &value);
+    }
+
     // ---- Activities ----
 
     pub fn put_activity(
@@ -800,6 +811,26 @@ impl<'a> StoreBatch<'a> {
         );
         let value = bincode::serialize(entry).expect("serialize ObjectCollectionActivityEntry");
         self.put_cf(self.store.cf_object_collection_activities(), key, &value);
+    }
+
+    // ---- Identity collection activities ----
+
+    pub fn put_identity_collection_activity(
+        &mut self,
+        collection_id: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        entry: &ObjectCollectionActivityEntry,
+    ) {
+        let key = keys::encode_nft_collection_activity_key(
+            collection_id,
+            block_num,
+            tx_idx,
+            &entry.block_hash,
+            &entry.tx_hash,
+        );
+        let value = bincode::serialize(entry).expect("serialize identity collection activity");
+        self.put_cf(self.store.cf_identity_collection_activities(), key, &value);
     }
 
     // ---- Statistics ----
