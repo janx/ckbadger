@@ -321,6 +321,8 @@ function SearchResultIcon({ type }: { type: string }) {
       case 'spore':
       case 'cluster':
       case 'nft':
+      case 'object':
+      case 'identity':
         return (
           <path
             d="M12 5 7 8v5l5 3 5-3V8l-5-3Zm0 0v11"

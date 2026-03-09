@@ -39,9 +39,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
   const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');
-  const [activityFilter, setActivityFilter] = useState<'all' | 'ckb' | 'token' | 'nft' | 'dao'>(
-    'all'
-  );
+  const [activityFilter, setActivityFilter] = useState<
+    'all' | 'ckb' | 'token' | 'object' | 'identity' | 'dao'
+  >('all');
   const [cellFilter, setCellFilter] = useState<'all' | 'ckb' | 'token' | 'dao'>('all');
 
   const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
@@ -292,14 +292,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           </span>
         );
       }
-      case 'dob':
+      case 'object':
         return (
           <Badge variant="neutral">
             {change.action.charAt(0).toUpperCase() + change.action.slice(1)}{' '}
             {formatAssetStandardLabel(change.standard)}
           </Badge>
         );
-      case 'nft':
+      case 'identity':
         return (
           <Badge variant="neutral">
             {change.action.charAt(0).toUpperCase() + change.action.slice(1)}{' '}
@@ -702,7 +702,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {activeTab === 'activities' && (
               <>
                 <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
-                  {(['all', 'ckb', 'token', 'nft', 'dao'] as const).map((f) => (
+                  {(['all', 'ckb', 'token', 'object', 'identity', 'dao'] as const).map((f) => (
                     <button
                       key={f}
                       onClick={() => {
@@ -715,7 +715,16 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           : 'text-text-muted hover:text-text-secondary'
                       }`}
                     >
-                      {{ all: 'All', ckb: 'CKB', token: 'Token', nft: 'NFT/DOB', dao: 'DAO' }[f]}
+                      {
+                        {
+                          all: 'All',
+                          ckb: 'CKB',
+                          token: 'Token',
+                          object: 'Object',
+                          identity: 'Identity',
+                          dao: 'DAO',
+                        }[f]
+                      }
                     </button>
                   ))}
                 </div>
@@ -811,7 +820,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-muted py-12 text-center">
                     {activityFilter === 'all'
                       ? 'No activities'
-                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'nft' ? 'NFT/DOB' : activityFilter.toUpperCase()} activities on this page`}
+                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
                   </div>
                 )}
               </>

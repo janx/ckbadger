@@ -22,7 +22,7 @@ import { api, Asset } from '@/lib/api';
 import { getClusterDetailHref, getNftDetailHref, getTokenDetailHref } from '@/lib/detail-routes';
 import { formatCkbCompact } from '@/lib/utils';
 
-type AssetTab = 'token' | 'nft';
+type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
 type StorageTierFilter = 'all' | 'fully_onchain' | 'offchain_dependent' | 'unknown';
 type AssetSortKey =
@@ -37,7 +37,8 @@ type AssetSortKey =
   | 'onchainRatio';
 
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
-const NFT_STANDARD_OPTIONS = ['spore', 'm-nft', 'dotbit', 'did:ckb'];
+const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
+const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
 const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
   'all',
   'fully_onchain',
@@ -46,11 +47,11 @@ const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
 ];
 
 function normalizeAssetTab(value: string | null): AssetTab {
-  if (value === 'dob') {
-    // Backward compatibility: old assets links used ?type=dob.
-    return 'nft';
+  if (value === 'dob' || value === 'nft') {
+    // Backward compatibility: old assets links used ?type=dob or ?type=nft.
+    return 'object';
   }
-  if (value === 'nft' || value === 'token') {
+  if (value === 'object' || value === 'identity' || value === 'token') {
     return value;
   }
   return 'token';
@@ -118,7 +119,12 @@ function formatStandardLabel(standard: string): string {
 }
 
 function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
-  const options = assetType === 'token' ? TOKEN_STANDARD_OPTIONS : NFT_STANDARD_OPTIONS;
+  const options =
+    assetType === 'token'
+      ? TOKEN_STANDARD_OPTIONS
+      : assetType === 'object'
+        ? OBJECT_STANDARD_OPTIONS
+        : IDENTITY_STANDARD_OPTIONS;
   if (selectedStandard && !options.includes(selectedStandard)) {
     return [...options, selectedStandard];
   }
@@ -167,7 +173,7 @@ function AssetTable({
         standard,
         sortKey,
         sortDirection,
-        storageTier: assetType === 'nft' && storageTier !== 'all' ? storageTier : undefined,
+        storageTier: assetType === 'object' && storageTier !== 'all' ? storageTier : undefined,
       }),
     placeholderData: keepPreviousData,
   });
@@ -339,7 +345,7 @@ function AssetTable({
                             }}
                           />
                         )}
-                        {asset.assetType === 'nft' && asset.standard === 'spore' && (
+                        {asset.assetType === 'object' && asset.standard === 'spore' && (
                           <span className="text-sm leading-none">🗂️</span>
                         )}
                       </span>
@@ -351,7 +357,7 @@ function AssetTable({
                           >
                             {getAssetName(asset)}
                           </span>
-                          {asset.assetType === 'nft' && getStorageBadgeLabel(asset) && (
+                          {asset.assetType === 'object' && getStorageBadgeLabel(asset) && (
                             <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
                               {getStorageBadgeLabel(asset)}
                             </span>
@@ -533,7 +539,7 @@ export function AssetsPageClient() {
       <main className="container mx-auto px-4 py-8">
         <PageHeader
           title="Assets"
-          subtitle="Browse tokens and NFTs on the CKB network"
+          subtitle="Browse tokens, objects, and identities on the CKB network"
           actions={
             <form
               onSubmit={handleSearch}
@@ -586,7 +592,7 @@ export function AssetsPageClient() {
                       </option>
                     ))}
                   </select>
-                  {activeTab === 'nft' && (
+                  {activeTab === 'object' && (
                     <select
                       value={storageTier}
                       onChange={(event) => handleStorageTierChange(event.target.value)}
@@ -602,7 +608,8 @@ export function AssetsPageClient() {
                   )}
                   <TabsList className="ml-auto">
                     <TabsTrigger value="token">Tokens</TabsTrigger>
-                    <TabsTrigger value="nft">NFTs</TabsTrigger>
+                    <TabsTrigger value="object">Objects</TabsTrigger>
+                    <TabsTrigger value="identity">Identities</TabsTrigger>
                   </TabsList>
                 </div>
               }
@@ -620,12 +627,21 @@ export function AssetsPageClient() {
                 />
               </TabsContent>
 
-              <TabsContent value="nft">
+              <TabsContent value="object">
                 <AssetTable
-                  assetType="nft"
+                  assetType="object"
                   search={search}
                   standard={standard}
                   storageTier={storageTier}
+                />
+              </TabsContent>
+
+              <TabsContent value="identity">
+                <AssetTable
+                  assetType="identity"
+                  search={search}
+                  standard={standard}
+                  storageTier="all"
                 />
               </TabsContent>
             </TerminalPanelContent>

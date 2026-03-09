@@ -59,16 +59,16 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
         </span>
       );
     }
-    case 'dob':
+    case 'object':
       return (
         <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
-          {change.standard === 'did_ckb' ? 'did:ckb' : 'Spore'} {change.action}
+          {change.standard === 'm-nft' ? 'M-NFT' : 'Spore'} {change.action}
         </span>
       );
-    case 'nft':
+    case 'identity':
       return (
         <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
-          {change.standard === 'm-nft' ? 'M-NFT' : '.bit'} {change.action}
+          {change.standard === 'did_ckb' ? 'did:ckb' : '.bit'} {change.action}
         </span>
       );
     case 'daoDeposit':

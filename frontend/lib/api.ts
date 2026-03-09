@@ -402,7 +402,7 @@ interface AssetTransfer {
   blockNumber: number;
   txIndex: number;
   eventIndex: number;
-  assetCategory: 'token' | 'dob' | 'nft' | 'dao';
+  assetCategory: 'token' | 'object' | 'identity' | 'dao';
   assetType: string;
   assetId: string | null;
   direction: 'in' | 'out';
@@ -418,13 +418,13 @@ interface AssetTransfer {
 interface AssetTransferParams {
   limit?: number;
   cursor?: string;
-  category?: 'token' | 'dob' | 'nft' | 'dao';
+  category?: 'token' | 'object' | 'identity' | 'dao';
 }
 
 type ActivityAssetChange =
   | { type: 'token'; typeScriptHash: string; delta: string; symbol?: string; decimals?: number }
-  | { type: 'dob'; dobId: string; standard: string; action: string }
-  | { type: 'nft'; nftId: string; standard: string; action: string }
+  | { type: 'object'; objectId: string; standard: string; action: string }
+  | { type: 'identity'; identityId: string; standard: string; action: string }
   | { type: 'daoDeposit'; capacity: string }
   | { type: 'daoWithdrawRequest'; capacity: string; depositBlock: number }
   | { type: 'daoWithdrawComplete'; capacity: string; compensation: string };
@@ -467,7 +467,8 @@ interface DailyActivityStats {
   daoWithdrawRequestCount: number;
   daoWithdrawCompleteCount: number;
   tokenCount: number;
-  nftCount: number;
+  objectCount: number;
+  identityCount: number;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
@@ -602,7 +603,7 @@ interface TokenQueryParams {
 
 interface Asset {
   id: string;
-  assetType: 'token' | 'nft';
+  assetType: 'token' | 'object' | 'identity';
   standard: string;
   name: string | null;
   symbol: string | null;
@@ -633,7 +634,7 @@ interface Asset {
 
 interface AssetQueryParams {
   limit?: number;
-  type?: 'token' | 'nft';
+  type?: 'token' | 'object' | 'identity';
   standard?: string;
   cursor?: string;
   search?: string;
@@ -2026,7 +2027,8 @@ export const api = {
             s.daoWithdrawRequestCount +
             s.daoWithdrawCompleteCount +
             s.tokenCount +
-            s.nftCount +
+            s.objectCount +
+            s.identityCount +
             s.coinbaseCount
         ),
       })),
@@ -2044,7 +2046,8 @@ export const api = {
           transfer: String(s.transferCount),
           dao: String(s.daoDepositCount + s.daoWithdrawRequestCount + s.daoWithdrawCompleteCount),
           token: String(s.tokenCount),
-          nft: String(s.nftCount),
+          object: String(s.objectCount),
+          identity: String(s.identityCount),
           coinbase: String(s.coinbaseCount),
         },
       })),
@@ -2052,7 +2055,8 @@ export const api = {
         { key: 'transfer', label: 'Transfer', color: '#8ce00a' },
         { key: 'dao', label: 'DAO', color: '#00d7eb' },
         { key: 'token', label: 'Token', color: '#a78bfa' },
-        { key: 'nft', label: 'NFT', color: '#f472b6' },
+        { key: 'object', label: 'Object', color: '#f472b6' },
+        { key: 'identity', label: 'Identity', color: '#2dd4bf' },
         { key: 'coinbase', label: 'Coinbase', color: '#64748b' },
       ],
       title: 'Activity Type Breakdown',

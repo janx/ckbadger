@@ -219,7 +219,7 @@ describe('api', () => {
       server.use(
         http.get('*/api/v1/assets', ({ request }) => {
           const url = new URL(request.url);
-          expect(url.searchParams.get('type')).toBe('nft');
+          expect(url.searchParams.get('type')).toBe('object');
           expect(url.searchParams.get('standard')).toBe('spore');
           return HttpResponse.json({
             data: [],
@@ -231,7 +231,7 @@ describe('api', () => {
         })
       );
 
-      await api.getAssets({ type: 'nft', standard: 'spore' });
+      await api.getAssets({ type: 'object', standard: 'spore' });
     });
 
     it('fetches script occupation chart by script name', async () => {

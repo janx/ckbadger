@@ -19,7 +19,8 @@ const ACTIVITY_COLORS: Record<string, string> = {
   'DAO Deposit': '#00d7eb',
   'DAO Withdraw': '#ffb900',
   Token: '#a78bfa',
-  NFT: '#f472b6',
+  Object: '#f472b6',
+  Identity: '#2dd4bf',
 };
 
 function buildChartData(stats: DailyActivityStats) {
@@ -32,7 +33,8 @@ function buildChartData(stats: DailyActivityStats) {
       color: ACTIVITY_COLORS['DAO Withdraw'],
     },
     { label: 'Token', value: stats.tokenCount, color: ACTIVITY_COLORS.Token },
-    { label: 'NFT', value: stats.nftCount, color: ACTIVITY_COLORS.NFT },
+    { label: 'Object', value: stats.objectCount, color: ACTIVITY_COLORS.Object },
+    { label: 'Identity', value: stats.identityCount, color: ACTIVITY_COLORS.Identity },
   ].filter((s) => s.value > 0);
 }
 
@@ -76,7 +78,8 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
       today.daoWithdrawRequestCount +
       today.daoWithdrawCompleteCount +
       today.tokenCount +
-      today.nftCount
+      today.objectCount +
+      today.identityCount
     : 0;
 
   return (

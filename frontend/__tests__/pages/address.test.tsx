@@ -506,8 +506,8 @@ describe('AddressDetailPage', () => {
           peers: [],
           assetChanges: [
             {
-              type: 'nft',
-              nftId: '0x1111111111111111111111111111111111111111',
+              type: 'identity',
+              identityId: '0x1111111111111111111111111111111111111111',
               standard: 'dotbit',
               action: 'mint',
             },
@@ -527,7 +527,7 @@ describe('AddressDetailPage', () => {
     });
   });
 
-  it('shows did:ckb label in activities for dob changes', async () => {
+  it('shows did:ckb label in activities for identity changes', async () => {
     vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       data: [
@@ -542,8 +542,8 @@ describe('AddressDetailPage', () => {
           peers: [],
           assetChanges: [
             {
-              type: 'dob',
-              dobId: '0x2222222222222222222222222222222222222222222222222222222222222222',
+              type: 'identity',
+              identityId: '0x2222222222222222222222222222222222222222222222222222222222222222',
               standard: 'did_ckb',
               action: 'mint',
             },

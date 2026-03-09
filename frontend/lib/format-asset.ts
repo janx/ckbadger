@@ -42,14 +42,14 @@ export function getAssetLabel(transfer: AssetTransfer): string {
 
 export function getAssetBadgeVariant(
   category: string
-): 'green' | 'amber' | 'red' | 'gray' | 'purple' {
+): 'green' | 'amber' | 'red' | 'gray' | 'purple' | 'blue' {
   switch (category) {
     case 'token':
       return 'amber';
-    case 'dob':
+    case 'object':
       return 'purple';
-    case 'nft':
-      return 'green';
+    case 'identity':
+      return 'blue';
     case 'dao':
       return 'gray';
     default:
