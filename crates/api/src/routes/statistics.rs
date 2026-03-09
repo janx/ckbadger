@@ -3574,7 +3574,7 @@ mod tests {
     #[test]
     fn test_visit_live_cells_in_batches_reads_only_live_cells() {
         let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
         let live_a = ckbadger_store::LiveCellInfo {
             capacity: 100_00000000,

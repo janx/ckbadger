@@ -1878,21 +1878,18 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let panicked = std::panic::catch_unwind(|| {
-            let _ = store.cf_addr_txs();
+            let _ = store.cf_cells();
         })
         .is_err();
         assert!(panicked, "domain store should reject append-only CF access");
     }
 
     #[test]
-    fn test_open_domain_rejects_activities_cf() {
+    fn test_open_domain_allows_activities_cf() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let panicked = std::panic::catch_unwind(|| {
-            let _ = store.cf_activities();
-        })
-        .is_err();
-        assert!(panicked, "domain store should reject activities CF access");
+        // Activities CF is now in domain store, access should succeed
+        let _ = store.cf_activities();
     }
 
     #[test]
@@ -1907,10 +1904,10 @@ mod tests {
     }
 
     #[test]
-    fn test_open_append_only_allows_activities_cf() {
+    fn test_open_append_only_allows_cells_cf() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let _ = store.cf_activities();
+        let _ = store.cf_cells();
     }
 
     #[test]
@@ -1939,7 +1936,7 @@ mod tests {
     fn test_append_only_put_rejects_duplicate_same_value() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let cf = store.cf_addr_txs();
+        let cf = store.cf_cells();
 
         store.put_cf(cf, b"k1", b"v1").unwrap();
         let err = store.put_cf(cf, b"k1", b"v1").unwrap_err();
@@ -1950,7 +1947,7 @@ mod tests {
     fn test_append_only_put_rejects_overwrite_with_different_value() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let cf = store.cf_addr_txs();
+        let cf = store.cf_cells();
 
         store.put_cf(cf, b"k1", b"v1").unwrap();
         let err = store.put_cf(cf, b"k1", b"v2").unwrap_err();
@@ -1961,7 +1958,7 @@ mod tests {
     fn test_append_only_delete_rejected_in_normal_path() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let cf = store.cf_addr_txs();
+        let cf = store.cf_cells();
 
         store.put_cf(cf, b"k1", b"v1").unwrap();
         let err = store.delete_cf(cf, b"k1").unwrap_err();
@@ -1974,7 +1971,7 @@ mod tests {
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
 
         let mut batch = WriteBatch::default();
-        batch.put_cf(store.cf_addr_txs(), b"k1", b"v1");
+        batch.put_cf(store.cf_cells(), b"k1", b"v1");
         let err = store.write_batch(batch).unwrap_err();
         assert!(err
             .to_string()
@@ -1985,14 +1982,14 @@ mod tests {
     fn test_append_only_delete_rejected_in_append_validated_intent() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let cf = store.cf_addr_txs();
+        let cf = store.cf_cells();
         store.put_cf(cf, b"k1", b"v1").unwrap();
 
         let mut batch = WriteBatch::default();
         let err = store
             .apply_batch_op_by_cf_name_with_intent(
                 &mut batch,
-                CF_ADDR_TXS,
+                CF_CELLS,
                 b"k1",
                 None,
                 StoreWriteIntent::AppendValidated,
@@ -2204,7 +2201,7 @@ mod tests {
     #[test]
     fn test_memory_stats() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         store
             .put_cf(store.cf_cells(), b"cell-k1", b"cell-v1")
             .unwrap();
@@ -2356,12 +2353,7 @@ mod tests {
 
     #[test]
     fn test_historical_append_cfs_expected_members() {
-        let expected = &[
-            CF_ACTIVITIES,
-            CF_ADDR_TXS,
-            CF_OBJECT_COLLECTION_ACTIVITIES,
-            CF_IDENTITY_COLLECTION_ACTIVITIES,
-        ];
+        let expected = &[CF_CELLS];
         for cf in expected {
             assert!(
                 CkbadgerStore::is_historical_append_cf(cf),

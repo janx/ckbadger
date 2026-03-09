@@ -2748,48 +2748,11 @@ mod tests {
     fn test_collection_activity_helpers_filter_orphaned_append_history() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
-        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
         let collection_id = [0xAB; 32];
 
         let stale_tx = vec![0x30; 32];
         let canonical_tx_new = vec![0x20; 32];
         let canonical_tx_old = vec![0x10; 32];
-
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_object_collection_activity(
-            &collection_id,
-            30,
-            0,
-            &make_collection_activity(
-                &stale_tx,
-                &[0x30; 32],
-                1_700_000_030_000,
-                AssetAction::Transfer,
-            ),
-        );
-        append_batch.put_object_collection_activity(
-            &collection_id,
-            20,
-            0,
-            &make_collection_activity(
-                &canonical_tx_new,
-                &[0x20; 32],
-                1_700_000_020_000,
-                AssetAction::Transfer,
-            ),
-        );
-        append_batch.put_object_collection_activity(
-            &collection_id,
-            10,
-            0,
-            &make_collection_activity(
-                &canonical_tx_old,
-                &[0x10; 32],
-                1_700_000_010_000,
-                AssetAction::Mint,
-            ),
-        );
-        append_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -2801,6 +2764,39 @@ mod tests {
             cycles: None,
         };
         let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_object_collection_activity(
+            &collection_id,
+            30,
+            0,
+            &make_collection_activity(
+                &stale_tx,
+                &[0x30; 32],
+                1_700_000_030_000,
+                AssetAction::Transfer,
+            ),
+        );
+        domain_batch.put_object_collection_activity(
+            &collection_id,
+            20,
+            0,
+            &make_collection_activity(
+                &canonical_tx_new,
+                &[0x20; 32],
+                1_700_000_020_000,
+                AssetAction::Transfer,
+            ),
+        );
+        domain_batch.put_object_collection_activity(
+            &collection_id,
+            10,
+            0,
+            &make_collection_activity(
+                &canonical_tx_old,
+                &[0x10; 32],
+                1_700_000_010_000,
+                AssetAction::Mint,
+            ),
+        );
         domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
@@ -2813,7 +2809,7 @@ mod tests {
 
         let listed = list_canonical_nft_collection_activities_page(
             &domain,
-            &append,
+            &domain,
             &collection_id,
             3,
             None,
@@ -2827,17 +2823,17 @@ mod tests {
         assert_eq!(listed[1].2.tx_hash, canonical_tx_old);
 
         let count =
-            count_canonical_nft_collection_activities(&domain, &append, &collection_id).unwrap();
+            count_canonical_nft_collection_activities(&domain, &domain, &collection_id).unwrap();
         assert_eq!(count, 2);
 
         let mem_cache = InMemoryCache::new();
         let canonical_cached =
-            count_nft_collection_activities_cached(&domain, &append, &mem_cache, &collection_id)
+            count_nft_collection_activities_cached(&domain, &domain, &mem_cache, &collection_id)
                 .unwrap();
         assert_eq!(canonical_cached, 2);
 
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_object_collection_activity(
+        let mut domain_batch2 = StoreBatch::new(&domain);
+        domain_batch2.put_object_collection_activity(
             &collection_id,
             40,
             0,
@@ -2848,9 +2844,9 @@ mod tests {
                 AssetAction::Mint,
             ),
         );
-        append_batch.commit().unwrap();
+        domain_batch2.commit().unwrap();
         let cached_count =
-            count_nft_collection_activities_cached(&domain, &append, &mem_cache, &collection_id)
+            count_nft_collection_activities_cached(&domain, &domain, &mem_cache, &collection_id)
                 .unwrap();
         assert_eq!(cached_count, 2);
     }
@@ -2859,34 +2855,8 @@ mod tests {
     fn test_collection_activity_helpers_filter_competing_block_hash_history() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
-        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
         let collection_id = [0xAC; 32];
         let tx_hash = vec![0x55; 32];
-
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_object_collection_activity(
-            &collection_id,
-            20,
-            0,
-            &make_collection_activity(
-                &tx_hash,
-                &[0xAA; 32],
-                1_700_000_020_000,
-                AssetAction::Transfer,
-            ),
-        );
-        append_batch.put_object_collection_activity(
-            &collection_id,
-            20,
-            0,
-            &make_collection_activity(
-                &tx_hash,
-                &[0xBB; 32],
-                1_700_000_020_001,
-                AssetAction::Transfer,
-            ),
-        );
-        append_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -2898,6 +2868,28 @@ mod tests {
             cycles: None,
         };
         let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_object_collection_activity(
+            &collection_id,
+            20,
+            0,
+            &make_collection_activity(
+                &tx_hash,
+                &[0xAA; 32],
+                1_700_000_020_000,
+                AssetAction::Transfer,
+            ),
+        );
+        domain_batch.put_object_collection_activity(
+            &collection_id,
+            20,
+            0,
+            &make_collection_activity(
+                &tx_hash,
+                &[0xBB; 32],
+                1_700_000_020_001,
+                AssetAction::Transfer,
+            ),
+        );
         domain_batch.put_tx_hash_map(&tx_hash, 20, 0);
         domain_batch.put_tx_index(20, 0, &tx_index);
         domain_batch.put_block_header(20, &make_header(0xBB));
@@ -2905,7 +2897,7 @@ mod tests {
 
         let listed = list_canonical_nft_collection_activities_page(
             &domain,
-            &append,
+            &domain,
             &collection_id,
             10,
             None,
@@ -2917,7 +2909,7 @@ mod tests {
         assert_eq!(listed[0].2.block_hash, vec![0xBB; 32]);
 
         let count =
-            count_canonical_nft_collection_activities(&domain, &append, &collection_id).unwrap();
+            count_canonical_nft_collection_activities(&domain, &domain, &collection_id).unwrap();
         assert_eq!(count, 1);
     }
 

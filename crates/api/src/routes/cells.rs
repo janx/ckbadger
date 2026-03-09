@@ -3619,18 +3619,11 @@ mod tests {
     fn test_list_canonical_addr_txs_page_filters_orphaned_entries() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
-        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
         let lock_hash = [0xAA; 32];
 
         let stale_tx = vec![0x30; 32];
         let canonical_tx_new = vec![0x20; 32];
         let canonical_tx_old = vec![0x10; 32];
-
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);
-        append_batch.put_addr_tx(&lock_hash, 20, 0, &canonical_tx_new);
-        append_batch.put_addr_tx(&lock_hash, 10, 0, &canonical_tx_old);
-        append_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -3642,6 +3635,9 @@ mod tests {
             cycles: None,
         };
         let mut domain_batch = StoreBatch::new(&domain);
+        domain_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);
+        domain_batch.put_addr_tx(&lock_hash, 20, 0, &canonical_tx_new);
+        domain_batch.put_addr_tx(&lock_hash, 10, 0, &canonical_tx_old);
         domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_old, 10, 0);
@@ -3649,7 +3645,7 @@ mod tests {
         domain_batch.put_tx_index(10, 0, &tx_index);
         domain_batch.commit().unwrap();
 
-        let rows = list_canonical_addr_txs_page(&domain, &append, &lock_hash, 3, None).unwrap();
+        let rows = list_canonical_addr_txs_page(&domain, &domain, &lock_hash, 3, None).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, 20);
         assert_eq!(rows[1].0, 10);

@@ -203,7 +203,7 @@ mod tests {
 
     fn test_append_only_store() -> (TempDir, CkbadgerStore) {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         (dir, store)
     }
 

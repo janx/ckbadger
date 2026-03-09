@@ -196,7 +196,7 @@ mod tests {
         let (domain, append, _root) = open_dual_store();
 
         domain.put_cf(domain.cf_sync_meta(), b"k1", b"v1").unwrap();
-        append.put_cf(append.cf_addr_txs(), b"a1", b"tx1").unwrap();
+        append.put_cf(append.cf_cells(), b"c1", b"cell1").unwrap();
 
         // Forward writes happened in block 10.
         domain.put_cf(domain.cf_sync_meta(), b"k1", b"v2").unwrap();
@@ -220,9 +220,9 @@ mod tests {
             1,
             &UndoLogEntry::KeyMutation {
                 target_store: UndoLogStoreTarget::AppendOnly,
-                cf_name: crate::store::CF_ADDR_TXS.to_string(),
-                key: b"a1".to_vec(),
-                previous_value: Some(b"tx1".to_vec()),
+                cf_name: crate::store::CF_CELLS.to_string(),
+                key: b"c1".to_vec(),
+                previous_value: Some(b"cell1".to_vec()),
             },
         );
         batch.put_reorg_undo_log_by_block(
@@ -256,11 +256,11 @@ mod tests {
             .is_none());
         assert_eq!(
             append
-                .get_cf(append.cf_addr_txs(), b"a1")
+                .get_cf(append.cf_cells(), b"c1")
                 .unwrap()
                 .unwrap()
                 .as_slice(),
-            b"tx1"
+            b"cell1"
         );
 
         let k0 = keys::encode_reorg_undo_log_key(10, 0);

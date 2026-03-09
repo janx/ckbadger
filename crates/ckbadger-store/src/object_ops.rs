@@ -501,7 +501,7 @@ mod tests {
 
     fn test_append_only_store() -> (TempDir, CkbadgerStore) {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         (dir, store)
     }
 
@@ -982,7 +982,7 @@ mod tests {
     #[test]
     fn test_list_object_collection_activities_keeps_two_rows_same_position_different_tx_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let cid = [0x04u8; 32];
 
         let mut batch = StoreBatch::new(&store);

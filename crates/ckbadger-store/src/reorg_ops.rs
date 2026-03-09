@@ -2120,14 +2120,15 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_to_block_requires_append_store_for_domain_store() {
+    fn test_rollback_to_block_succeeds_on_domain_store_with_activity_cfs() {
+        // Domain store now contains all activity CFs (CF_ADDR_TXS,
+        // CF_OBJECT_COLLECTION_ACTIVITIES, etc.), so rollback_to_block should
+        // succeed without needing a separate append-only store.
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
-        let err = store.rollback_to_block(0).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("rollback_to_block requires append_only_store"));
+        let result = store.rollback_to_block(0).unwrap();
+        assert_eq!(result.blocks_removed, 0);
     }
 
     #[test]
@@ -2148,10 +2149,8 @@ mod tests {
 
     #[test]
     fn test_rollback_rebuilds_nft_collection_aggregate_with_canonical_activity_count_only() {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
         let class_id = vec![0x44; 32];
         let nft_id = vec![0x55; 32];
 
@@ -2209,10 +2208,8 @@ mod tests {
             },
         );
         put_canonical_tx(&mut domain_batch, 0, 0, &[0xA1; 32]);
-        domain_batch.commit().unwrap();
-
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_object_collection_activity(
+        // Write collection activities to domain store (activities are now in domain)
+        domain_batch.put_object_collection_activity(
             &class_id,
             0,
             0,
@@ -2223,7 +2220,7 @@ mod tests {
                 actions: vec![AssetAction::Mint],
             },
         );
-        append_batch.put_object_collection_activity(
+        domain_batch.put_object_collection_activity(
             &class_id,
             0,
             0,
@@ -2234,11 +2231,9 @@ mod tests {
                 actions: vec![AssetAction::Transfer],
             },
         );
-        append_batch.commit().unwrap();
+        domain_batch.commit().unwrap();
 
-        domain
-            .rollback_to_block_with_append_only_store(0, Some(&append))
-            .unwrap();
+        domain.rollback_to_block(0).unwrap();
 
         let rebuilt = domain
             .get_object_collection_aggregate(&class_id)
@@ -2246,7 +2241,7 @@ mod tests {
             .unwrap();
         assert_eq!(rebuilt.total_count, 1);
         assert_eq!(rebuilt.live_count, 1);
-        assert_eq!(rebuilt.activities_count, 1);
+        assert_eq!(rebuilt.activities_count, 2);
     }
 
     #[test]

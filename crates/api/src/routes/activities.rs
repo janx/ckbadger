@@ -458,30 +458,12 @@ mod tests {
     fn test_list_canonical_activities_page_filters_orphaned_entries() {
         let root = tempfile::tempdir().unwrap();
         let domain_path = root.path().join("domain");
-        let append_path = root.path().join("append-only");
         let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
-        let append = CkbadgerStore::open_append_only(&append_path).unwrap();
 
         let lock_hash = [0xAA; 32];
         let stale_tx = vec![0x30; 32];
         let canonical_tx_new = vec![0x20; 32];
         let canonical_tx_old = vec![0x10; 32];
-
-        let mut append_activity_batch = StoreBatch::new(&append);
-        append_activity_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
-        append_activity_batch.put_activity(
-            &lock_hash,
-            20,
-            0,
-            &make_activity(&canonical_tx_new, 20, 0),
-        );
-        append_activity_batch.put_activity(
-            &lock_hash,
-            10,
-            0,
-            &make_activity(&canonical_tx_old, 10, 0),
-        );
-        append_activity_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -494,6 +476,10 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain);
+        // Activities are now in domain store
+        domain_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
+        domain_batch.put_activity(&lock_hash, 20, 0, &make_activity(&canonical_tx_new, 20, 0));
+        domain_batch.put_activity(&lock_hash, 10, 0, &make_activity(&canonical_tx_old, 10, 0));
         // Simulate stale/orphan-like mapping without canonical tx_index entry.
         domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
@@ -506,7 +492,7 @@ mod tests {
         domain_batch.commit().unwrap();
 
         let rows =
-            list_canonical_activities_page(&append, &domain, &lock_hash, 3, None, None).unwrap();
+            list_canonical_activities_page(&domain, &domain, &lock_hash, 3, None, None).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, 20);
         assert_eq!(rows[1].0, 10);
@@ -518,24 +504,8 @@ mod tests {
     fn test_list_canonical_activities_page_filters_competing_block_hash_history() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
-        let append = CkbadgerStore::open_append_only(root.path().join("append")).unwrap();
         let lock_hash = [0x44; 32];
         let tx_hash = vec![0x77; 32];
-
-        let mut append_activity_batch = StoreBatch::new(&append);
-        append_activity_batch.put_activity(
-            &lock_hash,
-            20,
-            0,
-            &make_activity_with_block_hash(&tx_hash, &[0xAA; 32], 20, 0),
-        );
-        append_activity_batch.put_activity(
-            &lock_hash,
-            20,
-            0,
-            &make_activity_with_block_hash(&tx_hash, &[0xBB; 32], 20, 0),
-        );
-        append_activity_batch.commit().unwrap();
 
         let tx_index = TxIndexEntry {
             is_cellbase: false,
@@ -548,13 +518,26 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain);
+        // Activities are now in domain store
+        domain_batch.put_activity(
+            &lock_hash,
+            20,
+            0,
+            &make_activity_with_block_hash(&tx_hash, &[0xAA; 32], 20, 0),
+        );
+        domain_batch.put_activity(
+            &lock_hash,
+            20,
+            0,
+            &make_activity_with_block_hash(&tx_hash, &[0xBB; 32], 20, 0),
+        );
         domain_batch.put_tx_hash_map(&tx_hash, 20, 0);
         domain_batch.put_tx_index(20, 0, &tx_index);
         domain_batch.put_block_header(20, &make_header(0xBB));
         domain_batch.commit().unwrap();
 
         let rows =
-            list_canonical_activities_page(&append, &domain, &lock_hash, 10, None, None).unwrap();
+            list_canonical_activities_page(&domain, &domain, &lock_hash, 10, None, None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].2.tx_hash, tx_hash);
         assert_eq!(rows[0].2.block_hash, vec![0xBB; 32]);

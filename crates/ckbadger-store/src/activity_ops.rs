@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_list_activities_limit_zero_returns_empty() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn test_list_activities_unknown_filter_returns_empty() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn test_list_activities_keeps_two_rows_same_position_different_tx_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAB; 32];
 
         let mut batch = StoreBatch::new(&store);

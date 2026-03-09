@@ -251,86 +251,34 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_via_undo_log_preserves_append_history_cfs() {
+    fn test_rollback_via_undo_log_preserves_append_only_cells() {
+        // After dual-store refactor, CF_CELLS is the only append-only CF.
+        // Undo log entries targeting AppendOnly are skipped during rollback,
+        // so cells written to append-only store survive rollback.
         let domain_dir = tempfile::tempdir().unwrap();
         let append_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
         let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
-        let lock_hash = [0x44; 32];
-        let collection_id = [0x55; 24];
 
-        let addr_keep = keys::encode_addr_tx_key(&lock_hash, 10, 0, &[0xA1; 32]);
-        let addr_drop = keys::encode_addr_tx_key(&lock_hash, 20, 0, &[0xA2; 32]);
+        let cell_key_keep = ckbadger_store::keys::encode_outpoint(&[0xA1; 32], 0);
+        let cell_key_drop = ckbadger_store::keys::encode_outpoint(&[0xA2; 32], 0);
         append_store
-            .put_cf(append_store.cf_addr_txs(), &addr_keep, &[0x01])
+            .put_cf(append_store.cf_cells(), &cell_key_keep, &[0x01])
             .unwrap();
         append_store
-            .put_cf(append_store.cf_addr_txs(), &addr_drop, &[0x02])
+            .put_cf(append_store.cf_cells(), &cell_key_drop, &[0x02])
             .unwrap();
 
-        let act_keep = keys::encode_activity_key(&lock_hash, 11, 0, &[0x11; 32], &[0xB1; 32]);
-        let act_drop = keys::encode_activity_key(&lock_hash, 21, 0, &[0x21; 32], &[0xB2; 32]);
-        append_store
-            .put_cf(append_store.cf_activities(), &act_keep, &[0x03])
-            .unwrap();
-        append_store
-            .put_cf(append_store.cf_activities(), &act_drop, &[0x04])
-            .unwrap();
-
-        let nft_keep = keys::encode_nft_collection_activity_key(
-            &collection_id,
-            12,
-            0,
-            &[0x12; 32],
-            &[0xC1; 32],
-        );
-        let nft_drop = keys::encode_nft_collection_activity_key(
-            &collection_id,
-            22,
-            0,
-            &[0x22; 32],
-            &[0xC2; 32],
-        );
-        append_store
-            .put_cf(
-                append_store.cf_object_collection_activities(),
-                &nft_keep,
-                &[0x05],
-            )
-            .unwrap();
-        append_store
-            .put_cf(
-                append_store.cf_object_collection_activities(),
-                &nft_drop,
-                &[0x06],
-            )
-            .unwrap();
-
+        // Write an undo entry targeting append-only store for CF_CELLS
         let mut domain_batch = StoreBatch::new(&domain_store);
         let mut undo_seq_by_block = HashMap::new();
         put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
-            UndoSeqScope::AppendAddrTx,
+            UndoSeqScope::AppendAddrTx, // scope is just for sequence partitioning
             20,
-            ckbadger_store::CF_ADDR_TXS,
-            &addr_drop,
-        );
-        put_append_delete_undo_entry(
-            &mut domain_batch,
-            &mut undo_seq_by_block,
-            UndoSeqScope::AppendActivity,
-            21,
-            ckbadger_store::CF_ACTIVITIES,
-            &act_drop,
-        );
-        put_append_delete_undo_entry(
-            &mut domain_batch,
-            &mut undo_seq_by_block,
-            UndoSeqScope::AppendObjectCollectionActivity,
-            22,
-            ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
-            &nft_drop,
+            ckbadger_store::CF_CELLS,
+            &cell_key_drop,
         );
         domain_batch.commit().unwrap();
 
@@ -338,38 +286,25 @@ mod tests {
             .rollback_via_undo_log(&append_store, 15)
             .unwrap();
 
+        // Both cells survive because append-only entries are skipped during rollback
         assert!(append_store
-            .get_cf(append_store.cf_addr_txs(), &addr_keep)
+            .get_cf(append_store.cf_cells(), &cell_key_keep)
             .unwrap()
             .is_some());
         assert!(append_store
-            .get_cf(append_store.cf_addr_txs(), &addr_drop)
-            .unwrap()
-            .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_activities(), &act_keep)
-            .unwrap()
-            .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_activities(), &act_drop)
-            .unwrap()
-            .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_object_collection_activities(), &nft_keep)
-            .unwrap()
-            .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_object_collection_activities(), &nft_drop)
+            .get_cf(append_store.cf_cells(), &cell_key_drop)
             .unwrap()
             .is_some());
     }
 
     #[test]
-    fn test_put_activity_with_undo_log_targets_append_store() {
+    fn test_put_activity_with_undo_log_writes_to_domain_without_undo() {
+        // After dual-store refactor, activities are in domain store.
+        // put_activity_with_undo_log writes directly to domain batch
+        // without creating undo log entries (domain rollback deletes
+        // activity entries directly via range-delete).
         let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
         let lock_hash = [0x44; 32];
         let entry = ckbadger_store::types::ActivityEntry {
             tx_hash: vec![0xAB; 32],
@@ -396,34 +331,21 @@ mod tests {
         );
         domain_batch.commit().unwrap();
 
+        // Verify NO undo entries were written
         let iter = domain_store.iterator_cf(
             domain_store.cf_reorg_undo_log_by_block(),
             rocksdb::IteratorMode::Start,
         );
-        let mut found = false;
-        for item in iter {
-            let (_key, value) = item.unwrap();
-            let decoded: ckbadger_store::types::UndoLogEntry =
-                bincode::deserialize(&value).unwrap();
-            if let ckbadger_store::types::UndoLogEntry::KeyMutation {
-                target_store,
-                cf_name,
-                ..
-            } = decoded
-            {
-                if cf_name == ckbadger_store::CF_ACTIVITIES {
-                    assert_eq!(
-                        target_store,
-                        ckbadger_store::types::UndoLogStoreTarget::AppendOnly
-                    );
-                    found = true;
-                }
-            }
-        }
-        assert!(found, "expected activities key mutation undo entry");
-        assert!(append_store
+        assert_eq!(
+            iter.count(),
+            0,
+            "activities are domain CFs now; no undo entries should be written"
+        );
+
+        // Verify activity was written to domain store
+        assert!(domain_store
             .get_cf(
-                append_store.cf_activities(),
+                domain_store.cf_activities(),
                 &keys::encode_activity_key(&lock_hash, 42, 3, &entry.block_hash, &entry.tx_hash)
             )
             .unwrap()
@@ -556,20 +478,18 @@ mod tests {
         // During bulk sync, callers use put_addr_tx/put_activity directly
         // instead of put_addr_tx_with_undo_log/put_activity_with_undo_log.
         let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
         let lock_hash = [0x44; 32];
 
-        // Bulk pattern: write directly to append store without undo log
-        let mut append_batch = StoreBatch::new(&append_store);
-        append_batch.put_addr_tx(&lock_hash, 100, 0, &[0xAA; 32]);
-        append_batch.commit().unwrap();
+        // Bulk pattern: write directly to domain store without undo log
+        let mut domain_batch = StoreBatch::new(&domain_store);
+        domain_batch.put_addr_tx(&lock_hash, 100, 0, &[0xAA; 32]);
+        domain_batch.commit().unwrap();
 
         // Verify data was written
         let key = keys::encode_addr_tx_key(&lock_hash, 100, 0, &[0xAA; 32]);
-        assert!(append_store
-            .get_cf(append_store.cf_addr_txs(), &key)
+        assert!(domain_store
+            .get_cf(domain_store.cf_addr_txs(), &key)
             .unwrap()
             .is_some());
 

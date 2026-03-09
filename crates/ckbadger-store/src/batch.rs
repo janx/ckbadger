@@ -1136,6 +1136,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn make_nft_collection_activity(tx_hash_byte: u8) -> ObjectCollectionActivityEntry {
         ObjectCollectionActivityEntry {
             tx_hash: vec![tx_hash_byte; 32],
@@ -1148,7 +1149,7 @@ mod tests {
     #[test]
     fn test_put_and_list_activities() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1171,7 +1172,7 @@ mod tests {
     #[test]
     fn test_list_activities_with_limit() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xBBu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1189,7 +1190,7 @@ mod tests {
     #[test]
     fn test_list_activities_cursor_pagination() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xCCu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1221,7 +1222,7 @@ mod tests {
     #[test]
     fn test_list_activities_different_locks_isolated() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock_a = [0x01u8; 32];
         let lock_b = [0x02u8; 32];
 
@@ -1242,7 +1243,7 @@ mod tests {
     #[test]
     fn test_list_activities_empty() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xFFu8; 32];
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
@@ -1252,7 +1253,7 @@ mod tests {
     #[test]
     fn test_list_activities_rejects_non_32_byte_lock_hash() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let err = store
             .list_activities(&[0xAA; 31], 10, None, None)
@@ -1265,7 +1266,7 @@ mod tests {
     #[test]
     fn test_list_activities_cursor_i32_max_does_not_overflow() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xABu8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1284,12 +1285,26 @@ mod tests {
     fn test_append_only_batch_rejects_duplicate_key_in_same_commit() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let lock = [0xA1u8; 32];
-        let tx_hash = [0xB2u8; 32];
+
+        let info = LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_addr_tx(&lock, 100, 0, &tx_hash);
-        batch.put_addr_tx(&lock, 100, 0, &tx_hash);
+        batch.put_cell(&[0xA1; 32], 0, &info);
+        batch.put_cell(&[0xA1; 32], 0, &info);
         let err = batch.commit().unwrap_err();
         assert!(err
             .to_string()
@@ -1297,32 +1312,32 @@ mod tests {
     }
 
     #[test]
-    fn test_append_only_nft_collection_activity_rejects_overwrite() {
+    fn test_append_only_cell_rejects_overwrite() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let collection_id = [0x11u8; 32];
+
+        let info = LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_object_collection_activity(
-            &collection_id,
-            100,
-            0,
-            &make_nft_collection_activity(0x01),
-        );
+        batch.put_cell(&[0x11; 32], 0, &info);
         batch.commit().unwrap();
 
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_object_collection_activity(
-            &collection_id,
-            100,
-            0,
-            &ObjectCollectionActivityEntry {
-                tx_hash: vec![0x01; 32],
-                block_hash: vec![0x02; 32],
-                timestamp_ms: 1_700_000_000_999,
-                actions: vec![AssetAction::Mint],
-            },
-        );
+        overwrite_batch.put_cell(&[0x11; 32], 0, &info);
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
@@ -1330,7 +1345,7 @@ mod tests {
     #[test]
     fn test_append_only_activity_preserves_competing_block_hash_history() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xA2u8; 32];
         let tx_hash = [0xC3u8; 32];
 
@@ -1360,7 +1375,7 @@ mod tests {
     #[test]
     fn test_append_only_nft_collection_activity_preserves_competing_block_hash_history() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = [0x12u8; 32];
         let tx_hash = vec![0x44; 32];
 
@@ -1398,26 +1413,42 @@ mod tests {
     fn test_append_only_batch_allows_idempotent_replay_existing_value() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
-        let lock = [0xA1u8; 32];
-        let tx_hash = [0x01u8; 32];
+
+        let info = LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_addr_tx(&lock, 100, 0, &tx_hash);
+        first_batch.put_cell(&[0xA1; 32], 0, &info);
         first_batch.commit().unwrap();
 
+        // Replay with identical value should succeed (idempotent)
         let mut replay_batch = StoreBatch::new(&store);
-        replay_batch.put_addr_tx(&lock, 100, 0, &tx_hash);
+        replay_batch.put_cell(&[0xA1; 32], 0, &info);
         replay_batch.commit().unwrap();
 
-        let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].2, tx_hash);
+        // Cell should still be readable
+        let key = keys::encode_outpoint(&[0xA1; 32], 0);
+        let val = store.get_cf(store.cf_cells(), &key).unwrap();
+        assert!(val.is_some());
     }
 
     #[test]
     fn test_append_only_bulk_sync_skips_existing_probe_on_conflicting_key() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xA1u8; 32];
         let tx_hash = [0x01u8; 32];
         let first_entry = ActivityEntry {
@@ -1827,7 +1858,7 @@ mod tests {
     #[test]
     fn test_merge_append_only_batches() {
         let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xDDu8; 32];
 
         let mut a = StoreBatch::new(&store);

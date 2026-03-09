@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_rejects_non_32_byte_lock_hash() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
 
         let err = store
             .list_addr_txs_recent(&[0xAA; 31], 10, None)
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_limit_zero_returns_empty() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn test_list_addr_txs_recent_keeps_two_rows_same_position_different_tx_hash() {
         let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xAB; 32];
 
         let mut batch = StoreBatch::new(&store);
