@@ -135,7 +135,12 @@ pub(crate) fn resolve_dotbit_tx_activity(
         actions,
     };
 
-    batch.put_object_collection_activity(&DOTBIT_SENTINEL_COLLECTION, block_number, tx_idx, &entry);
+    batch.put_identity_collection_activity(
+        &DOTBIT_SENTINEL_COLLECTION,
+        block_number,
+        tx_idx,
+        &entry,
+    );
     true
 }
 
