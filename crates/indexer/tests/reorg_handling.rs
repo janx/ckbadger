@@ -1,7 +1,9 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{ActivityEntry, UndoLogEntry, UndoLogStoreTarget};
+use ckbadger_store::types::{
+    ActivityEntry, AddressBalance, ScriptInfo, TokenInfo, UndoLogEntry, UndoLogStoreTarget,
+};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
     keys, CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, TxIndexEntry,
@@ -327,4 +329,207 @@ fn test_rollback_preserves_activities_history() {
     assert_eq!(after[2].0, 300);
     assert_eq!(after[3].0, 200);
     assert_eq!(after[4].0, 100);
+}
+
+/// Create a UDT cell with type_script_hash, type_code_hash, and udt_amount set.
+fn make_udt_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
+    LiveCellInfo {
+        capacity: 14_200_000_000,
+        created_at_block: block_num,
+        lock_script_hash: lock_hash.to_vec(),
+        lock_code_hash: vec![0xAA; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0xBB; 20],
+        type_script_hash: Some(vec![0xCC; 32]),
+        type_code_hash: Some(vec![0xDD; 32]),
+        type_args: Some(vec![0xEE; 20]),
+        data_size: 16,
+        occupied_capacity: 14_200_000_000,
+        udt_amount: Some(500_000_000),
+    }
+}
+
+/// Insert a UDT cell into the store with a distinct tx_hash (byte [8]=0xFF).
+fn insert_udt_cell(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
+    let mut tx_hash = vec![0u8; 32];
+    tx_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
+    tx_hash[8] = 0xFF; // distinguish from regular tx hashes
+
+    let cell = make_udt_cell(block_num, lock_hash);
+    let type_hash = cell.type_script_hash.as_ref().unwrap();
+    let type_code_hash = cell.type_code_hash.as_ref().unwrap();
+
+    let mut batch = StoreBatch::new(store);
+    batch.put_cell(&tx_hash, 0, &cell);
+    batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
+    batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
+    batch.put_cell_by_type_code(type_code_hash, block_num, &tx_hash, 0);
+    batch.commit().unwrap();
+}
+
+#[test]
+fn test_rollback_updates_derived_cfs_inline() {
+    let (store, append_store) = setup_split_stores();
+    let lock_hash = vec![1u8; 32];
+    let lock_code_hash = vec![0xAA; 32];
+    let type_script_hash = vec![0xCC; 32];
+    let type_code_hash = vec![0xDD; 32];
+
+    let reg_cap: i128 = 10_000_000_000;
+    let udt_cap: i128 = 14_200_000_000;
+    let udt_amount: i128 = 500_000_000;
+
+    // 1. Insert blocks 1-4 with regular cells for lock_hash.
+    for i in 1..=4 {
+        insert_full_block(&store, i, &lock_hash);
+    }
+
+    // 2. Insert UDT cells for blocks 3 and 4.
+    insert_udt_cell(&store, 3, &lock_hash);
+    insert_udt_cell(&store, 4, &lock_hash);
+
+    // 3. Write initial derived CF state.
+    let mut batch = StoreBatch::new(&store);
+
+    // addr_balance: 4 regular cells + 2 UDT cells = 6 live cells
+    let addr_bal = AddressBalance {
+        balance: 4 * reg_cap + 2 * udt_cap,
+        occupied_capacity: 2 * udt_cap, // only UDT cells have occupied_capacity set
+        live_cells_count: 6,
+        total_cells_count: 6,
+        txs_count: 4,
+        first_seen_block: 1,
+        first_seen_tx: vec![0u8; 32],
+        last_activity_block: 4,
+        last_activity_tx: vec![0u8; 32],
+    };
+    batch.put_addr_balance(&lock_hash, &addr_bal);
+
+    // script_info for lock_code_hash [0xAA;32]
+    let lock_si = ScriptInfo {
+        code_hash: lock_code_hash.clone(),
+        hash_type: 1,
+        lock_live_cells_count: 6,
+        lock_live_capacity_sum: 4 * reg_cap + 2 * udt_cap,
+        lock_live_occupied_capacity_sum: 2 * udt_cap,
+        ..Default::default()
+    };
+    batch.put_script_info(&lock_code_hash, &lock_si);
+
+    // script_info for type_code_hash [0xDD;32]
+    let type_si = ScriptInfo {
+        code_hash: type_code_hash.clone(),
+        hash_type: 1,
+        type_live_cells_count: 2,
+        type_live_capacity_sum: 2 * udt_cap,
+        type_live_occupied_capacity_sum: 2 * udt_cap,
+        ..Default::default()
+    };
+    batch.put_script_info(&type_code_hash, &type_si);
+
+    // token_holder: (type_script_hash, lock_hash) -> balance = 2 * udt_amount
+    batch.put_token_holder(&type_script_hash, &lock_hash, 2 * udt_amount);
+
+    // token_info for type_script_hash
+    let token_info = TokenInfo {
+        type_code_hash: type_code_hash.clone(),
+        hash_type: 1,
+        type_args: vec![0xEE; 20],
+        standard: "xudt".to_string(),
+        name: None,
+        symbol: None,
+        decimals: None,
+        total_supply: Some(2 * udt_amount),
+        max_supply: None,
+        holders_count: 1,
+        first_seen_block: 3,
+        icon_url: None,
+        description: None,
+        transfers_count: 0,
+    };
+    batch.put_token(&type_script_hash, &token_info);
+
+    batch.commit().unwrap();
+
+    // 4. Rollback to block 2 — removes cells from blocks 3 and 4:
+    //    2 regular cells + 2 UDT cells removed.
+    let result = store
+        .rollback_to_block_with_tx_index_store(2, Some(append_store.as_ref()))
+        .unwrap();
+    assert_eq!(result.blocks_removed, 2, "blocks 3 and 4 removed");
+    // 2 regular cells + 2 UDT cells = 4 cells removed
+    assert_eq!(result.cells_removed, 4, "4 cells removed (2 reg + 2 UDT)");
+
+    // 5. Assert derived CF state after rollback.
+
+    // addr_balance: should reflect only blocks 1-2 regular cells
+    let ab = store.get_addr_balance(&lock_hash).unwrap().unwrap();
+    assert_eq!(
+        ab.live_cells_count, 2,
+        "addr_balance live_cells_count: 6 - 4 = 2"
+    );
+    assert_eq!(
+        ab.balance,
+        2 * reg_cap,
+        "addr_balance balance: only 2 regular cells remain"
+    );
+    assert_eq!(
+        ab.occupied_capacity, 0,
+        "addr_balance occupied_capacity: UDT cells removed"
+    );
+    // txs_count is not tracked by inline rollback deltas; the rebuild path
+    // recomputes it from addr_txs which is not populated in this test.
+
+    // script_info for lock_code_hash: only 2 regular cells remain as lock
+    let lock_si = store.get_script_info(&lock_code_hash).unwrap().unwrap();
+    assert_eq!(
+        lock_si.lock_live_cells_count, 2,
+        "lock script_info: 6 - 4 = 2 live cells"
+    );
+    assert_eq!(
+        lock_si.lock_live_capacity_sum,
+        2 * reg_cap,
+        "lock script_info: capacity of 2 regular cells"
+    );
+
+    // script_info for type_code_hash: both UDT cells removed
+    let type_si = store.get_script_info(&type_code_hash).unwrap().unwrap();
+    assert_eq!(
+        type_si.type_live_cells_count, 0,
+        "type script_info: 2 - 2 = 0 live cells"
+    );
+    assert_eq!(
+        type_si.type_live_capacity_sum, 0,
+        "type script_info: capacity 0 after all UDT cells removed"
+    );
+
+    // token_holder: balance reached 0, should be deleted
+    let holder = store
+        .get_token_holder_balance(&type_script_hash, &lock_hash)
+        .unwrap();
+    assert!(
+        holder.is_none(),
+        "token_holder should be deleted when balance reaches 0"
+    );
+
+    // token_info: the inline delta sets holders_count=0 and total_supply=Some(0),
+    // then the rebuild_token_state_from_transfers runs and finds no transfers
+    // for this type_hash, deleting the token_info entirely.
+    // When the rebuild is removed (later task), this should become:
+    //   ti.holders_count == 0, ti.total_supply == Some(0)
+    let ti = store.get_token(&type_script_hash).unwrap();
+    match ti {
+        None => {
+            // Rebuild path deleted the token (no token_transfers in test).
+        }
+        Some(ref info) => {
+            // Inline-only path: verify the deltas were applied correctly.
+            assert_eq!(info.holders_count, 0, "token_info holders_count: 1 - 1 = 0");
+            assert_eq!(
+                info.total_supply,
+                Some(0),
+                "token_info total_supply: 2*udt_amount - 2*udt_amount = 0"
+            );
+        }
+    }
 }
