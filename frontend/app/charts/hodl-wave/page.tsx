@@ -20,13 +20,13 @@ export default function HodlWavePage() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             ← Back to Charts
           </Link>
@@ -36,10 +36,10 @@ export default function HodlWavePage() {
           <TerminalPanelHeader indicator="active">CKB HODL Wave</TerminalPanelHeader>
           <TerminalPanelContent className="p-6">
             {isLoading && (
-              <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+              <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="flex h-96 items-center justify-center text-slate-500">
+              <div className="text-text-muted flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}
@@ -60,15 +60,15 @@ export default function HodlWavePage() {
                   {data.series.map((s) => (
                     <div key={s.key} className="flex items-center gap-2">
                       <span className="h-3 w-3 rounded" style={{ backgroundColor: s.color }} />
-                      <span className="text-slate-400">{s.label}</span>
+                      <span className="text-text-muted">{s.label}</span>
                     </div>
                   ))}
                   <div className="flex items-center gap-2">
                     <span className="h-0.5 w-3 rounded" style={{ backgroundColor: '#ec4899' }} />
-                    <span className="text-slate-400">Holder Count</span>
+                    <span className="text-text-muted">Holder Count</span>
                   </div>
                 </div>
-                <div className="mt-4 text-center font-mono text-xs text-slate-500">
+                <div className="text-text-muted mt-4 text-center font-mono text-xs">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

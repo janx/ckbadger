@@ -18,9 +18,9 @@ export function TerminalNumber({
   const displayValue = String(value);
 
   const glowClasses = {
-    none: 'text-terminal-dim',
-    subtle: 'text-terminal-green',
-    strong: 'text-terminal-green',
+    none: 'text-emphasis-dim',
+    subtle: 'text-emphasis',
+    strong: 'text-emphasis',
   };
 
   return (

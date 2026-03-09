@@ -43,7 +43,7 @@ export default function ForksPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
@@ -54,7 +54,7 @@ export default function ForksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="warning">Fork Event Log</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
               <div className="w-24">Event</div>
               <div className="w-16 text-center">Depth</div>
               <div className="w-28">Fork Point</div>
@@ -69,25 +69,25 @@ export default function ForksPage() {
                   <TerminalRow key={i} hoverable={false}>
                     <div className="flex animate-pulse items-center">
                       <div className="w-24">
-                        <div className="h-5 w-16 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-5 w-16 rounded" />
                       </div>
                       <div className="w-16 text-center">
-                        <div className="mx-auto h-4 w-8 rounded bg-slate-800" />
+                        <div className="bg-base-elevated mx-auto h-4 w-8 rounded" />
                       </div>
                       <div className="w-28">
-                        <div className="h-4 w-20 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-4 w-20 rounded" />
                       </div>
                       <div className="flex-1">
-                        <div className="h-8 w-32 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-8 w-32 rounded" />
                       </div>
                       <div className="flex-1">
-                        <div className="h-8 w-32 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-8 w-32 rounded" />
                       </div>
                       <div className="w-24 text-center">
-                        <div className="mx-auto h-8 w-16 rounded bg-slate-800" />
+                        <div className="bg-base-elevated mx-auto h-8 w-16 rounded" />
                       </div>
                       <div className="w-28 text-right">
-                        <div className="ml-auto h-4 w-20 rounded bg-slate-800" />
+                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
                     </div>
                   </TerminalRow>
@@ -102,17 +102,17 @@ export default function ForksPage() {
                           </Badge>
                         </Link>
                       </div>
-                      <div className="text-amber w-16 text-center font-mono">{event.depth}</div>
+                      <div className="text-warning w-16 text-center font-mono">{event.depth}</div>
                       <div className="w-28">
                         <Link
                           href={`/blocks/${event.forkPointNumber}`}
-                          className="text-terminal-green font-mono hover:underline"
+                          className="text-emphasis font-mono hover:underline"
                         >
                           #{event.forkPointNumber.toLocaleString()}
                         </Link>
                       </div>
                       <div className="flex-1">
-                        <div className="font-mono text-slate-300">
+                        <div className="text-text-secondary font-mono">
                           #{event.oldTipNumber.toLocaleString()}
                         </div>
                         <HexDisplay
@@ -124,7 +124,7 @@ export default function ForksPage() {
                         />
                       </div>
                       <div className="flex-1">
-                        <div className="font-mono text-slate-300">
+                        <div className="text-text-secondary font-mono">
                           #{event.newTipNumber.toLocaleString()}
                         </div>
                         <HexDisplay
@@ -139,11 +139,11 @@ export default function ForksPage() {
                         <div className="font-mono text-sm text-red-400">
                           {event.orphanedBlocksCount} blocks
                         </div>
-                        <div className="font-mono text-xs text-slate-500">
+                        <div className="text-text-muted font-mono text-xs">
                           {event.orphanedTxsCount} txs
                         </div>
                       </div>
-                      <div className="w-28 text-right text-slate-500">
+                      <div className="text-text-muted w-28 text-right">
                         {formatTimeAgo(event.detectedAt)}
                       </div>
                     </div>

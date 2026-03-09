@@ -33,8 +33,8 @@ export function ProgressBar({
   const colorClass = getColor();
 
   const barColors = {
-    green: 'bg-gradient-to-r from-terminal-dark via-terminal-dim to-terminal-green',
-    amber: 'bg-gradient-to-r from-amber-dark via-amber-dim to-amber',
+    green: 'bg-gradient-to-r from-emphasis-dim via-emphasis-dim to-emphasis',
+    amber: 'bg-gradient-to-r from-warning-dim via-warning-dim to-warning',
     blue: 'bg-gradient-to-r from-blue-900 via-blue-600 to-blue-400',
     red: 'bg-gradient-to-r from-red-900 via-red-600 to-red-400',
   };
@@ -67,7 +67,7 @@ export function ProgressBar({
     <div className={cn('', className)}>
       <div
         className={cn(
-          'relative w-full overflow-hidden rounded-full bg-slate-800',
+          'bg-base-elevated relative w-full overflow-hidden rounded-full',
           sizeClasses[size]
         )}
       >
@@ -81,7 +81,7 @@ export function ProgressBar({
         />
       </div>
       {showLabel && (
-        <div className="mt-1 font-mono text-xs tabular-nums text-slate-500">{formatLabel()}</div>
+        <div className="text-text-muted mt-1 font-mono text-xs tabular-nums">{formatLabel()}</div>
       )}
     </div>
   );
@@ -106,7 +106,7 @@ export function UsageBar({ value, max, unit = '', className }: UsageBarProps) {
   return (
     <span
       className={cn(
-        'relative inline-flex overflow-hidden rounded bg-slate-800 px-2 py-1 font-mono text-sm text-white',
+        'bg-base-elevated relative inline-flex overflow-hidden rounded px-2 py-1 font-mono text-sm text-white',
         className
       )}
     >

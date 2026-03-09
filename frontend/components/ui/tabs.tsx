@@ -43,7 +43,7 @@ interface TabsListProps {
 }
 
 export function TabsList({ children, className }: TabsListProps) {
-  return <div className={cn('flex border-b border-slate-800', className)}>{children}</div>;
+  return <div className={cn('border-base-border flex border-b', className)}>{children}</div>;
 }
 
 interface TabsTriggerProps {
@@ -64,8 +64,8 @@ export function TabsTrigger({ value, children, className }: TabsTriggerProps) {
       className={cn(
         'px-4 py-2 font-mono text-sm font-medium transition',
         isActive
-          ? 'border-terminal-green text-terminal-green border-b-2'
-          : 'text-slate-500 hover:text-slate-300',
+          ? 'border-interactive text-interactive border-b-2'
+          : 'text-text-muted hover:text-text-secondary',
         className
       )}
     >

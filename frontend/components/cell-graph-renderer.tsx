@@ -12,8 +12,8 @@ type ForceLink = LinkObject;
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full w-full items-center justify-center bg-slate-900/50">
-      <div className="text-slate-400">Loading graph...</div>
+    <div className="bg-base-surface/50 flex h-full w-full items-center justify-center">
+      <div className="text-text-muted">Loading graph...</div>
     </div>
   ),
 });
@@ -195,10 +195,10 @@ export function CellGraphRenderer({
     return (
       <div
         ref={containerRef}
-        className="flex w-full items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50"
+        className="border-base-border bg-base-surface/50 flex w-full items-center justify-center rounded-lg border"
         style={{ width: width ?? '100%', height }}
       >
-        <p className="text-slate-500">No graph data available</p>
+        <p className="text-text-muted">No graph data available</p>
       </div>
     );
   }
@@ -206,7 +206,7 @@ export function CellGraphRenderer({
   return (
     <div
       ref={containerRef}
-      className="w-full overflow-hidden rounded-lg border border-slate-800"
+      className="border-base-border w-full overflow-hidden rounded-lg border"
       style={{ width: width ?? '100%', height }}
     >
       <ForceGraph2D

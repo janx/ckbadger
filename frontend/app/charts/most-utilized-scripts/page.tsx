@@ -23,7 +23,7 @@ function SeriesLegend({
       {series.map((item) => (
         <div key={item.key} className="flex items-center gap-2 text-xs">
           <span className="h-2.5 w-2.5 shrink-0 rounded" style={{ backgroundColor: item.color }} />
-          <span className="truncate font-mono text-slate-400" title={item.label}>
+          <span className="text-text-muted truncate font-mono" title={item.label}>
             {item.label}
           </span>
         </div>
@@ -39,13 +39,13 @@ export default function MostUtilizedScriptsPage() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             ← Back to Charts
           </Link>
@@ -57,17 +57,17 @@ export default function MostUtilizedScriptsPage() {
           </TerminalPanelHeader>
           <TerminalPanelContent className="space-y-8 p-6">
             {isLoading && (
-              <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+              <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="flex h-96 items-center justify-center text-slate-500">
+              <div className="text-text-muted flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}
             {data && (
               <>
                 <section>
-                  <h3 className="mb-3 font-mono text-sm uppercase tracking-wider text-slate-300">
+                  <h3 className="text-text-secondary mb-3 font-mono text-sm uppercase tracking-wider">
                     Occupied Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
@@ -80,8 +80,8 @@ export default function MostUtilizedScriptsPage() {
                   <SeriesLegend series={data.occupiedShare.series} />
                 </section>
 
-                <section className="border-t border-slate-800 pt-6">
-                  <h3 className="mb-3 font-mono text-sm uppercase tracking-wider text-slate-300">
+                <section className="border-base-border border-t pt-6">
+                  <h3 className="text-text-secondary mb-3 font-mono text-sm uppercase tracking-wider">
                     Total Cells Capacity Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
@@ -94,7 +94,7 @@ export default function MostUtilizedScriptsPage() {
                   <SeriesLegend series={data.capacityShare.series} />
                 </section>
 
-                <div className="text-center font-mono text-xs text-slate-500">
+                <div className="text-text-muted text-center font-mono text-xs">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

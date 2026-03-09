@@ -34,7 +34,7 @@ export function CursorPagination({
 
   return (
     <div className={cn('flex w-full items-center justify-between', className)}>
-      <span className="font-mono text-sm text-slate-500">
+      <span className="text-text-muted font-mono text-sm">
         {canShowRange ? (
           <>
             Showing {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()}
@@ -55,12 +55,12 @@ export function CursorPagination({
           type="button"
           onClick={onPrevious}
           disabled={!hasPrevious}
-          className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-2 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Previous
         </button>
         {page !== undefined && (
-          <span className="font-mono text-sm text-slate-500">
+          <span className="text-text-muted font-mono text-sm">
             Page {page}
             {totalPages !== undefined ? ` of ${totalPages}` : ''}
           </span>
@@ -69,7 +69,7 @@ export function CursorPagination({
           type="button"
           onClick={onNext}
           disabled={!hasMore}
-          className="hover:border-terminal-green hover:text-terminal-green rounded border border-slate-700 bg-slate-800 px-4 py-2 font-mono text-sm text-slate-300 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Next
         </button>

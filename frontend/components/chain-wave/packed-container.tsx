@@ -28,30 +28,30 @@ interface PackedContainerProps {
 
 const TYPE_CONFIG = {
   mempool: {
-    borderColor: 'border-slate-600/50',
-    bgGradient: 'from-slate-800/50 to-slate-900/50',
-    titleColor: 'text-slate-300',
-    countColor: 'text-slate-400',
+    borderColor: 'border-base-border/50',
+    bgGradient: 'from-base-elevated/50 to-base-surface/50',
+    titleColor: 'text-text-secondary',
+    countColor: 'text-text-muted',
   },
   proposals: {
-    borderColor: 'border-amber-600/50',
-    bgGradient: 'from-amber-950/30 to-slate-900/50',
-    titleColor: 'text-amber-400',
-    countColor: 'text-amber-500/80',
+    borderColor: 'border-warning-600/50',
+    bgGradient: 'from-warning-950/30 to-base-surface/50',
+    titleColor: 'text-warning-400',
+    countColor: 'text-warning-500/80',
   },
   tip: {
-    borderColor: 'border-terminal-green/50',
-    bgGradient: 'from-terminal-dark/20 to-slate-900/50',
-    titleColor: 'text-terminal-green',
-    countColor: 'text-terminal-dim',
+    borderColor: 'border-emphasis/50',
+    bgGradient: 'from-emphasis-dim/20 to-base-surface/50',
+    titleColor: 'text-emphasis',
+    countColor: 'text-emphasis-dim',
   },
 };
 
 const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip', string>> = {
   normal: {
-    mempool: 'bg-slate-500/80 hover:bg-slate-400',
-    proposals: 'bg-amber-600/80 hover:bg-amber-500',
-    tip: 'bg-terminal-green/80 hover:bg-terminal-dim',
+    mempool: 'bg-base-border/80 hover:bg-base-border',
+    proposals: 'bg-warning-600/80 hover:bg-warning',
+    tip: 'bg-emphasis/80 hover:bg-emphasis-dim',
   },
   cellbase: {
     mempool: 'bg-emerald-600/80 hover:bg-emerald-500',
@@ -59,9 +59,9 @@ const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip'
     tip: 'bg-emerald-600/80 hover:bg-emerald-500',
   },
   dao: {
-    mempool: 'bg-amber-500/80 hover:bg-amber-400',
-    proposals: 'bg-amber-500/80 hover:bg-amber-400',
-    tip: 'bg-amber-500/80 hover:bg-amber-400',
+    mempool: 'bg-warning/80 hover:bg-warning-400',
+    proposals: 'bg-warning/80 hover:bg-warning-400',
+    tip: 'bg-warning/80 hover:bg-warning-400',
   },
 };
 
@@ -205,14 +205,14 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
         typeof window !== 'undefined' &&
         createPortal(
           <div
-            className="pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg border border-slate-700/50 bg-slate-900/95 px-3 py-2 text-xs shadow-xl backdrop-blur-sm"
+            className="border-base-border/50 bg-base-surface/95 pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg border px-3 py-2 text-xs shadow-xl backdrop-blur-sm"
             style={{
               left: tooltipPos.x,
               top: tooltipPos.y - 8,
             }}
           >
-            <div className="mb-1 text-[10px] text-slate-500">{CATEGORY_LABELS[item.category]}</div>
-            <div className="space-y-0.5 text-slate-400">
+            <div className="text-text-muted mb-1 text-[10px]">{CATEGORY_LABELS[item.category]}</div>
+            <div className="text-text-muted space-y-0.5">
               <div>
                 TX: <span className="font-mono text-white">{truncateHash(item.id)}</span>
               </div>
@@ -232,7 +232,7 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
                 </div>
               )}
             </div>
-            <div className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-900/95" />
+            <div className="border-t-base-surface/95 absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent" />
           </div>,
           document.body
         )}
@@ -282,13 +282,13 @@ export function PackedContainer({
         config.bgGradient,
         type === 'tip' &&
           blockNumber &&
-          'hover:border-terminal-green/70 hover:shadow-terminal-glow cursor-pointer hover:shadow-lg'
+          'hover:border-emphasis/70 hover:shadow-glow cursor-pointer hover:shadow-lg'
       )}
     >
       <div className="mb-2 flex items-center justify-between sm:mb-3">
         <div>
           <h3 className={cn('text-sm font-bold sm:text-base', config.titleColor)}>{title}</h3>
-          {subtitle && <div className="text-[10px] text-slate-500 sm:text-xs">{subtitle}</div>}
+          {subtitle && <div className="text-text-muted text-[10px] sm:text-xs">{subtitle}</div>}
         </div>
         <div className={cn('text-right text-xs sm:text-sm', config.countColor)}>
           <span className="font-bold text-white">{totalCount.toLocaleString()}</span>
@@ -298,7 +298,7 @@ export function PackedContainer({
 
       <div ref={containerRef} className="relative flex-1 overflow-hidden rounded-lg bg-black/20">
         {items.length === 0 ? (
-          <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
+          <div className="text-text-muted flex h-full w-full items-center justify-center text-xs">
             {emptyText}
           </div>
         ) : (

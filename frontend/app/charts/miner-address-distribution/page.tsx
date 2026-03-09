@@ -37,16 +37,16 @@ function MinerRow({
   return (
     <TerminalRow>
       <div className="flex items-center">
-        <div className="w-12 font-mono text-slate-500">{rank}</div>
+        <div className="text-text-muted w-12 font-mono">{rank}</div>
         <div className="flex flex-1 items-center gap-3">
           <div className="h-3 w-3 flex-shrink-0 rounded" style={{ backgroundColor: color }} />
           <Link href={`/address/${addressPath}`} className="group flex flex-col gap-0.5">
             {miner.minerName && (
-              <span className="group-hover:text-terminal-green text-sm font-medium text-white transition-colors">
+              <span className="group-hover:text-emphasis text-sm font-medium text-white transition-colors">
                 {miner.minerName}
               </span>
             )}
-            <span className="group-hover:text-terminal-green font-mono text-sm text-slate-400 transition-colors">
+            <span className="group-hover:text-emphasis text-text-muted font-mono text-sm transition-colors">
               {miner.address.slice(0, 10)}...{miner.address.slice(-8)}
             </span>
           </Link>
@@ -55,7 +55,7 @@ function MinerRow({
           {formatNumber(miner.blocksMined)}
         </div>
         <div className="flex w-40 items-center justify-end gap-2">
-          <div className="h-2 w-20 overflow-hidden rounded-full bg-slate-800">
+          <div className="bg-base-elevated h-2 w-20 overflow-hidden rounded-full">
             <div
               className="h-full rounded-full"
               style={{
@@ -64,7 +64,7 @@ function MinerRow({
               }}
             />
           </div>
-          <span className="w-16 text-right font-mono text-sm text-slate-400">
+          <span className="text-text-muted w-16 text-right font-mono text-sm">
             {parseFloat(miner.percentage).toFixed(2)}%
           </span>
         </div>
@@ -107,13 +107,13 @@ export default function MinerAddressDistributionPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             ← Back to Charts
           </Link>
@@ -124,7 +124,7 @@ export default function MinerAddressDistributionPage() {
             <div className="flex items-center gap-4">
               <span>Miner Address Distribution</span>
               {data && (
-                <span className="text-sm font-normal text-slate-500">
+                <span className="text-text-muted text-sm font-normal">
                   Total Blocks: {formatNumber(data.totalBlocks)}
                 </span>
               )}
@@ -132,10 +132,10 @@ export default function MinerAddressDistributionPage() {
           </TerminalPanelHeader>
           <TerminalPanelContent className="p-6">
             {isLoading && (
-              <div className="h-80 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+              <div className="border-base-border bg-base-surface/50 h-80 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="flex h-80 items-center justify-center text-slate-500">
+              <div className="text-text-muted flex h-80 items-center justify-center">
                 Failed to load data
               </div>
             )}
@@ -169,7 +169,7 @@ export default function MinerAddressDistributionPage() {
           <TerminalPanelContent padding="none">
             {data && (
               <>
-                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="w-12">Rank</div>
                   <div className="flex-1">Miner Address</div>
                   <div className="w-28 text-right">Blocks Mined</div>

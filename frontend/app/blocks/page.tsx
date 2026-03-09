@@ -29,7 +29,7 @@ export default function BlocksPage() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader title="Blocks" subtitle="Browse all blocks on the CKB network" />
@@ -37,7 +37,7 @@ export default function BlocksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Block List</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
               <div className="w-32">Block</div>
               <div className="flex-1">Hash</div>
               <div className="w-20 text-center">Txs</div>
@@ -49,16 +49,16 @@ export default function BlocksPage() {
                   <TerminalRow key={i} hoverable={false}>
                     <div className="flex animate-pulse items-center">
                       <div className="w-32">
-                        <div className="h-4 w-20 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-4 w-20 rounded" />
                       </div>
                       <div className="flex-1">
-                        <div className="h-4 w-48 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-4 w-48 rounded" />
                       </div>
                       <div className="w-20 text-center">
-                        <div className="mx-auto h-4 w-8 rounded bg-slate-800" />
+                        <div className="bg-base-elevated mx-auto h-4 w-8 rounded" />
                       </div>
                       <div className="w-32 text-right">
-                        <div className="ml-auto h-4 w-20 rounded bg-slate-800" />
+                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
                     </div>
                   </TerminalRow>
@@ -69,7 +69,7 @@ export default function BlocksPage() {
                       <div className="w-32">
                         <Link
                           href={`/blocks/${block.number}`}
-                          className="text-terminal-green font-mono hover:underline"
+                          className="text-emphasis font-mono hover:underline"
                         >
                           #{block.number.toLocaleString()}
                         </Link>
@@ -91,10 +91,10 @@ export default function BlocksPage() {
                           />
                         </Link>
                       </div>
-                      <div className="text-amber w-20 text-center font-mono">
+                      <div className="text-warning w-20 text-center font-mono">
                         {block.transactionsCount}
                       </div>
-                      <div className="w-32 text-right text-slate-500">
+                      <div className="text-text-muted w-32 text-right">
                         {formatTimeAgo(block.timestamp)}
                       </div>
                     </div>

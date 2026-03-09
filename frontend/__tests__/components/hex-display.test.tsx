@@ -7,8 +7,8 @@ describe('HexDisplay accent color', () => {
       <HexDisplay value="0xabcdef12" truncate={false} copyable={false} color="accent" />
     );
 
-    expect(container.querySelector('.text-terminal-dark')).toBeTruthy();
-    expect(container.querySelector('.text-terminal-green')).toBeTruthy();
+    expect(container.querySelector('.text-emphasis-dim')).toBeTruthy();
+    expect(container.querySelector('.text-emphasis')).toBeTruthy();
   });
 
   it('renders accent classes in byte group mode', () => {
@@ -16,8 +16,8 @@ describe('HexDisplay accent color', () => {
       <ByteGroupDisplay value="0xabcdef12" bytesPerGroup={1} color="accent" />
     );
 
-    expect(container.querySelector('.text-terminal-green')).toBeTruthy();
-    expect(container.querySelector('.text-terminal-dark')).toBeTruthy();
+    expect(container.querySelector('.text-emphasis')).toBeTruthy();
+    expect(container.querySelector('.text-emphasis-dim')).toBeTruthy();
   });
 
   it('allows wrapping when full hex is shown', () => {

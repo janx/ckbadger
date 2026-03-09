@@ -23,7 +23,7 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       {stats && stats.deepForkStatus && <DeepForkAlert status={stats.deepForkStatus} />}
       <HomeContent initialData={initialData} />

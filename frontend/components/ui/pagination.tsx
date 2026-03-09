@@ -18,14 +18,14 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
         type="button"
         onClick={() => onPageChange(page - 1)}
         disabled={page <= 1}
-        className="hover:text-terminal-green rounded px-3 py-1.5 font-mono text-sm text-slate-400 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        className="hover:text-interactive text-text-muted hover:bg-base-elevated rounded px-3 py-1.5 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         Prev
       </button>
 
       {pages.map((p, i) =>
         p === '...' ? (
-          <span key={`ellipsis-${i}`} className="px-2 text-slate-500">
+          <span key={`ellipsis-${i}`} className="text-text-muted px-2">
             ...
           </span>
         ) : (
@@ -36,8 +36,8 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
             className={cn(
               'rounded px-3 py-1.5 font-mono text-sm transition-colors',
               page === p
-                ? 'bg-terminal-green text-slate-950'
-                : 'hover:text-terminal-green text-slate-400 hover:bg-slate-800'
+                ? 'bg-emphasis text-base-bg'
+                : 'hover:text-interactive text-text-muted hover:bg-base-elevated'
             )}
           >
             {p}
@@ -49,7 +49,7 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
         type="button"
         onClick={() => onPageChange(page + 1)}
         disabled={page >= totalPages}
-        className="hover:text-terminal-green rounded px-3 py-1.5 font-mono text-sm text-slate-400 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        className="hover:text-interactive text-text-muted hover:bg-base-elevated rounded px-3 py-1.5 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         Next
       </button>

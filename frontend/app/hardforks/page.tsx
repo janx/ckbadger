@@ -30,7 +30,7 @@ export default function HardforksPage() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
@@ -45,7 +45,7 @@ export default function HardforksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Protocol Upgrades</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
               <div className="w-44">Edition</div>
               <div className="w-56">Activation</div>
               <div className="w-24 text-center">Status</div>
@@ -57,11 +57,11 @@ export default function HardforksPage() {
               Array.from({ length: 2 }).map((_, idx) => (
                 <TerminalRow key={idx} hoverable={false}>
                   <div className="flex animate-pulse items-center">
-                    <div className="h-10 w-40 rounded bg-slate-800" />
-                    <div className="ml-4 h-10 w-52 rounded bg-slate-800" />
-                    <div className="ml-4 h-6 w-20 rounded bg-slate-800" />
-                    <div className="ml-4 h-10 flex-1 rounded bg-slate-800" />
-                    <div className="ml-4 h-10 w-52 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-10 w-40 rounded" />
+                    <div className="bg-base-elevated ml-4 h-10 w-52 rounded" />
+                    <div className="bg-base-elevated ml-4 h-6 w-20 rounded" />
+                    <div className="bg-base-elevated ml-4 h-10 flex-1 rounded" />
+                    <div className="bg-base-elevated ml-4 h-10 w-52 rounded" />
                   </div>
                 </TerminalRow>
               ))}
@@ -79,15 +79,15 @@ export default function HardforksPage() {
                   <div className="flex items-center gap-4">
                     <div className="w-44">
                       <div className="font-mono text-sm text-white">{event.name}</div>
-                      <div className="font-mono text-xs text-slate-500">
+                      <div className="text-text-muted font-mono text-xs">
                         {event.editionYear} · {event.shortName}
                       </div>
                     </div>
                     <div className="w-56">
-                      <div className="font-mono text-sm text-slate-300">
+                      <div className="text-text-secondary font-mono text-sm">
                         Epoch #{event.activationEpoch.toLocaleString()}
                       </div>
-                      <div className="font-mono text-xs text-slate-500">
+                      <div className="text-text-muted font-mono text-xs">
                         {event.activationDate}
                         {event.activationBlock !== null
                           ? ` · Block #${event.activationBlock.toLocaleString()}`
@@ -99,7 +99,7 @@ export default function HardforksPage() {
                         {event.status.toUpperCase()}
                       </Badge>
                     </div>
-                    <div className="flex-1 pr-4 font-mono text-sm text-slate-300">
+                    <div className="text-text-secondary flex-1 pr-4 font-mono text-sm">
                       {event.summary}
                     </div>
                     <div className="w-56">
@@ -110,7 +110,7 @@ export default function HardforksPage() {
                             href={resource.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-terminal-green hover:underline"
+                            className="text-emphasis hover:underline"
                           >
                             {resource.label}
                           </a>
@@ -119,7 +119,7 @@ export default function HardforksPage() {
                       {event.activationBlock !== null && (
                         <Link
                           href={`/blocks/${event.activationBlock}`}
-                          className="text-terminal-green mt-1 inline-block font-mono text-xs hover:underline"
+                          className="text-emphasis mt-1 inline-block font-mono text-xs hover:underline"
                         >
                           View activation block
                         </Link>

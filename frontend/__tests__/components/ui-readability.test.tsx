@@ -9,7 +9,7 @@ import { DataField } from '@/components/ui/data-field';
 describe('UI readability classes', () => {
   it('uses readable slate tone for terminal divider label', () => {
     render(<TerminalDivider label="network" />);
-    expect(screen.getByText('network')).toHaveClass('text-slate-500');
+    expect(screen.getByText('network')).toHaveClass('text-text-muted');
   });
 
   it('uses readable slate tone for stat metadata text', () => {
@@ -25,14 +25,14 @@ describe('UI readability classes', () => {
       </div>
     );
 
-    expect(screen.getByText('24h')).toHaveClass('text-slate-500');
-    expect(screen.getByText('stable')).toHaveClass('text-slate-500');
-    expect(screen.getByText('delta')).toHaveClass('text-slate-500');
+    expect(screen.getByText('24h')).toHaveClass('text-text-muted');
+    expect(screen.getByText('stable')).toHaveClass('text-text-muted');
+    expect(screen.getByText('delta')).toHaveClass('text-text-muted');
   });
 
   it('uses readable slate tone for spark chart empty state', () => {
     render(<SparkChart data={[]} />);
-    expect(screen.getByText('No data')).toHaveClass('text-slate-500');
+    expect(screen.getByText('No data')).toHaveClass('text-text-muted');
   });
 
   it('uses readable slate tone for page header copy icon', () => {
@@ -41,7 +41,7 @@ describe('UI readability classes', () => {
     const copyIcon = copyContainer.querySelector('svg');
 
     expect(copyIcon).toBeTruthy();
-    expect(copyIcon).toHaveClass('text-slate-500');
+    expect(copyIcon).toHaveClass('text-text-muted');
   });
 
   it('uses readable slate tone for data-field help and copy icons', () => {
@@ -54,9 +54,9 @@ describe('UI readability classes', () => {
     const helpIconWrapper = screen.getByTitle('Cell hash');
     const copyIcon = container.querySelector('.group .h-3\\.5.w-3\\.5');
 
-    expect(helpIconWrapper).toHaveClass('text-slate-500');
+    expect(helpIconWrapper).toHaveClass('text-text-muted');
     expect(copyIcon).toBeTruthy();
-    expect(copyIcon).toHaveClass('text-slate-500');
+    expect(copyIcon).toHaveClass('text-text-muted');
   });
 
   it('uses responsive wrapping layout for page header actions', () => {

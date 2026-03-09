@@ -70,15 +70,14 @@ const WITNESS_SEGMENT_TONES = [
   },
   {
     dot: 'bg-warning-400',
-    activePill: 'border-warning-400/70 bg-warning-500/15 text-warning-200',
-    valueText: 'text-warning-200',
-    byte: 'rounded bg-warning-500/15 text-warning-200',
-    byteActive: 'rounded bg-warning-500/25 text-warning-100 ring-1 ring-amber-400/70',
-    byteHover:
-      'byte-hover-breathe ring-1 ring-amber-400/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
-    asciiActive: 'rounded-sm bg-warning-500/20 text-warning-100',
+    activePill: 'border-warning-400/70 bg-warning/15 text-warning',
+    valueText: 'text-warning',
+    byte: 'rounded bg-warning/15 text-warning',
+    byteActive: 'rounded bg-warning/25 text-warning ring-1 ring-warning/70',
+    byteHover: 'byte-hover-breathe ring-1 ring-warning/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
+    asciiActive: 'rounded-sm bg-warning/20 text-warning',
     asciiHover:
-      'rounded-sm bg-warning-500/30 text-warning-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
+      'rounded-sm bg-warning/30 text-warning-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
   },
   {
     dot: 'bg-fuchsia-400',
@@ -510,7 +509,7 @@ export default function TransactionDetailPage() {
                     <UsageBar value={cycles} max={3_500_000_000} />
                   ) : isCalculating ? (
                     <span className="text-text-secondary inline-flex items-center gap-2 italic">
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+                      <span className="border-base-border inline-block h-3 w-3 animate-spin rounded-full border-2 border-t-transparent" />
                       <span className="cycles-calculating-marquee">Calculating ...</span>
                     </span>
                   ) : hasFailed ? (
@@ -1173,7 +1172,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                 className={`rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
                   activeWitnessIndex === null && activeScriptGroupKey === null
                     ? 'border-base-border text-text-muted cursor-not-allowed'
-                    : 'border-base-border/70 text-text-secondary hover:text-text-primary hover:border-slate-500/80'
+                    : 'border-base-border/70 text-text-secondary hover:text-text-primary hover:border-base-border/80'
                 }`}
               >
                 clear
@@ -1200,7 +1199,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                 className={`rounded border px-2 py-1.5 text-left transition ${
                   witness.index === activeWitnessIndex
                     ? 'border-emphasis/70 bg-emphasis/10'
-                    : 'border-base-border/70 bg-base-surface/70 hover:border-slate-500/70'
+                    : 'border-base-border/70 bg-base-surface/70 hover:border-base-border/70'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -1247,7 +1246,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                         : group.witnessIndex === activeWitnessIndex
                           ? 'border-emphasis/70 bg-emphasis/10'
                           : 'border-base-border/70 bg-base-surface/70'
-                    } cursor-pointer transition hover:border-slate-500/80`}
+                    } hover:border-base-border/80 cursor-pointer transition`}
                   >
                     <div className="mb-1 flex flex-wrap items-center gap-1.5">
                       <Badge variant="gray">{group.kind}</Badge>
@@ -1407,7 +1406,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                             isActive
                               ? segmentTone.activePill
                               : inPreview
-                                ? 'border-base-border/70 bg-base-surface/60 text-text-secondary hover:border-slate-500/70'
+                                ? 'border-base-border/70 bg-base-surface/60 text-text-secondary hover:border-base-border/70'
                                 : 'border-base-border/70 bg-base-surface/40 text-text-muted'
                           }`}
                         >
@@ -1505,7 +1504,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                       className={`rounded border p-1 text-left transition ${
                         isExpanded
                           ? `${guessTone.activePill} bg-opacity-100`
-                          : 'border-base-border/80 bg-base-surface/70 hover:border-slate-600/80'
+                          : 'border-base-border/80 bg-base-surface/70 hover:border-base-border/80'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
@@ -1613,13 +1612,13 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                       ? segmentIndex >= 0
                         ? (segmentTone?.asciiHover ??
                           'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
-                        : 'rounded-sm bg-slate-700/50 text-text-secondary'
+                        : 'rounded-sm bg-base-border/50 text-text-secondary'
                       : '';
                     const hoverBreatheClass = isHoveredByte
                       ? segmentIndex >= 0
                         ? (segmentTone?.byteHover ??
                           'byte-hover-breathe ring-1 ring-emphasis/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
-                        : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
+                        : 'byte-hover-breathe ring-1 ring-base-border/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
                       : '';
                     const title =
                       segmentIndex >= 0 && segmentIndex < dataSegments.length

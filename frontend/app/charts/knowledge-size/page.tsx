@@ -39,13 +39,13 @@ export default function KnowledgeSizePage() {
   const netFlowData = useMemo(() => buildNetFlowData(data?.data ?? []), [data?.data]);
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             ← Back to Charts
           </Link>
@@ -55,10 +55,10 @@ export default function KnowledgeSizePage() {
           <TerminalPanelHeader indicator="active">Common Knowledge Size</TerminalPanelHeader>
           <TerminalPanelContent className="space-y-8 p-6">
             {isLoading && (
-              <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+              <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="flex h-96 items-center justify-center text-slate-500">
+              <div className="text-text-muted flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}
@@ -73,20 +73,20 @@ export default function KnowledgeSizePage() {
                   />
                   <div className="mt-4 flex flex-wrap items-center justify-center gap-6 text-sm">
                     <div className="flex items-center gap-2">
-                      <span className="bg-terminal-green h-0.5 w-4" />
-                      <span className="text-slate-400">{data.yAxisLabel}</span>
+                      <span className="bg-emphasis h-0.5 w-4" />
+                      <span className="text-text-muted">{data.yAxisLabel}</span>
                     </div>
                     {data.y2AxisLabel && (
                       <div className="flex items-center gap-2">
-                        <span className="bg-amber h-0.5 w-4" />
-                        <span className="text-slate-400">{data.y2AxisLabel}</span>
+                        <span className="bg-warning h-0.5 w-4" />
+                        <span className="text-text-muted">{data.y2AxisLabel}</span>
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="border-t border-slate-800 pt-6">
-                  <h3 className="mb-4 font-mono text-sm uppercase tracking-wider text-slate-300">
+                <div className="border-base-border border-t pt-6">
+                  <h3 className="text-text-secondary mb-4 font-mono text-sm uppercase tracking-wider">
                     Net Occupied Capacity Flow
                   </h3>
                   <LineChart
@@ -97,12 +97,12 @@ export default function KnowledgeSizePage() {
                     primaryColor="#f59e0b"
                   />
                   <div className="mt-4 flex items-center justify-center gap-2 text-sm">
-                    <span className="h-0.5 w-4 bg-amber-500" />
-                    <span className="text-slate-400">Net Flow (CKB/day)</span>
+                    <span className="bg-warning h-0.5 w-4" />
+                    <span className="text-text-muted">Net Flow (CKB/day)</span>
                   </div>
                 </div>
 
-                <div className="text-center font-mono text-xs text-slate-500">
+                <div className="text-text-muted text-center font-mono text-xs">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

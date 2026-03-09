@@ -20,13 +20,13 @@ export default function CellCountPage() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             &larr; Back to Charts
           </Link>
@@ -36,10 +36,10 @@ export default function CellCountPage() {
           <TerminalPanelHeader indicator="active">Cell Count</TerminalPanelHeader>
           <TerminalPanelContent className="p-6">
             {isLoading && (
-              <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+              <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="flex h-96 items-center justify-center text-slate-500">
+              <div className="text-text-muted flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}

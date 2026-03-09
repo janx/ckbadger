@@ -35,16 +35,16 @@ export function NftActivityCard({
   const displayActions = normalizeAction ? actions.map(normalizeAction) : actions;
 
   return (
-    <div className="space-y-2 rounded border border-slate-800 bg-slate-900/40 p-3">
+    <div className="border-base-border bg-base-surface/40 space-y-2 rounded border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="font-mono text-xs text-slate-400">
+        <div className="text-text-muted font-mono text-xs">
           Block{' '}
-          <Link href={`/blocks/${blockNumber}`} className="text-terminal-green hover:underline">
+          <Link href={`/blocks/${blockNumber}`} className="text-emphasis hover:underline">
             #{formatNumber(blockNumber)}
           </Link>
           {txIndex !== undefined && (
             <>
-              <span className="mx-1 text-slate-500">•</span>
+              <span className="text-text-muted mx-1">•</span>
               Tx Index {txIndex}
             </>
           )}
@@ -61,16 +61,16 @@ export function NftActivityCard({
             ))}
           </div>
         ) : (
-          <div className="font-mono text-xs text-slate-300">{displayActions.join(', ')}</div>
+          <div className="text-text-secondary font-mono text-xs">{displayActions.join(', ')}</div>
         )}
       </div>
       <Link
         href={`/tx/${txHash}`}
-        className="block font-mono text-xs text-slate-300 hover:underline"
+        className="text-text-secondary block font-mono text-xs hover:underline"
       >
         <HexDisplay value={txHash} color="accent" size="sm" startChars={14} endChars={10} />
       </Link>
-      {timestamp && <div className="font-mono text-xs text-slate-500">Timestamp: {timestamp}</div>}
+      {timestamp && <div className="text-text-muted font-mono text-xs">Timestamp: {timestamp}</div>}
     </div>
   );
 }

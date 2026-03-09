@@ -33,8 +33,8 @@ export function ScriptView({
 
   if (!script) {
     return (
-      <div className={cn('text-slate-500', className)}>
-        {label && <span className="mr-2 text-slate-400">{label}:</span>}
+      <div className={cn('text-text-muted', className)}>
+        {label && <span className="text-text-muted mr-2">{label}:</span>}
         None
       </div>
     );
@@ -42,7 +42,7 @@ export function ScriptView({
 
   const headerContent = (
     <div className="flex items-center gap-2">
-      <span className="font-mono text-sm font-medium text-slate-300">{label}</span>
+      <span className="text-text-secondary font-mono text-sm font-medium">{label}</span>
       {scriptInfo && (
         <AppLink
           href={getScriptDetailHref({
@@ -52,11 +52,11 @@ export function ScriptView({
             scriptKind: scriptInfo.scriptKind,
           })}
           onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-xs text-slate-300 transition-colors hover:bg-slate-800"
+          className="border-base-border bg-base-elevated/70 text-text-secondary hover:bg-base-elevated inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs transition-colors"
         >
           {scriptInfo.name}
           {scriptInfo.scriptKind && (
-            <span className="text-slate-500">({scriptInfo.scriptKind})</span>
+            <span className="text-text-muted">({scriptInfo.scriptKind})</span>
           )}
         </AppLink>
       )}
@@ -64,41 +64,41 @@ export function ScriptView({
   );
 
   return (
-    <div className={cn('rounded border border-slate-800 bg-slate-900/50', className)}>
+    <div className={cn('border-base-border bg-base-surface/50 rounded border', className)}>
       {label && (
         <div
           className={cn(
-            'flex items-center justify-between border-b border-slate-800 px-3 py-2',
-            collapsible && 'cursor-pointer transition-colors hover:bg-slate-800/50'
+            'border-base-border flex items-center justify-between border-b px-3 py-2',
+            collapsible && 'hover:bg-base-elevated/50 cursor-pointer transition-colors'
           )}
           onClick={() => collapsible && setExpanded(!expanded)}
         >
           {headerContent}
           {collapsible && (
-            <span className="text-slate-500 transition-transform">{expanded ? '▼' : '▶'}</span>
+            <span className="text-text-muted transition-transform">{expanded ? '▼' : '▶'}</span>
           )}
         </div>
       )}
       {expanded && (
         <div className="space-y-2 p-3 font-mono text-sm">
           <div className="flex items-start gap-2">
-            <span className="w-20 shrink-0 text-slate-500">code_hash:</span>
-            <Hash hash={script.codeHash} className="text-slate-300" />
+            <span className="text-text-muted w-20 shrink-0">code_hash:</span>
+            <Hash hash={script.codeHash} className="text-text-secondary" />
           </div>
           <div className="flex items-start gap-2">
-            <span className="w-20 shrink-0 text-slate-500">hash_type:</span>
-            <span className="rounded border border-slate-700 bg-slate-800/70 px-2 py-0.5 text-xs text-slate-300">
+            <span className="text-text-muted w-20 shrink-0">hash_type:</span>
+            <span className="border-base-border bg-base-elevated/70 text-text-secondary rounded border px-2 py-0.5 text-xs">
               {getScriptRefBadgeLabel(script.hashType)}
             </span>
           </div>
           <div className="flex items-start gap-2">
-            <span className="w-20 shrink-0 text-slate-500">args:</span>
+            <span className="text-text-muted w-20 shrink-0">args:</span>
             <Hash
               hash={script.args}
               truncate={script.args.length > 66}
               startChars={20}
               endChars={20}
-              className="break-all text-slate-300"
+              className="text-text-secondary break-all"
             />
           </div>
         </div>

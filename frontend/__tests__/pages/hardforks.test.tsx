@@ -69,7 +69,7 @@ describe('HardforksPage', () => {
     expect(screen.getAllByText('ACTIVATED').length).toBeGreaterThanOrEqual(2);
     const activationLinks = screen.getAllByRole('link', { name: 'View activation block' });
     expect(activationLinks.length).toBe(2);
-    expect(activationLinks[0]).toHaveClass('text-terminal-green');
+    expect(activationLinks[0]).toHaveClass('text-emphasis');
   });
 
   it('shows error state on fetch failure', async () => {

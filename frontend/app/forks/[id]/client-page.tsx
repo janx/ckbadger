@@ -47,11 +47,11 @@ export default function ForkDetailPage() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8 text-center">
           <h1 className="text-2xl font-bold text-red-400">Error loading fork event</h1>
-          <p className="mt-2 text-slate-400">{(error as Error).message}</p>
+          <p className="text-text-muted mt-2">{(error as Error).message}</p>
         </main>
       </div>
     );
@@ -59,13 +59,13 @@ export default function ForkDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="mb-6 h-10 w-64 animate-pulse rounded bg-slate-800" />
+          <div className="bg-base-elevated mb-6 h-10 w-64 animate-pulse rounded" />
           <div className="grid gap-6 md:grid-cols-2">
-            <div className="h-64 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
-            <div className="h-64 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+            <div className="border-base-border bg-base-surface/50 h-64 animate-pulse rounded border" />
+            <div className="border-base-border bg-base-surface/50 h-64 animate-pulse rounded border" />
           </div>
         </main>
       </div>
@@ -79,7 +79,7 @@ export default function ForkDetailPage() {
   const { event, orphanedBlocks, orphanedTransactions } = data;
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
@@ -99,17 +99,17 @@ export default function ForkDetailPage() {
                 <DataField label="Detected">
                   <span>
                     {new Date(event.detectedAt).toLocaleString()}{' '}
-                    <span className="text-slate-500">({formatTimeAgo(event.detectedAt)})</span>
+                    <span className="text-text-muted">({formatTimeAgo(event.detectedAt)})</span>
                   </span>
                 </DataField>
                 <DataField label="Depth">
-                  <span className="text-amber font-mono">{event.depth} blocks</span>
+                  <span className="text-warning font-mono">{event.depth} blocks</span>
                 </DataField>
                 <DataField label="Fork Point">
                   <div className="space-y-1">
                     <Link
                       href={`/blocks/${event.forkPointNumber}`}
-                      className="text-terminal-green font-mono hover:underline"
+                      className="text-emphasis font-mono hover:underline"
                     >
                       #{event.forkPointNumber.toLocaleString()}
                     </Link>
@@ -139,7 +139,7 @@ export default function ForkDetailPage() {
                     Old Tip (Orphaned)
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-slate-300">
+                    <span className="text-text-secondary font-mono">
                       Height: {event.oldTipNumber.toLocaleString()}
                     </span>
                   </div>
@@ -149,7 +149,7 @@ export default function ForkDetailPage() {
                 </div>
 
                 <div className="flex justify-center">
-                  <div className="text-amber text-2xl">↓</div>
+                  <div className="text-warning text-2xl">↓</div>
                 </div>
 
                 <div className="rounded border border-green-900/50 bg-green-950/20 p-4">
@@ -157,7 +157,7 @@ export default function ForkDetailPage() {
                     New Tip (Canonical)
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-slate-300">
+                    <span className="text-text-secondary font-mono">
                       Height: {event.newTipNumber.toLocaleString()}
                     </span>
                   </div>
@@ -181,7 +181,7 @@ export default function ForkDetailPage() {
           <TerminalPanel className="mt-4">
             <TabsContent value="blocks" className="m-0">
               <TerminalPanelContent padding="none">
-                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="w-32">Number</div>
                   <div className="flex-1">Hash</div>
                   <div className="w-24 text-center">Tx Count</div>
@@ -189,7 +189,7 @@ export default function ForkDetailPage() {
                 </div>
 
                 {orphanedBlocks.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-slate-500">
+                  <div className="text-text-muted px-4 py-8 text-center">
                     No orphaned blocks data available
                   </div>
                 ) : (
@@ -199,7 +199,7 @@ export default function ForkDetailPage() {
                         <div className="w-32">
                           <Link
                             href={`/blocks/${block.number}`}
-                            className="text-terminal-green font-mono hover:underline"
+                            className="text-emphasis font-mono hover:underline"
                           >
                             #{block.number.toLocaleString()}
                           </Link>
@@ -207,10 +207,10 @@ export default function ForkDetailPage() {
                         <div className="flex-1">
                           <HexDisplay value={block.hash} color="accent" size="sm" />
                         </div>
-                        <div className="w-24 text-center font-mono text-slate-300">
+                        <div className="text-text-secondary w-24 text-center font-mono">
                           {block.transactionsCount}
                         </div>
-                        <div className="w-28 text-right text-slate-500">
+                        <div className="text-text-muted w-28 text-right">
                           {formatTimeAgo(block.timestamp)}
                         </div>
                       </div>
@@ -222,14 +222,14 @@ export default function ForkDetailPage() {
 
             <TabsContent value="transactions" className="m-0">
               <TerminalPanelContent padding="none">
-                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="flex-1">Transaction</div>
                   <div className="w-36">Fee</div>
                   <div className="w-24 text-right">I/O</div>
                 </div>
 
                 {orphanedTransactions.length === 0 ? (
-                  <div className="px-4 py-8 text-center text-slate-500">
+                  <div className="text-text-muted px-4 py-8 text-center">
                     No orphaned transactions data available
                   </div>
                 ) : (
@@ -242,16 +242,16 @@ export default function ForkDetailPage() {
                           </Link>
                           <Link
                             href={`/blocks/${tx.blockNumber}`}
-                            className="block font-mono text-xs text-slate-500 hover:text-slate-300"
+                            className="text-text-muted hover:text-text-secondary block font-mono text-xs"
                           >
                             #{tx.blockNumber.toLocaleString()}
                           </Link>
                         </div>
-                        <div className="w-36 font-mono text-slate-300">
+                        <div className="text-text-secondary w-36 font-mono">
                           {tx.totalCapacity ? parseInt(tx.totalCapacity).toLocaleString() : '-'}{' '}
-                          <span className="text-slate-500">shannons</span>
+                          <span className="text-text-muted">shannons</span>
                         </div>
-                        <div className="w-24 text-right font-mono text-slate-400">
+                        <div className="text-text-muted w-24 text-right font-mono">
                           {tx.inputsCount ?? '-'} / {tx.outputsCount ?? '-'}
                         </div>
                       </div>

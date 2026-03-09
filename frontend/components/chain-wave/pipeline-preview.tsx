@@ -58,7 +58,7 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
     typeof value === 'number' ? value.toLocaleString() : '--';
 
   return (
-    <section className="overflow-visible rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 ring-1 ring-inset ring-slate-700/70">
+    <section className="from-base-surface via-base-surface to-base-elevated ring-base-border/70 overflow-visible rounded-2xl bg-gradient-to-br p-4 ring-1 ring-inset">
       <div className="mb-2">
         <h2 className="text-base font-semibold text-white sm:text-lg">Transaction Pipeline</h2>
         <div
@@ -66,15 +66,13 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
           className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
         >
           <p className="text-xs sm:text-sm">
-            <span className="text-amber-300">Mempool ({formatCount(mempoolCount)})</span>
-            <span className="text-slate-500"> {'->'} </span>
-            <span className="text-terminal-dim">Proposals ({formatCount(proposalsCount)})</span>
-            <span className="text-slate-500"> {'->'} </span>
-            <span className="text-terminal-green">
-              New Committed ({formatCount(committedCount)})
-            </span>
+            <span className="text-warning-300">Mempool ({formatCount(mempoolCount)})</span>
+            <span className="text-text-muted"> {'->'} </span>
+            <span className="text-emphasis-dim">Proposals ({formatCount(proposalsCount)})</span>
+            <span className="text-text-muted"> {'->'} </span>
+            <span className="text-emphasis">New Committed ({formatCount(committedCount)})</span>
           </p>
-          <p className="rounded-md border border-slate-700/60 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 sm:text-right">
+          <p className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px] sm:text-right">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </p>
         </div>

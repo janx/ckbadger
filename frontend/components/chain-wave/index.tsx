@@ -74,9 +74,9 @@ function median(values: Array<number | null | undefined>): number | null {
 }
 
 function stagePillClass(stage: FlowStage): string {
-  if (stage === 'mempool') return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
+  if (stage === 'mempool') return 'border-warning-500/30 bg-warning/10 text-warning';
   if (stage === 'proposed') return 'border-green-500/30 bg-green-500/10 text-green-200';
-  return 'border-terminal-green/40 bg-terminal-green/10 text-terminal-green';
+  return 'border-emphasis/40 bg-emphasis/10 text-emphasis';
 }
 
 function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): string {
@@ -137,10 +137,10 @@ function StageFlowPill({
 }) {
   return (
     <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
-      <div className="text-[11px] uppercase tracking-widest text-slate-300/70">{title}</div>
+      <div className="text-text-secondary/70 text-[11px] uppercase tracking-widest">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
         <div className="text-lg font-semibold text-white">{value.toLocaleString()}</div>
-        <div className="text-[11px] text-slate-300/70">{subtitle}</div>
+        <div className="text-text-secondary/70 text-[11px]">{subtitle}</div>
       </div>
     </div>
   );
@@ -149,13 +149,13 @@ function StageFlowPill({
 function StageConnector({ label }: { label: string }) {
   return (
     <div className="hidden items-center gap-1 px-2 lg:flex">
-      <div className="h-px w-6 bg-slate-700" />
+      <div className="bg-base-border h-px w-6" />
       <div className="relative">
-        <div className="bg-terminal-green/80 h-2 w-2 rounded-full" />
-        <div className="bg-terminal-green/35 absolute inset-0 animate-ping rounded-full" />
+        <div className="bg-emphasis/80 h-2 w-2 rounded-full" />
+        <div className="bg-emphasis/35 absolute inset-0 animate-ping rounded-full" />
       </div>
-      <div className="text-[10px] uppercase tracking-widest text-slate-500">{label}</div>
-      <div className="h-px w-6 bg-slate-700" />
+      <div className="text-text-muted text-[10px] uppercase tracking-widest">{label}</div>
+      <div className="bg-base-border h-px w-6" />
     </div>
   );
 }
@@ -182,18 +182,18 @@ function TxMetricScatter({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border border-slate-700/60 bg-slate-950/50 ${
+      className={`border-base-border/60 bg-base-bg/50 relative overflow-hidden rounded-xl border ${
         compact ? 'h-28' : 'h-52'
       }`}
     >
       <div className="pointer-events-none absolute inset-0 grid grid-cols-4 grid-rows-4">
         {Array.from({ length: 16 }, (_, idx) => (
-          <div key={idx} className="border border-slate-800/30" />
+          <div key={idx} className="border-base-border/30 border" />
         ))}
       </div>
 
       {points.length === 0 ? (
-        <div className="flex h-full items-center justify-center px-4 text-center text-xs text-slate-500">
+        <div className="text-text-muted flex h-full items-center justify-center px-4 text-center text-xs">
           {emptyText}
         </div>
       ) : (
@@ -232,16 +232,16 @@ function TxMetricScatter({
 
       {!compact && (
         <>
-          <div className="absolute bottom-1 left-2 text-[10px] uppercase tracking-widest text-slate-500">
+          <div className="text-text-muted absolute bottom-1 left-2 text-[10px] uppercase tracking-widest">
             Low fee rate
           </div>
-          <div className="absolute bottom-1 right-2 text-[10px] uppercase tracking-widest text-slate-500">
+          <div className="text-text-muted absolute bottom-1 right-2 text-[10px] uppercase tracking-widest">
             High fee rate
           </div>
-          <div className="absolute left-1 top-2 -rotate-90 text-[10px] uppercase tracking-widest text-slate-500">
+          <div className="text-text-muted absolute left-1 top-2 -rotate-90 text-[10px] uppercase tracking-widest">
             High cycles
           </div>
-          <div className="absolute bottom-2 left-1 -rotate-90 text-[10px] uppercase tracking-widest text-slate-500">
+          <div className="text-text-muted absolute bottom-2 left-1 -rotate-90 text-[10px] uppercase tracking-widest">
             Low cycles
           </div>
         </>
@@ -269,26 +269,26 @@ function StageScatterCard({
   const medianCycles = useMemo(() => median(items.map((item) => item.cycles)), [items]);
 
   return (
-    <div className="rounded-2xl border border-slate-700/50 bg-slate-900/60 p-4">
+    <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-white sm:text-base">{title}</h3>
-          <div className="text-xs text-slate-400">{subtitle}</div>
+          <div className="text-text-muted text-xs">{subtitle}</div>
         </div>
         <div className="text-right">
           <div className="text-lg font-bold text-white">{totalCount.toLocaleString()}</div>
-          <div className="text-[11px] uppercase tracking-widest text-slate-500">txns</div>
+          <div className="text-text-muted text-[11px] uppercase tracking-widest">txns</div>
         </div>
       </div>
 
       <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
-        <div className="rounded-lg border border-slate-700/50 bg-slate-950/60 px-2 py-1.5">
-          <div className="text-slate-500">Median fee rate</div>
-          <div className="font-medium text-slate-200">{formatFeeRate(medianFeeRate)}</div>
+        <div className="border-base-border/50 bg-base-bg/60 rounded-lg border px-2 py-1.5">
+          <div className="text-text-muted">Median fee rate</div>
+          <div className="text-text-primary font-medium">{formatFeeRate(medianFeeRate)}</div>
         </div>
-        <div className="rounded-lg border border-slate-700/50 bg-slate-950/60 px-2 py-1.5">
-          <div className="text-slate-500">Median cycles</div>
-          <div className="font-medium text-slate-200">{formatCycles(medianCycles)}</div>
+        <div className="border-base-border/50 bg-base-bg/60 rounded-lg border px-2 py-1.5">
+          <div className="text-text-muted">Median cycles</div>
+          <div className="text-text-primary font-medium">{formatCycles(medianCycles)}</div>
         </div>
       </div>
 
@@ -300,20 +300,20 @@ function StageScatterCard({
 function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
   if (blocks.length === 0) {
     return (
-      <div className="rounded-2xl border border-slate-700/50 bg-slate-900/60 p-4 text-sm text-slate-500">
+      <div className="border-base-border/50 bg-base-surface/60 text-text-muted rounded-2xl border p-4 text-sm">
         No committed blocks yet
       </div>
     );
   }
 
   return (
-    <div className="rounded-2xl border border-slate-700/50 bg-slate-900/60 p-4">
+    <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold text-white sm:text-base">Recent Committed Blocks</h3>
-          <div className="text-xs text-slate-400">New blocks stream in as txns get packed</div>
+          <div className="text-text-muted text-xs">New blocks stream in as txns get packed</div>
         </div>
-        <div className="border-terminal-green/40 bg-terminal-green/10 text-terminal-green rounded-lg border px-2 py-1 text-xs">
+        <div className="border-emphasis/40 bg-emphasis/10 text-emphasis rounded-lg border px-2 py-1 text-xs">
           head #{blocks[0].block.number.toLocaleString()}
         </div>
       </div>
@@ -323,18 +323,18 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           <Link
             key={entry.block.number}
             href={`/blocks/${entry.block.number}`}
-            className="hover:border-terminal-green/50 block rounded-xl border border-slate-700/60 bg-slate-950/60 p-3 transition-colors"
+            className="hover:border-emphasis/50 border-base-border/60 bg-base-bg/60 block rounded-xl border p-3 transition-colors"
           >
             <div className="mb-2 flex items-center justify-between text-xs">
-              <div className="font-medium text-slate-200">
+              <div className="text-text-primary font-medium">
                 #{entry.block.number.toLocaleString()}
               </div>
               {index === 0 ? (
-                <span className="border-terminal-green/40 bg-terminal-green/20 text-terminal-green rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
+                <span className="border-emphasis/40 bg-emphasis/20 text-emphasis rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
                   New
                 </span>
               ) : (
-                <span className="text-slate-500">{entry.totalCount.toLocaleString()} txns</span>
+                <span className="text-text-muted">{entry.totalCount.toLocaleString()} txns</span>
               )}
             </div>
             <TxMetricScatter
@@ -352,20 +352,20 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
 
 function TriMetricLegend() {
   return (
-    <div className="mt-4 rounded-xl border border-slate-700/60 bg-slate-950/40 p-3">
-      <div className="text-xs uppercase tracking-widest text-slate-500">Tri-metric encoding</div>
-      <div className="mt-2 grid gap-2 text-xs text-slate-300 sm:grid-cols-3">
-        <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-2 py-1.5">
+    <div className="border-base-border/60 bg-base-bg/40 mt-4 rounded-xl border p-3">
+      <div className="text-text-muted text-xs uppercase tracking-widest">Tri-metric encoding</div>
+      <div className="text-text-secondary mt-2 grid gap-2 text-xs sm:grid-cols-3">
+        <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
           Bubble size = txn size (bytes)
         </div>
-        <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-2 py-1.5">
+        <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
           X-axis = fee rate (shannons / byte)
         </div>
-        <div className="rounded-lg border border-slate-700/50 bg-slate-900/60 px-2 py-1.5">
+        <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
           Y-axis = cycles (higher at top)
         </div>
       </div>
-      <div className="mt-2 text-[11px] text-slate-500">
+      <div className="text-text-muted mt-2 text-[11px]">
         Dashed bubble means cycles data is not available yet; green ring marks cellbase.
       </div>
     </div>
@@ -445,8 +445,8 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
 
   const containerClassName =
     chrome === 'flat'
-      ? 'rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800/80 p-4 sm:p-6'
-      : 'rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-4 shadow-xl sm:p-6';
+      ? 'rounded-2xl bg-gradient-to-br from-base-surface via-base-surface to-base-elevated/80 p-4 sm:p-6'
+      : 'rounded-2xl border border-base-border/50 bg-gradient-to-br from-base-surface via-base-surface to-base-elevated p-4 shadow-xl sm:p-6';
 
   return (
     <div className={containerClassName}>
@@ -455,7 +455,7 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
           <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">
             Transaction Flow Pipeline
           </h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="text-text-muted mt-1 text-sm">
             Mempool txns move through proposal queue and are continuously committed into new blocks.
           </p>
         </div>

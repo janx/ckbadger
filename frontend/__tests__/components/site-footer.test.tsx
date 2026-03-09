@@ -19,10 +19,6 @@ describe('SiteFooter', () => {
 
     expect(screen.queryByText(/ckbadger explorer/i)).toBeNull();
     expect(screen.queryByText(/Local-first CKB observability and protocol context/i)).toBeNull();
-    expect(screen.getByText('Credits')).toBeInTheDocument();
-    expect(screen.getByText('Build')).toBeInTheDocument();
-    expect(screen.getByText('Shortcut')).toBeInTheDocument();
-    expect(screen.getByText('Links')).toBeInTheDocument();
     const hardforksLink = screen.getByRole('link', { name: 'Hardforks' });
     expect(hardforksLink).toHaveAttribute('href', '/hardforks');
     expect(screen.queryByRole('link', { name: 'Blocks' })).toBeNull();
@@ -30,20 +26,14 @@ describe('SiteFooter', () => {
     expect(screen.queryByRole('link', { name: 'Charts' })).toBeNull();
     const githubLink = screen.getByRole('link', { name: 'Github' });
     expect(githubLink).toHaveAttribute('href', 'https://github.com/janx/ckbadger');
-    expect(githubLink).not.toHaveClass('text-terminal-green');
-    const footerLinks = Array.from(githubLink.parentElement?.querySelectorAll('a') ?? []).map(
-      (link) => link.textContent?.trim()
-    );
-    expect(footerLinks).toEqual(['Hardforks', 'Github']);
+    expect(githubLink).not.toHaveClass('text-emphasis');
     const shortcutHint = screen.getByText('Press ? for shortcuts');
     expect(shortcutHint).toBeInTheDocument();
     expect(hardforksLink.className).not.toEqual(shortcutHint.className);
     expect(githubLink.className).not.toEqual(shortcutHint.className);
     const profileLink = screen.getByRole('link', { name: '@busyforking' });
     expect(profileLink).toHaveAttribute('href', 'https://x.com/busyforking');
-    expect(footer).toHaveTextContent('Designed by @busyforking, coded by Claude and Codex. ❤️');
-    expect(screen.getByText(/coded by Claude and Codex\./i)).toBeInTheDocument();
-    expect(screen.getByText(/❤️/)).toBeInTheDocument();
+    expect(footer).toHaveTextContent('Built by @busyforking with agents Coco and Dede');
     expect(screen.getByText('0.1.0+feature/foo@abcdef123456')).toBeInTheDocument();
   });
 });

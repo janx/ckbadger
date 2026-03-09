@@ -49,7 +49,7 @@ describe('CommonKnowledgeCompositionPage', () => {
       expect(screen.getByTestId('stacked-area-chart')).toBeInTheDocument();
       expect(screen.getByText('Occupied')).toBeInTheDocument();
       expect(screen.getByText('Unoccupied')).toBeInTheDocument();
-      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-slate-500');
+      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-muted');
     });
   });
 });

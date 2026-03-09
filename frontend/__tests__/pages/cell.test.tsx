@@ -242,15 +242,15 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('byte-composition-guides')).not.toBeInTheDocument();
     expect(legend.className).toContain('mt-2');
     expect(legend.querySelector('.grid')).toBeTruthy();
-    expect(legend.querySelector('.bg-slate-500')).toBeTruthy();
-    expect(legend.querySelector('.bg-terminal-green')).toBeTruthy();
+    expect(legend.querySelector('.bg-base-border')).toBeTruthy();
+    expect(legend.querySelector('.bg-emphasis')).toBeTruthy();
     expect(legend.querySelector('.bg-cyan-400')).toBeTruthy();
-    expect(legend.querySelector('.bg-amber-400')).toBeTruthy();
+    expect(legend.querySelector('.bg-warning-400')).toBeTruthy();
 
     const lockScriptLegendItem = screen.getByRole('button', { name: /Lock Script/i });
     fireEvent.mouseEnter(lockScriptLegendItem);
-    expect(lockScriptLegendItem.className).toContain('bg-terminal-green/15');
-    expect(lockScriptLegendItem.className).toContain('border-terminal-green/70');
+    expect(lockScriptLegendItem.className).toContain('bg-emphasis/15');
+    expect(lockScriptLegendItem.className).toContain('border-emphasis/70');
     fireEvent.mouseLeave(lockScriptLegendItem);
 
     expect(screen.getByText('Overview')).toBeInTheDocument();
@@ -434,14 +434,14 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-analysis-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-deterministic-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-heuristic-panel')).not.toBeInTheDocument();
-    expect(screen.getByTestId('data-byte-0').className).toContain('bg-terminal-green/15');
-    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('text-slate-500');
+    expect(screen.getByTestId('data-byte-0').className).toContain('bg-emphasis/15');
+    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('text-text-muted');
 
     fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
     expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');
     expect(screen.getByTestId('data-byte-0').className).toContain('byte-hover-breathe');
-    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('bg-terminal-green/30');
-    expect(screen.getByTestId('data-ascii-byte-1').className).toContain('bg-terminal-green/20');
+    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('bg-emphasis/30');
+    expect(screen.getByTestId('data-ascii-byte-1').className).toContain('bg-emphasis/20');
 
     fireEvent.mouseEnter(screen.getByTestId('data-ascii-byte-2'));
     expect(screen.getByTestId('data-byte-2').className).toContain('byte-hover-breathe');
@@ -489,18 +489,16 @@ describe('CellDetailPage', () => {
       expect(screen.getByTestId('data-heuristic-item-0')).toBeInTheDocument();
     });
 
-    expect(
-      screen.getByTestId('data-heuristic-item-0').querySelector('.bg-terminal-green')
-    ).toBeTruthy();
+    expect(screen.getByTestId('data-heuristic-item-0').querySelector('.bg-emphasis')).toBeTruthy();
     expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
     expect(screen.getByTestId('data-heuristic-detail-0')).toBeInTheDocument();
-    expect(screen.getByTestId('data-heuristic-item-0').className).toContain('bg-terminal-green/15');
+    expect(screen.getByTestId('data-heuristic-item-0').className).toContain('bg-emphasis/15');
     expect(
       screen.getByText('Payload length is exactly 16 bytes (common u128 LE encoding)')
     ).toBeInTheDocument();
-    expect(screen.getByText('42').className).toContain('text-terminal-green');
+    expect(screen.getByText('42').className).toContain('text-emphasis');
 
     fireEvent.click(screen.getByTestId('data-heuristic-item-0'));
     expect(screen.queryByTestId('data-heuristic-detail-0')).not.toBeInTheDocument();
@@ -540,6 +538,6 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-coverage-grid')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-unparsed-ranges')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-byte-filter')).not.toBeInTheDocument();
-    expect(screen.getByTestId('data-byte-10').className).toContain('bg-slate-800/70');
+    expect(screen.getByTestId('data-byte-10').className).toContain('bg-base-elevated/70');
   });
 });

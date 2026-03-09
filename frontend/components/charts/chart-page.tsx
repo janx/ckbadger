@@ -69,13 +69,13 @@ export function ChartPage({
     : undefined;
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
             href={backLink}
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             ← {backLabel}
           </Link>
@@ -87,10 +87,10 @@ export function ChartPage({
           <TerminalPanelHeader indicator="active">{title}</TerminalPanelHeader>
           <TerminalPanelContent className="p-6">
             {isLoading && (
-              <div className="h-96 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+              <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="flex h-96 items-center justify-center text-slate-500">
+              <div className="text-text-muted flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}
@@ -110,20 +110,20 @@ export function ChartPage({
                     <span
                       className={
                         chartType === 'bar'
-                          ? 'bg-terminal-green h-3 w-3 rounded'
-                          : 'bg-terminal-green h-0.5 w-4'
+                          ? 'bg-emphasis h-3 w-3 rounded'
+                          : 'bg-emphasis h-0.5 w-4'
                       }
                     />
-                    <span className="text-slate-400">{data.yAxisLabel}</span>
+                    <span className="text-text-muted">{data.yAxisLabel}</span>
                   </div>
                   {chartType === 'line' && data.y2AxisLabel && (
                     <div className="flex items-center gap-2">
-                      <span className="bg-amber h-0.5 w-4" />
-                      <span className="text-slate-400">{data.y2AxisLabel}</span>
+                      <span className="bg-warning h-0.5 w-4" />
+                      <span className="text-text-muted">{data.y2AxisLabel}</span>
                     </div>
                   )}
                 </div>
-                <div className="mt-4 text-center font-mono text-xs text-slate-500">
+                <div className="text-text-muted mt-4 text-center font-mono text-xs">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

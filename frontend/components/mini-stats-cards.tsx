@@ -26,15 +26,15 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
 
   if (!data.length) {
     return (
-      <div className="flex items-center justify-center text-slate-500" style={{ height }}>
+      <div className="text-text-muted flex items-center justify-center" style={{ height }}>
         No data
       </div>
     );
   }
 
   const maxValue = Math.max(...data.map((d) => d.value), 1);
-  const barColor = color === 'green' ? 'bg-terminal-dark' : 'bg-amber-dim';
-  const barColorHover = color === 'green' ? 'bg-terminal-green' : 'bg-amber';
+  const barColor = color === 'green' ? 'bg-emphasis-dim' : 'bg-warning-dim';
+  const barColorHover = color === 'green' ? 'bg-emphasis' : 'bg-warning';
 
   return (
     <div className="relative" style={{ height }}>
@@ -59,12 +59,12 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
                 style={{ height: `${Math.max(barHeight, 2)}%` }}
               />
               {isHovered && (
-                <div className="absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs shadow-lg">
-                  <div className="font-mono text-slate-300">{point.label}</div>
+                <div className="bg-base-elevated absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded px-2 py-1 text-xs shadow-lg">
+                  <div className="text-text-secondary font-mono">{point.label}</div>
                   <div
                     className={cn(
                       'font-mono font-bold',
-                      color === 'green' ? 'text-terminal-green' : 'text-amber'
+                      color === 'green' ? 'text-emphasis' : 'text-warning'
                     )}
                   >
                     {formatNumber(point.value)}
@@ -90,18 +90,18 @@ function TxStatWidget({ label, value, data, color }: TxStatWidgetProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between">
-        <span className="font-mono text-xs uppercase tracking-wider text-slate-500">{label}</span>
+        <span className="text-text-muted font-mono text-xs uppercase tracking-wider">{label}</span>
         <span
           className={cn(
             'font-mono text-xl font-bold tabular-nums',
-            color === 'green' ? 'text-terminal-green' : 'text-amber'
+            color === 'green' ? 'text-emphasis' : 'text-warning'
           )}
         >
           {formatNumber(value)}
         </span>
       </div>
       <BarChart data={data} color={color} height={48} />
-      <div className="flex justify-between font-mono text-[10px] text-slate-500">
+      <div className="text-text-muted flex justify-between font-mono text-[10px]">
         <span>{data.length > 0 ? data[0].label : ''}</span>
         <span>{data.length > 0 ? data[data.length - 1].label : ''}</span>
       </div>
@@ -123,7 +123,9 @@ export function MiniStatsCards({ className }: MiniStatsCardsProps) {
   const txsLast24Hours = txStats?.currentDay ?? 0;
 
   return (
-    <div className={cn('h-full rounded-lg border border-slate-800 bg-slate-900 p-4', className)}>
+    <div
+      className={cn('border-base-border bg-base-surface h-full rounded-lg border p-4', className)}
+    >
       <div className="grid h-full grid-cols-2 gap-6">
         <TxStatWidget
           label="TXs Last 60 Mins"

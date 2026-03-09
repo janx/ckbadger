@@ -41,7 +41,7 @@ describe('SecondaryIssuancePage', () => {
       expect(screen.getByTestId('stacked-area-chart')).toBeInTheDocument();
       expect(screen.getByText('Mining Reward')).toBeInTheDocument();
       expect(screen.getByText('Deposit Compensation')).toBeInTheDocument();
-      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-slate-500');
+      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-muted');
     });
   });
 });

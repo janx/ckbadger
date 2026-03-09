@@ -87,7 +87,7 @@ export default function ScriptsPage() {
       aria-label={`Sort by ${label}`}
     >
       <span>{label}</span>
-      <span className={sortKey === key ? 'text-terminal-green' : 'text-slate-700'}>
+      <span className={sortKey === key ? 'text-emphasis' : 'text-text-muted'}>
         {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
       </span>
     </button>
@@ -116,7 +116,7 @@ export default function ScriptsPage() {
       scriptKind: normalizeScriptKind(script.scriptKind),
     });
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
@@ -130,13 +130,13 @@ export default function ScriptsPage() {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   placeholder="Search by name or code hash..."
-                  className="focus:border-terminal-dark focus:ring-terminal-dark w-64 rounded border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm text-white placeholder-slate-600 transition-colors focus:outline-none focus:ring-1"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim w-64 rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
                 />
                 {search && (
                   <button
                     type="button"
                     onClick={clearSearch}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                    className="text-text-muted hover:text-text-secondary absolute right-2 top-1/2 -translate-y-1/2"
                   >
                     ×
                   </button>
@@ -144,7 +144,7 @@ export default function ScriptsPage() {
               </div>
               <button
                 type="submit"
-                className="border-terminal-dark bg-terminal-dark/20 text-terminal-green hover:bg-terminal-dark/40 rounded border px-4 py-1.5 font-mono text-sm transition-colors"
+                className="border-emphasis-dim bg-emphasis-dim/20 text-emphasis hover:bg-emphasis-dim/40 rounded border px-4 py-1.5 font-mono text-sm transition-colors"
               >
                 Search
               </button>
@@ -161,19 +161,19 @@ export default function ScriptsPage() {
                   <TerminalRow key={i} hoverable={false}>
                     <div className="flex animate-pulse items-center">
                       <div className="flex-1">
-                        <div className="h-4 w-32 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-4 w-32 rounded" />
                       </div>
                       <div className="w-20">
-                        <div className="h-4 w-12 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-4 w-12 rounded" />
                       </div>
                       <div className="flex-1">
-                        <div className="h-4 w-48 rounded bg-slate-800" />
+                        <div className="bg-base-elevated h-4 w-48 rounded" />
                       </div>
                       <div className="w-28">
-                        <div className="ml-auto h-4 w-20 rounded bg-slate-800" />
+                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
                       <div className="w-28">
-                        <div className="ml-auto h-4 w-20 rounded bg-slate-800" />
+                        <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
                     </div>
                   </TerminalRow>
@@ -186,7 +186,7 @@ export default function ScriptsPage() {
               </div>
             ) : data?.data?.length ? (
               <>
-                <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   {renderSortHeader('name', 'Script', 'w-44')}
                   {renderSortHeader('kind', 'Kind', 'w-16')}
                   {renderSortHeader('description', 'Description', 'flex-1 px-4')}
@@ -200,14 +200,14 @@ export default function ScriptsPage() {
                         {hasKnownScriptName(script.name) ? (
                           <AppLink
                             href={getScriptHref(script)}
-                            className="text-terminal-green font-medium hover:underline"
+                            className="text-emphasis font-medium hover:underline"
                           >
                             {script.name!.trim()}
                           </AppLink>
                         ) : (
                           <AppLink
                             href={getScriptHref(script)}
-                            className="hover:text-terminal-green font-medium text-slate-300 hover:underline"
+                            className="hover:text-emphasis text-text-secondary font-medium hover:underline"
                             title={getScriptRefFull(script)}
                           >
                             {UNLABELED_SCRIPT_LABEL}
@@ -220,36 +220,36 @@ export default function ScriptsPage() {
                             {script.scriptKind}
                           </Badge>
                         ) : (
-                          <span className="text-slate-500">-</span>
+                          <span className="text-text-muted">-</span>
                         )}
                       </div>
-                      <div className="flex-1 truncate px-4 text-sm text-slate-400">
+                      <div className="text-text-muted flex-1 truncate px-4 text-sm">
                         {hasKnownScriptName(script.name) ? (
                           script.description
                         ) : (
                           <span
                             title={getScriptRefFull(script)}
-                            className="font-mono text-xs text-slate-500"
+                            className="text-text-muted font-mono text-xs"
                           >
                             {getScriptRefDisplay(script)}
                           </span>
                         )}
                       </div>
-                      <div className="w-28 text-right font-mono text-slate-300">
+                      <div className="text-text-secondary w-28 text-right font-mono">
                         {(() => {
                           const occupied = script.liveOccupiedCapacitySum;
                           if (!occupied) {
-                            return <span className="text-slate-500">-</span>;
+                            return <span className="text-text-muted">-</span>;
                           }
                           const compact = formatCkbCompact(occupied);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                         })()}
                       </div>
-                      <div className="w-28 text-right font-mono text-slate-300">
+                      <div className="text-text-secondary w-28 text-right font-mono">
                         {(() => {
                           const capacity = script.liveCapacitySum;
                           if (!capacity) {
-                            return <span className="text-slate-500">-</span>;
+                            return <span className="text-text-muted">-</span>;
                           }
                           const compact = formatCkbCompact(capacity);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -260,7 +260,7 @@ export default function ScriptsPage() {
                 ))}
               </>
             ) : (
-              <div className="py-8 text-center text-slate-500">No scripts found</div>
+              <div className="text-text-muted py-8 text-center">No scripts found</div>
             )}
           </TerminalPanelContent>
 

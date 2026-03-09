@@ -41,12 +41,12 @@ export function CapacityOccupationSection({
       <TerminalPanelHeader indicator="none">Capacity & Occupation</TerminalPanelHeader>
       <TerminalPanelContent>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs text-slate-500">{description}</div>
+          <div className="text-text-muted text-xs">{description}</div>
           <OccupationRangeSelector value={occupationRange} onChange={onOccupationRangeChange} />
         </div>
 
         {hasCapacityData && (
-          <div className="mb-3 rounded border border-slate-800 bg-slate-950/50 p-3">
+          <div className="border-base-border bg-base-bg/50 mb-3 rounded border p-3">
             <CapacityUtilization
               totalCapacity={totalCapacity!}
               occupiedCapacity={occupiedCapacity!}
@@ -56,7 +56,7 @@ export function CapacityOccupationSection({
         )}
 
         {isOccupationChartLoading ? (
-          <div className="py-6 text-center text-slate-500">Loading occupation history...</div>
+          <div className="text-text-muted py-6 text-center">Loading occupation history...</div>
         ) : occupationChart && occupationChart.data.length > 0 ? (
           <StackedAreaChart
             data={occupationChart.data}
@@ -65,7 +65,7 @@ export function CapacityOccupationSection({
             valueUnit="shannon"
           />
         ) : (
-          <div className="py-6 text-center text-slate-500">No occupation history yet</div>
+          <div className="text-text-muted py-6 text-center">No occupation history yet</div>
         )}
       </TerminalPanelContent>
     </TerminalPanel>

@@ -98,13 +98,13 @@ describe('Pagination', () => {
     it('highlights current page with terminal green', () => {
       render(<Pagination page={5} totalPages={10} onPageChange={mockOnPageChange} />);
       const currentPageButton = screen.getByText('5');
-      expect(currentPageButton).toHaveClass('bg-terminal-green');
+      expect(currentPageButton).toHaveClass('bg-emphasis');
     });
 
     it('does not highlight other pages', () => {
       render(<Pagination page={5} totalPages={10} onPageChange={mockOnPageChange} />);
       const otherPageButton = screen.getByText('4');
-      expect(otherPageButton).not.toHaveClass('bg-terminal-green');
+      expect(otherPageButton).not.toHaveClass('bg-emphasis');
     });
   });
 

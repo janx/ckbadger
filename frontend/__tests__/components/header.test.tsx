@@ -71,9 +71,9 @@ describe('Header', () => {
       (node) => node.textContent?.trim() === 'DAO'
     );
 
-    expect(chartsLink?.className).toContain('text-terminal-green');
-    expect(chartsLink?.className).toContain('bg-terminal-green/12');
-    expect(daoLink?.className).toContain('text-slate-300/85');
+    expect(chartsLink?.className).toContain('text-interactive');
+    expect(chartsLink?.className).toContain('bg-interactive/12');
+    expect(daoLink?.className).toContain('text-text-secondary/85');
     expect(daoLink?.className).toContain('border-transparent');
   });
 });

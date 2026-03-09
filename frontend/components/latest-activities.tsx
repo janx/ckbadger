@@ -36,7 +36,7 @@ function getTypeBadge(activity: GlobalActivity): { label: string; className: str
   }
   return {
     label: 'Self',
-    className: 'bg-slate-800 text-slate-400 border border-slate-700/50',
+    className: 'bg-base-elevated text-text-muted border border-base-border/50',
   };
 }
 
@@ -50,7 +50,7 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
       return (
         <span
           className={cn(
-            'rounded border border-slate-700/60 bg-slate-800/80 px-1.5 py-0.5 font-mono text-[10px]',
+            'border-base-border/60 bg-base-elevated/80 rounded border px-1.5 py-0.5 font-mono text-[10px]',
             color
           )}
         >
@@ -61,25 +61,25 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
     }
     case 'dob':
       return (
-        <span className="rounded border border-slate-700/60 bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-300">
+        <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
           {change.standard === 'did_ckb' ? 'did:ckb' : 'Spore'} {change.action}
         </span>
       );
     case 'nft':
       return (
-        <span className="rounded border border-slate-700/60 bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-300">
+        <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
           {change.standard === 'm-nft' ? 'M-NFT' : '.bit'} {change.action}
         </span>
       );
     case 'daoDeposit':
       return (
-        <span className="rounded border border-slate-700/60 bg-slate-800/80 px-1.5 py-0.5 text-[10px] text-slate-300">
+        <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
           DAO Deposit
         </span>
       );
     case 'daoWithdrawRequest':
       return (
-        <span className="rounded border border-amber-700/50 bg-amber-900/30 px-1.5 py-0.5 text-[10px] text-amber-300">
+        <span className="border-warning-700/50 bg-warning-900/30 text-warning-300 rounded border px-1.5 py-0.5 text-[10px]">
           DAO Withdraw Request
         </span>
       );
@@ -139,7 +139,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   const headerActions = (
     <Link
       href="/activities"
-      className="font-mono text-xs text-slate-500 transition-colors hover:text-cyan-400"
+      className="text-text-muted font-mono text-xs transition-colors hover:text-cyan-400"
     >
       VIEW ALL →
     </Link>
@@ -156,15 +156,15 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
               <TerminalRow key={i} hoverable={false}>
                 <div className="animate-pulse space-y-2">
                   <div className="flex items-center justify-between">
-                    <div className="h-4 w-28 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-4 w-28 rounded" />
                     <div className="flex items-center gap-2">
-                      <div className="h-4 w-16 rounded bg-slate-800" />
-                      <div className="h-3 w-14 rounded bg-slate-800" />
+                      <div className="bg-base-elevated h-4 w-16 rounded" />
+                      <div className="bg-base-elevated h-3 w-14 rounded" />
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <div className="h-3 w-24 rounded bg-slate-800" />
-                    <div className="h-3 w-20 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-3 w-24 rounded" />
+                    <div className="bg-base-elevated h-3 w-20 rounded" />
                   </div>
                 </div>
               </TerminalRow>
@@ -190,7 +190,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                     <div className="min-w-0 flex-1">
                       <Link
                         href={`/address/${activity.address}`}
-                        className="font-mono text-sm text-slate-300 transition-opacity hover:opacity-80"
+                        className="text-text-secondary font-mono text-sm transition-opacity hover:opacity-80"
                       >
                         {isCkbAddress ? (
                           truncateAddress(activity.address)
@@ -216,7 +216,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                       >
                         {badge.label}
                       </span>
-                      <span className="text-xs text-slate-500">
+                      <span className="text-text-muted text-xs">
                         {formatTimeAgo(activity.timestamp)}
                       </span>
                     </div>
@@ -237,10 +237,10 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                     </Link>
                     <Link
                       href={`/blocks/${activity.blockNumber}`}
-                      className="hover:text-terminal-green shrink-0 font-mono text-xs text-slate-400 transition-colors"
+                      className="hover:text-emphasis text-text-muted shrink-0 font-mono text-xs transition-colors"
                     >
                       Block{' '}
-                      <span className="text-terminal-green">
+                      <span className="text-emphasis">
                         #{activity.blockNumber.toLocaleString()}
                       </span>
                     </Link>

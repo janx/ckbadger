@@ -50,7 +50,7 @@ export function NotFoundPage() {
   const tipHash = blocks?.data[0]?.hash;
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-slate-950 text-slate-100">
+    <main className="bg-base-bg text-text-primary relative min-h-screen overflow-hidden">
       <NotFoundCellOcean
         cellCount={oceanConfig.cellCount}
         splitPulse={oceanConfig.splitPulse}
@@ -64,16 +64,16 @@ export function NotFoundPage() {
 
       <section className="relative z-10 flex min-h-[calc(100vh-4rem)] items-center justify-center px-6 py-20">
         <div className="mx-auto flex w-full max-w-4xl flex-col items-start gap-7">
-          <p className="text-terminal-dim font-mono text-sm tracking-[0.35em]">404</p>
-          <h1 className="max-w-3xl font-mono text-4xl font-semibold leading-tight text-slate-50 md:text-6xl">
+          <p className="text-emphasis-dim font-mono text-sm tracking-[0.35em]">404</p>
+          <h1 className="text-text-primary max-w-3xl font-mono text-4xl font-semibold leading-tight md:text-6xl">
             The cells you sought have fallen silent in the dark.
           </h1>
-          <p className="text-slate-200/92 max-w-2xl font-mono text-lg leading-relaxed">
+          <p className="text-text-primary/92 max-w-2xl font-mono text-lg leading-relaxed">
             Elsewhere, unborn cells are gathering light.
           </p>
           <Link
             href="/"
-            className="border-terminal-dark bg-terminal-green/10 text-terminal-green hover:bg-terminal-green/20 rounded-md border px-5 py-2.5 font-mono text-xs uppercase tracking-[0.18em] transition"
+            className="border-emphasis-dim bg-emphasis/10 text-emphasis hover:bg-emphasis/20 rounded-md border px-5 py-2.5 font-mono text-xs uppercase tracking-[0.18em] transition"
           >
             Return Home
           </Link>
@@ -81,12 +81,12 @@ export function NotFoundPage() {
 
         <div className="pointer-events-none absolute bottom-7 left-1/2 w-[min(94vw,56rem)] -translate-x-1/2">
           <div data-testid="tip-values-strip" className="bg-transparent px-5 py-2.5">
-            <div className="flex flex-wrap items-center justify-center gap-3 font-mono text-sm tabular-nums text-slate-100/85 md:gap-5">
+            <div className="text-text-primary/85 flex flex-wrap items-center justify-center gap-3 font-mono text-sm tabular-nums md:gap-5">
               <span>{formatTipBlock(stats?.latestBlock)}</span>
-              <span className="bg-terminal-dark/85 h-1 w-1 rounded-full" />
+              <span className="bg-emphasis-dim/85 h-1 w-1 rounded-full" />
               <span>{formatTipHash(tipHash)}</span>
-              <span className="bg-terminal-dark/85 h-1 w-1 rounded-full" />
-              <span className="text-terminal-green">{formatHashRate(stats?.hashRate)}</span>
+              <span className="bg-emphasis-dim/85 h-1 w-1 rounded-full" />
+              <span className="text-emphasis">{formatHashRate(stats?.hashRate)}</span>
             </div>
           </div>
         </div>

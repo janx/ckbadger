@@ -26,13 +26,11 @@ export function Capacity({
   return (
     <span className={cn('font-mono tabular-nums', className)}>
       {signPrefix && (
-        <span className={cn(isNegative ? 'text-red-400' : 'text-terminal-green')}>
-          {signPrefix}
-        </span>
+        <span className={cn(isNegative ? 'text-red-400' : 'text-emphasis')}>{signPrefix}</span>
       )}
       <TerminalNumber value={integer} animate={animate} glowIntensity={glowIntensity} />
-      <span className="text-terminal-dark text-[0.85em]">.{decimal}</span>
-      {showUnit && <span className="text-terminal-dark ml-1 text-[0.85em]">CKB</span>}
+      <span className="text-emphasis-dim text-[0.85em]">.{decimal}</span>
+      {showUnit && <span className="text-emphasis-dim ml-1 text-[0.85em]">CKB</span>}
     </span>
   );
 }

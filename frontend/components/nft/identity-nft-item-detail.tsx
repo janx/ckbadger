@@ -134,13 +134,13 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
 
   if (detailQuery.isLoading) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="mb-6 h-10 w-48 animate-pulse rounded bg-slate-800" />
+          <div className="bg-base-elevated mb-6 h-10 w-48 animate-pulse rounded" />
           <div className="space-y-6">
-            <div className="h-40 animate-pulse rounded border border-slate-800 bg-slate-900/40" />
-            <div className="h-52 animate-pulse rounded border border-slate-800 bg-slate-900/40" />
+            <div className="border-base-border bg-base-surface/40 h-40 animate-pulse rounded border" />
+            <div className="border-base-border bg-base-surface/40 h-52 animate-pulse rounded border" />
           </div>
         </main>
       </div>
@@ -149,12 +149,12 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
 
   if (!detail) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-xl text-slate-400">{labels.notFoundMsg}</h2>
+              <h2 className="text-text-muted text-xl">{labels.notFoundMsg}</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -167,19 +167,19 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
   const liveOutputIndex = detail.outputIndex;
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6 flex items-center gap-4">
           <Link
             href={labels.backHref}
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             ← {labels.backLabel}
           </Link>
           <Link
             href="/assets?type=nft"
-            className="hover:text-terminal-green text-sm text-slate-500 transition-colors"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
             Back to NFTs
           </Link>
@@ -202,7 +202,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
             <TerminalPanelContent>
               <DataGrid columns={2}>
                 <DataField label="Standard">
-                  <span className="font-mono text-slate-200">{labels.standardDisplay}</span>
+                  <span className="text-text-primary font-mono">{labels.standardDisplay}</span>
                 </DataField>
                 <DataField label="Status">
                   {detail.isLive ? (
@@ -214,14 +214,14 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                 <DataField label="Created Block">
                   <Link
                     href={`/blocks/${detail.createdAtBlock}`}
-                    className="text-terminal-green font-mono hover:underline"
+                    className="text-emphasis font-mono hover:underline"
                   >
                     #{formatNumber(detail.createdAtBlock)}
                   </Link>
                 </DataField>
                 {labels.showExpiry && (
                   <DataField label="Expires At">
-                    <span className="font-mono text-slate-200">
+                    <span className="text-text-primary font-mono">
                       {formatExpiry(detail.expiredAt)}
                     </span>
                   </DataField>
@@ -235,7 +235,9 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
             <TerminalPanelContent>
               <DataGrid columns={1}>
                 <DataField label={labels.nameLabel}>
-                  <span className="font-mono text-slate-200">{detail.name || 'Unavailable'}</span>
+                  <span className="text-text-primary font-mono">
+                    {detail.name || 'Unavailable'}
+                  </span>
                 </DataField>
                 <DataField label={labels.idLabel} layout="vertical" valueClassName="w-full">
                   <HexDisplay value={detail.nftId} truncate={false} color="accent" />
@@ -248,7 +250,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                       <HexDisplay value={detail.ownerLockHash} truncate={false} color="accent" />
                     </Link>
                   ) : (
-                    <span className="font-mono text-slate-500">Unavailable</span>
+                    <span className="text-text-muted font-mono">Unavailable</span>
                   )}
                 </DataField>
                 <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
@@ -257,7 +259,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                       <HexDisplay value={detail.ownerLockHash} truncate={false} color="accent" />
                     </Link>
                   ) : (
-                    <span className="font-mono text-slate-500">Unavailable</span>
+                    <span className="text-text-muted font-mono">Unavailable</span>
                   )}
                 </DataField>
               </DataGrid>
@@ -271,13 +273,13 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                 <DataField label="Live Cell">
                   <Link
                     href={`/cell/${liveTxHash}-${liveOutputIndex}`}
-                    className="text-terminal-green font-mono hover:underline"
+                    className="text-emphasis font-mono hover:underline"
                   >
                     <HexDisplay value={liveTxHash} color="accent" size="sm" />-{liveOutputIndex}
                   </Link>
                 </DataField>
               ) : (
-                <div className="font-mono text-sm text-slate-400">{labels.recycledMsg}</div>
+                <div className="text-text-muted font-mono text-sm">{labels.recycledMsg}</div>
               )}
             </TerminalPanelContent>
           </TerminalPanel>
@@ -285,16 +287,16 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
-              <div className="flex items-center gap-1.5 border-b border-slate-800 px-4 py-2">
-                <span className="bg-terminal-green/15 text-terminal-green rounded px-2.5 py-1 font-mono text-xs">
+              <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
+                <span className="bg-emphasis/15 text-emphasis rounded px-2.5 py-1 font-mono text-xs">
                   Activities
                 </span>
               </div>
               <div className="p-4">
                 {isActivitiesLoading ? (
-                  <div className="py-2 text-sm text-slate-500">Loading activities...</div>
+                  <div className="text-text-muted py-2 text-sm">Loading activities...</div>
                 ) : !itemActivities?.data?.length ? (
-                  <div className="py-2 text-sm text-slate-500">No related activities found.</div>
+                  <div className="text-text-muted py-2 text-sm">No related activities found.</div>
                 ) : (
                   <div className="space-y-2">
                     {itemActivities.data.map((activity) => (

@@ -6,10 +6,10 @@ import type { CellGraphProps } from '@/components/cell-graph-renderer';
 const CellGraphRenderer = dynamic(() => import('@/components/cell-graph-renderer'), {
   loading: (props: CellGraphProps) => (
     <div
-      className="flex w-full items-center justify-center rounded-lg border border-slate-800 bg-slate-900/50"
+      className="border-base-border bg-base-surface/50 flex w-full items-center justify-center rounded-lg border"
       style={{ width: props.width ?? '100%', height: props.height ?? 500 }}
     >
-      <p className="text-slate-500">Loading graph...</p>
+      <p className="text-text-muted">Loading graph...</p>
     </div>
   ),
 });

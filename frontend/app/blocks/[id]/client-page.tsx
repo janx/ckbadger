@@ -346,9 +346,9 @@ export default function BlockDetailPage() {
                         <span className="text-text-muted text-xs">Index: {index}</span>
                       </div>
                       <div className="text-text-secondary text-right font-mono text-sm">
-                        <span className="text-terminal-dim">{tx.inputsCount}</span>
-                        <span className="mx-1 text-slate-500">→</span>
-                        <span className="text-amber-dim">{tx.outputsCount}</span>
+                        <span className="text-emphasis-dim">{tx.inputsCount}</span>
+                        <span className="text-text-muted mx-1">→</span>
+                        <span className="text-warning-dim">{tx.outputsCount}</span>
                       </div>
                     </div>
                   </TerminalRow>
@@ -377,7 +377,7 @@ export default function BlockDetailPage() {
                           </div>
                           {proposal.committedTxHash && (
                             <div className="flex items-center gap-2 text-xs">
-                              <span className="text-slate-500">Committed:</span>
+                              <span className="text-text-muted">Committed:</span>
                               <Link
                                 href={`/tx/${proposal.committedTxHash}`}
                                 className="text-interactive font-mono hover:underline"

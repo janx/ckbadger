@@ -31,16 +31,15 @@ const DATA_BYTES_PER_ROW = 24;
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 const DATA_SEGMENT_TONES = [
   {
-    dot: 'bg-terminal-green',
-    activePill: 'border-terminal-green/70 bg-terminal-green/15 text-terminal-green',
-    valueText: 'text-terminal-green',
-    byte: 'rounded bg-terminal-green/15 text-terminal-dim',
-    byteActive: 'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70',
-    byteHover:
-      'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]',
-    asciiActive: 'rounded-sm bg-terminal-green/20 text-terminal-green',
+    dot: 'bg-emphasis',
+    activePill: 'border-emphasis/70 bg-emphasis/15 text-emphasis',
+    valueText: 'text-emphasis',
+    byte: 'rounded bg-emphasis/15 text-emphasis-dim',
+    byteActive: 'rounded bg-emphasis/25 text-emphasis ring-1 ring-emphasis/70',
+    byteHover: 'byte-hover-breathe ring-1 ring-emphasis/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]',
+    asciiActive: 'rounded-sm bg-emphasis/20 text-emphasis',
     asciiHover:
-      'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]',
+      'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]',
   },
   {
     dot: 'bg-cyan-400',
@@ -54,16 +53,15 @@ const DATA_SEGMENT_TONES = [
       'rounded-sm bg-cyan-500/30 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.5)]',
   },
   {
-    dot: 'bg-amber-400',
-    activePill: 'border-amber-400/70 bg-amber-500/15 text-amber-200',
-    valueText: 'text-amber-200',
-    byte: 'rounded bg-amber-500/15 text-amber-200',
-    byteActive: 'rounded bg-amber-500/25 text-amber-100 ring-1 ring-amber-400/70',
-    byteHover:
-      'byte-hover-breathe ring-1 ring-amber-400/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
-    asciiActive: 'rounded-sm bg-amber-500/20 text-amber-100',
+    dot: 'bg-warning-400',
+    activePill: 'border-warning-400/70 bg-warning/15 text-warning',
+    valueText: 'text-warning',
+    byte: 'rounded bg-warning/15 text-warning',
+    byteActive: 'rounded bg-warning/25 text-warning ring-1 ring-warning/70',
+    byteHover: 'byte-hover-breathe ring-1 ring-warning/80 shadow-[0_0_10px_rgba(251,191,36,0.35)]',
+    asciiActive: 'rounded-sm bg-warning/20 text-warning',
     asciiHover:
-      'rounded-sm bg-amber-500/30 text-amber-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
+      'rounded-sm bg-warning/30 text-warning-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
   },
   {
     dot: 'bg-fuchsia-400',
@@ -87,14 +85,14 @@ type CapacitySegmentTone = {
 
 const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
   capacityFieldBytes: {
-    dot: 'bg-slate-500',
-    legendActivePill: 'border-slate-400/70 bg-slate-500/15 text-slate-100',
-    legendValueText: 'text-slate-300',
+    dot: 'bg-base-border',
+    legendActivePill: 'border-base-border/70 bg-base-border/15 text-text-primary',
+    legendValueText: 'text-text-secondary',
   },
   lockScriptBytes: {
-    dot: 'bg-terminal-green',
-    legendActivePill: 'border-terminal-green/70 bg-terminal-green/15 text-terminal-green',
-    legendValueText: 'text-terminal-green',
+    dot: 'bg-emphasis',
+    legendActivePill: 'border-emphasis/70 bg-emphasis/15 text-emphasis',
+    legendValueText: 'text-emphasis',
   },
   typeScriptBytes: {
     dot: 'bg-cyan-400',
@@ -102,9 +100,9 @@ const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
     legendValueText: 'text-cyan-300',
   },
   dataBytes: {
-    dot: 'bg-amber-400',
-    legendActivePill: 'border-amber-400/70 bg-amber-500/15 text-amber-200',
-    legendValueText: 'text-amber-200',
+    dot: 'bg-warning-400',
+    legendActivePill: 'border-warning-400/70 bg-warning/15 text-warning',
+    legendValueText: 'text-warning',
   },
   inferredBytes: {
     dot: 'bg-fuchsia-400',
@@ -115,8 +113,8 @@ const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => (
-    <div className="flex h-[240px] items-center justify-center rounded border border-slate-700/70 bg-slate-900/70">
-      <p className="text-sm text-slate-500">Loading graph section...</p>
+    <div className="border-base-border/70 bg-base-surface/70 flex h-[240px] items-center justify-center rounded border">
+      <p className="text-text-muted text-sm">Loading graph section...</p>
     </div>
   ),
 });
@@ -468,16 +466,16 @@ export default function CellDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
           <div className="animate-pulse space-y-8">
-            <div className="h-20 w-full rounded bg-slate-900" />
+            <div className="bg-base-surface h-20 w-full rounded" />
             <div className="grid gap-6 lg:grid-cols-2">
-              <div className="h-80 rounded bg-slate-900" />
+              <div className="bg-base-surface h-80 rounded" />
               <div className="space-y-6">
-                <div className="h-36 rounded bg-slate-900" />
-                <div className="h-36 rounded bg-slate-900" />
+                <div className="bg-base-surface h-36 rounded" />
+                <div className="bg-base-surface h-36 rounded" />
               </div>
             </div>
           </div>
@@ -488,12 +486,12 @@ export default function CellDetailPage() {
 
   if (error || !cell) {
     return (
-      <div className="min-h-screen bg-slate-950">
+      <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-xl text-slate-400">Cell not found</h2>
+              <h2 className="text-text-muted text-xl">Cell not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -508,7 +506,7 @@ export default function CellDetailPage() {
   const isDataPreviewTruncated = dataPreview.isDataPreviewTruncated;
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
@@ -528,32 +526,32 @@ export default function CellDetailPage() {
             <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="grid gap-4 md:grid-cols-3">
-                <div className="rounded border border-slate-700/70 bg-slate-900/60 p-3">
-                  <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
+                <div className="border-base-border/70 bg-base-surface/60 rounded border p-3">
+                  <div className="text-text-muted mb-1 text-xs uppercase tracking-wide">
                     Total Capacity
                   </div>
                   <Capacity
                     value={capacityView.totalCapacity}
-                    className="text-lg text-slate-200"
+                    className="text-text-primary text-lg"
                     animate={false}
                   />
                 </div>
-                <div className="rounded border border-slate-700/70 bg-slate-900/60 p-3">
-                  <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
+                <div className="border-base-border/70 bg-base-surface/60 rounded border p-3">
+                  <div className="text-text-muted mb-1 text-xs uppercase tracking-wide">
                     Occupied Capacity
                   </div>
                   {capacityView.occupied !== null ? (
                     <Capacity
                       value={capacityView.occupied}
-                      className="text-terminal-green text-lg"
+                      className="text-emphasis text-lg"
                       animate={false}
                     />
                   ) : (
-                    <div className="font-mono text-lg text-slate-500">N/A</div>
+                    <div className="text-text-muted font-mono text-lg">N/A</div>
                   )}
                 </div>
-                <div className="rounded border border-slate-700/60 bg-slate-900/60 p-3">
-                  <div className="mb-1 text-xs uppercase tracking-wide text-slate-400">
+                <div className="border-base-border/60 bg-base-surface/60 rounded border p-3">
+                  <div className="text-text-muted mb-1 text-xs uppercase tracking-wide">
                     Utilization Ratio
                   </div>
                   <div className="font-mono text-xl text-white">
@@ -568,16 +566,16 @@ export default function CellDetailPage() {
                 <>
                   <div className="mt-3">
                     <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                      <div className="text-text-muted text-xs uppercase tracking-wide">
                         Byte Composition ({capacityView.totalBytes.toLocaleString()} bytes)
                       </div>
                       {capacityView.formulaText && (
-                        <div className="text-xs text-slate-500">
+                        <div className="text-text-muted text-xs">
                           Formula: {capacityView.formulaText}
                         </div>
                       )}
                     </div>
-                    <div className="overflow-hidden rounded border border-slate-700/80 bg-slate-900/80">
+                    <div className="border-base-border/80 bg-base-surface/80 overflow-hidden rounded border">
                       <div className="flex h-3 w-full">
                         {capacityView.segments.map((segment) =>
                           segment.percent > 0 ? (
@@ -612,10 +610,10 @@ export default function CellDetailPage() {
                           type="button"
                           className={`inline-flex min-w-0 items-center justify-between gap-1 rounded border px-2 py-1 text-xs transition-all ${
                             hoveredSegmentKey === null
-                              ? 'border-slate-700/50 bg-slate-900/60 text-slate-300'
+                              ? 'border-base-border/50 bg-base-surface/60 text-text-secondary'
                               : hoveredSegmentKey === segment.key
                                 ? segment.legendActivePill
-                                : 'border-slate-800/60 bg-slate-900/40 text-slate-500'
+                                : 'border-base-border/60 bg-base-surface/40 text-text-muted'
                           }`}
                           onMouseEnter={() => setHoveredSegmentKey(segment.key)}
                           onMouseLeave={() => setHoveredSegmentKey(null)}
@@ -629,10 +627,10 @@ export default function CellDetailPage() {
                           <span
                             className={`shrink-0 font-mono text-[11px] ${
                               hoveredSegmentKey === null
-                                ? 'text-slate-500'
+                                ? 'text-text-muted'
                                 : hoveredSegmentKey === segment.key
                                   ? segment.legendValueText
-                                  : 'text-slate-500'
+                                  : 'text-text-muted'
                             }`}
                           >
                             {segment.bytes.toLocaleString()}B · {segment.percent.toFixed(2)}%
@@ -643,7 +641,7 @@ export default function CellDetailPage() {
                   </div>
                 </>
               ) : (
-                <div className="mt-4 text-sm text-slate-500">
+                <div className="text-text-muted mt-4 text-sm">
                   Occupied capacity breakdown is unavailable for this cell.
                 </div>
               )}
@@ -657,7 +655,7 @@ export default function CellDetailPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span>Overview</span>
                 {relationshipStats.nodeCount > 0 && (
-                  <span className="text-xs text-slate-500">
+                  <span className="text-text-muted text-xs">
                     {relationshipStats.nodeCount} nodes / {relationshipStats.linkCount} links
                   </span>
                 )}
@@ -665,13 +663,13 @@ export default function CellDetailPage() {
             </TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="space-y-3">
-                <div className="inline-flex rounded border border-slate-700/70 bg-slate-900/60 p-1">
+                <div className="border-base-border/70 bg-base-surface/60 inline-flex rounded border p-1">
                   <button
                     type="button"
                     className={`rounded px-2.5 py-1 text-xs transition-colors ${
                       relationshipView === 'lifecycle'
-                        ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'bg-base-elevated text-text-primary ring-base-border ring-1'
+                        : 'text-text-muted hover:text-text-primary'
                     }`}
                     onClick={() => setRelationshipView('lifecycle')}
                   >
@@ -681,8 +679,8 @@ export default function CellDetailPage() {
                     type="button"
                     className={`rounded px-2.5 py-1 text-xs transition-colors ${
                       relationshipView === 'graph'
-                        ? 'bg-slate-800 text-slate-100 ring-1 ring-slate-700'
-                        : 'text-slate-400 hover:text-slate-200'
+                        ? 'bg-base-elevated text-text-primary ring-base-border ring-1'
+                        : 'text-text-muted hover:text-text-primary'
                     }`}
                     onClick={() => setRelationshipView('graph')}
                   >
@@ -692,47 +690,47 @@ export default function CellDetailPage() {
 
                 {relationshipView === 'lifecycle' ? (
                   <div data-testid="cell-relationship-lifecycle" className="space-y-2.5">
-                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">Created</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200">
-                        <span className="text-slate-500">TX</span>
+                    <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                      <div className="text-text-muted text-xs uppercase tracking-wide">Created</div>
+                      <div className="text-text-primary mt-1 flex flex-wrap items-center gap-2 text-sm">
+                        <span className="text-text-muted">TX</span>
                         <Link
                           href={`/tx/${cell.txHash}`}
-                          className="text-terminal-green font-mono hover:underline"
+                          className="text-emphasis font-mono hover:underline"
                         >
                           {shortenHash(cell.txHash)}
                         </Link>
-                        <span className="text-slate-500">Output #{cell.outputIndex}</span>
-                        <span className="text-slate-500">at</span>
+                        <span className="text-text-muted">Output #{cell.outputIndex}</span>
+                        <span className="text-text-muted">at</span>
                         <Link
                           href={`/blocks/${cell.createdAtBlock}`}
-                          className="text-terminal-green hover:underline"
+                          className="text-emphasis hover:underline"
                         >
                           #{cell.createdAtBlock.toLocaleString()}
                         </Link>
                       </div>
                     </div>
 
-                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                    <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                      <div className="text-text-muted text-xs uppercase tracking-wide">
                         Current Status
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-sm">
                         <Badge variant={isLive ? 'green' : 'red'}>{isLive ? 'Live' : 'Dead'}</Badge>
                         {isLive ? (
-                          <span className="text-slate-300">
+                          <span className="text-text-secondary">
                             Unspent cell available in current state.
                           </span>
                         ) : (
-                          <span className="text-slate-300">
+                          <span className="text-text-secondary">
                             Cell was consumed by a later transaction.
                           </span>
                         )}
                       </div>
                     </div>
 
-                    <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">
+                    <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                      <div className="text-text-muted text-xs uppercase tracking-wide">
                         Upstream Inputs ({relationshipStats.upstreamInputs.length})
                       </div>
                       {relationshipStats.upstreamInputs.length > 0 ? (
@@ -744,12 +742,12 @@ export default function CellDetailPage() {
                             >
                               <Link
                                 href={`/cell/${input.txHash}-${input.outputIndex}`}
-                                className="text-terminal-green font-mono hover:underline"
+                                className="text-emphasis font-mono hover:underline"
                               >
                                 {shortenHash(input.txHash)}:{input.outputIndex}
                               </Link>
                               {input.capacity && (
-                                <span className="font-mono text-slate-400">
+                                <span className="text-text-muted font-mono">
                                   {BigInt(input.capacity).toLocaleString()} shannons
                                 </span>
                               )}
@@ -775,32 +773,32 @@ export default function CellDetailPage() {
                           ))}
                         </div>
                       ) : (
-                        <div className="mt-1 text-sm text-slate-500">
+                        <div className="text-text-muted mt-1 text-sm">
                           No upstream input cells found.
                         </div>
                       )}
                     </div>
 
                     {!isLive && (
-                      <div className="rounded border border-slate-700/70 bg-slate-900/70 p-3">
-                        <div className="text-xs uppercase tracking-wide text-slate-400">
+                      <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                        <div className="text-text-muted text-xs uppercase tracking-wide">
                           Consumed
                         </div>
                         {cell.consumedByTx ? (
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-200">
-                            <span className="text-slate-500">TX</span>
+                          <div className="text-text-primary mt-1 flex flex-wrap items-center gap-2 text-sm">
+                            <span className="text-text-muted">TX</span>
                             <Link
                               href={`/tx/${cell.consumedByTx}`}
-                              className="text-terminal-green font-mono hover:underline"
+                              className="text-emphasis font-mono hover:underline"
                             >
                               {shortenHash(cell.consumedByTx)}
                             </Link>
                             {cell.consumedAtBlock && (
                               <>
-                                <span className="text-slate-500">at</span>
+                                <span className="text-text-muted">at</span>
                                 <Link
                                   href={`/blocks/${cell.consumedAtBlock}`}
-                                  className="text-terminal-green hover:underline"
+                                  className="text-emphasis hover:underline"
                                 >
                                   #{cell.consumedAtBlock.toLocaleString()}
                                 </Link>
@@ -808,7 +806,7 @@ export default function CellDetailPage() {
                             )}
                           </div>
                         ) : (
-                          <div className="mt-1 text-sm text-slate-500">
+                          <div className="text-text-muted mt-1 text-sm">
                             Consuming transaction not indexed in this graph view.
                           </div>
                         )}
@@ -817,9 +815,9 @@ export default function CellDetailPage() {
                   </div>
                 ) : graphData && graphData.nodes.length > 0 ? (
                   <div className="space-y-2">
-                    <div className="rounded border border-slate-700/70 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
+                    <div className="border-base-border/70 bg-base-surface/70 text-text-muted rounded border px-3 py-2 text-xs">
                       <span className="inline-flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-amber-300" />
+                        <span className="bg-warning-300 h-2 w-2 rounded-full" />
                         Current cell node is highlighted.
                       </span>
                     </div>
@@ -833,25 +831,25 @@ export default function CellDetailPage() {
                     />
                   </div>
                 ) : (
-                  <div className="flex h-[220px] items-center justify-center text-sm text-slate-500">
+                  <div className="text-text-muted flex h-[220px] items-center justify-center text-sm">
                     Graph data unavailable
                   </div>
                 )}
               </div>
 
               {cell.cellType === 'genesis_special_burn' && (
-                <div className="border-amber/30 bg-amber/10 mt-4 rounded-lg border p-4">
-                  <div className="text-amber text-sm font-medium">Genesis Special Burn Cell</div>
-                  <div className="mt-2 text-sm text-slate-300">
+                <div className="border-warning/30 bg-warning/10 mt-4 rounded-lg border p-4">
+                  <div className="text-warning text-sm font-medium">Genesis Special Burn Cell</div>
+                  <div className="text-text-secondary mt-2 text-sm">
                     <p>
                       This cell contains 8.4B CKB burnt at genesis (25% of 33.6B initial issuance).
                       For secondary issuance calculation,{' '}
-                      <strong className="text-amber">5.04B CKB (60%)</strong> is treated as
+                      <strong className="text-warning">5.04B CKB (60%)</strong> is treated as
                       &ldquo;occupied&rdquo; capacity, ensuring miners receive secondary rewards.
                     </p>
                     <p className="mt-2">
-                      <span className="text-slate-400">Virtual Occupied Capacity: </span>
-                      <span className="text-amber font-mono">5,040,000,000 CKB</span>
+                      <span className="text-text-muted">Virtual Occupied Capacity: </span>
+                      <span className="text-warning font-mono">5,040,000,000 CKB</span>
                     </p>
                   </div>
                 </div>
@@ -864,13 +862,13 @@ export default function CellDetailPage() {
               <TerminalPanel>
                 <TerminalPanelHeader indicator="none">Address</TerminalPanelHeader>
                 <TerminalPanelContent>
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-200">
+                  <div className="text-text-primary flex flex-wrap items-center gap-2 text-sm">
                     {cell.address ? (
                       <Address address={cell.address} />
                     ) : (
                       <Link
                         href={`/address/${cell.lockScriptHash}`}
-                        className="text-terminal-green hover:underline"
+                        className="text-emphasis hover:underline"
                       >
                         <HexDisplay value={cell.lockScriptHash} color="accent" />
                       </Link>
@@ -878,7 +876,7 @@ export default function CellDetailPage() {
                     {lockScriptInfo && (
                       <Link
                         href={`/scripts/${encodeURIComponent(lockScriptInfo.name)}`}
-                        className="text-terminal-green hover:underline"
+                        className="text-emphasis hover:underline"
                       >
                         <Badge variant="neutral">{lockScriptInfo.name}</Badge>
                       </Link>
@@ -947,26 +945,26 @@ export default function CellDetailPage() {
             <TerminalPanelContent>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <div>
-                  <div className="text-xs text-slate-500">Deposit Block</div>
+                  <div className="text-text-muted text-xs">Deposit Block</div>
                   <Link
                     href={`/blocks/${cell.daoInfo.depositBlockNumber}`}
-                    className="text-terminal-green hover:underline"
+                    className="text-emphasis hover:underline"
                   >
                     #{cell.daoInfo.depositBlockNumber.toLocaleString()}
                   </Link>
                 </div>
                 <div>
-                  <div className="text-xs text-slate-500">Deposit Time</div>
+                  <div className="text-text-muted text-xs">Deposit Time</div>
                   <span className="text-white">
                     {new Date(cell.daoInfo.depositTimestamp).toLocaleString()}
                   </span>
                 </div>
                 {cell.daoInfo.withdrawRequestBlock && (
                   <div>
-                    <div className="text-xs text-slate-500">Withdraw Request</div>
+                    <div className="text-text-muted text-xs">Withdraw Request</div>
                     <Link
                       href={`/blocks/${cell.daoInfo.withdrawRequestBlock}`}
-                      className="text-terminal-green hover:underline"
+                      className="text-emphasis hover:underline"
                     >
                       #{cell.daoInfo.withdrawRequestBlock.toLocaleString()}
                     </Link>
@@ -974,7 +972,7 @@ export default function CellDetailPage() {
                 )}
                 {cell.daoInfo.withdrawRequestTimestamp && (
                   <div>
-                    <div className="text-xs text-slate-500">Request Time</div>
+                    <div className="text-text-muted text-xs">Request Time</div>
                     <span className="text-white">
                       {new Date(cell.daoInfo.withdrawRequestTimestamp).toLocaleString()}
                     </span>
@@ -982,10 +980,10 @@ export default function CellDetailPage() {
                 )}
                 {cell.daoInfo.withdrawBlock && (
                   <div>
-                    <div className="text-xs text-slate-500">Withdrawn Block</div>
+                    <div className="text-text-muted text-xs">Withdrawn Block</div>
                     <Link
                       href={`/blocks/${cell.daoInfo.withdrawBlock}`}
-                      className="text-terminal-green hover:underline"
+                      className="text-emphasis hover:underline"
                     >
                       #{cell.daoInfo.withdrawBlock.toLocaleString()}
                     </Link>
@@ -993,7 +991,7 @@ export default function CellDetailPage() {
                 )}
                 {cell.daoInfo.withdrawTimestamp && (
                   <div>
-                    <div className="text-xs text-slate-500">Withdrawn Time</div>
+                    <div className="text-text-muted text-xs">Withdrawn Time</div>
                     <span className="text-white">
                       {new Date(cell.daoInfo.withdrawTimestamp).toLocaleString()}
                     </span>
@@ -1001,8 +999,8 @@ export default function CellDetailPage() {
                 )}
                 {cell.daoInfo.compensation && (
                   <div>
-                    <div className="text-xs text-slate-500">Compensation Earned</div>
-                    <span className="font-mono text-slate-200">
+                    <div className="text-text-muted text-xs">Compensation Earned</div>
+                    <span className="text-text-primary font-mono">
                       {cell.daoInfo.compensationCkb
                         ? `${Number(cell.daoInfo.compensationCkb).toLocaleString()} CKB`
                         : `${Number(cell.daoInfo.compensation).toLocaleString()} Shannon`}
@@ -1023,7 +1021,7 @@ export default function CellDetailPage() {
               </div>
             </TerminalPanelHeader>
             <TerminalPanelContent>
-              <p className="mb-4 text-sm text-slate-400">
+              <p className="text-text-muted mb-4 text-sm">
                 This cell stores script code used by the following scripts:
               </p>
               <div className="space-y-2">
@@ -1035,19 +1033,19 @@ export default function CellDetailPage() {
                       <div className="min-w-0 space-y-1.5">
                         <Link
                           href={getCodeCellScriptHref(script)}
-                          className="text-terminal-green text-lg font-medium hover:underline"
+                          className="text-emphasis text-lg font-medium hover:underline"
                         >
                           {hasKnownScriptName(script.name)
                             ? script.name.trim()
                             : scriptFallbackLabel(script.codeHash)}
                         </Link>
                         <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="uppercase tracking-wide text-slate-500">Refs</span>
+                          <span className="text-text-muted uppercase tracking-wide">Refs</span>
                           <Badge variant="gray">type</Badge>
                           {refs.typeHash ? (
                             <Link
                               href={getScriptRefHref(refs.typeHash, 'type')}
-                              className="hover:text-terminal-green font-mono text-slate-300 hover:underline"
+                              className="hover:text-emphasis text-text-secondary font-mono hover:underline"
                             >
                               <HexDisplay
                                 value={refs.typeHash}
@@ -1058,13 +1056,13 @@ export default function CellDetailPage() {
                               />
                             </Link>
                           ) : (
-                            <span className="font-mono text-slate-500">Unavailable</span>
+                            <span className="text-text-muted font-mono">Unavailable</span>
                           )}
                           <Badge variant="gray">{getScriptRefBadgeLabel(refs.dataHashType)}</Badge>
                           {refs.dataHash ? (
                             <Link
                               href={getScriptRefHref(refs.dataHash, refs.dataHashType)}
-                              className="hover:text-terminal-green font-mono text-slate-300 hover:underline"
+                              className="hover:text-emphasis text-text-secondary font-mono hover:underline"
                             >
                               <HexDisplay
                                 value={refs.dataHash}
@@ -1075,7 +1073,7 @@ export default function CellDetailPage() {
                               />
                             </Link>
                           ) : (
-                            <span className="font-mono text-slate-500">Unavailable</span>
+                            <span className="text-text-muted font-mono">Unavailable</span>
                           )}
                         </div>
                       </div>
@@ -1104,12 +1102,12 @@ export default function CellDetailPage() {
                 <div className="space-y-1">
                   {cell.depGroupItems.map((item, idx) => (
                     <TerminalRow key={idx} className="flex items-center gap-3">
-                      <span className="w-8 text-right font-mono text-sm text-slate-500">
+                      <span className="text-text-muted w-8 text-right font-mono text-sm">
                         #{idx}
                       </span>
                       <Link
                         href={`/cell/${item.txHash}-${item.outputIndex}`}
-                        className="text-terminal-green hover:underline"
+                        className="text-emphasis hover:underline"
                       >
                         <HexDisplay value={`${item.txHash}:${item.outputIndex}`} color="accent" />
                       </Link>
@@ -1117,7 +1115,7 @@ export default function CellDetailPage() {
                   ))}
                 </div>
               ) : (
-                <p className="text-sm text-slate-500">
+                <p className="text-text-muted text-sm">
                   Cell data contains {Math.floor((cell.dataSize - 4) / 36)} OutPoints (data
                   truncated in database)
                 </p>
@@ -1133,8 +1131,8 @@ export default function CellDetailPage() {
             </TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-                <div className="inline-flex items-center gap-2 rounded border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5">
-                  <span className="uppercase tracking-wide text-slate-400">Total</span>
+                <div className="border-base-border/70 bg-base-surface/70 inline-flex items-center gap-2 rounded border px-2.5 py-1.5">
+                  <span className="text-text-muted uppercase tracking-wide">Total</span>
                   <span className="font-mono text-white">
                     {cell.dataSize.toLocaleString()} bytes
                   </span>
@@ -1142,17 +1140,17 @@ export default function CellDetailPage() {
                 <div
                   className={`inline-flex items-center gap-2 rounded border px-2.5 py-1.5 ${
                     isDataPreviewTruncated
-                      ? 'border-amber/30 bg-amber/10'
-                      : 'border-terminal-green/25 bg-terminal-green/5'
+                      ? 'border-warning/30 bg-warning/10'
+                      : 'border-emphasis/25 bg-emphasis/5'
                   }`}
                 >
-                  <span className="uppercase tracking-wide text-slate-400">Preview</span>
+                  <span className="text-text-muted uppercase tracking-wide">Preview</span>
                   {isDataPreviewTruncated ? (
-                    <span className="text-amber font-mono">
+                    <span className="text-warning font-mono">
                       Truncated at the {dataPreviewBytes.toLocaleString()}-th byte
                     </span>
                   ) : (
-                    <span className="text-terminal-green">Full data shown</span>
+                    <span className="text-emphasis">Full data shown</span>
                   )}
                 </div>
               </div>
@@ -1160,14 +1158,14 @@ export default function CellDetailPage() {
               {deterministicAnalysis && (
                 <div
                   data-testid="data-deterministic-section"
-                  className="mb-3 rounded border border-slate-800 bg-slate-950/70 p-2"
+                  className="border-base-border bg-base-bg/70 mb-3 rounded border p-2"
                 >
                   <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                    <span className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
                       Deterministic Decode
                     </span>
                     <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
-                    <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                    <span className="border-base-border/80 bg-base-surface/70 text-text-muted rounded border px-1.5 py-0.5 font-mono text-[10px]">
                       {deterministicAnalysis.segments.length} segments
                     </span>
                     {pinnedDataSegmentIndex !== null && (
@@ -1176,15 +1174,15 @@ export default function CellDetailPage() {
                       </span>
                     )}
                   </div>
-                  <div className="mb-1.5 text-[11px] leading-4 text-slate-300">
+                  <div className="text-text-secondary mb-1.5 text-[11px] leading-4">
                     {deterministicAnalysis.summary}
                   </div>
                   <div
                     data-testid="data-deterministic-columns"
                     className="grid gap-2 md:grid-cols-2"
                   >
-                    <div className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
-                      <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                    <div className="border-base-border bg-base-bg/60 rounded border p-1.5">
+                      <div className="text-text-muted mb-1 text-[10px] uppercase tracking-[0.12em]">
                         Parsed Segments
                       </div>
                       <div
@@ -1209,15 +1207,15 @@ export default function CellDetailPage() {
                                 isActive
                                   ? segmentTone.activePill
                                   : inPreview
-                                    ? 'border-slate-700/70 bg-slate-900/60 text-slate-200 hover:border-slate-500/70'
-                                    : 'border-slate-800/70 bg-slate-900/40 text-slate-500'
+                                    ? 'border-base-border/70 bg-base-surface/60 text-text-primary hover:border-base-border/70'
+                                    : 'border-base-border/70 bg-base-surface/40 text-text-muted'
                               }`}
                             >
                               <span
                                 className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`}
                               />
                               <span className="truncate">{segment.label}</span>
-                              <span className="shrink-0 text-[10px] text-slate-500">
+                              <span className="text-text-muted shrink-0 text-[10px]">
                                 [{segment.start}..{segment.end})
                               </span>
                             </button>
@@ -1228,48 +1226,48 @@ export default function CellDetailPage() {
 
                     <div
                       data-testid="data-active-segment"
-                      className="h-[132px] overflow-y-auto rounded border border-slate-800 bg-slate-950/70 p-2 sm:h-[144px]"
+                      className="border-base-border bg-base-bg/70 h-[132px] overflow-y-auto rounded border p-2 sm:h-[144px]"
                     >
                       {activeDataSegment ? (
                         <>
-                          <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                          <div className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
                             Segment Detail
                           </div>
-                          <div className="mt-1 font-mono text-[11px] text-slate-300">
+                          <div className="text-text-secondary mt-1 font-mono text-[11px]">
                             {activeDataSegment.label}
                           </div>
-                          <div className="mt-0.5 text-[10px] leading-4 text-slate-400">
+                          <div className="text-text-muted mt-0.5 text-[10px] leading-4">
                             {activeDataSegment.meaning}
                           </div>
                           <div
                             data-testid="data-active-segment-value"
-                            className={`mt-1 break-all font-mono text-sm ${activeDataSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                            className={`mt-1 break-all font-mono text-sm ${activeDataSegmentTone?.valueText ?? 'text-emphasis'}`}
                           >
                             {activeDataSegment.humanValue}
                           </div>
-                          <div className="mt-1.5 font-mono text-[11px] text-slate-300">
+                          <div className="text-text-secondary mt-1.5 font-mono text-[11px]">
                             [{activeDataSegment.start}..{activeDataSegment.end})
                           </div>
                           {activeDataSegmentHex && (
                             <div
                               data-testid="data-active-segment-hex"
-                              className={`mt-1 break-all font-mono text-[11px] ${activeDataSegmentTone?.valueText ?? 'text-terminal-green'}`}
+                              className={`mt-1 break-all font-mono text-[11px] ${activeDataSegmentTone?.valueText ?? 'text-emphasis'}`}
                             >
                               {activeDataSegmentHex.value}
                             </div>
                           )}
                           {activeDataSegmentHex?.truncated && (
-                            <div className="mt-1 text-[11px] text-slate-500">
+                            <div className="text-text-muted mt-1 text-[11px]">
                               Hex preview truncated for readability.
                             </div>
                           )}
                         </>
                       ) : (
                         <>
-                          <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                          <div className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
                             Segment Detail
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="text-text-muted mt-1 text-xs">
                             Hover a segment/byte to preview it, or click a segment to pin it.
                           </div>
                         </>
@@ -1282,13 +1280,13 @@ export default function CellDetailPage() {
               {heuristicGuesses.length > 0 && (
                 <div
                   data-testid="data-heuristics-list"
-                  className="mb-3 rounded border border-slate-800 bg-slate-950/70 p-2"
+                  className="border-base-border bg-base-bg/70 mb-3 rounded border p-2"
                 >
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                    <div className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
                       Heuristic Guesses
                     </div>
-                    <span className="rounded border border-slate-700/80 bg-slate-900/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
+                    <span className="border-base-border/80 bg-base-surface/70 text-text-muted rounded border px-1.5 py-0.5 font-mono text-[10px]">
                       {heuristicGuesses.length}
                     </span>
                   </div>
@@ -1307,7 +1305,7 @@ export default function CellDetailPage() {
                           className={`rounded border p-1 text-left transition ${
                             isExpanded
                               ? `${guessTone.activePill} bg-opacity-100`
-                              : 'border-slate-800/80 bg-slate-900/70 hover:border-slate-600/80'
+                              : 'border-base-border/80 bg-base-surface/70 hover:border-base-border/80'
                           }`}
                         >
                           <div className="flex items-center justify-between gap-2">
@@ -1316,7 +1314,7 @@ export default function CellDetailPage() {
                                 <span
                                   className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`}
                                 />
-                                <span className="font-mono text-[11px] text-slate-200">
+                                <span className="text-text-primary font-mono text-[11px]">
                                   {guess.kind}
                                 </span>
                                 <Badge
@@ -1333,16 +1331,16 @@ export default function CellDetailPage() {
                                 {guess.mimeType && <Badge variant="gray">{guess.mimeType}</Badge>}
                               </div>
                             </div>
-                            <span className="font-mono text-[10px] text-slate-500">
+                            <span className="text-text-muted font-mono text-[10px]">
                               {isExpanded ? '[-]' : '[+]'}
                             </span>
                           </div>
                           {isExpanded && (
                             <div
                               data-testid={`data-heuristic-detail-${idx}`}
-                              className="mt-1 border-t border-slate-800/80 pt-1"
+                              className="border-base-border/80 mt-1 border-t pt-1"
                             >
-                              <div className="text-[10px] leading-4 text-slate-400">
+                              <div className="text-text-muted text-[10px] leading-4">
                                 {guess.reason}
                               </div>
                               {guess.humanValue && (
@@ -1361,12 +1359,12 @@ export default function CellDetailPage() {
                 </div>
               )}
 
-              <div className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950 p-4 font-mono text-xs">
+              <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
                 {(() => {
                   const rawData = dataPreview.rawData;
                   if (!rawData) {
                     return (
-                      <div className="text-slate-500">
+                      <div className="text-text-muted">
                         Raw bytes unavailable from node store. Set `[ckb].data_path` in
                         `ckbadger.toml` to enable payload preview.
                       </div>
@@ -1415,37 +1413,37 @@ export default function CellDetailPage() {
                           const byteClass =
                             segmentIndex < 0
                               ? hasActiveSegment
-                                ? 'text-slate-500'
-                                : 'rounded bg-slate-800/70 text-slate-300'
+                                ? 'text-text-muted'
+                                : 'rounded bg-base-elevated/70 text-text-secondary'
                               : isActiveSegment
                                 ? (segmentTone?.byteActive ??
-                                  'rounded bg-terminal-green/25 text-terminal-green ring-1 ring-terminal-green/70')
+                                  'rounded bg-emphasis/25 text-emphasis ring-1 ring-emphasis/70')
                                 : hasActiveSegment
-                                  ? 'text-slate-500 opacity-40'
+                                  ? 'text-text-muted opacity-40'
                                   : (segmentTone?.byte ??
-                                    'rounded bg-terminal-green/15 text-terminal-dim');
+                                    'rounded bg-emphasis/15 text-emphasis-dim');
                           const asciiClass =
                             segmentIndex < 0
                               ? hasActiveSegment
-                                ? 'text-slate-500'
-                                : 'text-slate-500'
+                                ? 'text-text-muted'
+                                : 'text-text-muted'
                               : isActiveSegment
                                 ? (segmentTone?.asciiActive ??
-                                  'rounded-sm bg-terminal-green/20 text-terminal-green')
+                                  'rounded-sm bg-emphasis/20 text-emphasis')
                                 : hasActiveSegment
-                                  ? 'text-slate-500 opacity-40'
-                                  : 'text-slate-500';
+                                  ? 'text-text-muted opacity-40'
+                                  : 'text-text-muted';
                           const asciiHoverClass = isHoveredByte
                             ? segmentIndex >= 0
                               ? (segmentTone?.asciiHover ??
-                                'rounded-sm bg-terminal-green/30 text-terminal-green shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
-                              : 'rounded-sm bg-slate-700/50 text-slate-200'
+                                'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
+                              : 'rounded-sm bg-base-border/50 text-text-primary'
                             : '';
                           const hoverBreatheClass = isHoveredByte
                             ? segmentIndex >= 0
                               ? (segmentTone?.byteHover ??
-                                'byte-hover-breathe ring-1 ring-terminal-green/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
-                              : 'byte-hover-breathe ring-1 ring-slate-400/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
+                                'byte-hover-breathe ring-1 ring-emphasis/80 shadow-[0_0_10px_rgba(0,255,65,0.35)]')
+                              : 'byte-hover-breathe ring-1 ring-base-border/70 shadow-[0_0_8px_rgba(148,163,184,0.35)]'
                             : '';
                           const title =
                             segmentIndex >= 0 && segmentIndex < dataSegments.length
@@ -1474,10 +1472,10 @@ export default function CellDetailPage() {
                           <div
                             key={idx}
                             data-row-index={idx}
-                            className="flex py-0.5 hover:bg-slate-800/50"
+                            className="hover:bg-base-elevated/50 flex py-0.5"
                           >
-                            <span className="mr-4 select-none text-slate-500">0x{offset}:</span>
-                            <div className="text-terminal-dim mr-6 flex gap-1.5">
+                            <span className="text-text-muted mr-4 select-none">0x{offset}:</span>
+                            <div className="text-emphasis-dim mr-6 flex gap-1.5">
                               {byteEntries.map((entry) => {
                                 return (
                                   <span
@@ -1510,7 +1508,7 @@ export default function CellDetailPage() {
                                 </span>
                               ))}
                             </div>
-                            <div className="border-l border-slate-800 pl-4">
+                            <div className="border-base-border border-l pl-4">
                               {byteEntries.map((entry) => (
                                 <span
                                   key={`ascii-${entry.absoluteOffset}`}
@@ -1540,7 +1538,7 @@ export default function CellDetailPage() {
                         );
                       })}
                       {remainingBytes > 0 && (
-                        <div className="mt-2 select-none italic text-slate-500">
+                        <div className="text-text-muted mt-2 select-none italic">
                           ... {remainingBytes.toLocaleString()} more bytes
                         </div>
                       )}

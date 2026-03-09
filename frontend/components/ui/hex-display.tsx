@@ -24,23 +24,23 @@ const HexChar = memo(function HexChar({
 }: HexCharProps) {
   const colorClasses = {
     green: {
-      base: 'text-terminal-dim',
-      hover: 'text-terminal-green',
+      base: 'text-emphasis-dim',
+      hover: 'text-emphasis',
       glow: '0 0 4px rgba(0, 255, 65, 0.6)',
     },
     amber: {
-      base: 'text-amber-dim',
-      hover: 'text-amber',
+      base: 'text-warning-dim',
+      hover: 'text-warning',
       glow: '0 0 4px rgba(255, 176, 0, 0.6)',
     },
     white: {
-      base: 'text-slate-500',
+      base: 'text-text-muted',
       hover: 'text-white',
       glow: '0 0 4px rgba(255, 255, 255, 0.4)',
     },
     accent: {
-      base: 'text-terminal-green',
-      hover: 'text-terminal-green',
+      base: 'text-emphasis',
+      hover: 'text-emphasis',
       glow: '0 0 4px rgba(0, 255, 65, 0.6)',
     },
   };
@@ -151,10 +151,10 @@ export function HexDisplay({
   };
 
   const prefixColorClasses = {
-    green: 'text-terminal-dark',
-    amber: 'text-amber-dark',
-    white: 'text-slate-500',
-    accent: 'text-terminal-dark',
+    green: 'text-emphasis-dim',
+    amber: 'text-warning-dim',
+    white: 'text-text-muted',
+    accent: 'text-emphasis-dim',
   };
 
   const allowWrap = !truncate;
@@ -170,7 +170,7 @@ export function HexDisplay({
           className
         )}
       >
-        <span className="text-terminal-green animate-subtle-bounce">✓ Copied</span>
+        <span className="text-emphasis animate-subtle-bounce">Copied</span>
       </span>
     );
   }
@@ -193,7 +193,7 @@ export function HexDisplay({
       {chars.map(({ char, groupIndex, originalIndex }) => {
         if (char === '.') {
           return (
-            <span key={`ellipsis-${originalIndex}`} className="mx-0.5 text-slate-500">
+            <span key={`ellipsis-${originalIndex}`} className="text-text-muted mx-0.5">
               {char}
             </span>
           );
@@ -246,19 +246,19 @@ export function ByteGroupDisplay({
   }, [cleanValue, bytesPerGroup]);
 
   const colorClasses = {
-    green: ['text-terminal-green', 'text-terminal-dim'],
-    amber: ['text-amber', 'text-amber-dim'],
-    white: ['text-white', 'text-slate-400'],
-    accent: ['text-terminal-green', 'text-terminal-dark'],
+    green: ['text-emphasis', 'text-emphasis-dim'],
+    amber: ['text-warning', 'text-warning-dim'],
+    white: ['text-white', 'text-text-muted'],
+    accent: ['text-emphasis', 'text-emphasis-dim'],
   };
 
   return (
     <span className={cn('font-mono tabular-nums', className)}>
-      {prefix && <span className="text-slate-500">{prefix}</span>}
+      {prefix && <span className="text-text-muted">{prefix}</span>}
       {groups.map((group, index) => (
         <span key={index}>
           <span className={colorClasses[color][index % 2]}>{group}</span>
-          {index < groups.length - 1 && <span className="text-slate-700">{separator}</span>}
+          {index < groups.length - 1 && <span className="text-text-muted">{separator}</span>}
         </span>
       ))}
     </span>

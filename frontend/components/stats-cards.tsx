@@ -26,13 +26,13 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
   const hasExtraInfo = syncSpeed || txnsSpeed || syncStatus.estimatedTime || syncStatus.elapsedTime;
 
   return (
-    <div className="terminal-card border-terminal-dark p-3">
+    <div className="terminal-card border-emphasis-dim p-3">
       <div className="relative z-10 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="bg-terminal-green h-2 w-2 animate-pulse rounded-full" />
-          <span className="text-terminal-dim font-mono text-sm font-medium">BULK SYNCING...</span>
+          <div className="bg-emphasis h-2 w-2 animate-pulse rounded-full" />
+          <span className="text-emphasis-dim font-mono text-sm font-medium">BULK SYNCING...</span>
         </div>
-        <span className="text-terminal-dark font-mono text-sm">
+        <span className="text-emphasis-dim font-mono text-sm">
           <TerminalNumber value={syncStatus.progress.toFixed(1)} glowIntensity="subtle" />% (
           <TerminalNumber
             value={syncStatus.syncedBlock.toLocaleString()}
@@ -41,7 +41,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
         </span>
       </div>
       {hasExtraInfo && (
-        <div className="text-terminal-dark relative z-10 mt-1 flex items-center gap-3 font-mono text-xs">
+        <div className="text-emphasis-dim relative z-10 mt-1 flex items-center gap-3 font-mono text-xs">
           {syncSpeed && (
             <span>
               <TerminalNumber value={syncSpeed} glowIntensity="subtle" /> blocks/s
@@ -56,9 +56,9 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
           {syncStatus.estimatedTime && <span>ETA: {syncStatus.estimatedTime}</span>}
         </div>
       )}
-      <div className="bg-terminal-bg relative z-10 mt-2 h-1.5 w-full overflow-hidden rounded-full">
+      <div className="bg-base-bg relative z-10 mt-2 h-1.5 w-full overflow-hidden rounded-full">
         <div
-          className="from-terminal-dark via-terminal-dim to-terminal-green h-full rounded-full bg-gradient-to-r transition-all duration-500"
+          className="from-emphasis-dim via-emphasis-dim to-emphasis h-full rounded-full bg-gradient-to-r transition-all duration-500"
           style={{ width: `${syncStatus.progress}%` }}
         />
       </div>
@@ -92,7 +92,7 @@ export function StatsCards() {
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => (
           <div key={card.label} className="terminal-card terminal-border-glow p-4">
-            <div className="text-terminal-dark relative z-10 font-mono text-xs uppercase tracking-wider">
+            <div className="text-emphasis-dim relative z-10 font-mono text-xs uppercase tracking-wider">
               {card.label}
             </div>
             <div

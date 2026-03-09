@@ -273,17 +273,17 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-start justify-center bg-slate-950/70 px-4 pt-[12vh]"
+      className="bg-base-bg/70 fixed inset-0 z-[100] flex items-start justify-center px-4 pt-[12vh]"
       onClick={closePalette}
       role="presentation"
     >
       <div
-        className="w-full max-w-2xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl"
+        className="border-base-border bg-base-surface w-full max-w-2xl rounded-xl border shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         {mode === 'commands' ? (
           <>
-            <div className="border-b border-slate-700 p-3">
+            <div className="border-base-border border-b p-3">
               <input
                 ref={inputRef}
                 type="text"
@@ -291,7 +291,7 @@ export function CommandPalette() {
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleInputKeyDown}
                 placeholder="Type a command, or search block / tx / address"
-                className="focus:border-terminal-green focus:ring-terminal-green w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100 outline-none focus:ring-1"
+                className="focus:border-interactive focus:ring-interactive border-base-border bg-base-bg text-text-primary w-full rounded-md border px-3 py-2 font-mono text-sm outline-none focus:ring-1"
                 aria-label="Command palette input"
               />
             </div>
@@ -305,8 +305,8 @@ export function CommandPalette() {
                         type="button"
                         className={`w-full rounded-md px-3 py-2 text-left font-mono text-sm transition-colors ${
                           index === selectedIndex
-                            ? 'text-terminal-green bg-slate-800'
-                            : 'text-slate-300 hover:bg-slate-800/60'
+                            ? 'text-interactive bg-base-elevated'
+                            : 'text-text-secondary hover:bg-base-elevated/60'
                         }`}
                         onClick={() => {
                           setSelectedIndex(index);
@@ -320,7 +320,7 @@ export function CommandPalette() {
                   ))}
                 </ul>
               ) : (
-                <div className="rounded-md px-3 py-2 font-mono text-sm text-slate-400">
+                <div className="text-text-muted rounded-md px-3 py-2 font-mono text-sm">
                   No command matched. Press Enter to run search.
                 </div>
               )}
@@ -328,8 +328,8 @@ export function CommandPalette() {
           </>
         ) : (
           <>
-            <div className="border-b border-slate-700 px-4 py-3">
-              <h2 className="font-mono text-sm uppercase tracking-wide text-slate-200">
+            <div className="border-base-border border-b px-4 py-3">
+              <h2 className="text-text-primary font-mono text-sm uppercase tracking-wide">
                 Keyboard Shortcuts
               </h2>
             </div>
@@ -341,8 +341,8 @@ export function CommandPalette() {
                     key={shortcut.keys}
                     className="flex items-center justify-between gap-4 rounded-md px-3 py-2"
                   >
-                    <span className="text-slate-300">{shortcut.description}</span>
-                    <span className="rounded border border-slate-700 px-2 py-0.5 font-mono text-xs text-slate-300">
+                    <span className="text-text-secondary">{shortcut.description}</span>
+                    <span className="border-base-border text-text-secondary rounded border px-2 py-0.5 font-mono text-xs">
                       {shortcut.keys}
                     </span>
                   </li>

@@ -497,14 +497,14 @@ function edgeFadeOpacity(distanceToEdge: number): number {
 
 function getBlockColors(index: number, isPending: boolean): string {
   if (!isPending) {
-    return 'from-terminal-dark via-terminal-dim to-terminal-green';
+    return 'from-emphasis-dim via-emphasis-dim to-emphasis';
   }
   const colorSets = [
-    'from-amber-bright via-amber to-amber-dim',
-    'from-amber via-amber-dim to-amber-dark',
-    'from-amber-dim via-amber-dark to-slate-700',
-    'from-slate-500 via-slate-600 to-slate-700',
-    'from-slate-500 via-slate-600 to-slate-700',
+    'from-warning-bright via-warning to-warning-dim',
+    'from-warning via-warning-dim to-warning-dim',
+    'from-warning-dim via-warning-dim to-base-border',
+    'from-base-border via-base-border to-base-border',
+    'from-base-border via-base-border to-base-border',
   ];
   return colorSets[Math.min(index, colorSets.length - 1)];
 }
@@ -534,7 +534,7 @@ function Block2D({
         <div
           className={cn(
             'relative flex h-full w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 p-2 text-center transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/30',
-            borderClassName || 'border-slate-500/70'
+            borderClassName || 'border-base-border/70'
           )}
           style={{ backgroundColor: 'transparent' }}
         >
@@ -547,7 +547,7 @@ function Block2D({
   if (isEmpty) {
     return (
       <div className={sizeClass}>
-        <div className="flex h-full w-full flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-600/50 bg-slate-800/40 backdrop-blur-sm">
+        <div className="border-base-border/50 bg-base-elevated/40 flex h-full w-full flex-col items-center justify-center rounded-xl border-2 border-dashed backdrop-blur-sm">
           {children}
         </div>
       </div>
@@ -576,7 +576,7 @@ function Block2D({
 function TxBubbleLayer({
   bubbles,
   showAxes = false,
-  glowClassName = 'to-terminal-green/10',
+  glowClassName = 'to-emphasis/10',
 }: {
   bubbles: TxBubble[];
   showAxes?: boolean;
@@ -603,34 +603,35 @@ function TxBubbleLayer({
   const tooltip = hovered ? (
     <div
       data-testid="tx-bubble-tooltip"
-      className="pointer-events-none fixed z-[9999] min-w-[196px] rounded-xl border border-slate-700/55 bg-slate-900/95 px-3 py-2.5 text-[10px] text-slate-100 shadow-2xl shadow-black/45 backdrop-blur-md"
+      className="border-base-border/55 bg-base-surface/95 text-text-primary pointer-events-none fixed z-[9999] min-w-[196px] rounded-xl border px-3 py-2.5 text-[10px] shadow-2xl shadow-black/45 backdrop-blur-md"
       style={{
         left: tooltipX,
         top: tooltipY,
       }}
     >
-      <div className="border-b border-slate-700/55 pb-1.5 font-mono text-[10px] tracking-wide text-slate-200">
+      <div className="border-base-border/55 text-text-primary border-b pb-1.5 font-mono text-[10px] tracking-wide">
         {hovered.bubble.txLabel}
       </div>
-      <div className="mt-1.5 text-slate-400">
-        Stage: <span className="font-medium text-slate-100">{hovered.bubble.stageLabel}</span>
+      <div className="text-text-muted mt-1.5">
+        Stage: <span className="text-text-primary font-medium">{hovered.bubble.stageLabel}</span>
       </div>
       {hovered.bubble.proposalLabel && (
-        <div className="text-slate-400">
-          Proposal: <span className="font-mono text-slate-100">{hovered.bubble.proposalLabel}</span>
+        <div className="text-text-muted">
+          Proposal:{' '}
+          <span className="text-text-primary font-mono">{hovered.bubble.proposalLabel}</span>
         </div>
       )}
-      <div className="text-slate-400">
-        Size: <span className="font-mono text-slate-100">{hovered.bubble.sizeLabel}</span>
+      <div className="text-text-muted">
+        Size: <span className="text-text-primary font-mono">{hovered.bubble.sizeLabel}</span>
       </div>
-      <div className="text-slate-400">
-        Fee: <span className="font-mono text-slate-100">{hovered.bubble.feeLabel}</span>
+      <div className="text-text-muted">
+        Fee: <span className="text-text-primary font-mono">{hovered.bubble.feeLabel}</span>
       </div>
-      <div className="text-slate-400">
-        Fee rate: <span className="font-mono text-slate-100">{hovered.bubble.feeRateLabel}</span>
+      <div className="text-text-muted">
+        Fee rate: <span className="text-text-primary font-mono">{hovered.bubble.feeRateLabel}</span>
       </div>
-      <div className="text-slate-400">
-        Cycles: <span className="font-mono text-slate-100">{hovered.bubble.cyclesLabel}</span>
+      <div className="text-text-muted">
+        Cycles: <span className="text-text-primary font-mono">{hovered.bubble.cyclesLabel}</span>
       </div>
     </div>
   ) : null;
@@ -650,22 +651,22 @@ function TxBubbleLayer({
             {[0.33, 0.66].map((ratio) => (
               <div
                 key={`vertical-guide-${ratio}`}
-                className="pointer-events-none absolute bottom-2 top-2 border-l border-dashed border-slate-300/15"
+                className="border-base-border/15 pointer-events-none absolute bottom-2 top-2 border-l border-dashed"
                 style={{ left: `calc(${ratio * 100}% - 0.5px)` }}
               />
             ))}
             {[0.33, 0.66].map((ratio) => (
               <div
                 key={`horizontal-guide-${ratio}`}
-                className="pointer-events-none absolute left-2 right-2 border-t border-dashed border-slate-300/15"
+                className="border-base-border/15 pointer-events-none absolute left-2 right-2 border-t border-dashed"
                 style={{ top: `calc(${ratio * 100}% - 0.5px)` }}
               />
             ))}
-            <div className="pointer-events-none absolute bottom-2 left-2 right-2 h-px bg-slate-200/25" />
-            <div className="pointer-events-none absolute bottom-2 left-2 top-2 w-px bg-slate-200/25" />
+            <div className="bg-base-border/25 pointer-events-none absolute bottom-2 left-2 right-2 h-px" />
+            <div className="bg-base-border/25 pointer-events-none absolute bottom-2 left-2 top-2 w-px" />
             <div className="pointer-events-none absolute inset-1.5 grid grid-cols-8 grid-rows-7 opacity-20">
               {Array.from({ length: 56 }, (_, idx) => (
-                <div key={idx} className="border border-slate-200/10" />
+                <div key={idx} className="border-base-border/10 border" />
               ))}
             </div>
           </>
@@ -723,35 +724,35 @@ function PendingBlock({
   const gradient = isEmpty
     ? ''
     : tone === 'mempool'
-      ? 'from-amber-bright via-amber to-amber-dim'
+      ? 'from-warning-bright via-amber to-warning-dim'
       : tone === 'proposals'
-        ? 'from-terminal-dark via-terminal-dim to-terminal-green'
+        ? 'from-emphasis-dim via-emphasis-dim to-emphasis'
         : large
-          ? 'from-terminal-dark via-terminal-dim to-terminal-green'
+          ? 'from-emphasis-dim via-emphasis-dim to-emphasis'
           : getBlockColors(block.index, true);
   const effectiveGradient =
-    isEmpty && large ? 'from-slate-700 via-slate-800 to-slate-900' : gradient;
+    isEmpty && large ? 'from-base-border via-base-border to-base-surface' : gradient;
   const borderClassName = isEmpty
-    ? 'border-slate-500/70'
+    ? 'border-base-border/70'
     : tone === 'mempool'
-      ? 'border-amber/70'
+      ? 'border-warning/70'
       : tone === 'proposals' || tone === 'next'
-        ? 'border-terminal-dim/70'
-        : 'border-terminal-green/70';
+        ? 'border-emphasis-dim/70'
+        : 'border-emphasis/70';
   const topLabelClass = isEmpty
-    ? 'text-slate-500'
+    ? 'text-text-muted'
     : tone === 'mempool'
-      ? 'text-amber'
+      ? 'text-warning'
       : tone === 'proposals' || tone === 'next'
-        ? 'text-terminal-dim'
-        : 'text-terminal-green';
+        ? 'text-emphasis-dim'
+        : 'text-emphasis';
   const glowClassName = isEmpty
-    ? 'to-slate-500/[0.20]'
+    ? 'to-base-border/[0.20]'
     : tone === 'mempool'
-      ? 'to-amber/[0.12]'
+      ? 'to-warning/[0.12]'
       : tone === 'proposals' || tone === 'next'
-        ? 'to-terminal-dim/[0.12]'
-        : 'to-terminal-green/10';
+        ? 'to-emphasis-dim/[0.12]'
+        : 'to-emphasis/10';
 
   return (
     <div className="flex flex-col items-center">
@@ -776,8 +777,8 @@ function PendingBlock({
           </div>
         ) : isEmpty ? (
           <>
-            <div className="text-[11px] font-medium text-slate-400">Empty</div>
-            <div className="text-[10px] text-slate-500">0 txs</div>
+            <div className="text-text-muted text-[11px] font-medium">Empty</div>
+            <div className="text-text-muted text-[10px]">0 txs</div>
           </>
         ) : (
           <div className="flex h-full w-full flex-col gap-1">
@@ -806,7 +807,7 @@ function PendingBlock({
       {large && (
         <div className="mt-1.5 text-center text-[10px] sm:text-[11px]">
           <div
-            className={cn('font-mono tabular-nums', isEmpty ? 'text-slate-500' : 'text-white/90')}
+            className={cn('font-mono tabular-nums', isEmpty ? 'text-text-muted' : 'text-white/90')}
           >
             ~{formatFeeRate(block.medianFeeRate)} sh/B
           </div>
@@ -819,7 +820,7 @@ function PendingBlock({
         </div>
       )}
       {isNextBlock && (
-        <div className="bg-terminal-dim/15 text-terminal-dim mt-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs">
+        <div className="bg-emphasis-dim/15 text-emphasis-dim mt-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium sm:text-xs">
           Next Block
         </div>
       )}
@@ -841,8 +842,8 @@ function MinedBlock({
   const isLoading = feeStats === 'loading';
   const stats = feeStats && feeStats !== 'loading' ? feeStats : null;
   const gradient = getBlockColors(0, false);
-  const borderClassName = 'border-terminal-green/70';
-  const glowClassName = 'to-terminal-green/10';
+  const borderClassName = 'border-emphasis/70';
+  const glowClassName = 'to-emphasis/10';
   const anchorRef = useRef<HTMLAnchorElement | null>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
@@ -883,46 +884,46 @@ function MinedBlock({
   const minedBlockTooltip = isHovered && anchorRect && typeof document !== 'undefined' && (
     <div
       data-testid={`mined-block-tooltip-${block.number}`}
-      className="pointer-events-none fixed z-[10000] w-[296px] rounded-xl border border-slate-700/50 bg-slate-900/95 px-4 py-3 text-xs text-white shadow-2xl backdrop-blur-sm"
+      className="border-base-border/50 bg-base-surface/95 pointer-events-none fixed z-[10000] w-[296px] rounded-xl border px-4 py-3 text-xs text-white shadow-2xl backdrop-blur-sm"
       style={{
         left: tooltipLeft,
         top: tooltipTop,
       }}
     >
       <div className="flex flex-col gap-1.5">
-        <div className="border-b border-slate-700/50 pb-2 text-sm font-semibold">
+        <div className="border-base-border/50 border-b pb-2 text-sm font-semibold">
           Block #{block.number.toLocaleString()}
         </div>
         {stats && (
           <>
             <div className="flex justify-between gap-4">
-              <span className="text-slate-400">Avg Fee Rate:</span>
+              <span className="text-text-muted">Avg Fee Rate:</span>
               <span className="font-mono tabular-nums">
                 ~{formatFeeRate(stats.avgFeeRate)} shannons/B
               </span>
             </div>
             <div className="flex justify-between gap-4">
-              <span className="text-slate-400">Fee Range:</span>
+              <span className="text-text-muted">Fee Range:</span>
               <span className="font-mono tabular-nums">
                 {formatFeeRate(stats.minFeeRate)} - {formatFeeRate(stats.maxFeeRate)}
               </span>
             </div>
             <div className="flex justify-between gap-4">
-              <span className="text-slate-400">Size:</span>
+              <span className="text-text-muted">Size:</span>
               <span>{formatBytes(stats.totalSize)}</span>
             </div>
           </>
         )}
         <div className="flex justify-between gap-4">
-          <span className="text-slate-400">Transactions:</span>
+          <span className="text-text-muted">Transactions:</span>
           <span>{block.transactionsCount}</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="text-slate-400">Proposals:</span>
+          <span className="text-text-muted">Proposals:</span>
           <span>{block.proposalsCount ?? 0}</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="text-slate-400">Time:</span>
+          <span className="text-text-muted">Time:</span>
           <span>{formatTimeAgo(block.timestamp)} ago</span>
         </div>
       </div>
@@ -939,12 +940,12 @@ function MinedBlock({
       onFocus={() => setIsHovered(true)}
       onBlur={() => setIsHovered(false)}
     >
-      <div className="text-terminal-green group-hover/block:text-terminal-dim mb-1 font-mono text-xs font-semibold tabular-nums transition-colors sm:text-sm">
+      <div className="text-emphasis group-hover/block:text-emphasis-dim mb-1 font-mono text-xs font-semibold tabular-nums transition-colors sm:text-sm">
         {block.number.toLocaleString()}
       </div>
       {block.hardforkActivation && (
         <div
-          className="mb-1 rounded border border-amber-900/60 bg-amber-900/30 px-1.5 py-0.5 font-mono text-[9px] text-amber-300"
+          className="border-warning-900/60 bg-warning-900/30 text-warning-300 mb-1 rounded border px-1.5 py-0.5 font-mono text-[9px]"
           data-testid={`mempool-mined-hardfork-${block.number}`}
         >
           HF {block.hardforkActivation.shortName.toUpperCase()}
@@ -1052,13 +1053,13 @@ function ChainArrow({ isPending = false }: { isPending?: boolean }) {
       <div
         className={cn(
           'flex items-center gap-0.5',
-          isPending ? 'text-terminal-dim/70' : 'text-terminal-green/70'
+          isPending ? 'text-emphasis-dim/70' : 'text-emphasis/70'
         )}
       >
         <div
           className={cn(
             'h-0.5 w-3 rounded-full',
-            isPending ? 'bg-terminal-dim/50' : 'bg-terminal-green/50'
+            isPending ? 'bg-emphasis-dim/50' : 'bg-emphasis/50'
           )}
         />
         <svg width="8" height="12" viewBox="0 0 8 12" fill="none" className="opacity-60">
@@ -1085,11 +1086,11 @@ function MempoolDivider({ large = false }: { large?: boolean }) {
         )}
       >
         <div className="flex items-center gap-2">
-          <div className="h-px w-4 bg-gradient-to-r from-transparent to-slate-500" />
-          <div className="border-terminal-dark/50 text-terminal-green/80 rounded-md border bg-slate-900/70 px-2 py-1 text-[10px] font-medium tracking-wider">
+          <div className="to-base-border h-px w-4 bg-gradient-to-r from-transparent" />
+          <div className="border-emphasis-dim/50 text-emphasis/80 bg-base-surface/70 rounded-md border px-2 py-1 text-[10px] font-medium tracking-wider">
             MINED
           </div>
-          <div className="h-px w-4 bg-gradient-to-l from-transparent to-slate-500" />
+          <div className="to-base-border h-px w-4 bg-gradient-to-l from-transparent" />
         </div>
       </div>
     </div>
@@ -1558,10 +1559,10 @@ export function MempoolBlocks({
   const containerClassName =
     chrome === 'flat'
       ? cn(
-          'rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800/80',
+          'rounded-2xl bg-gradient-to-br from-base-surface via-base-surface to-base-elevated/80',
           showHeader ? 'p-5' : 'px-3 py-2 sm:px-4 sm:py-2.5'
         )
-      : 'rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 p-5 shadow-xl';
+      : 'rounded-2xl border border-base-border/50 bg-gradient-to-br from-base-surface via-base-surface to-base-elevated p-5 shadow-xl';
 
   if (mempoolLoading && pendingBlocks.length === 0) {
     return (
@@ -1576,7 +1577,7 @@ export function MempoolBlocks({
             <div
               key={i}
               className={cn(
-                'animate-pulse rounded-xl bg-slate-700/50',
+                'bg-base-border/50 animate-pulse rounded-xl',
                 showTxnLens
                   ? 'h-[98px] w-[126px] sm:h-[114px] sm:w-[148px]'
                   : 'h-[80px] w-[100px] sm:h-[96px] sm:w-[116px]'
@@ -1600,16 +1601,14 @@ export function MempoolBlocks({
             className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
           >
             <p className="text-xs sm:text-sm">
-              <span className="text-amber-300">Mempool ({formatCount(totalPending)})</span>
-              <span className="text-slate-500"> {'->'} </span>
-              <span className="text-terminal-dim">Proposals ({formatCount(totalProposed)})</span>
-              <span className="text-slate-500"> {'->'} </span>
-              <span className="text-terminal-green">
-                New Committed ({formatCount(totalCommitted)})
-              </span>
+              <span className="text-warning-300">Mempool ({formatCount(totalPending)})</span>
+              <span className="text-text-muted"> {'->'} </span>
+              <span className="text-emphasis-dim">Proposals ({formatCount(totalProposed)})</span>
+              <span className="text-text-muted"> {'->'} </span>
+              <span className="text-emphasis">New Committed ({formatCount(totalCommitted)})</span>
             </p>
             {legendMode === 'row' && (
-              <p className="rounded-md border border-slate-700/60 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 sm:text-right">
+              <p className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px] sm:text-right">
                 w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
               </p>
             )}
@@ -1619,7 +1618,7 @@ export function MempoolBlocks({
 
       {legendMode === 'row' && !showHeader && (
         <div className="mb-1 mt-1 flex items-center">
-          <span className="rounded-md border border-slate-700/60 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300">
+          <span className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px]">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </span>
         </div>

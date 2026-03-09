@@ -17,6 +17,6 @@ describe('MultiSeriesLineChart', () => {
     const guide = screen.getByText(
       'Drag to select range | Scroll to zoom | Middle-click drag to pan'
     );
-    expect(guide).toHaveClass('text-slate-500');
+    expect(guide).toHaveClass('text-text-muted');
   });
 });

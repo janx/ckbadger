@@ -924,7 +924,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 )}
 
                                 {cellToken && cell.udtAmount && (
-                                  <div className="bg-warning-900/10 rounded border border-amber-900/30 px-2 py-1.5">
+                                  <div className="bg-warning-900/10 border-warning-900/30 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
                                       <span className="text-warning-dim font-mono">
                                         {formatTokenBalance(cell.udtAmount, cellToken.decimals)}
@@ -1081,7 +1081,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   )}
                                   {tx.cycles != null && (
                                     <>
-                                      <span className="mx-1 text-slate-700">/</span>
+                                      <span className="text-text-muted mx-1">/</span>
                                       <span>
                                         {tx.cycles >= 1000000
                                           ? `${(tx.cycles / 1000000).toFixed(1)}M`

@@ -178,7 +178,7 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
-      const sporesValue = document.querySelector('.text-amber.text-xl');
+      const sporesValue = document.querySelector('.text-warning.text-xl');
       expect(sporesValue?.textContent).toBe('5');
     });
   });

@@ -27,7 +27,7 @@ function findSlate600Usages(root: string): string[] {
 
   for (const file of files) {
     const content = fs.readFileSync(file, 'utf8');
-    if (content.includes('text-slate-600')) {
+    if (content.includes('text-text-dim')) {
       offenders.push(path.relative(process.cwd(), file));
     }
   }
@@ -36,7 +36,7 @@ function findSlate600Usages(root: string): string[] {
 }
 
 describe('ui color usage guard', () => {
-  it('does not use text-slate-600 in app and components views', () => {
+  it('does not use text-text-dim in app and components views', () => {
     const frontendRoot = process.cwd();
     const appOffenders = findSlate600Usages(path.join(frontendRoot, 'app'));
     const componentOffenders = findSlate600Usages(path.join(frontendRoot, 'components'));

@@ -251,8 +251,8 @@ describe('TransactionDetailPage', () => {
     expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=0');
     expect(screen.getByTestId('tx-io-input-0')).toHaveClass('io-linked-highlight');
     expect(screen.getByTestId('tx-io-output-0')).toHaveClass('io-linked-highlight');
-    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('border-terminal-green/70');
-    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('border-terminal-green/70');
+    expect(screen.getByTestId('tx-io-input-0')).toHaveClass('border-emphasis/70');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('border-emphasis/70');
     expect(screen.getByTestId('tx-witness-deterministic-section')).toBeInTheDocument();
     expect(screen.getByText('WitnessArgs')).toBeInTheDocument();
 

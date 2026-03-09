@@ -242,7 +242,7 @@ function AssetTable({
       aria-label={`Sort by ${label}`}
     >
       <span>{label}</span>
-      <span className={sortKey === key ? 'text-terminal-green' : 'text-slate-700'}>
+      <span className={sortKey === key ? 'text-emphasis' : 'text-text-muted'}>
         {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
       </span>
     </button>
@@ -251,7 +251,7 @@ function AssetTable({
   if (isLoading) {
     return (
       <div className="space-y-2 py-4">
-        <div className="px-4 pb-1 text-xs text-slate-500 md:hidden">
+        <div className="text-text-muted px-4 pb-1 text-xs md:hidden">
           Swipe horizontally to view all columns.
         </div>
         <div className="overflow-x-auto" data-testid="asset-table-scroll">
@@ -260,27 +260,27 @@ function AssetTable({
               <TerminalRow key={i} hoverable={false}>
                 <div className="flex animate-pulse items-center">
                   <div className={nameColumnClass}>
-                    <div className="h-4 w-48 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-4 w-48 rounded" />
                   </div>
                   <div className={typeColumnClass}>
-                    <div className="h-4 w-12 rounded bg-slate-800" />
+                    <div className="bg-base-elevated h-4 w-12 rounded" />
                   </div>
                   {assetType !== 'token' && (
                     <div className={smallNumberColumnClass}>
-                      <div className="ml-auto h-4 w-10 rounded bg-slate-800" />
+                      <div className="bg-base-elevated ml-auto h-4 w-10 rounded" />
                     </div>
                   )}
                   <div className={smallNumberColumnClass}>
-                    <div className="ml-auto h-4 w-12 rounded bg-slate-800" />
+                    <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
                   </div>
                   <div className={mediumNumberColumnClass}>
-                    <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
+                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
                   </div>
                   <div className={capacityColumnClass}>
-                    <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
+                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
                   </div>
                   <div className={capacityColumnClass}>
-                    <div className="ml-auto h-4 w-16 rounded bg-slate-800" />
+                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
                   </div>
                 </div>
               </TerminalRow>
@@ -292,17 +292,17 @@ function AssetTable({
   }
 
   if (!data?.data?.length) {
-    return <div className="py-8 text-center text-slate-500">No assets found</div>;
+    return <div className="text-text-muted py-8 text-center">No assets found</div>;
   }
 
   return (
     <>
-      <div className="px-4 pb-1 pt-3 text-xs text-slate-500 md:hidden">
+      <div className="text-text-muted px-4 pb-1 pt-3 text-xs md:hidden">
         Swipe horizontally to view all columns.
       </div>
       <div className="overflow-x-auto" data-testid="asset-table-scroll">
         <div className={tableMinWidthClass} data-testid="asset-table-inner">
-          <div className="flex border-b border-slate-800 bg-slate-900/50 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-500">
+          <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
             {renderSortHeader(
               'name',
               assetType === 'token' ? 'Token' : 'Collection',
@@ -346,18 +346,18 @@ function AssetTable({
                       <div className="min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span
-                            className="text-terminal-green max-w-full truncate font-medium hover:underline"
+                            className="text-emphasis max-w-full truncate font-medium hover:underline"
                             title={getAssetName(asset)}
                           >
                             {getAssetName(asset)}
                           </span>
                           {asset.assetType === 'nft' && getStorageBadgeLabel(asset) && (
-                            <span className="rounded border border-slate-700 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
+                            <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
                               {getStorageBadgeLabel(asset)}
                             </span>
                           )}
                           {asset.published && (
-                            <span className="text-terminal-green" title="Verified">
+                            <span className="text-emphasis" title="Verified">
                               <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                                 <path
                                   fillRule="evenodd"
@@ -368,7 +368,7 @@ function AssetTable({
                             </span>
                           )}
                           {asset.famous && (
-                            <span className="text-amber" title="Famous">
+                            <span className="text-warning" title="Famous">
                               <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
                                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                               </svg>
@@ -396,27 +396,33 @@ function AssetTable({
                     {formatNumber(asset.totalSupply || 0)}
                   </div>
                 )}
-                <div className={`${smallNumberColumnClass} text-amber font-mono tabular-nums`}>
+                <div className={`${smallNumberColumnClass} text-warning font-mono tabular-nums`}>
                   {formatNumber(asset.transfers24h)}
                 </div>
-                <div className={`${mediumNumberColumnClass} font-mono tabular-nums text-slate-400`}>
+                <div
+                  className={`${mediumNumberColumnClass} text-text-muted font-mono tabular-nums`}
+                >
                   {formatNumber(asset.holdersCount)}
                 </div>
-                <div className={`${capacityColumnClass} font-mono tabular-nums text-slate-300`}>
+                <div
+                  className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}
+                >
                   {(() => {
                     const occupied = asset.liveOccupiedCapacity;
                     if (!occupied) {
-                      return <span className="text-slate-500">-</span>;
+                      return <span className="text-text-muted">-</span>;
                     }
                     const compact = formatCkbCompact(occupied);
                     return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                   })()}
                 </div>
-                <div className={`${capacityColumnClass} font-mono tabular-nums text-slate-300`}>
+                <div
+                  className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}
+                >
                   {(() => {
                     const capacity = asset.liveCapacity;
                     if (!capacity) {
-                      return <span className="text-slate-500">-</span>;
+                      return <span className="text-text-muted">-</span>;
                     }
                     const compact = formatCkbCompact(capacity);
                     return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -522,7 +528,7 @@ export function AssetsPageClient() {
   const standardOptions = getStandardOptions(activeTab, standard);
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
         <PageHeader
@@ -539,13 +545,13 @@ export function AssetsPageClient() {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   placeholder="Search by name..."
-                  className="focus:border-terminal-dark focus:ring-terminal-dark w-full rounded border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm text-white placeholder-slate-600 transition-colors focus:outline-none focus:ring-1 sm:w-64"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim w-full rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1 sm:w-64"
                 />
                 {search && (
                   <button
                     type="button"
                     onClick={clearSearch}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                    className="text-text-muted hover:text-text-secondary absolute right-2 top-1/2 -translate-y-1/2"
                   >
                     ×
                   </button>
@@ -553,7 +559,7 @@ export function AssetsPageClient() {
               </div>
               <button
                 type="submit"
-                className="text-terminal-green rounded border border-slate-700 bg-slate-900/40 px-4 py-1.5 font-mono text-sm transition-colors hover:bg-slate-900/70"
+                className="text-emphasis border-base-border bg-base-surface/40 hover:bg-base-surface/70 rounded border px-4 py-1.5 font-mono text-sm transition-colors"
               >
                 Search
               </button>
@@ -571,7 +577,7 @@ export function AssetsPageClient() {
                     value={standard ?? ''}
                     onChange={(event) => handleStandardChange(event.target.value)}
                     aria-label="Filter by standard"
-                    className="focus:border-terminal-dark focus:ring-terminal-dark min-w-[10.5rem] rounded border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
                   >
                     <option value="">All standards</option>
                     {standardOptions.map((item) => (
@@ -585,7 +591,7 @@ export function AssetsPageClient() {
                       value={storageTier}
                       onChange={(event) => handleStorageTierChange(event.target.value)}
                       aria-label="Filter by storage tier"
-                      className="focus:border-terminal-dark focus:ring-terminal-dark min-w-[12rem] rounded border border-slate-700 bg-slate-900 px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                      className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
                     >
                       {STORAGE_TIER_OPTIONS.map((item) => (
                         <option key={item} value={item}>
@@ -632,11 +638,11 @@ export function AssetsPageClient() {
 
 export function AssetsPageFallback() {
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <div className="mb-6 h-10 w-48 animate-pulse rounded bg-slate-800" />
-        <div className="h-80 animate-pulse rounded border border-slate-800 bg-slate-900/50" />
+        <div className="bg-base-elevated mb-6 h-10 w-48 animate-pulse rounded" />
+        <div className="border-base-border bg-base-surface/50 h-80 animate-pulse rounded border" />
       </main>
     </div>
   );

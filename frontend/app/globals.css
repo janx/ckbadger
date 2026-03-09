@@ -12,11 +12,6 @@
   --color-emphasis-dim: #6ba808;
   --color-interactive: #00d7eb;
   --color-interactive-hover: #67ffef;
-  /* Legacy color vars — still referenced by un-migrated components */
-  --terminal-green: #8ce00a;
-  --terminal-dim: #6ba808;
-  --amber: #ffb900;
-  --amber-dim: #cc8c00;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: var(--font-mono);
 }
@@ -97,8 +92,8 @@ body {
   }
 
   .hex-char:hover {
-    color: var(--terminal-green);
-    text-shadow: 0 0 8px var(--terminal-green);
+    color: var(--color-emphasis);
+    text-shadow: 0 0 8px var(--color-emphasis);
     transform: scale(1.1);
   }
 
@@ -162,8 +157,8 @@ body {
   }
 
   .indicator-light-amber {
-    background: var(--amber);
-    box-shadow: 0 0 6px var(--amber);
+    background: #ffb900;
+    box-shadow: 0 0 6px #ffb900;
   }
 
   .indicator-light-static {

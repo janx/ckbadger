@@ -10,8 +10,8 @@ interface OccupationRangeSelectorProps {
 export function OccupationRangeSelector({ value, onChange }: OccupationRangeSelectorProps) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <span className="font-mono text-xs uppercase tracking-wider text-slate-500">Range</span>
-      <div className="flex items-center gap-1 rounded border border-slate-800 bg-slate-900/50 p-1">
+      <span className="text-text-muted font-mono text-xs uppercase tracking-wider">Range</span>
+      <div className="border-base-border bg-base-surface/50 flex items-center gap-1 rounded border p-1">
         {OCCUPATION_RANGE_OPTIONS.map((option) => {
           const active = value === option.key;
           return (
@@ -21,8 +21,8 @@ export function OccupationRangeSelector({ value, onChange }: OccupationRangeSele
               onClick={() => onChange(option.key)}
               className={`rounded px-2 py-1 font-mono text-xs transition-colors ${
                 active
-                  ? 'bg-terminal-dark/30 text-terminal-green border-terminal-dark border'
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
+                  ? 'bg-emphasis-dim/30 text-emphasis border-emphasis-dim border'
+                  : 'text-text-muted hover:bg-base-elevated hover:text-text-primary'
               }`}
             >
               {option.label}
