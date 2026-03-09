@@ -373,7 +373,7 @@ pub const ALL_CFS: &[&str] = &[
 
 /// Column families intended for the domain mutable store.
 pub const DOMAIN_CFS: &[&str] = &[
-    CF_CELLS,
+    // CF_CELLS removed — now in APPEND_CFS (content-addressed, hash-keyed)
     CF_LIVE_CELLS,
     CF_CONSUMED_CELLS,
     CF_REORG_UNDO_LOG_BY_BLOCK,
@@ -386,6 +386,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
+    CF_ADDR_TXS,
     CF_DAO_DEPOSITS,
     CF_DAO_BY_WITHDRAW_TX,
     CF_DAO_BY_BLOCK,
@@ -408,18 +409,16 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
+    CF_ACTIVITIES,
     CF_CLUSTER_AGG,
     CF_OBJECT_COLLECTION_AGG,
-    CF_IDENTITY_AGG,
-];
-
-/// Column families intended for append-only history/archive store.
-pub const APPEND_CFS: &[&str] = &[
-    CF_ADDR_TXS,
-    CF_ACTIVITIES,
     CF_OBJECT_COLLECTION_ACTIVITIES,
+    CF_IDENTITY_AGG,
     CF_IDENTITY_COLLECTION_ACTIVITIES,
 ];
+
+/// Column families for the append-only store (immutable, hash-keyed cell payloads).
+pub const APPEND_CFS: &[&str] = &[CF_CELLS];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -531,17 +530,8 @@ impl CkbadgerStore {
                 self.store_class
             );
         }
-        if std::ptr::eq(cf, self.cf_addr_txs()) {
-            return Ok(CF_ADDR_TXS);
-        }
-        if std::ptr::eq(cf, self.cf_activities()) {
-            return Ok(CF_ACTIVITIES);
-        }
-        if std::ptr::eq(cf, self.cf_object_collection_activities()) {
-            return Ok(CF_OBJECT_COLLECTION_ACTIVITIES);
-        }
-        if std::ptr::eq(cf, self.cf_identity_collection_activities()) {
-            return Ok(CF_IDENTITY_COLLECTION_ACTIVITIES);
+        if std::ptr::eq(cf, self.cf_cells()) {
+            return Ok(CF_CELLS);
         }
         anyhow::bail!(
             "unknown append-only column family handle in {:?} store",
@@ -893,6 +883,8 @@ impl CkbadgerStore {
         CF_DAO_BY_LOCK_BLOCK,
         CF_DAO_BY_STATUS_BLOCK,
         CF_ACTIVITIES,
+        CF_OBJECT_COLLECTION_ACTIVITIES,
+        CF_IDENTITY_COLLECTION_ACTIVITIES,
         CF_STATS_CHAIN,
         CF_STATS_SCRIPT,
         CF_STATS_TOKEN,
@@ -905,12 +897,7 @@ impl CkbadgerStore {
     ///
     /// These indexes are primarily append writes during sync and large range scans on reads.
     /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
-    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[
-        CF_ACTIVITIES,
-        CF_ADDR_TXS,
-        CF_OBJECT_COLLECTION_ACTIVITIES,
-        CF_IDENTITY_COLLECTION_ACTIVITIES,
-    ];
+    const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[CF_CELLS];
 
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
