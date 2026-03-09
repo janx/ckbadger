@@ -3,6 +3,7 @@ mod supervisor;
 #[cfg(test)]
 mod build_version_format;
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -125,10 +126,10 @@ async fn main() -> Result<()> {
         .workdir
         .unwrap_or_else(|| std::env::current_dir().expect("cannot determine current directory"));
 
-    // Print build version as the first line for all commands except TUI
+    // Print ASCII banner for all commands except TUI
     // (TUI manages its own terminal and shows the version in the header).
     if !matches!(cli.command, Command::Tui) {
-        println!("{BUILD_VERSION}");
+        print_banner();
     }
 
     match cli.command {
@@ -602,6 +603,27 @@ fn cmd_purge(workdir: &Path, args: &PurgeArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Banner
+// ---------------------------------------------------------------------------
+
+const BANNER: &str = r#"  _______ __    ___  ___   ___  ____________
+ / ___/ //_/___/ _ )/ _ | / _ \/ ___/ __/ _ \
+/ /__/ ,< /___/ _  / __ |/ // / (_ / _// , _/
+\___/_/|_|   /____/_/ |_/____/\___/___/_/|_|"#;
+
+fn print_banner() {
+    let use_color = std::io::stdout().is_terminal();
+    if use_color {
+        // Green banner + dim version
+        println!("\x1b[32m{BANNER}\x1b[0m");
+        println!("\x1b[90m{BUILD_VERSION}\x1b[0m");
+    } else {
+        println!("{BANNER}");
+        println!("{BUILD_VERSION}");
+    }
 }
 
 // ---------------------------------------------------------------------------
