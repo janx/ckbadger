@@ -178,6 +178,58 @@ fn put_cell_index_entries(
     }
 }
 
+/// Accumulate derived-CF deltas for a cell changing live state during rollback.
+/// `sign` is -1 when removing from live (cell created after rollback_to),
+/// +1 when restoring to live (cell consumed after rollback_to).
+fn accumulate_cell_deltas(
+    cell: &LiveCellInfo,
+    sign: i128,
+    addr_deltas: &mut HashMap<Vec<u8>, (i128, i128, i32)>,
+    script_deltas: &mut HashMap<(Vec<u8>, bool), (i64, i128, i128)>,
+    token_holder_deltas: &mut HashMap<(Vec<u8>, Vec<u8>), i128>,
+) {
+    let cap = cell.capacity as i128 * sign;
+    let occ = cell.occupied_capacity as i128 * sign;
+    let live_d = sign as i32;
+
+    // addr_balance: (balance_delta, occupied_delta, live_cells_delta)
+    let e = addr_deltas
+        .entry(cell.lock_script_hash.clone())
+        .or_insert((0, 0, 0));
+    e.0 += cap;
+    e.1 += occ;
+    e.2 += live_d;
+
+    // script_info — lock side: (live_cells_delta, live_cap_delta, live_occupied_delta)
+    let e = script_deltas
+        .entry((cell.lock_code_hash.clone(), false))
+        .or_insert((0, 0, 0));
+    e.0 += live_d as i64;
+    e.1 += cap;
+    e.2 += occ;
+
+    // script_info — type side (if present)
+    if let Some(ref type_code_hash) = cell.type_code_hash {
+        let e = script_deltas
+            .entry((type_code_hash.clone(), true))
+            .or_insert((0, 0, 0));
+        e.0 += live_d as i64;
+        e.1 += cap;
+        e.2 += occ;
+    }
+
+    // token_holder (UDT cells with type_script)
+    if let (Some(ref type_script_hash), Some(udt_amount)) =
+        (&cell.type_script_hash, cell.udt_amount)
+    {
+        if udt_amount > 0 {
+            *token_holder_deltas
+                .entry((type_script_hash.clone(), cell.lock_script_hash.clone()))
+                .or_insert(0) += udt_amount as i128 * sign;
+        }
+    }
+}
+
 fn load_tx_contexts_from_undo_log(
     store: &CkbadgerStore,
     rollback_to: i64,
@@ -629,6 +681,15 @@ impl CkbadgerStore {
         // 4-5. Roll back cell/live/consumed/index state.
         // Prefer tx-context entries from reorg_undo_log_by_block to derive touched outpoints.
         // Fallback to full scans when tx-context coverage is missing or partial.
+
+        // Delta accumulators for derived CFs, populated during cell rollback.
+        // addr_deltas: lock_hash -> (balance_delta, occupied_delta, live_cells_delta)
+        let mut addr_balance_deltas: HashMap<Vec<u8>, (i128, i128, i32)> = HashMap::new();
+        // script_deltas: (code_hash, is_type) -> (live_cells_delta, live_cap_delta, live_occ_delta)
+        let mut script_info_deltas: HashMap<(Vec<u8>, bool), (i64, i128, i128)> = HashMap::new();
+        // token_holder_deltas: (type_hash, lock_hash) -> balance_delta
+        let mut token_holder_deltas: HashMap<(Vec<u8>, Vec<u8>), i128> = HashMap::new();
+
         if !use_tx_context {
             if txs_removed > 0 {
                 let reason = if tx_context_count == 0 {
@@ -675,6 +736,13 @@ impl CkbadgerStore {
                     batch.delete_cf(self.cf_live_cells(), &key);
                     delete_cell_index_entries(self, &mut batch, &info, &tx_hash, output_index);
                     cells_removed += 1;
+                    accumulate_cell_deltas(
+                        &info,
+                        -1,
+                        &mut addr_balance_deltas,
+                        &mut script_info_deltas,
+                        &mut token_holder_deltas,
+                    );
                 }
                 stage.tick(cells_removed);
             }
@@ -721,6 +789,13 @@ impl CkbadgerStore {
                     batch.put_cf(self.cf_live_cells(), &key, []);
                     put_cell_index_entries(self, &mut batch, &info, &tx_hash, output_index);
                     cells_restored += 1;
+                    accumulate_cell_deltas(
+                        &info,
+                        1,
+                        &mut addr_balance_deltas,
+                        &mut script_info_deltas,
+                        &mut token_holder_deltas,
+                    );
                 }
                 stage.tick(cells_restored);
             }
@@ -768,6 +843,13 @@ impl CkbadgerStore {
                             output_index,
                         );
                         cells_removed += 1;
+                        accumulate_cell_deltas(
+                            &info,
+                            -1,
+                            &mut addr_balance_deltas,
+                            &mut script_info_deltas,
+                            &mut token_holder_deltas,
+                        );
                     }
                     // Remove consumed marker for outputs created in rolled-back blocks.
                     batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
@@ -830,6 +912,13 @@ impl CkbadgerStore {
                                     input.output_index,
                                 );
                                 cells_restored += 1;
+                                accumulate_cell_deltas(
+                                    &consumed.cell,
+                                    1,
+                                    &mut addr_balance_deltas,
+                                    &mut script_info_deltas,
+                                    &mut token_holder_deltas,
+                                );
                             }
                         }
                         None => {
@@ -1004,6 +1093,8 @@ impl CkbadgerStore {
 
         // 8. Delete token_transfers entries > rollback_to
         // Key: type_hash(32) + block_num_desc(8) + tx_idx(4) = 44
+        // Per-type_hash count of deleted transfers, for TokenInfo.transfers_count update.
+        let mut transfer_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut token_transfers_removed = 0u64;
         let mut stage = RollbackStageProgress::new("delete_token_transfers");
         let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
@@ -1019,11 +1110,198 @@ impl CkbadgerStore {
                 if block_num > rollback_to {
                     batch.delete_cf(self.cf_token_transfers(), &key);
                     token_transfers_removed += 1;
+                    let type_hash = key[0..32].to_vec();
+                    *transfer_count_deltas.entry(type_hash).or_insert(0) += 1;
                 }
             }
             stage.tick(token_transfers_removed);
         }
         stage.finish(token_transfers_removed);
+
+        // 9. Apply derived-CF deltas (addr_balance, script_info, token_holders, token_info).
+        let stage = RollbackStageProgress::new("apply_derived_cf_deltas");
+        let mut addr_balances_updated = 0u64;
+        let mut script_infos_updated = 0u64;
+        let mut holders_updated = 0u64;
+        let mut holders_removed = 0u64;
+        let mut tokens_updated = 0u64;
+
+        // 9a. addr_balance
+        for (lock_hash, (balance_delta, occupied_delta, live_delta)) in &addr_balance_deltas {
+            if *balance_delta == 0 && *occupied_delta == 0 && *live_delta == 0 {
+                continue;
+            }
+            let mut ab = self.get_addr_balance(lock_hash)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing addr_balance during rollback delta application: lock_hash=0x{}",
+                    bytes_to_hex(lock_hash)
+                )
+            })?;
+            ab.balance += balance_delta;
+            ab.occupied_capacity += occupied_delta;
+            ab.live_cells_count += live_delta;
+            if ab.balance < 0 || ab.occupied_capacity < 0 || ab.live_cells_count < 0 {
+                anyhow::bail!(
+                    "addr_balance underflow during rollback: lock_hash=0x{}, balance={}, occupied={}, live_cells={}",
+                    bytes_to_hex(lock_hash),
+                    ab.balance,
+                    ab.occupied_capacity,
+                    ab.live_cells_count
+                );
+            }
+            batch.put_cf(
+                self.cf_addr_balance(),
+                lock_hash,
+                bincode::serialize(&ab).expect("serialize AddressBalance"),
+            );
+            addr_balances_updated += 1;
+        }
+
+        // 9b. script_info
+        for ((code_hash, is_type), (live_delta, live_cap_delta, live_occ_delta)) in
+            &script_info_deltas
+        {
+            if *live_delta == 0 && *live_cap_delta == 0 && *live_occ_delta == 0 {
+                continue;
+            }
+            let mut si = self.get_script_info(code_hash)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing script_info during rollback delta application: code_hash=0x{}, is_type={}",
+                    bytes_to_hex(code_hash),
+                    is_type
+                )
+            })?;
+            if *is_type {
+                si.type_live_cells_count += live_delta;
+                si.type_live_capacity_sum += live_cap_delta;
+                si.type_live_occupied_capacity_sum += live_occ_delta;
+                if si.type_live_cells_count < 0
+                    || si.type_live_capacity_sum < 0
+                    || si.type_live_occupied_capacity_sum < 0
+                {
+                    anyhow::bail!(
+                        "script_info type underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
+                        bytes_to_hex(code_hash),
+                        si.type_live_cells_count,
+                        si.type_live_capacity_sum,
+                        si.type_live_occupied_capacity_sum
+                    );
+                }
+            } else {
+                si.lock_live_cells_count += live_delta;
+                si.lock_live_capacity_sum += live_cap_delta;
+                si.lock_live_occupied_capacity_sum += live_occ_delta;
+                if si.lock_live_cells_count < 0
+                    || si.lock_live_capacity_sum < 0
+                    || si.lock_live_occupied_capacity_sum < 0
+                {
+                    anyhow::bail!(
+                        "script_info lock underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
+                        bytes_to_hex(code_hash),
+                        si.lock_live_cells_count,
+                        si.lock_live_capacity_sum,
+                        si.lock_live_occupied_capacity_sum
+                    );
+                }
+            }
+            batch.put_cf(
+                self.cf_script_info(),
+                code_hash,
+                bincode::serialize(&si).expect("serialize ScriptInfo"),
+            );
+            script_infos_updated += 1;
+        }
+
+        // 9c. token_holders — apply balance deltas, track per-type_hash holder count changes
+        let mut type_hash_holder_changes: HashMap<Vec<u8>, (i128, i64)> = HashMap::new();
+        for ((type_hash, lock_hash), balance_delta) in &token_holder_deltas {
+            if *balance_delta == 0 {
+                continue;
+            }
+            let current = self
+                .get_token_holder_balance(type_hash, lock_hash)?
+                .unwrap_or(0);
+            let new_balance = current + balance_delta;
+            let entry = type_hash_holder_changes
+                .entry(type_hash.clone())
+                .or_insert((0, 0));
+            entry.0 += balance_delta; // total_supply delta
+
+            if new_balance < 0 {
+                anyhow::bail!(
+                    "token_holder underflow during rollback: type=0x{}, lock=0x{}, current={}, delta={}",
+                    bytes_to_hex(type_hash),
+                    bytes_to_hex(lock_hash),
+                    current,
+                    balance_delta
+                );
+            } else if new_balance == 0 {
+                let key = keys::encode_token_holder_key(type_hash, lock_hash);
+                batch.delete_cf(self.cf_token_holders(), key);
+                if current > 0 {
+                    entry.1 -= 1; // lost a holder
+                }
+                holders_removed += 1;
+            } else {
+                let key = keys::encode_token_holder_key(type_hash, lock_hash);
+                batch.put_cf(self.cf_token_holders(), key, new_balance.to_le_bytes());
+                if current == 0 {
+                    entry.1 += 1; // gained a holder
+                }
+                holders_updated += 1;
+            }
+        }
+
+        // 9d. token_info — merge holder changes and transfer count deltas
+        let mut all_type_hashes: HashSet<Vec<u8>> =
+            type_hash_holder_changes.keys().cloned().collect();
+        all_type_hashes.extend(transfer_count_deltas.keys().cloned());
+        for type_hash in &all_type_hashes {
+            let (supply_delta, holders_delta) = type_hash_holder_changes
+                .get(type_hash)
+                .copied()
+                .unwrap_or((0, 0));
+            let transfers_removed = transfer_count_deltas.get(type_hash).copied().unwrap_or(0);
+            if supply_delta == 0 && holders_delta == 0 && transfers_removed == 0 {
+                continue;
+            }
+            if let Some(mut ti) = self.get_token(type_hash)? {
+                ti.holders_count += holders_delta;
+                if let Some(ref mut ts) = ti.total_supply {
+                    *ts += supply_delta;
+                }
+                ti.transfers_count -= transfers_removed;
+                batch.put_cf(
+                    self.cf_tokens(),
+                    type_hash.as_slice(),
+                    bincode::serialize(&ti).expect("serialize TokenInfo"),
+                );
+                // Also update CF_STATS_TOKEN total transfers count
+                if transfers_removed != 0 {
+                    let current_count = self.get_token_transfers_count(type_hash)?;
+                    let new_count = current_count - transfers_removed;
+                    let stats_key = keys::encode_token_transfers_key(type_hash);
+                    batch.put_cf(self.cf_stats_token(), &stats_key, new_count.to_le_bytes());
+                }
+                tokens_updated += 1;
+            }
+        }
+
+        info!(
+            addr_balances_updated,
+            script_infos_updated,
+            holders_updated,
+            holders_removed,
+            tokens_updated,
+            "Rollback derived CF deltas applied"
+        );
+        stage.finish(
+            addr_balances_updated
+                + script_infos_updated
+                + holders_updated
+                + holders_removed
+                + tokens_updated,
+        );
 
         // 10. Repair Spore/NFT domain state for orphaned blocks and rebuild secondary indexes.
         let mut stage = RollbackStageProgress::new("repair_spore_nft_domain");
