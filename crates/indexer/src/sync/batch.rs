@@ -884,6 +884,12 @@ impl Indexer {
                 inputs: write_metrics.inputs,
                 write_ms: write_metrics.write_ms,
                 t1_ms: write_metrics.t1_ms,
+                t2_ms: write_metrics.t2_ms,
+                t4_ms: write_metrics.t4_ms,
+                t5_ms: write_metrics.t5_ms,
+                t6a_ms: write_metrics.t6a_ms,
+                t6b_ms: write_metrics.t6b_ms,
+                t7_ms: write_metrics.t7_ms,
                 t_act_ms: write_metrics.t_act_ms,
                 ..BatchSample::new(
                     batch_block_count,
@@ -6290,7 +6296,7 @@ impl Indexer {
             .filter(|t| !t.is_cellbase)
             .map(|t| t.inputs.len())
             .sum();
-        let (t1_ms, t_act_ms) = if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
+        let thread_ms = if let Some([t1, t2, t4, t5, t6a, t6b, t7, t_act]) = thread_times {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
                 prefetch_ms = format!("{:.1}", prefetch_ms),
@@ -6310,7 +6316,7 @@ impl Indexer {
                 inputs = batch_input_count,
                 "Batch write breakdown"
             );
-            (t1, t_act)
+            [t1, t2, t4, t5, t6a, t6b, t7, t_act]
         } else {
             info!(
                 precompute_ms = format!("{:.1}", precompute_ms),
@@ -6322,7 +6328,7 @@ impl Indexer {
                 inputs = batch_input_count,
                 "Batch write breakdown"
             );
-            (0.0, 0.0)
+            [0.0; 8]
         };
         Ok(BatchWriteMetrics {
             commit_ms: write_commit_ms,
@@ -6330,8 +6336,14 @@ impl Indexer {
             txs: u64::try_from(batch_tx_count).expect("parsed batch tx count exceeds u64"),
             cells: u64::try_from(batch_cell_count).expect("parsed batch cell count exceeds u64"),
             inputs: u64::try_from(batch_input_count).expect("parsed batch input count exceeds u64"),
-            t1_ms,
-            t_act_ms,
+            t1_ms: thread_ms[0],
+            t2_ms: thread_ms[1],
+            t4_ms: thread_ms[2],
+            t5_ms: thread_ms[3],
+            t6a_ms: thread_ms[4],
+            t6b_ms: thread_ms[5],
+            t7_ms: thread_ms[6],
+            t_act_ms: thread_ms[7],
         })
     }
 
