@@ -39,6 +39,50 @@ export default {
           600: '#3d4a5c', // Secondary text
           500: '#5a6a7f', // Tertiary elements
         },
+        // Role-based Argonaut palette
+        base: {
+          bg: '#0d0f18',
+          surface: '#12151e',
+          elevated: '#181c27',
+          border: '#1f2430',
+        },
+        text: {
+          primary: '#fffaf3',
+          secondary: '#c8c2b8',
+          muted: '#6b6860',
+          dim: '#4a4740',
+        },
+        interactive: {
+          DEFAULT: '#00d7eb',
+          hover: '#67ffef',
+          muted: '#00d7eb40',
+          dim: '#009aa8',
+        },
+        emphasis: {
+          DEFAULT: '#8ce00a',
+          dim: '#6ba808',
+          glow: '#8ce00a30',
+          bright: '#abe05a',
+        },
+        positive: {
+          DEFAULT: '#8ce00a',
+          dim: '#6ba808',
+        },
+        negative: {
+          DEFAULT: '#ff000f',
+          dim: '#cc000c',
+          bright: '#ff273f',
+        },
+        warning: {
+          DEFAULT: '#ffb900',
+          dim: '#cc8c00',
+          bright: '#ffd141',
+        },
+        info: {
+          DEFAULT: '#008df8',
+          dim: '#006bc0',
+          bright: '#0092ff',
+        },
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
@@ -53,6 +97,10 @@ export default {
         'terminal-inset': 'inset 0 0 15px #00ff4108',
         'amber-glow': '0 0 6px #ffb00030, 0 0 12px #ffb00018',
         'amber-glow-strong': '0 0 4px #ffb00060, 0 0 10px #ffb00030',
+        glow: '0 0 4px #8ce00a25, 0 0 10px #8ce00a15',
+        'glow-strong': '0 0 3px #8ce00a50, 0 0 8px #8ce00a25',
+        'glow-inset': 'inset 0 1px 4px #8ce00a10',
+        'interactive-glow': '0 0 4px #00d7eb30, 0 0 10px #00d7eb18',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',
