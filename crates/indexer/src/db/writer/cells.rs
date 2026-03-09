@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_persists_precomputed_xudt_without_amount_payload() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_code_hash =
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_errors_when_precomputed_info_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store);
 
         let type_code_hash =
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn test_insert_cells_batch_uses_precomputed_info_without_reparsing_amount() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let type_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
@@ -645,7 +645,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_errors_on_corrupt_cell_data() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xCC; 32];
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_errors_on_missing_live_cell_info() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xEE; 32];
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     fn test_consume_cells_batch_preloaded_errors_on_missing_cell_info() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xFA; 32];
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn test_get_full_cells_info_batch_uses_consumed_batch_lookup() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
 
         let tx_hash = vec![0xAC; 32];
