@@ -1,17 +1,15 @@
 //! Token operations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use rocksdb::{IteratorMode, WriteBatch};
+use rocksdb::IteratorMode;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    AssetAction, LiveCellInfo, TokenActivityEntry, TokenActivityTransfer, TokenDailyDelta,
-    TokenInfo, TokenTransferRecord,
+    AssetAction, TokenActivityEntry, TokenActivityTransfer, TokenDailyDelta, TokenInfo,
+    TokenTransferRecord,
 };
-
-const TOKEN_REBUILD_BATCH_SIZE: usize = 20_000;
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -23,18 +21,6 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct TokenStateRebuildResult {
-    pub token_holders_cleared: u64,
-    pub token_transfer_stats_cleared: u64,
-    pub token_hourly_stats_cleared: u64,
-    pub tokens_written: u64,
-    pub tokens_deleted: u64,
-    pub token_holders_written: u64,
-    pub token_transfer_stats_written: u64,
-    pub token_hourly_stats_written: u64,
-}
-
 #[derive(Debug, Clone)]
 pub struct TokenDailyValidationError {
     pub type_hash: Vec<u8>,
@@ -43,40 +29,6 @@ pub struct TokenDailyValidationError {
     pub live_occupied_capacity: i128,
     pub capacity_delta: i128,
     pub occupied_delta: i128,
-}
-
-#[derive(Debug, Default)]
-struct LiveTokenAgg {
-    total_supply: i128,
-    first_seen_block: Option<i64>,
-    holder_balances: HashMap<Vec<u8>, i128>,
-}
-
-#[derive(Debug, Default)]
-struct TransferTokenAgg {
-    transfers_count: i64,
-    first_seen_block: Option<i64>,
-    hourly_counts: HashMap<i64, i64>,
-}
-
-fn flush_rebuild_batch(
-    store: &CkbadgerStore,
-    write_batch: &mut WriteBatch,
-    pending_writes: &mut usize,
-    force: bool,
-) -> anyhow::Result<()> {
-    if *pending_writes >= TOKEN_REBUILD_BATCH_SIZE || (force && !write_batch.is_empty()) {
-        store.write_batch(std::mem::take(write_batch))?;
-        *write_batch = WriteBatch::default();
-        *pending_writes = 0;
-    }
-    Ok(())
-}
-
-fn update_first_seen(first_seen: &mut Option<i64>, candidate: i64) {
-    if first_seen.is_none_or(|current| candidate < current) {
-        *first_seen = Some(candidate);
-    }
 }
 
 impl CkbadgerStore {
@@ -522,9 +474,9 @@ impl CkbadgerStore {
         collection_id: &[u8],
         cutoff_hour: i64,
     ) -> anyhow::Result<u64> {
-        if collection_id.len() != 32 {
+        if collection_id.is_empty() || collection_id.len() > 32 {
             anyhow::bail!(
-                "cleanup_old_nft_hourly_buckets expects 32-byte collection_id, got {} bytes",
+                "cleanup_old_nft_hourly_buckets expects 1..=32 byte collection_id, got {} bytes",
                 collection_id.len()
             );
         }
@@ -819,329 +771,6 @@ impl CkbadgerStore {
             }
         }
         Ok(results)
-    }
-
-    /// Rebuild token state after rollback.
-    ///
-    /// Sources of truth:
-    /// - `live_cells` for holder balances and outstanding total supply
-    /// - `token_transfers` for transfer counters/hourly buckets
-    pub fn rebuild_token_state_from_transfers(&self) -> anyhow::Result<TokenStateRebuildResult> {
-        let mut result = TokenStateRebuildResult::default();
-
-        let mut existing_tokens: HashMap<Vec<u8>, TokenInfo> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_tokens(), IteratorMode::Start);
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate tokens in rebuild_token_state_from_transfers: {}",
-                    e
-                )
-            })?;
-            let info: TokenInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize token metadata during rebuild: type_hash=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
-                )
-            })?;
-            existing_tokens.insert(key.to_vec(), info);
-        }
-
-        // 1) Aggregate live UDT balances and current total supply from live_cells.
-        let mut live_aggs: HashMap<Vec<u8>, LiveTokenAgg> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_live_cells(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate live_cells in rebuild_token_state_from_transfers: {}",
-                    e
-                )
-            })?;
-            if key.len() != keys::OUTPOINT_KEY_SIZE {
-                continue;
-            }
-            let info: LiveCellInfo = self.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing canonical cell for live marker during token rebuild: outpoint=0x{}",
-                    bytes_to_hex(&key)
-                )
-            })?;
-            let Some(type_hash) = info.type_script_hash.as_ref() else {
-                continue;
-            };
-            let Some(amount_u128) = info.udt_amount else {
-                continue;
-            };
-            if amount_u128 == 0 {
-                continue;
-            }
-            let amount = i128::try_from(amount_u128).map_err(|_| {
-                anyhow::anyhow!(
-                    "token rebuild amount exceeds i128 in live cell: type_hash=0x{}, outpoint=0x{}, amount={}",
-                    bytes_to_hex(type_hash),
-                    bytes_to_hex(&key),
-                    amount_u128
-                )
-            })?;
-
-            let agg = live_aggs.entry(type_hash.clone()).or_default();
-            agg.total_supply = agg.total_supply.checked_add(amount).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token rebuild supply overflow from live cells: type_hash=0x{}, current={}, delta={}",
-                    bytes_to_hex(type_hash),
-                    agg.total_supply,
-                    amount
-                )
-            })?;
-            update_first_seen(&mut agg.first_seen_block, info.created_at_block);
-
-            let holder = agg
-                .holder_balances
-                .entry(info.lock_script_hash.clone())
-                .or_insert(0);
-            *holder = holder.checked_add(amount).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token rebuild holder balance overflow from live cells: type_hash=0x{}, lock_hash=0x{}, current={}, delta={}",
-                    bytes_to_hex(type_hash),
-                    bytes_to_hex(&info.lock_script_hash),
-                    *holder,
-                    amount
-                )
-            })?;
-        }
-
-        // 2) Aggregate transfer counters from token_transfers.
-        let mut transfer_aggs: HashMap<Vec<u8>, TransferTokenAgg> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_token_transfers(), IteratorMode::Start);
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate token_transfers in rebuild_token_state_from_transfers: {}",
-                    e
-                )
-            })?;
-            if key.len() != 44 {
-                anyhow::bail!(
-                    "invalid token_transfer key length during rebuild: key_len={}, key=0x{}",
-                    key.len(),
-                    bytes_to_hex(&key)
-                );
-            }
-            let type_hash = key[..32].to_vec();
-            let (block_number, tx_idx) = keys::decode_token_transfer_key(&key);
-            let record: TokenTransferRecord = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize token transfer during rebuild: type_hash=0x{}, block_number={}, tx_idx={}, error={}",
-                    bytes_to_hex(&type_hash),
-                    block_number,
-                    tx_idx,
-                    e
-                )
-            })?;
-
-            let agg = transfer_aggs.entry(type_hash).or_default();
-            agg.transfers_count = agg.transfers_count.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token rebuild transfers_count overflow: block_number={}, tx_idx={}, current_count={}",
-                    block_number,
-                    tx_idx,
-                    agg.transfers_count
-                )
-            })?;
-            update_first_seen(&mut agg.first_seen_block, block_number);
-
-            let hour_bucket = record.timestamp / 3_600_000;
-            let hourly = agg.hourly_counts.entry(hour_bucket).or_insert(0);
-            *hourly = hourly.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token rebuild hourly count overflow: hour_bucket={}, block_number={}, tx_idx={}, current={}",
-                    hour_bucket,
-                    block_number,
-                    tx_idx,
-                    *hourly
-                )
-            })?;
-        }
-
-        // 3) Clear token_holders.
-        let mut clear_batch = WriteBatch::default();
-        let iter = self.iterator_cf(self.cf_token_holders(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate token_holders for clearing in rebuild_token_state_from_transfers: {}",
-                    e
-                )
-            })?;
-            clear_batch.delete_cf(self.cf_token_holders(), &key);
-            result.token_holders_cleared += 1;
-            if result
-                .token_holders_cleared
-                .is_multiple_of(TOKEN_REBUILD_BATCH_SIZE as u64)
-            {
-                self.write_batch(std::mem::take(&mut clear_batch))?;
-                clear_batch = WriteBatch::default();
-            }
-        }
-        if !clear_batch.is_empty() {
-            self.write_batch(clear_batch)?;
-        }
-
-        // 4) Clear token stats rollups (TOKEN_TRANSFERS and TOKEN_HOURLY).
-        let mut clear_batch = WriteBatch::default();
-        let iter = self.iterator_cf(self.cf_stats_token(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate stats_token for clearing in rebuild_token_state_from_transfers: {}",
-                    e
-                )
-            })?;
-            match key.first().copied() {
-                Some(keys::STATS_PREFIX_TOKEN_TRANSFERS) => {
-                    clear_batch.delete_cf(self.cf_stats_token(), &key);
-                    result.token_transfer_stats_cleared += 1;
-                }
-                Some(keys::STATS_PREFIX_TOKEN_HOURLY) => {
-                    clear_batch.delete_cf(self.cf_stats_token(), &key);
-                    result.token_hourly_stats_cleared += 1;
-                }
-                _ => continue,
-            }
-            let cleared_total =
-                result.token_transfer_stats_cleared + result.token_hourly_stats_cleared;
-            if cleared_total.is_multiple_of(TOKEN_REBUILD_BATCH_SIZE as u64) {
-                self.write_batch(std::mem::take(&mut clear_batch))?;
-                clear_batch = WriteBatch::default();
-            }
-        }
-        if !clear_batch.is_empty() {
-            self.write_batch(clear_batch)?;
-        }
-
-        // 5) Rebuild tokens and token_holders.
-        let mut type_hashes: HashSet<Vec<u8>> = HashSet::new();
-        type_hashes.extend(existing_tokens.keys().cloned());
-        type_hashes.extend(live_aggs.keys().cloned());
-        type_hashes.extend(transfer_aggs.keys().cloned());
-        let mut type_hashes: Vec<Vec<u8>> = type_hashes.into_iter().collect();
-        type_hashes.sort_unstable();
-
-        let mut write_batch = WriteBatch::default();
-        let mut pending_writes: usize = 0;
-        for type_hash in type_hashes {
-            let live = live_aggs.remove(&type_hash);
-            let transfer = transfer_aggs.remove(&type_hash);
-
-            // Stale token: no live state and no transfer history left after rollback.
-            if live.is_none() && transfer.is_none() {
-                if existing_tokens.remove(&type_hash).is_some() {
-                    write_batch.delete_cf(self.cf_tokens(), &type_hash);
-                    pending_writes += 1;
-                    result.tokens_deleted += 1;
-                    flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
-                }
-                continue;
-            }
-
-            let mut info = existing_tokens.remove(&type_hash).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "token rebuild missing token metadata for state key: type_hash=0x{}",
-                    bytes_to_hex(&type_hash)
-                )
-            })?;
-
-            let (total_supply, holders_count, live_first_seen, holder_balances) = match live {
-                Some(live) => {
-                    let holders_count =
-                        i64::try_from(live.holder_balances.len()).map_err(|_| {
-                            anyhow::anyhow!(
-                                "token rebuild holders_count overflow: type_hash=0x{}, holders={}",
-                                bytes_to_hex(&type_hash),
-                                live.holder_balances.len()
-                            )
-                        })?;
-                    (
-                        live.total_supply,
-                        holders_count,
-                        live.first_seen_block,
-                        live.holder_balances,
-                    )
-                }
-                None => (0, 0, None, HashMap::new()),
-            };
-
-            let (transfers_count, transfer_first_seen, hourly_counts) = match transfer {
-                Some(transfer) => (
-                    transfer.transfers_count,
-                    transfer.first_seen_block,
-                    transfer.hourly_counts,
-                ),
-                None => (0, None, HashMap::new()),
-            };
-
-            let mut first_seen = None;
-            if info.first_seen_block > 0 {
-                update_first_seen(&mut first_seen, info.first_seen_block);
-            }
-            if let Some(block) = live_first_seen {
-                update_first_seen(&mut first_seen, block);
-            }
-            if let Some(block) = transfer_first_seen {
-                update_first_seen(&mut first_seen, block);
-            }
-
-            info.total_supply = Some(total_supply);
-            info.holders_count = holders_count;
-            info.transfers_count = transfers_count;
-            info.first_seen_block = first_seen.unwrap_or(0);
-
-            let token_value = bincode::serialize(&info)?;
-            write_batch.put_cf(self.cf_tokens(), &type_hash, &token_value);
-            pending_writes += 1;
-            result.tokens_written += 1;
-            flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
-
-            if transfers_count > 0 {
-                let transfer_stats_key = keys::encode_token_transfers_key(&type_hash);
-                write_batch.put_cf(
-                    self.cf_stats_token(),
-                    &transfer_stats_key,
-                    transfers_count.to_le_bytes(),
-                );
-                pending_writes += 1;
-                result.token_transfer_stats_written += 1;
-                flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
-            }
-
-            for (hour_bucket, count) in hourly_counts {
-                let hourly_key = keys::encode_token_hourly_key(&type_hash, hour_bucket);
-                write_batch.put_cf(self.cf_stats_token(), &hourly_key, count.to_le_bytes());
-                pending_writes += 1;
-                result.token_hourly_stats_written += 1;
-                flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
-            }
-
-            for (lock_hash, balance) in holder_balances {
-                if balance <= 0 {
-                    anyhow::bail!(
-                        "token rebuild found non-positive live holder balance: type_hash=0x{}, lock_hash=0x{}, balance={}",
-                        bytes_to_hex(&type_hash),
-                        bytes_to_hex(&lock_hash),
-                        balance
-                    );
-                }
-                let holder_key = keys::encode_token_holder_key(&type_hash, &lock_hash);
-                write_batch.put_cf(self.cf_token_holders(), holder_key, balance.to_le_bytes());
-                pending_writes += 1;
-                result.token_holders_written += 1;
-                flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, false)?;
-            }
-        }
-        flush_rebuild_batch(self, &mut write_batch, &mut pending_writes, true)?;
-
-        Ok(result)
     }
 }
 
@@ -1464,14 +1093,41 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup_old_nft_hourly_buckets_rejects_non_32_byte_collection_id() {
+    fn test_cleanup_old_nft_hourly_buckets_rejects_empty_collection_id() {
+        let (_dir, store) = test_store();
+        let err = store.cleanup_old_nft_hourly_buckets(&[], 100).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("cleanup_old_nft_hourly_buckets expects 1..=32 byte collection_id"));
+    }
+
+    #[test]
+    fn test_cleanup_old_nft_hourly_buckets_rejects_oversized_collection_id() {
         let (_dir, store) = test_store();
         let err = store
-            .cleanup_old_nft_hourly_buckets(&[0x16u8; 31], 100)
+            .cleanup_old_nft_hourly_buckets(&[0x16u8; 33], 100)
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("cleanup_old_nft_hourly_buckets expects 32-byte collection_id"));
+            .contains("cleanup_old_nft_hourly_buckets expects 1..=32 byte collection_id"));
+    }
+
+    #[test]
+    fn test_cleanup_old_nft_hourly_buckets_accepts_24_byte_collection_id() {
+        let (_dir, store) = test_store();
+        let collection_id = [0x16u8; 24]; // mNFT class_id: 20B issuer + 4B class index
+        let current_hour = 510_000i64;
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_nft_hourly_transfer(&collection_id, current_hour, 10);
+        batch.put_nft_hourly_transfer(&collection_id, current_hour - 100, 30);
+        batch.commit().unwrap();
+
+        let cutoff = current_hour - 48;
+        let deleted = store
+            .cleanup_old_nft_hourly_buckets(&collection_id, cutoff)
+            .unwrap();
+        assert_eq!(deleted, 1); // current_hour - 100 < cutoff
     }
 
     #[test]

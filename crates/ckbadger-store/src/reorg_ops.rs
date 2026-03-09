@@ -1939,8 +1939,7 @@ mod tests {
         AddressBalance, AssetAction, CachedBlockHeader, DaoDepositCacheEntry, DobEntry, DobExtra,
         DobStandard, HodlTrackerState, LiveCellInfo, NftCollectionActivityEntry,
         NftCollectionAggregate, NftEntry, NftExtra, NftStandard, ScriptInfo, SporeMediaProfile,
-        StorageDependencyTier, TokenDailyDelta, TokenInfo, TokenTransferRecord, TxIndexEntry,
-        UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        StorageDependencyTier, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -2112,148 +2111,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_rebuilds_addr_balance_from_live_cells() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let lock_hash = vec![0xAA; 32];
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_000_010_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let cell_block_1 = LiveCellInfo {
-            capacity: 100,
-            created_at_block: 1,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 100,
-            udt_amount: None,
-        };
-        let cell_block_2 = LiveCellInfo {
-            capacity: 300,
-            created_at_block: 2,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: vec![0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 300,
-            udt_amount: None,
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&[0x10; 32], 0, &cell_block_1);
-        batch.put_cell(&[0x20; 32], 0, &cell_block_2);
-        batch.put_addr_balance(
-            &lock_hash,
-            &AddressBalance {
-                balance: 400,
-                occupied_capacity: 400,
-                live_cells_count: 2,
-                total_cells_count: 2,
-                txs_count: 0,
-                first_seen_block: 1,
-                first_seen_tx: vec![0x10; 32],
-                last_activity_block: 2,
-                last_activity_tx: vec![0x20; 32],
-            },
-        );
-        batch.commit().unwrap();
-
-        store.rollback_to_block(1).unwrap();
-
-        let rebuilt = store.get_addr_balance(&lock_hash).unwrap().unwrap();
-        assert_eq!(rebuilt.balance, 100);
-        assert_eq!(rebuilt.occupied_capacity, 100);
-        assert_eq!(rebuilt.live_cells_count, 1);
-    }
-
-    #[test]
-    fn test_rollback_rebuilds_addr_balance_for_history_only_addresses() {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
-        let lock_hash = vec![0xAB; 32];
-
-        let header0 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header1 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_000_010_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-
-        let mut domain_batch = StoreBatch::new(&domain);
-        domain_batch.put_block_header(0, &header0);
-        domain_batch.put_block_header(1, &header1);
-        domain_batch.put_addr_balance(
-            &lock_hash,
-            &AddressBalance {
-                txs_count: 0,
-                ..Default::default()
-            },
-        );
-        domain_batch.commit().unwrap();
-
-        let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_addr_tx(&lock_hash, 0, 0, &[0x31; 32]);
-        append_batch.put_addr_tx(&lock_hash, 0, 1, &[0x32; 32]);
-        append_batch.commit().unwrap();
-
-        let mut domain_tx_batch = StoreBatch::new(&domain);
-        put_canonical_tx(&mut domain_tx_batch, 0, 0, &[0x31; 32]);
-        put_canonical_tx(&mut domain_tx_batch, 0, 1, &[0x32; 32]);
-        domain_tx_batch.commit().unwrap();
-
-        domain
-            .rollback_to_block_with_tx_index_store(0, Some(&append))
-            .unwrap();
-
-        let rebuilt = domain.get_addr_balance(&lock_hash).unwrap().unwrap();
-        assert_eq!(rebuilt.balance, 0);
-        assert_eq!(rebuilt.occupied_capacity, 0);
-        assert_eq!(rebuilt.live_cells_count, 0);
-        assert_eq!(rebuilt.txs_count, 2);
-    }
-
-    #[test]
     fn test_rollback_rebuilds_nft_collection_aggregate_with_canonical_activity_count_only() {
         let domain_dir = tempfile::tempdir().unwrap();
         let append_dir = tempfile::tempdir().unwrap();
@@ -2355,93 +2212,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_rebuilds_script_info_from_cells() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let lock_code_hash = vec![0x7A; 32];
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_000_010_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let keep_live = LiveCellInfo {
-            capacity: 100,
-            created_at_block: 1,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: lock_code_hash.clone(),
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 60,
-            udt_amount: None,
-        };
-        let rollback_live = LiveCellInfo {
-            capacity: 300,
-            created_at_block: 2,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: lock_code_hash.clone(),
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 180,
-            udt_amount: None,
-        };
-
-        let stale_script_info = ScriptInfo {
-            code_hash: lock_code_hash.clone(),
-            hash_type: 1,
-            name: Some("Rollback Script".to_string()),
-            lock_cells_count: 99,
-            lock_live_cells_count: 99,
-            lock_capacity_sum: 9_999,
-            lock_live_capacity_sum: 9_999,
-            lock_occupied_capacity_sum: 8_888,
-            lock_live_occupied_capacity_sum: 8_888,
-            ..Default::default()
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&[0x10; 32], 0, &keep_live);
-        batch.put_cell(&[0x20; 32], 0, &rollback_live);
-        batch.put_script_info(&lock_code_hash, &stale_script_info);
-        batch.commit().unwrap();
-
-        store.rollback_to_block(1).unwrap();
-
-        let rebuilt = store.get_script_info(&lock_code_hash).unwrap().unwrap();
-        assert_eq!(rebuilt.name.as_deref(), Some("Rollback Script"));
-        assert_eq!(rebuilt.hash_type, 1);
-        assert_eq!(rebuilt.lock_cells_count, 1);
-        assert_eq!(rebuilt.lock_live_cells_count, 1);
-        assert_eq!(rebuilt.lock_capacity_sum, 100);
-        assert_eq!(rebuilt.lock_live_capacity_sum, 100);
-        assert_eq!(rebuilt.lock_occupied_capacity_sum, 60);
-        assert_eq!(rebuilt.lock_live_occupied_capacity_sum, 60);
-    }
-
-    #[test]
     fn test_rollback_restores_consumed_cells_after_fork_point() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -2469,7 +2239,7 @@ mod tests {
         let cell = LiveCellInfo {
             capacity: 500,
             created_at_block: 1,
-            lock_script_hash: lock_hash,
+            lock_script_hash: lock_hash.clone(),
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![],
@@ -2485,6 +2255,15 @@ mod tests {
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
         batch.put_cell(&tx_hash, 0, &cell);
+        // Seed derived CFs so inline delta application can find them.
+        batch.put_addr_balance(&lock_hash, &AddressBalance::default());
+        batch.put_script_info(
+            &[0x11; 32],
+            &ScriptInfo {
+                code_hash: vec![0x11; 32],
+                ..Default::default()
+            },
+        );
         batch.commit().unwrap();
 
         // Simulate consumption in block 2.
@@ -2591,6 +2370,27 @@ mod tests {
                     output_index: 0,
                 }],
             }),
+        );
+        // Seed derived CFs so inline delta application can find them.
+        batch.put_addr_balance(&[0xAA; 32], &AddressBalance::default());
+        batch.put_addr_balance(
+            &[0xBB; 32],
+            &AddressBalance {
+                balance: 200,
+                occupied_capacity: 200,
+                live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &[0x11; 32],
+            &ScriptInfo {
+                code_hash: vec![0x11; 32],
+                lock_live_cells_count: 1,
+                lock_live_capacity_sum: 200,
+                lock_live_occupied_capacity_sum: 200,
+                ..Default::default()
+            },
         );
         batch.commit().unwrap();
 
@@ -2708,6 +2508,36 @@ mod tests {
                     output_index: 0,
                 }],
             }),
+        );
+        // Seed derived CFs so inline delta application can find them.
+        batch.put_addr_balance(&[0xAA; 32], &AddressBalance::default());
+        batch.put_addr_balance(
+            &[0xBB; 32],
+            &AddressBalance {
+                balance: 200,
+                occupied_capacity: 200,
+                live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_addr_balance(
+            &[0xCC; 32],
+            &AddressBalance {
+                balance: 180,
+                occupied_capacity: 180,
+                live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &[0x11; 32],
+            &ScriptInfo {
+                code_hash: vec![0x11; 32],
+                lock_live_cells_count: 2,
+                lock_live_capacity_sum: 380,
+                lock_live_occupied_capacity_sum: 380,
+                ..Default::default()
+            },
         );
         batch.commit().unwrap();
 
@@ -2907,6 +2737,26 @@ mod tests {
                 }],
             }),
         );
+        // Seed derived CFs so inline delta application can find them.
+        batch.put_addr_balance(
+            &[0xAA; 32],
+            &AddressBalance {
+                balance: 100,
+                occupied_capacity: 100,
+                live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_script_info(
+            &[0x11; 32],
+            &ScriptInfo {
+                code_hash: vec![0x11; 32],
+                lock_live_cells_count: 1,
+                lock_live_capacity_sum: 100,
+                lock_live_occupied_capacity_sum: 100,
+                ..Default::default()
+            },
+        );
         batch.commit().unwrap();
 
         store.rollback_to_block(1).unwrap();
@@ -2992,6 +2842,36 @@ mod tests {
         batch.put_cell(&keep_tx, 0, &keep_cell);
         batch.put_cell(&drop_live_tx, 0, &drop_live_cell);
         batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell);
+        // Seed derived CFs so inline delta application can find them.
+        batch.put_addr_balance(
+            &[0xAA; 32],
+            &AddressBalance {
+                balance: 100,
+                occupied_capacity: 100,
+                live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_addr_balance(
+            &[0xBB; 32],
+            &AddressBalance {
+                balance: 200,
+                occupied_capacity: 200,
+                live_cells_count: 1,
+                ..Default::default()
+            },
+        );
+        batch.put_addr_balance(&[0xCC; 32], &AddressBalance::default());
+        batch.put_script_info(
+            &[0x11; 32],
+            &ScriptInfo {
+                code_hash: vec![0x11; 32],
+                lock_live_cells_count: 2,
+                lock_live_capacity_sum: 300,
+                lock_live_occupied_capacity_sum: 300,
+                ..Default::default()
+            },
+        );
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(&store);
@@ -3300,370 +3180,6 @@ mod tests {
             .to_string()
             .contains("missing rollback target block header while updating sync status tip"));
         assert!(err.to_string().contains("rollback_to=1"));
-    }
-
-    #[test]
-    fn test_rollback_rebuilds_token_state_from_transfers() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_003_600_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-
-        let type_hash = vec![0xCD; 32];
-        let lock_a = vec![0xAA; 32];
-        let lock_b = vec![0xBB; 32];
-
-        let stale_token_info = TokenInfo {
-            type_code_hash: vec![0x11; 32],
-            hash_type: 1,
-            type_args: vec![0x22; 32],
-            standard: "sudt".to_string(),
-            name: Some("Test Token".to_string()),
-            symbol: Some("TT".to_string()),
-            decimals: Some(8),
-            total_supply: Some(100),
-            max_supply: Some(1_000),
-            holders_count: 2, // stale (contains block2 state)
-            first_seen_block: 1,
-            icon_url: None,
-            description: None,
-            transfers_count: 2, // stale (contains block2 state)
-        };
-
-        let transfer_block_1 = TokenTransferRecord {
-            tx_hash: vec![0x10; 32],
-            block_number: 1,
-            from_lock_hash: None,
-            to_lock_hash: lock_a.clone(),
-            amount: 100,
-            is_mint: true,
-            is_burn: false,
-            timestamp: header1.timestamp,
-        };
-        let transfer_block_2 = TokenTransferRecord {
-            tx_hash: vec![0x20; 32],
-            block_number: 2,
-            from_lock_hash: Some(lock_a.clone()),
-            to_lock_hash: lock_b.clone(),
-            amount: 60,
-            is_mint: false,
-            is_burn: false,
-            timestamp: header2.timestamp,
-        };
-        let live_cell_block_1 = LiveCellInfo {
-            capacity: 1000,
-            created_at_block: 1,
-            lock_script_hash: lock_a.clone(),
-            lock_code_hash: vec![0x33; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
-            type_args: Some(vec![0x22; 32]),
-            data_size: 16,
-            occupied_capacity: 1000,
-            udt_amount: Some(100),
-        };
-        let live_cell_block_2 = LiveCellInfo {
-            capacity: 1000,
-            created_at_block: 2,
-            lock_script_hash: lock_b.clone(),
-            lock_code_hash: vec![0x33; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
-            type_args: Some(vec![0x22; 32]),
-            data_size: 16,
-            occupied_capacity: 1000,
-            udt_amount: Some(60),
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&[0x31; 32], 0, &live_cell_block_1);
-        batch.put_cell(&[0x32; 32], 0, &live_cell_block_2);
-        batch.put_token(&type_hash, &stale_token_info);
-        batch.put_token_holder(&type_hash, &lock_a, 40);
-        batch.put_token_holder(&type_hash, &lock_b, 60);
-        batch.put_token_transfers_count(&type_hash, 2);
-        batch.put_token_hourly_transfer(&type_hash, header1.timestamp / 3_600_000, 1);
-        batch.put_token_hourly_transfer(&type_hash, header2.timestamp / 3_600_000, 1);
-        batch.put_token_transfer(&type_hash, 1, 0, &transfer_block_1);
-        batch.put_token_transfer(&type_hash, 2, 0, &transfer_block_2);
-        batch.commit().unwrap();
-
-        store.rollback_to_block(1).unwrap();
-
-        // Transfer history should be truncated to block 1.
-        let transfers = store.list_token_transfers(&type_hash, 10, None).unwrap();
-        assert_eq!(transfers.len(), 1);
-        assert_eq!(transfers[0].0, 1);
-
-        // Holder balances should match only block 1 mint.
-        assert_eq!(
-            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
-            Some(100)
-        );
-        assert_eq!(
-            store.get_token_holder_balance(&type_hash, &lock_b).unwrap(),
-            None
-        );
-
-        // Token aggregates should be rebuilt from the truncated transfer history.
-        let rebuilt_token = store.get_token(&type_hash).unwrap().unwrap();
-        assert_eq!(rebuilt_token.total_supply, Some(100));
-        assert_eq!(rebuilt_token.holders_count, 1);
-        assert_eq!(rebuilt_token.transfers_count, 1);
-        assert_eq!(rebuilt_token.first_seen_block, 1);
-        assert_eq!(rebuilt_token.name.as_deref(), Some("Test Token"));
-        assert_eq!(rebuilt_token.max_supply, Some(1_000));
-
-        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 1);
-        assert_eq!(
-            store
-                .get_token_24h_transfers(&type_hash, header2.timestamp)
-                .unwrap(),
-            1
-        );
-    }
-
-    #[test]
-    fn test_rollback_keeps_token_daily_deltas_unchanged() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let day1_ts = 1_704_067_200_000i64; // 2024-01-01T00:00:00Z
-        let day2_ts = 1_704_153_600_000i64; // 2024-01-02T00:00:00Z
-        let day1 = keys::timestamp_ms_to_date(day1_ts);
-        let day2 = keys::timestamp_ms_to_date(day2_ts);
-        let type_hash = vec![0x44; 32];
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: day1_ts,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: day2_ts,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-
-        let keep_cell = LiveCellInfo {
-            capacity: 1_000,
-            created_at_block: 1,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x33; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
-            type_args: Some(vec![0x22; 32]),
-            data_size: 16,
-            occupied_capacity: 600,
-            udt_amount: Some(1),
-        };
-        let rollback_cell = LiveCellInfo {
-            capacity: 400,
-            created_at_block: 2,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: vec![0x33; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
-            type_args: Some(vec![0x22; 32]),
-            data_size: 16,
-            occupied_capacity: 300,
-            udt_amount: Some(1),
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&[0x10; 32], 0, &keep_cell);
-        batch.put_cell(&[0x20; 32], 0, &rollback_cell);
-        batch.put_token(
-            &type_hash,
-            &TokenInfo {
-                type_code_hash: vec![0x11; 32],
-                hash_type: 1,
-                type_args: vec![0x22; 32],
-                standard: "sudt".to_string(),
-                name: None,
-                symbol: None,
-                decimals: None,
-                total_supply: Some(0),
-                max_supply: None,
-                holders_count: 0,
-                first_seen_block: 1,
-                icon_url: None,
-                description: None,
-                transfers_count: 0,
-            },
-        );
-        batch.commit().unwrap();
-
-        store
-            .put_token_daily_delta(
-                &type_hash,
-                day1,
-                &TokenDailyDelta {
-                    live_capacity_delta: 100,
-                    live_occupied_capacity_delta: 200,
-                },
-            )
-            .unwrap();
-        store
-            .put_token_daily_delta(
-                &type_hash,
-                day2,
-                &TokenDailyDelta {
-                    live_capacity_delta: 50,
-                    live_occupied_capacity_delta: 50,
-                },
-            )
-            .unwrap();
-        assert!(store
-            .find_first_invalid_token_daily_delta()
-            .unwrap()
-            .is_some());
-
-        store.rollback_to_block(1).unwrap();
-
-        let deltas = store.list_token_daily_deltas(&type_hash).unwrap();
-        assert_eq!(deltas.len(), 1);
-        assert_eq!(deltas[0].0, day1);
-        assert_eq!(deltas[0].1.live_capacity_delta, 100);
-        assert_eq!(deltas[0].1.live_occupied_capacity_delta, 200);
-        assert!(store
-            .get_token_daily_delta(&type_hash, day2)
-            .unwrap()
-            .is_none());
-        assert!(store
-            .find_first_invalid_token_daily_delta()
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn test_rollback_deletes_token_without_remaining_transfers() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            timestamp: 1_700_003_600_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-        };
-
-        let type_hash = vec![0xEF; 32];
-        let lock_a = vec![0xAA; 32];
-
-        let token_info = TokenInfo {
-            type_code_hash: vec![0x11; 32],
-            hash_type: 1,
-            type_args: vec![0x22; 32],
-            standard: "sudt".to_string(),
-            name: None,
-            symbol: None,
-            decimals: None,
-            total_supply: Some(50),
-            max_supply: None,
-            holders_count: 1,
-            first_seen_block: 2,
-            icon_url: None,
-            description: None,
-            transfers_count: 1,
-        };
-        let transfer_block_2 = TokenTransferRecord {
-            tx_hash: vec![0x20; 32],
-            block_number: 2,
-            from_lock_hash: None,
-            to_lock_hash: lock_a.clone(),
-            amount: 50,
-            is_mint: true,
-            is_burn: false,
-            timestamp: header2.timestamp,
-        };
-        let live_cell_block_2 = LiveCellInfo {
-            capacity: 1000,
-            created_at_block: 2,
-            lock_script_hash: lock_a.clone(),
-            lock_code_hash: vec![0x33; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
-            type_args: Some(vec![0x22; 32]),
-            data_size: 16,
-            occupied_capacity: 1000,
-            udt_amount: Some(50),
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.put_cell(&[0x33; 32], 0, &live_cell_block_2);
-        batch.put_token(&type_hash, &token_info);
-        batch.put_token_holder(&type_hash, &lock_a, 50);
-        batch.put_token_transfers_count(&type_hash, 1);
-        batch.put_token_hourly_transfer(&type_hash, header2.timestamp / 3_600_000, 1);
-        batch.put_token_transfer(&type_hash, 2, 0, &transfer_block_2);
-        batch.commit().unwrap();
-
-        store.rollback_to_block(1).unwrap();
-
-        assert!(store.get_token(&type_hash).unwrap().is_none());
-        assert_eq!(
-            store.get_token_holder_balance(&type_hash, &lock_a).unwrap(),
-            None
-        );
-        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 0);
-        assert!(store
-            .list_token_transfers(&type_hash, 10, None)
-            .unwrap()
-            .is_empty());
     }
 
     #[test]
