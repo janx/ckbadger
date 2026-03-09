@@ -2,8 +2,8 @@ use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::build_block_time_distribution_response;
 use crate::utils::{
-    accumulate_live_capacity, resolve_dob_collection_name, resolve_nft_collection_name,
-    resolve_nft_collection_storage_tier_override,
+    accumulate_live_capacity, resolve_collection_standard, resolve_dob_collection_name,
+    resolve_nft_collection_name, resolve_nft_collection_storage_tier_override,
 };
 use crate::AppState;
 use ckbadger_store::AddressBalance;
@@ -533,7 +533,8 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .get(collection_id_bytes.as_slice())
             .copied()
             .unwrap_or(0);
-        let standard = agg.standard.asset_standard().to_string();
+        let raw_standard = agg.standard.asset_standard().to_string();
+        let standard = resolve_collection_standard(collection_id_bytes, &raw_standard);
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
         let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
             .unwrap_or("unknown")

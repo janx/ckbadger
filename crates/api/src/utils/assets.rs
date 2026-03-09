@@ -174,6 +174,22 @@ pub fn resolve_dob_collection_name(
     }
 }
 
+const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+
+/// Resolve the display-level standard for a collection, overriding for
+/// sentinel identity collections whose `ObjectCollectionAggregate.standard`
+/// cannot represent dotbit/did:ckb (those live in `IdentityStandard`).
+pub fn resolve_collection_standard(collection_id: &[u8], agg_standard: &str) -> String {
+    if collection_id == DOTBIT_SENTINEL_COLLECTION {
+        return "dotbit".to_string();
+    }
+    if collection_id == DID_CKB_SENTINEL_COLLECTION {
+        return "did_ckb".to_string();
+    }
+    agg_standard.to_string()
+}
+
 /// Resolve an NFT collection display name.
 ///
 /// Priority:
