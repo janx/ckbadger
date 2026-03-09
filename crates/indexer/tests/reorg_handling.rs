@@ -98,6 +98,40 @@ fn insert_full_block(store: &CkbadgerStore, block_num: i64, lock_hash: &[u8]) {
     batch.commit().unwrap();
 }
 
+/// Write the derived CF records (addr_balance + script_info) that forward sync
+/// would have produced. Rollback's inline delta code reads these CFs, so they
+/// must exist before `rollback_to_block_with_tx_index_store` is called.
+fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i64) {
+    let lock_code_hash = vec![0xAA; 32]; // matches make_cell
+    let cap_per_cell: i128 = 10_000_000_000; // matches make_cell
+
+    let mut batch = StoreBatch::new(store);
+
+    let addr_bal = AddressBalance {
+        balance: block_count as i128 * cap_per_cell,
+        occupied_capacity: 0, // make_cell sets occupied_capacity = 0
+        live_cells_count: block_count as i32,
+        total_cells_count: block_count,
+        txs_count: block_count,
+        first_seen_block: 1,
+        first_seen_tx: vec![0u8; 32],
+        last_activity_block: block_count,
+        last_activity_tx: vec![0u8; 32],
+    };
+    batch.put_addr_balance(lock_hash, &addr_bal);
+
+    let lock_si = ScriptInfo {
+        code_hash: lock_code_hash.clone(),
+        hash_type: 1,
+        lock_live_cells_count: block_count,
+        lock_live_capacity_sum: block_count as i128 * cap_per_cell,
+        ..Default::default()
+    };
+    batch.put_script_info(&lock_code_hash, &lock_si);
+
+    batch.commit().unwrap();
+}
+
 #[test]
 fn test_rollback_removes_blocks() {
     let (store, append_store) = setup_split_stores();
@@ -116,6 +150,9 @@ fn test_rollback_removes_blocks() {
             i
         );
     }
+
+    // Populate derived CFs so inline delta code finds the records it needs.
+    populate_derived_cfs(&store, &lock_hash, 10);
 
     // Rollback to block 5: blocks 6-10 should be removed
     let result: RollbackResult = store
@@ -156,6 +193,9 @@ fn test_rollback_removes_transactions() {
     let txs = store.list_block_txs(6).unwrap();
     assert_eq!(txs.len(), 2, "block 6 should have 2 txs before rollback");
 
+    // Populate derived CFs so inline delta code finds the records it needs.
+    populate_derived_cfs(&store, &lock_hash, 6);
+
     // Rollback to block 3
     let result = store
         .rollback_to_block_with_tx_index_store(3, Some(append_store.as_ref()))
@@ -187,6 +227,9 @@ fn test_rollback_removes_cells_and_indexes() {
     let cells_before = store.list_cells_by_lock(&lock_hash, 100, None).unwrap();
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
+    // Populate derived CFs so inline delta code finds the records it needs.
+    populate_derived_cfs(&store, &lock_hash, 4);
+
     // Rollback to block 2: blocks 3-4 removed
     let result = store
         .rollback_to_block_with_tx_index_store(2, Some(append_store.as_ref()))
@@ -212,6 +255,9 @@ fn test_rollback_result_counts() {
     for i in 1..=8 {
         insert_full_block(&store, i, &lock_hash);
     }
+
+    // Populate derived CFs so inline delta code finds the records it needs.
+    populate_derived_cfs(&store, &lock_hash, 8);
 
     // Rollback to block 5: remove blocks 6, 7, 8
     let result = store
