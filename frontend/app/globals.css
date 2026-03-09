@@ -3,13 +3,20 @@
 @tailwind utilities;
 
 :root {
-  --foreground: #ededed;
-  --background: #0a0d12;
-  --terminal-green: #00ff41;
-  --terminal-dim: #00cc33;
-  --amber: #ffb000;
+  --foreground: #fffaf3;
+  --background: #0d0f18;
+  --color-surface: #12151e;
+  --color-elevated: #181c27;
+  --color-border: #1f2430;
+  --color-emphasis: #8ce00a;
+  --color-emphasis-dim: #6ba808;
+  --color-interactive: #00d7eb;
+  --color-interactive-hover: #67ffef;
+  /* Legacy color vars — still referenced by un-migrated components */
+  --terminal-green: #8ce00a;
+  --terminal-dim: #6ba808;
+  --amber: #ffb900;
   --amber-dim: #cc8c00;
-  --font-sans: 'Inter', 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: var(--font-mono);
 }
@@ -34,15 +41,13 @@ body {
   }
 
   .terminal-text {
-    color: var(--terminal-green);
-    text-shadow:
-      0 0 5px var(--terminal-green),
-      0 0 10px rgba(0, 255, 65, 0.5);
+    color: #8ce00a;
+    text-shadow: 0 0 4px #8ce00a40;
   }
 
   .terminal-text-dim {
-    color: var(--terminal-dim);
-    text-shadow: 0 0 3px rgba(0, 204, 51, 0.5);
+    color: #6ba808;
+    text-shadow: 0 0 3px #6ba80830;
   }
 
   .crt-screen {
@@ -80,7 +85,7 @@ body {
     left: 0;
     width: 100%;
     height: 4px;
-    background: linear-gradient(to bottom, transparent, rgba(0, 255, 65, 0.03), transparent);
+    background: linear-gradient(to bottom, transparent, rgba(140, 224, 10, 0.015), transparent);
     animation: scan-line 8s linear infinite;
     pointer-events: none;
     z-index: 9999;
@@ -149,8 +154,10 @@ body {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--terminal-green);
-    box-shadow: 0 0 6px var(--terminal-green);
+    background: #8ce00a;
+    box-shadow:
+      0 0 4px #8ce00a80,
+      0 0 8px #8ce00a40;
     animation: glow-pulse 1.5s ease-in-out infinite;
   }
 
@@ -164,12 +171,12 @@ body {
   }
 
   .logo-image {
-    filter: drop-shadow(0 0 12px rgba(0, 255, 65, 0.4));
+    filter: drop-shadow(0 0 12px rgba(140, 224, 10, 0.4));
     transform-origin: top left;
   }
 
   .logo-image:hover {
-    filter: drop-shadow(0 0 20px rgba(0, 255, 65, 0.6));
+    filter: drop-shadow(0 0 20px rgba(140, 224, 10, 0.6));
   }
 
   .neon-flicker {
@@ -357,10 +364,12 @@ body {
 
 @layer components {
   .terminal-card {
-    @apply border-terminal-dark bg-terminal-bg relative overflow-hidden rounded-lg border;
+    @apply relative overflow-hidden rounded-lg border;
+    border-color: #1f2430;
+    background: #12151e;
     box-shadow:
-      inset 0 0 30px rgba(0, 255, 65, 0.05),
-      0 0 10px rgba(0, 255, 65, 0.1);
+      inset 0 0 30px rgba(140, 224, 10, 0.03),
+      0 0 10px rgba(140, 224, 10, 0.06);
   }
 
   .terminal-card::before {
@@ -379,8 +388,9 @@ body {
   }
 
   .terminal-card-header {
-    @apply border-terminal-dark relative z-10 border-b px-4 py-3;
-    background: linear-gradient(to bottom, rgba(0, 255, 65, 0.05), transparent);
+    @apply relative z-10 border-b px-4 py-3;
+    border-color: #1f2430;
+    background: linear-gradient(to bottom, rgba(140, 224, 10, 0.03), transparent);
   }
 
   .terminal-card-content {
@@ -399,9 +409,9 @@ body {
     padding: 1px;
     background: linear-gradient(
       135deg,
-      rgba(0, 255, 65, 0.3),
+      rgba(140, 224, 10, 0.3),
       transparent 50%,
-      rgba(0, 255, 65, 0.1)
+      rgba(140, 224, 10, 0.1)
     );
     mask:
       linear-gradient(#fff 0 0) content-box,
