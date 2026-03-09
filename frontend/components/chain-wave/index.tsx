@@ -85,7 +85,7 @@ function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): stri
   const alpha = 0.4 + feeScore * 0.4;
   if (stage === 'mempool') return `rgba(255, 176, 0, ${alpha})`;
   if (stage === 'proposed') return `rgba(0, 204, 51, ${alpha})`;
-  return `rgba(0, 255, 65, ${alpha})`;
+  return `rgba(140, 224, 10, ${alpha})`;
 }
 
 function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
@@ -188,7 +188,7 @@ function TxMetricScatter({
     >
       <div className="pointer-events-none absolute inset-0 grid grid-cols-4 grid-rows-4">
         {Array.from({ length: 16 }, (_, idx) => (
-          <div key={idx} className="border-base-border/30 border" />
+          <div key={idx} className="border-base-border/60 border" />
         ))}
       </div>
 

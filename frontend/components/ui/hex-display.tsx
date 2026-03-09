@@ -26,7 +26,7 @@ const HexChar = memo(function HexChar({
     green: {
       base: 'text-emphasis-dim',
       hover: 'text-emphasis',
-      glow: '0 0 4px rgba(0, 255, 65, 0.6)',
+      glow: '0 0 4px rgba(140, 224, 10, 0.6)',
     },
     amber: {
       base: 'text-warning-dim',
@@ -41,7 +41,7 @@ const HexChar = memo(function HexChar({
     accent: {
       base: 'text-emphasis',
       hover: 'text-emphasis',
-      glow: '0 0 4px rgba(0, 255, 65, 0.6)',
+      glow: '0 0 4px rgba(140, 224, 10, 0.6)',
     },
   };
 

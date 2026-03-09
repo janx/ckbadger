@@ -319,7 +319,7 @@ function lensColor(
   const alpha = 0.35 + feeScore * 0.5;
   if (stage === 'mempool') return `rgba(255, 176, 0, ${alpha})`;
   if (stage === 'proposed') return `rgba(0, 204, 51, ${alpha})`;
-  return `rgba(0, 255, 65, ${alpha})`;
+  return `rgba(140, 224, 10, ${alpha})`;
 }
 
 function mempoolTxToLensItem(tx: {
