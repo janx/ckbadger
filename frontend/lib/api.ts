@@ -1411,11 +1411,8 @@ export const api = {
     return fetchApi(`/activities/latest?limit=${limit}`);
   },
 
-  getDailyActivityStats: async (days: number = 30): Promise<DailyActivityStats[]> => {
-    const res = await fetch(`${API_BASE}/stats/daily-activities?days=${days}`);
-    if (!res.ok) throw new Error('Failed to fetch daily activity stats');
-    const json = await res.json();
-    return json.data;
+  getDailyActivityStats: (days: number = 30): Promise<DailyActivityStats[]> => {
+    return fetchApi(`/stats/daily-activities?days=${days}`);
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {
