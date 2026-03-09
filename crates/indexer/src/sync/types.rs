@@ -19,6 +19,8 @@ pub(crate) enum UndoSeqScope {
     AppendAddrTx = 0x0002,
     AppendActivity = 0x0003,
     AppendObjectCollectionActivity = 0x0004,
+    #[allow(dead_code)] // Used in upcoming identity collection activity writer
+    AppendIdentityCollectionActivity = 0x0005,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────
