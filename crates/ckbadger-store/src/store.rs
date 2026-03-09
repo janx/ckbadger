@@ -285,15 +285,16 @@ pub const CF_DAO_BY_STATUS_BLOCK: &str = "dao_by_status_block";
 pub const CF_TOKENS: &str = "tokens";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
 pub const CF_SPORE_DATA: &str = "spore_data";
-pub const CF_NFT_DATA: &str = "nft_data";
-pub const CF_NFT_BY_COLLECTION: &str = "nft_by_collection";
+pub const CF_OBJECT_DATA: &str = "object_data";
+pub const CF_OBJECT_BY_COLLECTION: &str = "object_by_collection";
+pub const CF_IDENTITY_DATA: &str = "identity_data";
 pub const CF_STATS_CHAIN: &str = "stats_chain";
 pub const CF_STATS_DAO: &str = "stats_dao";
 pub const CF_STATS_HODL: &str = "stats_hodl";
 pub const CF_STATS_SCRIPT: &str = "stats_script";
 pub const CF_STATS_TOKEN: &str = "stats_token";
 pub const CF_STATS_SPORE: &str = "stats_spore";
-pub const CF_STATS_NFT: &str = "stats_nft";
+pub const CF_STATS_OBJECT: &str = "stats_object";
 pub const CF_SCRIPT_INFO: &str = "script_info";
 pub const CF_SYNC_META: &str = "sync_meta";
 pub const CF_SPORE_BY_CLUSTER: &str = "spore_by_cluster";
@@ -302,8 +303,8 @@ pub const CF_CELL_BY_TYPE_CODE: &str = "cell_by_type_code";
 pub const CF_TOKEN_TRANSFERS: &str = "token_transfers";
 pub const CF_ACTIVITIES: &str = "activities";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
-pub const CF_NFT_COLLECTION_AGG: &str = "nft_collection_agg";
-pub const CF_NFT_COLLECTION_ACTIVITIES: &str = "nft_collection_activities";
+pub const CF_OBJECT_COLLECTION_AGG: &str = "object_collection_agg";
+pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreClass {
@@ -346,23 +347,24 @@ pub const ALL_CFS: &[&str] = &[
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
     CF_SPORE_DATA,
-    CF_NFT_DATA,
-    CF_NFT_BY_COLLECTION,
+    CF_OBJECT_DATA,
+    CF_OBJECT_BY_COLLECTION,
+    CF_IDENTITY_DATA,
     CF_STATS_CHAIN,
     CF_STATS_DAO,
     CF_STATS_HODL,
     CF_STATS_SCRIPT,
     CF_STATS_TOKEN,
     CF_STATS_SPORE,
-    CF_STATS_NFT,
+    CF_STATS_OBJECT,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
     CF_ACTIVITIES,
     CF_CLUSTER_AGG,
-    CF_NFT_COLLECTION_AGG,
-    CF_NFT_COLLECTION_ACTIVITIES,
+    CF_OBJECT_COLLECTION_AGG,
+    CF_OBJECT_COLLECTION_ACTIVITIES,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -388,25 +390,26 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
     CF_SPORE_DATA,
-    CF_NFT_DATA,
-    CF_NFT_BY_COLLECTION,
+    CF_OBJECT_DATA,
+    CF_OBJECT_BY_COLLECTION,
+    CF_IDENTITY_DATA,
     CF_STATS_CHAIN,
     CF_STATS_DAO,
     CF_STATS_HODL,
     CF_STATS_SCRIPT,
     CF_STATS_TOKEN,
     CF_STATS_SPORE,
-    CF_STATS_NFT,
+    CF_STATS_OBJECT,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
     CF_TOKEN_TRANSFERS,
     CF_CLUSTER_AGG,
-    CF_NFT_COLLECTION_AGG,
+    CF_OBJECT_COLLECTION_AGG,
 ];
 
 /// Column families intended for append-only history/archive store.
-pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_ACTIVITIES, CF_NFT_COLLECTION_ACTIVITIES];
+pub const APPEND_CFS: &[&str] = &[CF_ADDR_TXS, CF_ACTIVITIES, CF_OBJECT_COLLECTION_ACTIVITIES];
 
 fn append_path_from_domain(domain_path: &Path) -> PathBuf {
     if domain_path.file_name().and_then(|name| name.to_str()) == Some("domain") {
@@ -524,8 +527,8 @@ impl CkbadgerStore {
         if std::ptr::eq(cf, self.cf_activities()) {
             return Ok(CF_ACTIVITIES);
         }
-        if std::ptr::eq(cf, self.cf_nft_collection_activities()) {
-            return Ok(CF_NFT_COLLECTION_ACTIVITIES);
+        if std::ptr::eq(cf, self.cf_object_collection_activities()) {
+            return Ok(CF_OBJECT_COLLECTION_ACTIVITIES);
         }
         anyhow::bail!(
             "unknown append-only column family handle in {:?} store",
@@ -881,7 +884,8 @@ impl CkbadgerStore {
         CF_STATS_SCRIPT,
         CF_STATS_TOKEN,
         CF_STATS_SPORE,
-        CF_STATS_NFT,
+        CF_STATS_OBJECT,
+        CF_IDENTITY_DATA,
     ];
 
     /// Historical append-heavy CFs.
@@ -889,7 +893,7 @@ impl CkbadgerStore {
     /// These indexes are primarily append writes during sync and large range scans on reads.
     /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
     const HISTORICAL_APPEND_CFS: &'static [&'static str] =
-        &[CF_ACTIVITIES, CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
+        &[CF_ACTIVITIES, CF_ADDR_TXS, CF_OBJECT_COLLECTION_ACTIVITIES];
 
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
@@ -1100,11 +1104,14 @@ impl CkbadgerStore {
     pub fn cf_spore_data(&self) -> &ColumnFamily {
         self.cf(CF_SPORE_DATA)
     }
-    pub fn cf_nft_data(&self) -> &ColumnFamily {
-        self.cf(CF_NFT_DATA)
+    pub fn cf_object_data(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_DATA)
     }
-    pub fn cf_nft_by_collection(&self) -> &ColumnFamily {
-        self.cf(CF_NFT_BY_COLLECTION)
+    pub fn cf_object_by_collection(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_BY_COLLECTION)
+    }
+    pub fn cf_identity_data(&self) -> &ColumnFamily {
+        self.cf(CF_IDENTITY_DATA)
     }
     pub fn cf_stats_chain(&self) -> &ColumnFamily {
         self.cf(CF_STATS_CHAIN)
@@ -1124,8 +1131,8 @@ impl CkbadgerStore {
     pub fn cf_stats_spore(&self) -> &ColumnFamily {
         self.cf(CF_STATS_SPORE)
     }
-    pub fn cf_stats_nft(&self) -> &ColumnFamily {
-        self.cf(CF_STATS_NFT)
+    pub fn cf_stats_object(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_OBJECT)
     }
     pub fn cf_script_info(&self) -> &ColumnFamily {
         self.cf(CF_SCRIPT_INFO)
@@ -1151,11 +1158,11 @@ impl CkbadgerStore {
     pub fn cf_cluster_agg(&self) -> &ColumnFamily {
         self.cf(CF_CLUSTER_AGG)
     }
-    pub fn cf_nft_collection_agg(&self) -> &ColumnFamily {
-        self.cf(CF_NFT_COLLECTION_AGG)
+    pub fn cf_object_collection_agg(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_COLLECTION_AGG)
     }
-    pub fn cf_nft_collection_activities(&self) -> &ColumnFamily {
-        self.cf(CF_NFT_COLLECTION_ACTIVITIES)
+    pub fn cf_object_collection_activities(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_COLLECTION_ACTIVITIES)
     }
 
     // ---- Raw DB operations ----
@@ -1325,7 +1332,7 @@ impl CkbadgerStore {
             | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
             | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
             | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-            | keys::STATS_PREFIX_NFT_COLLECTION_OWNER => Ok(self.cf_stats_nft()),
+            | keys::STATS_PREFIX_NFT_COLLECTION_OWNER => Ok(self.cf_stats_object()),
             _ => anyhow::bail!("unsupported stats prefix: 0x{:02x}", prefix),
         }
     }
@@ -2082,7 +2089,7 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(store
-            .get_cf(store.cf_stats_nft(), &cases[7].0)
+            .get_cf(store.cf_stats_object(), &cases[7].0)
             .unwrap()
             .is_some());
     }
@@ -2339,7 +2346,7 @@ mod tests {
 
     #[test]
     fn test_historical_append_cfs_expected_members() {
-        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS, CF_NFT_COLLECTION_ACTIVITIES];
+        let expected = &[CF_ACTIVITIES, CF_ADDR_TXS, CF_OBJECT_COLLECTION_ACTIVITIES];
         for cf in expected {
             assert!(
                 CkbadgerStore::is_historical_append_cf(cf),

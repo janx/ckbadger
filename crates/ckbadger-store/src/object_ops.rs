@@ -1,13 +1,13 @@
-//! Generic NFT operations (cross-standard infrastructure).
+//! Generic Object operations (cross-standard infrastructure).
 
 use crate::keys;
 use crate::store::CkbadgerStore;
 use crate::types::{
-    AssetAction, NftCollectionActivityEntry, NftCollectionAggregate, NftDailyDelta, NftEntry,
-    NftTypeIndex,
+    AssetAction, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta,
+    ObjectEntry, ObjectTypeIndex,
 };
 
-pub(crate) type NftBatchEntry = (Vec<u8>, Option<NftEntry>);
+pub(crate) type ObjectBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -20,36 +20,38 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 impl CkbadgerStore {
-    pub fn get_nft(&self, id: &[u8]) -> anyhow::Result<Option<NftEntry>> {
-        match self.get_cf(self.cf_nft_data(), id)? {
+    pub fn get_object(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
+        match self.get_cf(self.cf_object_data(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
-    /// Batch-fetch multiple NFT entries by ID in a single RocksDB multi_get.
-    pub fn get_nfts_batch(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<NftBatchEntry>> {
+    /// Batch-fetch multiple object entries by ID in a single RocksDB multi_get.
+    pub fn get_objects_batch(&self, ids: &[Vec<u8>]) -> anyhow::Result<Vec<ObjectBatchEntry>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let cf = self.cf_nft_data();
+        let cf = self.cf_object_data();
         let cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> =
             ids.iter().map(|id| (cf, id.as_slice())).collect();
         let values = self.multi_get_cf(cf_keys);
         let mut result = Vec::with_capacity(ids.len());
         for (id, value_result) in ids.iter().zip(values) {
             let entry = match value_result {
-                Ok(Some(value)) => Some(bincode::deserialize::<NftEntry>(&value).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize nft entry in get_nfts_batch: nft_id=0x{}, error={}",
-                        bytes_to_hex(id),
-                        e
-                    )
-                })?),
+                Ok(Some(value)) => {
+                    Some(bincode::deserialize::<ObjectEntry>(&value).map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize object entry in get_objects_batch: object_id=0x{}, error={}",
+                            bytes_to_hex(id),
+                            e
+                        )
+                    })?)
+                }
                 Ok(None) => None,
                 Err(e) => {
                     return Err(anyhow::anyhow!(
-                        "rocksdb multi_get failed in get_nfts_batch: nft_id=0x{}, error={}",
+                        "rocksdb multi_get failed in get_objects_batch: object_id=0x{}, error={}",
                         bytes_to_hex(id),
                         e
                     ));
@@ -60,17 +62,18 @@ impl CkbadgerStore {
         Ok(result)
     }
 
-    /// List all NFTs.
-    pub fn list_nfts(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, NftEntry)>> {
-        let iter = self.iterator_cf(self.cf_nft_data(), rocksdb::IteratorMode::Start);
+    /// List all objects.
+    pub fn list_objects(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, ObjectEntry)>> {
+        let iter = self.iterator_cf(self.cf_object_data(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
         for item in iter {
-            let (key, value) = item
-                .map_err(|e| anyhow::anyhow!("failed to iterate nft_data in list_nfts: {}", e))?;
-            let entry: NftEntry = bincode::deserialize(&value).map_err(|e| {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate object_data in list_objects: {}", e)
+            })?;
+            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to deserialize nft entry in list_nfts: nft_id=0x{}, error={}",
+                    "failed to deserialize object entry in list_objects: object_id=0x{}, error={}",
                     bytes_to_hex(&key),
                     e
                 )
@@ -83,34 +86,37 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// Get pre-aggregated data for an NFT collection.
-    pub fn get_nft_collection_aggregate(
+    /// Get pre-aggregated data for an object collection.
+    pub fn get_object_collection_aggregate(
         &self,
         collection_id: &[u8],
-    ) -> anyhow::Result<Option<NftCollectionAggregate>> {
-        match self.get_cf(self.cf_nft_collection_agg(), collection_id)? {
+    ) -> anyhow::Result<Option<ObjectCollectionAggregate>> {
+        match self.get_cf(self.cf_object_collection_agg(), collection_id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
-    /// List all NFT collection aggregates. Scans the small `nft_collection_agg` CF.
-    pub fn list_nft_collection_aggregates(
+    /// List all object collection aggregates. Scans the small `object_collection_agg` CF.
+    pub fn list_object_collection_aggregates(
         &self,
-    ) -> anyhow::Result<Vec<(Vec<u8>, NftCollectionAggregate)>> {
-        let iter = self.iterator_cf(self.cf_nft_collection_agg(), rocksdb::IteratorMode::Start);
+    ) -> anyhow::Result<Vec<(Vec<u8>, ObjectCollectionAggregate)>> {
+        let iter = self.iterator_cf(
+            self.cf_object_collection_agg(),
+            rocksdb::IteratorMode::Start,
+        );
         let mut results = Vec::new();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft_collection_agg in list_nft_collection_aggregates: {}",
+                    "failed to iterate object_collection_agg in list_object_collection_aggregates: {}",
                     e
                 )
             })?;
-            let agg: NftCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
+            let agg: ObjectCollectionAggregate = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to deserialize nft collection aggregate in list_nft_collection_aggregates: collection_id=0x{}, error={}",
+                    "failed to deserialize object collection aggregate in list_object_collection_aggregates: collection_id=0x{}, error={}",
                     bytes_to_hex(&key),
                     e
                 )
@@ -120,27 +126,27 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// Get the live NFT count for a specific owner in a collection.
-    pub fn get_nft_collection_owner_count(
+    /// Get the live object count for a specific owner in a collection.
+    pub fn get_object_collection_owner_count(
         &self,
         collection_id: &[u8],
         lock_hash: &[u8],
     ) -> anyhow::Result<i64> {
         if collection_id.is_empty() || collection_id.len() > 32 {
             anyhow::bail!(
-                "invalid collection_id length in get_nft_collection_owner_count: expected 1..=32, got {}",
+                "invalid collection_id length in get_object_collection_owner_count: expected 1..=32, got {}",
                 collection_id.len()
             );
         }
         if lock_hash.len() != 32 {
             anyhow::bail!(
-                "invalid lock_hash length in get_nft_collection_owner_count: expected 32, got {}",
+                "invalid lock_hash length in get_object_collection_owner_count: expected 32, got {}",
                 lock_hash.len()
             );
         }
 
         let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
-        match self.get_cf(self.cf_stats_nft(), &key)? {
+        match self.get_cf(self.cf_stats_object(), &key)? {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
             }
@@ -148,26 +154,26 @@ impl CkbadgerStore {
         }
     }
 
-    /// List all owners and live NFT counts for a collection.
-    pub fn list_nft_collection_owner_counts(
+    /// List all owners and live object counts for a collection.
+    pub fn list_object_collection_owner_counts(
         &self,
         collection_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
         if collection_id.is_empty() || collection_id.len() > 32 {
             anyhow::bail!(
-                "invalid collection_id length in list_nft_collection_owner_counts: expected 1..=32, got {}",
+                "invalid collection_id length in list_object_collection_owner_counts: expected 1..=32, got {}",
                 collection_id.len()
             );
         }
 
         let prefix = keys::encode_nft_collection_owner_prefix(collection_id);
-        let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
         let mut results = Vec::new();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_nft in list_nft_collection_owner_counts: {}",
+                    "failed to iterate stats_object in list_object_collection_owner_counts: {}",
                     e
                 )
             })?;
@@ -176,14 +182,14 @@ impl CkbadgerStore {
             }
             if key.len() != keys::NFT_COLLECTION_OWNER_KEY_SIZE {
                 anyhow::bail!(
-                    "invalid nft collection owner key length: expected {}, got {}",
+                    "invalid object collection owner key length: expected {}, got {}",
                     keys::NFT_COLLECTION_OWNER_KEY_SIZE,
                     key.len()
                 );
             }
             if value.len() != 8 {
                 anyhow::bail!(
-                    "invalid nft collection owner value length: expected 8, got {}",
+                    "invalid object collection owner value length: expected 8, got {}",
                     value.len()
                 );
             }
@@ -198,68 +204,68 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    pub fn get_nft_type_index(
+    pub fn get_object_type_index(
         &self,
         type_script_hash: &[u8],
-    ) -> anyhow::Result<Option<NftTypeIndex>> {
+    ) -> anyhow::Result<Option<ObjectTypeIndex>> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        match self.get_cf(self.cf_stats_nft(), &key)? {
+        match self.get_cf(self.cf_stats_object(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
-    pub fn put_nft_type_index_direct(
+    pub fn put_object_type_index_direct(
         &self,
         type_script_hash: &[u8],
-        index: &NftTypeIndex,
+        index: &ObjectTypeIndex,
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_type_index_key(type_script_hash);
         let value = bincode::serialize(index)?;
-        self.put_cf(self.cf_stats_nft(), &key, &value)
+        self.put_cf(self.cf_stats_object(), &key, &value)
     }
 
-    pub fn get_nft_daily_delta(
+    pub fn get_object_daily_delta(
         &self,
         collection_id: &[u8],
         date_yyyymmdd: u32,
-    ) -> anyhow::Result<Option<NftDailyDelta>> {
+    ) -> anyhow::Result<Option<ObjectDailyDelta>> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        match self.get_cf(self.cf_stats_nft(), &key)? {
+        match self.get_cf(self.cf_stats_object(), &key)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
         }
     }
 
-    pub fn put_nft_daily_delta(
+    pub fn put_object_daily_delta(
         &self,
         collection_id: &[u8],
         date_yyyymmdd: u32,
-        delta: &NftDailyDelta,
+        delta: &ObjectDailyDelta,
     ) -> anyhow::Result<()> {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
         let value = bincode::serialize(delta)?;
-        self.put_cf(self.cf_stats_nft(), &key, &value)
+        self.put_cf(self.cf_stats_object(), &key, &value)
     }
 
-    pub fn list_nft_daily_deltas(
+    pub fn list_object_daily_deltas(
         &self,
         collection_id: &[u8],
-    ) -> anyhow::Result<Vec<(u32, NftDailyDelta)>> {
-        self.list_nft_daily_deltas_in_range(collection_id, None, None)
+    ) -> anyhow::Result<Vec<(u32, ObjectDailyDelta)>> {
+        self.list_object_daily_deltas_in_range(collection_id, None, None)
     }
 
-    pub fn list_nft_daily_deltas_in_range(
+    pub fn list_object_daily_deltas_in_range(
         &self,
         collection_id: &[u8],
         from_date_yyyymmdd: Option<u32>,
         to_date_yyyymmdd: Option<u32>,
-    ) -> anyhow::Result<Vec<(u32, NftDailyDelta)>> {
+    ) -> anyhow::Result<Vec<(u32, ObjectDailyDelta)>> {
         let prefix = keys::encode_nft_daily_prefix(collection_id);
         let start_key =
             keys::encode_nft_daily_key(collection_id, from_date_yyyymmdd.unwrap_or(u32::MIN));
         let iter = self.iterator_cf(
-            self.cf_stats_nft(),
+            self.cf_stats_object(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -267,7 +273,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_nft in list_nft_daily_deltas_in_range: {}",
+                    "failed to iterate stats_object in list_object_daily_deltas_in_range: {}",
                     e
                 )
             })?;
@@ -283,9 +289,9 @@ impl CkbadgerStore {
                     break;
                 }
             }
-            let delta: NftDailyDelta = bincode::deserialize(&value).map_err(|e| {
+            let delta: ObjectDailyDelta = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to deserialize nft daily delta in list_nft_daily_deltas_in_range: collection_id=0x{}, date={}, error={}",
+                    "failed to deserialize object daily delta in list_object_daily_deltas_in_range: collection_id=0x{}, date={}, error={}",
                     bytes_to_hex(collection_id),
                     date,
                     e
@@ -297,12 +303,12 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// List NFT IDs in a collection via the `nft_by_collection` secondary index.
+    /// List object IDs in a collection via the `object_by_collection` secondary index.
     ///
-    /// Pagination is keyset-based by `nft_id` lexicographic order.
+    /// Pagination is keyset-based by `object_id` lexicographic order.
     /// - `cursor = None` starts from the beginning.
     /// - `cursor = Some(id)` starts AFTER that id.
-    pub fn list_nft_ids_by_collection(
+    pub fn list_object_ids_by_collection(
         &self,
         collection_id: &[u8],
         cursor: Option<&[u8]>,
@@ -313,11 +319,11 @@ impl CkbadgerStore {
         }
 
         let prefix = keys::encode_nft_by_collection_prefix(collection_id);
-        let start_nft_id = cursor.unwrap_or(&[]);
-        let start_key = keys::encode_nft_by_collection_key(collection_id, start_nft_id);
+        let start_object_id = cursor.unwrap_or(&[]);
+        let start_key = keys::encode_nft_by_collection_key(collection_id, start_object_id);
 
         let iter = self.iterator_cf(
-            self.cf_nft_by_collection(),
+            self.cf_object_by_collection(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         let mut results = Vec::new();
@@ -325,7 +331,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft_by_collection in list_nft_ids_by_collection: {}",
+                    "failed to iterate object_by_collection in list_object_ids_by_collection: {}",
                     e
                 )
             })?;
@@ -337,14 +343,14 @@ impl CkbadgerStore {
                 continue;
             }
 
-            let Some((_, nft_id)) = keys::decode_nft_by_collection_key(&key) else {
-                anyhow::bail!("invalid nft_by_collection key length: {}", key.len());
+            let Some((_, object_id)) = keys::decode_nft_by_collection_key(&key) else {
+                anyhow::bail!("invalid object_by_collection key length: {}", key.len());
             };
-            if nft_id.is_empty() {
-                anyhow::bail!("invalid empty nft_id in nft_by_collection key");
+            if object_id.is_empty() {
+                anyhow::bail!("invalid empty object_id in object_by_collection key");
             }
 
-            results.push(nft_id);
+            results.push(object_id);
             if results.len() >= limit {
                 break;
             }
@@ -353,17 +359,17 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    /// List pre-computed activities for an NFT collection, newest first.
+    /// List pre-computed activities for an object collection, newest first.
     ///
     /// Returns `(block_number, tx_index, entry)` tuples. Simple prefix scan
-    /// on `CF_NFT_COLLECTION_ACTIVITIES` with early termination at `limit`.
-    pub fn list_nft_collection_activities(
+    /// on `CF_OBJECT_COLLECTION_ACTIVITIES` with early termination at `limit`.
+    pub fn list_object_collection_activities(
         &self,
         collection_id: &[u8],
         limit: usize,
         cursor: Option<(i64, i32)>,
         action_filter: Option<&str>,
-    ) -> anyhow::Result<Vec<(i64, i32, NftCollectionActivityEntry)>> {
+    ) -> anyhow::Result<Vec<(i64, i32, ObjectCollectionActivityEntry)>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -382,7 +388,7 @@ impl CkbadgerStore {
         };
 
         let iter = self.iterator_cf(
-            self.cf_nft_collection_activities(),
+            self.cf_object_collection_activities(),
             rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
 
@@ -400,7 +406,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft_collection_activities in list_nft_collection_activities: {}",
+                    "failed to iterate object_collection_activities in list_object_collection_activities: {}",
                     e
                 )
             })?;
@@ -413,10 +419,10 @@ impl CkbadgerStore {
 
             let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
                 keys::decode_nft_collection_activity_key(&key);
-            let entry: NftCollectionActivityEntry = bincode::deserialize(&value)?;
+            let entry: ObjectCollectionActivityEntry = bincode::deserialize(&value)?;
             if entry.tx_hash != tx_hash_from_key {
                 anyhow::bail!(
-                    "nft_collection_activities key/value tx_hash mismatch in list_nft_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+                    "object_collection_activities key/value tx_hash mismatch in list_object_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
                     bytes_to_hex(&prefix),
                     block_num,
                     tx_idx,
@@ -426,7 +432,7 @@ impl CkbadgerStore {
             }
             if entry.block_hash != block_hash_from_key {
                 anyhow::bail!(
-                    "nft_collection_activities key/value block_hash mismatch in list_nft_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_block_hash=0x{}, value_block_hash=0x{}",
+                    "object_collection_activities key/value block_hash mismatch in list_object_collection_activities: collection_id=0x{}, block_num={}, tx_idx={}, key_block_hash=0x{}, value_block_hash=0x{}",
                     bytes_to_hex(&prefix),
                     block_num,
                     tx_idx,
@@ -456,10 +462,10 @@ impl CkbadgerStore {
     }
 
     /// Count total activities for a collection (prefix scan, no deserialization).
-    pub fn count_nft_collection_activities(&self, collection_id: &[u8]) -> anyhow::Result<i64> {
+    pub fn count_object_collection_activities(&self, collection_id: &[u8]) -> anyhow::Result<i64> {
         let prefix = keys::encode_nft_collection_activity_prefix(collection_id);
         let iter = self.iterator_cf(
-            self.cf_nft_collection_activities(),
+            self.cf_object_collection_activities(),
             rocksdb::IteratorMode::From(&prefix, rocksdb::Direction::Forward),
         );
 
@@ -467,7 +473,7 @@ impl CkbadgerStore {
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate nft_collection_activities in count_nft_collection_activities: {}",
+                    "failed to iterate object_collection_activities in count_object_collection_activities: {}",
                     e
                 )
             })?;
@@ -484,7 +490,7 @@ impl CkbadgerStore {
 mod tests {
     use super::*;
     use crate::batch::StoreBatch;
-    use crate::types::{NftDailyDelta, NftStandard, NftTypeIndex};
+    use crate::types::{ObjectDailyDelta, ObjectStandard, ObjectTypeIndex};
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -500,19 +506,22 @@ mod tests {
     }
 
     #[test]
-    fn test_get_nft_collection_aggregate_missing() {
+    fn test_get_object_collection_aggregate_missing() {
         let (_dir, store) = test_store();
         let id = [0x01u8; 32];
-        assert!(store.get_nft_collection_aggregate(&id).unwrap().is_none());
+        assert!(store
+            .get_object_collection_aggregate(&id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
-    fn test_put_and_get_nft_collection_aggregate() {
+    fn test_put_and_get_object_collection_aggregate() {
         let (_dir, store) = test_store();
         let id = [0x01u8; 32];
-        let agg = NftCollectionAggregate {
+        let agg = ObjectCollectionAggregate {
             name: Some("Test mNFT Class".to_string()),
-            standard: NftStandard::MnftClass,
+            standard: ObjectStandard::MnftClass,
             total_count: 50,
             live_count: 42,
             holders_count: 11,
@@ -520,12 +529,12 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_aggregate(&id, &agg);
+        batch.put_object_collection_aggregate(&id, &agg);
         batch.commit().unwrap();
 
-        let result = store.get_nft_collection_aggregate(&id).unwrap().unwrap();
+        let result = store.get_object_collection_aggregate(&id).unwrap().unwrap();
         assert_eq!(result.name.as_deref(), Some("Test mNFT Class"));
-        assert_eq!(result.standard, NftStandard::MnftClass);
+        assert_eq!(result.standard, ObjectStandard::MnftClass);
         assert_eq!(result.total_count, 50);
         assert_eq!(result.live_count, 42);
         assert_eq!(result.holders_count, 11);
@@ -533,28 +542,28 @@ mod tests {
     }
 
     #[test]
-    fn test_list_nft_collection_aggregates() {
+    fn test_list_object_collection_aggregates() {
         let (_dir, store) = test_store();
         let id_a = [0x01u8; 32];
         let id_b = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_aggregate(
+        batch.put_object_collection_aggregate(
             &id_a,
-            &NftCollectionAggregate {
+            &ObjectCollectionAggregate {
                 name: Some("Class A".to_string()),
-                standard: NftStandard::MnftClass,
+                standard: ObjectStandard::MnftClass,
                 total_count: 10,
                 live_count: 8,
                 holders_count: 3,
                 activities_count: 15,
             },
         );
-        batch.put_nft_collection_aggregate(
+        batch.put_object_collection_aggregate(
             &id_b,
-            &NftCollectionAggregate {
-                name: Some("DotBit".to_string()),
-                standard: NftStandard::DotBit,
+            &ObjectCollectionAggregate {
+                name: Some("Spore Cluster".to_string()),
+                standard: ObjectStandard::SporeCluster,
                 total_count: 100,
                 live_count: 90,
                 holders_count: 50,
@@ -563,15 +572,15 @@ mod tests {
         );
         batch.commit().unwrap();
 
-        let results = store.list_nft_collection_aggregates().unwrap();
+        let results = store.list_object_collection_aggregates().unwrap();
         assert_eq!(results.len(), 2);
     }
 
     #[test]
-    fn test_nft_collection_aggregate_default() {
-        let agg = NftCollectionAggregate::default();
+    fn test_object_collection_aggregate_default() {
+        let agg = ObjectCollectionAggregate::default();
         assert!(agg.name.is_none());
-        assert_eq!(agg.standard, NftStandard::MnftClass);
+        assert_eq!(agg.standard, ObjectStandard::Spore);
         assert_eq!(agg.total_count, 0);
         assert_eq!(agg.live_count, 0);
         assert_eq!(agg.holders_count, 0);
@@ -579,28 +588,28 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_collection_owner_count_roundtrip() {
+    fn test_object_collection_owner_count_roundtrip() {
         let (_dir, store) = test_store();
         let collection_id = [0x31u8; 32];
         let owner_a = [0x41u8; 32];
         let owner_b = [0x42u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_owner_count(&collection_id, &owner_a, 2);
-        batch.put_nft_collection_owner_count(&collection_id, &owner_b, 1);
+        batch.put_object_collection_owner_count(&collection_id, &owner_a, 2);
+        batch.put_object_collection_owner_count(&collection_id, &owner_b, 1);
         batch.commit().unwrap();
 
         let count_a = store
-            .get_nft_collection_owner_count(&collection_id, &owner_a)
+            .get_object_collection_owner_count(&collection_id, &owner_a)
             .unwrap();
         let count_b = store
-            .get_nft_collection_owner_count(&collection_id, &owner_b)
+            .get_object_collection_owner_count(&collection_id, &owner_b)
             .unwrap();
         assert_eq!(count_a, 2);
         assert_eq!(count_b, 1);
 
         let mut rows = store
-            .list_nft_collection_owner_counts(&collection_id)
+            .list_object_collection_owner_counts(&collection_id)
             .unwrap();
         rows.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(rows.len(), 2);
@@ -609,49 +618,55 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_collection_owner_count_length_validation() {
+    fn test_object_collection_owner_count_length_validation() {
         let (_dir, store) = test_store();
         let err = store
-            .get_nft_collection_owner_count(&[0x11; 33], &[0x22; 32])
+            .get_object_collection_owner_count(&[0x11; 33], &[0x22; 32])
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("invalid collection_id length in get_nft_collection_owner_count"));
+            .contains("invalid collection_id length in get_object_collection_owner_count"));
 
-        let err = store.list_nft_collection_owner_counts(&[]).unwrap_err();
+        let err = store.list_object_collection_owner_counts(&[]).unwrap_err();
         assert!(err
             .to_string()
-            .contains("invalid collection_id length in list_nft_collection_owner_counts"));
+            .contains("invalid collection_id length in list_object_collection_owner_counts"));
     }
 
     #[test]
-    fn test_list_nfts_fails_on_invalid_payload() {
+    fn test_list_objects_fails_on_invalid_payload() {
         let (_dir, store) = test_store();
         store
-            .put_cf(store.cf_nft_data(), &[0x11; 32], b"invalid-nft-payload")
+            .put_cf(
+                store.cf_object_data(),
+                &[0x11; 32],
+                b"invalid-object-payload",
+            )
             .unwrap();
 
-        let err = store.list_nfts(10).unwrap_err();
+        let err = store.list_objects(10).unwrap_err();
         assert!(err
             .to_string()
-            .contains("failed to deserialize nft entry in list_nfts"));
+            .contains("failed to deserialize object entry in list_objects"));
     }
 
     #[test]
-    fn test_get_nfts_batch_reads_multiple_entries() {
+    fn test_get_objects_batch_reads_multiple_entries() {
         let (_dir, store) = test_store();
-        let nft_a = [0x11u8; 32];
-        let nft_b = [0x22u8; 32];
+        let object_a = [0x11u8; 32];
+        let object_b = [0x22u8; 32];
 
-        let make_entry = |owner: &[u8]| NftEntry {
-            standard: NftStandard::MnftToken,
+        let make_entry = |owner: &[u8]| ObjectEntry {
+            standard: ObjectStandard::MnftToken,
             collection_id: Some(vec![0x01; 32]),
             token_id: None,
             owner_lock_hash: Some(owner.to_vec()),
             name: None,
+            description: None,
             is_live: true,
             created_at_block: 1,
-            extra: crate::types::NftExtra::MnftToken {
+            created_at_tx: vec![],
+            extra: crate::types::ObjectExtra::MnftToken {
                 token_index: 0,
                 characteristic: vec![],
                 configure: 0,
@@ -660,16 +675,16 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft(&nft_a, &make_entry(&[0xA1; 32]));
-        batch.put_nft(&nft_b, &make_entry(&[0xA2; 32]));
+        batch.put_object(&object_a, &make_entry(&[0xA1; 32]));
+        batch.put_object(&object_b, &make_entry(&[0xA2; 32]));
         batch.commit().unwrap();
 
         let fetched = store
-            .get_nfts_batch(&[nft_a.to_vec(), nft_b.to_vec(), vec![0x33; 32]])
+            .get_objects_batch(&[object_a.to_vec(), object_b.to_vec(), vec![0x33; 32]])
             .unwrap();
         assert_eq!(fetched.len(), 3);
-        assert_eq!(fetched[0].0, nft_a.to_vec());
-        assert_eq!(fetched[1].0, nft_b.to_vec());
+        assert_eq!(fetched[0].0, object_a.to_vec());
+        assert_eq!(fetched[1].0, object_b.to_vec());
         assert_eq!(
             fetched[0]
                 .1
@@ -694,136 +709,140 @@ mod tests {
     }
 
     #[test]
-    fn test_get_nfts_batch_fails_on_invalid_payload() {
+    fn test_get_objects_batch_fails_on_invalid_payload() {
         let (_dir, store) = test_store();
-        let nft_id = [0x44u8; 32];
-        store
-            .put_cf(store.cf_nft_data(), &nft_id, b"invalid-nft-payload")
-            .unwrap();
-
-        let err = store.get_nfts_batch(&[nft_id.to_vec()]).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize nft entry in get_nfts_batch"));
-    }
-
-    #[test]
-    fn test_list_nft_collection_aggregates_fails_on_invalid_payload() {
-        let (_dir, store) = test_store();
+        let object_id = [0x44u8; 32];
         store
             .put_cf(
-                store.cf_nft_collection_agg(),
-                &[0x22; 32],
-                b"invalid-nft-collection-agg",
+                store.cf_object_data(),
+                &object_id,
+                b"invalid-object-payload",
             )
             .unwrap();
 
-        let err = store.list_nft_collection_aggregates().unwrap_err();
+        let err = store.get_objects_batch(&[object_id.to_vec()]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to deserialize object entry in get_objects_batch"));
+    }
+
+    #[test]
+    fn test_list_object_collection_aggregates_fails_on_invalid_payload() {
+        let (_dir, store) = test_store();
+        store
+            .put_cf(
+                store.cf_object_collection_agg(),
+                &[0x22; 32],
+                b"invalid-object-collection-agg",
+            )
+            .unwrap();
+
+        let err = store.list_object_collection_aggregates().unwrap_err();
         assert!(err.to_string().contains(
-            "failed to deserialize nft collection aggregate in list_nft_collection_aggregates"
+            "failed to deserialize object collection aggregate in list_object_collection_aggregates"
         ));
     }
 
     #[test]
-    fn test_nft_type_index_and_nft_daily_delta_roundtrip() {
+    fn test_object_type_index_and_object_daily_delta_roundtrip() {
         let (_dir, store) = test_store();
         let type_script_hash = [0x66u8; 32];
         let collection_id = [0x77u8; 24];
 
         store
-            .put_nft_type_index_direct(
+            .put_object_type_index_direct(
                 &type_script_hash,
-                &NftTypeIndex {
+                &ObjectTypeIndex {
                     collection_id: collection_id.to_vec(),
                 },
             )
             .unwrap();
         let loaded_index = store
-            .get_nft_type_index(&type_script_hash)
+            .get_object_type_index(&type_script_hash)
             .unwrap()
             .unwrap();
         assert_eq!(loaded_index.collection_id, collection_id.to_vec());
 
         store
-            .put_nft_daily_delta(
+            .put_object_daily_delta(
                 &collection_id,
                 20260219,
-                &NftDailyDelta {
+                &ObjectDailyDelta {
                     live_capacity_delta: 500,
                     live_occupied_capacity_delta: 320,
                 },
             )
             .unwrap();
         let loaded_daily = store
-            .get_nft_daily_delta(&collection_id, 20260219)
+            .get_object_daily_delta(&collection_id, 20260219)
             .unwrap()
             .unwrap();
         assert_eq!(loaded_daily.live_capacity_delta, 500);
         assert_eq!(loaded_daily.live_occupied_capacity_delta, 320);
 
-        let list = store.list_nft_daily_deltas(&collection_id).unwrap();
+        let list = store.list_object_daily_deltas(&collection_id).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, 20260219);
 
         let ranged = store
-            .list_nft_daily_deltas_in_range(&collection_id, Some(20260219), Some(20260219))
+            .list_object_daily_deltas_in_range(&collection_id, Some(20260219), Some(20260219))
             .unwrap();
         assert_eq!(ranged.len(), 1);
         assert_eq!(ranged[0].0, 20260219);
     }
 
     #[test]
-    fn test_list_nft_daily_deltas_fails_on_invalid_payload() {
+    fn test_list_object_daily_deltas_fails_on_invalid_payload() {
         let (_dir, store) = test_store();
         let collection_id = [0x77u8; 24];
         let key = keys::encode_nft_daily_key(&collection_id, 20260219);
         store
-            .put_cf(store.cf_stats_nft(), &key, b"invalid-nft-daily")
+            .put_cf(store.cf_stats_object(), &key, b"invalid-object-daily")
             .unwrap();
 
-        let err = store.list_nft_daily_deltas(&collection_id).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize nft daily delta in list_nft_daily_deltas_in_range"));
+        let err = store.list_object_daily_deltas(&collection_id).unwrap_err();
+        assert!(err.to_string().contains(
+            "failed to deserialize object daily delta in list_object_daily_deltas_in_range"
+        ));
     }
 
     #[test]
-    fn test_list_nft_ids_by_collection_pagination() {
+    fn test_list_object_ids_by_collection_pagination() {
         let (_dir, store) = test_store();
         let collection_id = [0x88u8; 24];
-        let nft_a = [0x01u8; 20];
-        let nft_b = [0x02u8; 20];
-        let nft_c = [0x03u8; 20];
+        let object_a = [0x01u8; 20];
+        let object_b = [0x02u8; 20];
+        let object_c = [0x03u8; 20];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_by_collection(&collection_id, &nft_b);
-        batch.put_nft_by_collection(&collection_id, &nft_c);
-        batch.put_nft_by_collection(&collection_id, &nft_a);
+        batch.put_object_by_collection(&collection_id, &object_b);
+        batch.put_object_by_collection(&collection_id, &object_c);
+        batch.put_object_by_collection(&collection_id, &object_a);
         batch.commit().unwrap();
 
         let first = store
-            .list_nft_ids_by_collection(&collection_id, None, 2)
+            .list_object_ids_by_collection(&collection_id, None, 2)
             .unwrap();
         assert_eq!(first.len(), 2);
-        assert_eq!(first[0], nft_a.to_vec());
-        assert_eq!(first[1], nft_b.to_vec());
+        assert_eq!(first[0], object_a.to_vec());
+        assert_eq!(first[1], object_b.to_vec());
 
         let second = store
-            .list_nft_ids_by_collection(&collection_id, Some(&first[1]), 2)
+            .list_object_ids_by_collection(&collection_id, Some(&first[1]), 2)
             .unwrap();
-        assert_eq!(second, vec![nft_c.to_vec()]);
+        assert_eq!(second, vec![object_c.to_vec()]);
     }
 
-    // ---- NFT collection activities ----
+    // ---- Object collection activities ----
 
-    use crate::types::{AssetAction, NftCollectionActivityEntry};
+    use crate::types::{AssetAction, ObjectCollectionActivityEntry};
 
     fn make_activity(
         tx_hash: &[u8],
         ts_ms: i64,
         actions: Vec<AssetAction>,
-    ) -> NftCollectionActivityEntry {
-        NftCollectionActivityEntry {
+    ) -> ObjectCollectionActivityEntry {
+        ObjectCollectionActivityEntry {
             tx_hash: tx_hash.to_vec(),
             block_hash: vec![0x71; 32],
             timestamp_ms: ts_ms,
@@ -832,17 +851,17 @@ mod tests {
     }
 
     #[test]
-    fn test_list_nft_collection_activities_empty() {
+    fn test_list_object_collection_activities_empty() {
         let (_dir, store) = test_append_only_store();
         let cid = [0x01u8; 32];
         let results = store
-            .list_nft_collection_activities(&cid, 10, None, None)
+            .list_object_collection_activities(&cid, 10, None, None)
             .unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
-    fn test_list_nft_collection_activities_basic_pagination() {
+    fn test_list_object_collection_activities_basic_pagination() {
         let (_dir, store) = test_append_only_store();
         let cid = [0x01u8; 32];
 
@@ -850,7 +869,7 @@ mod tests {
         // Insert 5 activities at different blocks (newest first due to descending key)
         for block in 100..105 {
             let tx_hash = [block as u8; 32];
-            batch.put_nft_collection_activity(
+            batch.put_object_collection_activity(
                 &cid,
                 block,
                 0,
@@ -861,7 +880,7 @@ mod tests {
 
         // Request limit=3
         let page1 = store
-            .list_nft_collection_activities(&cid, 3, None, None)
+            .list_object_collection_activities(&cid, 3, None, None)
             .unwrap();
         assert_eq!(page1.len(), 3);
         // Should be newest first: 104, 103, 102
@@ -872,7 +891,7 @@ mod tests {
         // Page 2 using cursor
         let cursor = (page1[2].0, page1[2].1);
         let page2 = store
-            .list_nft_collection_activities(&cid, 3, Some(cursor), None)
+            .list_object_collection_activities(&cid, 3, Some(cursor), None)
             .unwrap();
         assert_eq!(page2.len(), 2);
         assert_eq!(page2[0].0, 101);
@@ -880,24 +899,24 @@ mod tests {
     }
 
     #[test]
-    fn test_list_nft_collection_activities_action_filter() {
+    fn test_list_object_collection_activities_action_filter() {
         let (_dir, store) = test_append_only_store();
         let cid = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             100,
             0,
             &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
         );
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             200,
             0,
             &make_activity(&[2u8; 32], 200000, vec![AssetAction::Transfer]),
         );
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             300,
             0,
@@ -906,31 +925,31 @@ mod tests {
         batch.commit().unwrap();
 
         let mints = store
-            .list_nft_collection_activities(&cid, 10, None, Some("mint"))
+            .list_object_collection_activities(&cid, 10, None, Some("mint"))
             .unwrap();
         assert_eq!(mints.len(), 1);
         assert_eq!(mints[0].0, 100);
 
         let transfers = store
-            .list_nft_collection_activities(&cid, 10, None, Some("transfer"))
+            .list_object_collection_activities(&cid, 10, None, Some("transfer"))
             .unwrap();
         assert_eq!(transfers.len(), 1);
         assert_eq!(transfers[0].0, 200);
 
         let burns = store
-            .list_nft_collection_activities(&cid, 10, None, Some("burn"))
+            .list_object_collection_activities(&cid, 10, None, Some("burn"))
             .unwrap();
         assert_eq!(burns.len(), 1);
         assert_eq!(burns[0].0, 300);
     }
 
     #[test]
-    fn test_list_nft_collection_activities_multi_action_per_tx() {
+    fn test_list_object_collection_activities_multi_action_per_tx() {
         let (_dir, store) = test_append_only_store();
         let cid = [0x03u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             500,
             0,
@@ -944,42 +963,42 @@ mod tests {
 
         // Should match both mint and burn filters
         let mints = store
-            .list_nft_collection_activities(&cid, 10, None, Some("mint"))
+            .list_object_collection_activities(&cid, 10, None, Some("mint"))
             .unwrap();
         assert_eq!(mints.len(), 1);
 
         let burns = store
-            .list_nft_collection_activities(&cid, 10, None, Some("burn"))
+            .list_object_collection_activities(&cid, 10, None, Some("burn"))
             .unwrap();
         assert_eq!(burns.len(), 1);
 
         // Transfer filter should not match
         let transfers = store
-            .list_nft_collection_activities(&cid, 10, None, Some("transfer"))
+            .list_object_collection_activities(&cid, 10, None, Some("transfer"))
             .unwrap();
         assert!(transfers.is_empty());
     }
 
     #[test]
-    fn test_list_nft_collection_activities_keeps_two_rows_same_position_different_tx_hash() {
+    fn test_list_object_collection_activities_keeps_two_rows_same_position_different_tx_hash() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let cid = [0x04u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             100,
             1,
             &make_activity(&[0x10; 32], 100_000, vec![AssetAction::Mint]),
         );
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             100,
             1,
             &make_activity(&[0x20; 32], 100_001, vec![AssetAction::Transfer]),
         );
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid,
             99,
             0,
@@ -988,7 +1007,7 @@ mod tests {
         batch.commit().unwrap();
 
         let rows = store
-            .list_nft_collection_activities(&cid, 10, None, None)
+            .list_object_collection_activities(&cid, 10, None, None)
             .unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].0, 100);
@@ -1002,7 +1021,7 @@ mod tests {
         assert_eq!(rows[2].2.tx_hash, vec![0x30; 32]);
 
         let next = store
-            .list_nft_collection_activities(&cid, 10, Some((100, 1)), None)
+            .list_object_collection_activities(&cid, 10, Some((100, 1)), None)
             .unwrap();
         assert_eq!(next.len(), 1);
         assert_eq!(next[0].0, 99);
@@ -1011,19 +1030,19 @@ mod tests {
     }
 
     #[test]
-    fn test_list_nft_collection_activities_isolation_between_collections() {
+    fn test_list_object_collection_activities_isolation_between_collections() {
         let (_dir, store) = test_append_only_store();
         let cid_a = [0x0Au8; 32];
         let cid_b = [0x0Bu8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid_a,
             100,
             0,
             &make_activity(&[1u8; 32], 100000, vec![AssetAction::Mint]),
         );
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &cid_b,
             200,
             0,
@@ -1032,27 +1051,27 @@ mod tests {
         batch.commit().unwrap();
 
         let results_a = store
-            .list_nft_collection_activities(&cid_a, 10, None, None)
+            .list_object_collection_activities(&cid_a, 10, None, None)
             .unwrap();
         assert_eq!(results_a.len(), 1);
         assert_eq!(results_a[0].0, 100);
 
         let results_b = store
-            .list_nft_collection_activities(&cid_b, 10, None, None)
+            .list_object_collection_activities(&cid_b, 10, None, None)
             .unwrap();
         assert_eq!(results_b.len(), 1);
         assert_eq!(results_b[0].0, 200);
     }
 
     #[test]
-    fn test_count_nft_collection_activities() {
+    fn test_count_object_collection_activities() {
         let (_dir, store) = test_append_only_store();
         let cid = [0x0Cu8; 32];
         let cid_empty = [0x0Du8; 32];
 
         let mut batch = StoreBatch::new(&store);
         for block in 100..105 {
-            batch.put_nft_collection_activity(
+            batch.put_object_collection_activity(
                 &cid,
                 block,
                 0,
@@ -1061,9 +1080,11 @@ mod tests {
         }
         batch.commit().unwrap();
 
-        assert_eq!(store.count_nft_collection_activities(&cid).unwrap(), 5);
+        assert_eq!(store.count_object_collection_activities(&cid).unwrap(), 5);
         assert_eq!(
-            store.count_nft_collection_activities(&cid_empty).unwrap(),
+            store
+                .count_object_collection_activities(&cid_empty)
+                .unwrap(),
             0
         );
     }

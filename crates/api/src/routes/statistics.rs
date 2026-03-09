@@ -994,7 +994,7 @@ async fn get_most_utilized_assets_chart(
         })?;
         let deltas = state
             .store
-            .list_nft_daily_deltas(&collection_bytes)
+            .list_object_daily_deltas(&collection_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         let (total_cells_capacity, occupied_capacity) =
             accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
@@ -3131,7 +3131,8 @@ pub struct DailyActivityStatsResponse {
     pub dao_withdraw_request_count: u32,
     pub dao_withdraw_complete_count: u32,
     pub token_count: u32,
-    pub nft_count: u32,
+    pub object_count: u32,
+    pub identity_count: u32,
     pub coinbase_count: u32,
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
@@ -3228,7 +3229,8 @@ async fn get_daily_activity_stats(
                 dao_withdraw_request_count: s.dao_withdraw_request_count,
                 dao_withdraw_complete_count: s.dao_withdraw_complete_count,
                 token_count: s.token_count,
-                nft_count: s.nft_count,
+                object_count: s.object_count,
+                identity_count: s.identity_count,
                 coinbase_count: s.coinbase_count,
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),

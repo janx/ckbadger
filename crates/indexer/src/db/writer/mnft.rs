@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    NftCollectionAggregate, NftEntry, NftExtra, NftStandard, NftTypeIndex,
+    ObjectCollectionAggregate, ObjectEntry, ObjectExtra, ObjectStandard, ObjectTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -14,23 +14,23 @@ use super::BatchWriter;
 
 #[derive(Default)]
 pub(crate) struct MnftBatchState {
-    tokens: HashMap<Vec<u8>, Option<NftEntry>>,
-    collection_aggs: HashMap<Vec<u8>, Option<NftCollectionAggregate>>,
+    tokens: HashMap<Vec<u8>, Option<ObjectEntry>>,
+    collection_aggs: HashMap<Vec<u8>, Option<ObjectCollectionAggregate>>,
     collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
 }
 
 impl MnftBatchState {
-    fn get_token(&mut self, store: &CkbadgerStore, token_id: &[u8]) -> Result<Option<NftEntry>> {
+    fn get_token(&mut self, store: &CkbadgerStore, token_id: &[u8]) -> Result<Option<ObjectEntry>> {
         if let Some(cached) = self.tokens.get(token_id) {
             return Ok(cached.clone());
         }
-        let loaded = store.get_nft(token_id)?;
+        let loaded = store.get_object(token_id)?;
         self.tokens.insert(token_id.to_vec(), loaded.clone());
         Ok(loaded)
     }
 
-    fn put_token(&mut self, token_id: &[u8], entry: NftEntry) {
+    fn put_token(&mut self, token_id: &[u8], entry: ObjectEntry) {
         self.tokens.insert(token_id.to_vec(), Some(entry));
     }
 
@@ -38,11 +38,11 @@ impl MnftBatchState {
         &mut self,
         store: &CkbadgerStore,
         collection_id: &[u8],
-    ) -> Result<Option<NftCollectionAggregate>> {
+    ) -> Result<Option<ObjectCollectionAggregate>> {
         if let Some(cached) = self.collection_aggs.get(collection_id) {
             return Ok(cached.clone());
         }
-        let loaded = store.get_nft_collection_aggregate(collection_id)?;
+        let loaded = store.get_object_collection_aggregate(collection_id)?;
         self.collection_aggs
             .insert(collection_id.to_vec(), loaded.clone());
         Ok(loaded)
@@ -51,17 +51,17 @@ impl MnftBatchState {
     fn put_collection_aggregate(
         &mut self,
         collection_id: &[u8],
-        agg: NftCollectionAggregate,
+        agg: ObjectCollectionAggregate,
         batch: &mut StoreBatch,
     ) {
-        batch.put_nft_collection_aggregate(collection_id, &agg);
+        batch.put_object_collection_aggregate(collection_id, &agg);
         self.collection_aggs
             .insert(collection_id.to_vec(), Some(agg));
     }
 
     pub(crate) fn extend_pending_collection_aggregates(
         &self,
-        target: &mut HashMap<Vec<u8>, NftCollectionAggregate>,
+        target: &mut HashMap<Vec<u8>, ObjectCollectionAggregate>,
     ) {
         for (collection_id, agg) in &self.collection_aggs {
             if let Some(agg) = agg {
@@ -80,7 +80,7 @@ impl MnftBatchState {
         if let Some(cached) = self.collection_owner_counts.get(&key) {
             return Ok(*cached);
         }
-        let loaded = store.get_nft_collection_owner_count(collection_id, lock_hash)?;
+        let loaded = store.get_object_collection_owner_count(collection_id, lock_hash)?;
         self.collection_owner_counts.insert(key, loaded);
         Ok(loaded)
     }
@@ -92,7 +92,7 @@ impl MnftBatchState {
         count: i64,
         batch: &mut StoreBatch,
     ) {
-        batch.put_nft_collection_owner_count(collection_id, lock_hash, count);
+        batch.put_object_collection_owner_count(collection_id, lock_hash, count);
         self.collection_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
     }
@@ -103,7 +103,7 @@ impl MnftBatchState {
         lock_hash: &[u8],
         batch: &mut StoreBatch,
     ) {
-        batch.delete_nft_collection_owner(collection_id, lock_hash);
+        batch.delete_object_collection_owner(collection_id, lock_hash);
         self.collection_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
     }
@@ -149,7 +149,7 @@ impl BatchWriter {
         collection_id: &[u8],
         old_owner: Option<&[u8]>,
         new_owner: Option<&[u8]>,
-        agg: &mut NftCollectionAggregate,
+        agg: &mut ObjectCollectionAggregate,
         batch: &mut StoreBatch,
         state: &mut MnftBatchState,
     ) -> Result<()> {
@@ -216,26 +216,30 @@ impl BatchWriter {
         block_number: i64,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let existing = self.store.get_nft(&issuer.issuer_id)?;
-        let entry = NftEntry {
-            standard: NftStandard::MnftIssuer,
+        let existing = self.store.get_object(&issuer.issuer_id)?;
+        let entry = ObjectEntry {
+            standard: ObjectStandard::MnftIssuer,
             collection_id: None,
             token_id: None,
             owner_lock_hash: Some(issuer.owner_lock_hash.clone()),
             name: issuer.name.clone(),
+            description: None,
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
-            extra: NftExtra::MnftIssuer {
+            created_at_tx: existing
+                .as_ref()
+                .map(|e| e.created_at_tx.clone())
+                .unwrap_or_else(|| tx_hash.to_vec()),
+            extra: ObjectExtra::MnftIssuer {
                 class_count: issuer.class_count,
                 set_count: issuer.set_count,
                 info: issuer.info.clone(),
             },
         };
-        batch.put_nft(&issuer.issuer_id, &entry);
-        let _ = tx_hash; // Used for provenance tracking in PG, not needed in RocksDB
+        batch.put_object(&issuer.issuer_id, &entry);
         Ok(())
     }
 
@@ -268,18 +272,23 @@ impl BatchWriter {
         state: &mut MnftBatchState,
     ) -> Result<()> {
         let existing = state.get_token(self.store.as_ref(), &class.class_id)?;
-        let entry = NftEntry {
-            standard: NftStandard::MnftClass,
+        let entry = ObjectEntry {
+            standard: ObjectStandard::MnftClass,
             collection_id: Some(class.issuer_id.clone()),
             token_id: None,
             owner_lock_hash: Some(class.owner_lock_hash.clone()),
             name: class.name.clone(),
+            description: class.description.clone(),
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
-            extra: NftExtra::MnftClass {
+            created_at_tx: existing
+                .as_ref()
+                .map(|e| e.created_at_tx.clone())
+                .unwrap_or_else(|| tx_hash.to_vec()),
+            extra: ObjectExtra::MnftClass {
                 description: class.description.clone(),
                 renderer: class.renderer.clone(),
                 total: class.total,
@@ -287,15 +296,15 @@ impl BatchWriter {
                 configure: class.configure,
             },
         };
-        batch.put_nft(&class.class_id, &entry);
+        batch.put_object(&class.class_id, &entry);
         state.put_token(&class.class_id, entry);
 
-        // Create/update NFT collection aggregate
+        // Create/update object collection aggregate
         let mut agg = state
             .get_collection_aggregate(self.store.as_ref(), &class.class_id)?
             .unwrap_or_default();
         agg.name = class.name.clone();
-        agg.standard = NftStandard::MnftClass;
+        agg.standard = ObjectStandard::MnftClass;
         state.put_collection_aggregate(&class.class_id, agg, batch);
         batch.put_mnft_class_outpoint(tx_hash, output_index, &class.class_id);
         Ok(())
@@ -350,31 +359,36 @@ impl BatchWriter {
         } else {
             None
         };
-        let entry = NftEntry {
-            standard: NftStandard::MnftToken,
+        let entry = ObjectEntry {
+            standard: ObjectStandard::MnftToken,
             collection_id: Some(token.class_id.clone()),
             token_id: Some(token.token_id.clone()),
             owner_lock_hash: Some(token.owner_lock_hash.clone()),
             name: None,
+            description: None,
             is_live: true,
             created_at_block: existing
                 .as_ref()
                 .map(|e| e.created_at_block)
                 .unwrap_or(block_number),
-            extra: NftExtra::MnftToken {
+            created_at_tx: existing
+                .as_ref()
+                .map(|e| e.created_at_tx.clone())
+                .unwrap_or_else(|| tx_hash.to_vec()),
+            extra: ObjectExtra::MnftToken {
                 token_index: token.token_index,
                 characteristic: token.characteristic.clone(),
                 configure: token.configure,
                 state: token.state,
             },
         };
-        batch.put_nft(&token.token_id, &entry);
+        batch.put_object(&token.token_id, &entry);
         state.put_token(&token.token_id, entry);
         let should_upsert_collection_index = !existing
             .as_ref()
             .is_some_and(|e| e.is_live && e.collection_id.as_ref() == Some(&token.class_id));
         if should_upsert_collection_index {
-            batch.put_nft_by_collection(&token.class_id, &token.token_id);
+            batch.put_object_by_collection(&token.class_id, &token.token_id);
         }
 
         // Update collection aggregate if this is a new token
@@ -474,7 +488,7 @@ impl BatchWriter {
                     hex::encode(&token.token_id)
                 )
             })?;
-            batch.put_nft_hourly_transfer(&token.class_id, hour_bucket, next);
+            batch.put_object_hourly_transfer(&token.class_id, hour_bucket, next);
             state.put_hourly_transfer(key, next);
         }
         batch.put_mnft_token_outpoint(tx_hash, output_index, &token.token_id);
@@ -518,7 +532,7 @@ impl BatchWriter {
             }
             entry.is_live = false;
             entry.owner_lock_hash = None;
-            batch.put_nft(token_id, &entry);
+            batch.put_object(token_id, &entry);
             state.put_token(token_id, entry);
 
             // Decrement collection's live_count
@@ -582,18 +596,18 @@ impl BatchWriter {
         self.store.get_mnft_token_ids_by_outpoints_batch(&outpoints)
     }
 
-    pub fn update_nft_type_index_batch(
+    pub fn update_object_type_index_batch(
         &self,
-        changes: &HashMap<Vec<u8>, NftTypeIndex>,
+        changes: &HashMap<Vec<u8>, ObjectTypeIndex>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         for (type_script_hash, index) in changes {
-            batch.put_nft_type_index(type_script_hash, index);
+            batch.put_object_type_index(type_script_hash, index);
         }
         Ok(())
     }
 
-    pub fn update_nft_daily_deltas_batch(
+    pub fn update_object_daily_deltas_batch(
         &self,
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
@@ -604,14 +618,14 @@ impl BatchWriter {
             }
             let mut current = self
                 .store
-                .get_nft_daily_delta(collection_id, *date)?
+                .get_object_daily_delta(collection_id, *date)?
                 .unwrap_or_default();
             current.live_capacity_delta = current
                 .live_capacity_delta
                 .checked_add(*capacity_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "nft daily capacity delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
+                        "object daily capacity delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
                         hex::encode(collection_id),
                         date,
                         current.live_capacity_delta,
@@ -623,7 +637,7 @@ impl BatchWriter {
                 .checked_add(*occupied_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "nft daily occupied delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
+                        "object daily occupied delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
                         hex::encode(collection_id),
                         date,
                         current.live_occupied_capacity_delta,
@@ -634,7 +648,7 @@ impl BatchWriter {
                 let key = keys::encode_nft_daily_key(collection_id, *date);
                 batch.delete_stats(&key);
             } else {
-                batch.put_nft_daily_delta(collection_id, *date, &current);
+                batch.put_object_daily_delta(collection_id, *date, &current);
             }
         }
         Ok(())
@@ -677,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_nft_type_index_and_daily_deltas_batch_and_delete_zero_net() {
+    fn test_update_object_type_index_and_daily_deltas_batch_and_delete_zero_net() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let writer = BatchWriter::new(Arc::new(store));
@@ -690,31 +704,31 @@ mod tests {
         let mut index_changes = HashMap::new();
         index_changes.insert(
             type_script_hash.clone(),
-            NftTypeIndex {
+            ObjectTypeIndex {
                 collection_id: collection_id.clone(),
             },
         );
         writer
-            .update_nft_type_index_batch(&index_changes, &mut batch)
+            .update_object_type_index_batch(&index_changes, &mut batch)
             .unwrap();
 
         let mut daily_changes = HashMap::new();
         daily_changes.insert((collection_id.clone(), date), (100, 61));
         writer
-            .update_nft_daily_deltas_batch(&daily_changes, &mut batch)
+            .update_object_daily_deltas_batch(&daily_changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
         let idx = writer
             .store()
-            .get_nft_type_index(&type_script_hash)
+            .get_object_type_index(&type_script_hash)
             .unwrap()
             .unwrap();
         assert_eq!(idx.collection_id, collection_id);
 
         let daily = writer
             .store()
-            .get_nft_daily_delta(&[0x22; 24], date)
+            .get_object_daily_delta(&[0x22; 24], date)
             .unwrap()
             .unwrap();
         assert_eq!(daily.live_capacity_delta, 100);
@@ -724,13 +738,13 @@ mod tests {
         let mut daily_changes = HashMap::new();
         daily_changes.insert((collection_id.clone(), date), (-100, -61));
         writer
-            .update_nft_daily_deltas_batch(&daily_changes, &mut batch)
+            .update_object_daily_deltas_batch(&daily_changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
         let daily = writer
             .store()
-            .get_nft_daily_delta(&collection_id, date)
+            .get_object_daily_delta(&collection_id, date)
             .unwrap();
         assert!(daily.is_none());
     }
@@ -774,7 +788,7 @@ mod tests {
 
         let collection_ids = writer
             .store()
-            .list_nft_ids_by_collection(&class.class_id, None, 10)
+            .list_object_ids_by_collection(&class.class_id, None, 10)
             .unwrap();
         assert_eq!(collection_ids, vec![token.token_id]);
     }
@@ -805,7 +819,7 @@ mod tests {
 
         let agg = writer
             .store()
-            .get_nft_collection_aggregate(&class.class_id)
+            .get_object_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.total_count, 2);
@@ -903,7 +917,7 @@ mod tests {
 
         let agg = writer
             .store()
-            .get_nft_collection_aggregate(&class.class_id)
+            .get_object_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.total_count, 2);
@@ -966,7 +980,7 @@ mod tests {
 
         let agg = writer
             .store()
-            .get_nft_collection_aggregate(&class.class_id)
+            .get_object_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.total_count, 2);
@@ -995,12 +1009,12 @@ mod tests {
 
         let mut agg = writer
             .store()
-            .get_nft_collection_aggregate(&class.class_id)
+            .get_object_collection_aggregate(&class.class_id)
             .unwrap()
             .unwrap();
         agg.live_count = 0;
         let mut batch = StoreBatch::new(writer.store());
-        batch.put_nft_collection_aggregate(&class.class_id, &agg);
+        batch.put_object_collection_aggregate(&class.class_id, &agg);
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());

@@ -26,7 +26,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_nft(), &key)? {
+        match self.get_cf(self.cf_stats_object(), &key)? {
             Some(value) if !value.is_empty() => Ok(Some(value)),
             _ => Ok(None),
         }
@@ -38,7 +38,7 @@ impl CkbadgerStore {
         output_index: i16,
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        match self.get_cf(self.cf_stats_nft(), &key)? {
+        match self.get_cf(self.cf_stats_object(), &key)? {
             Some(value) if !value.is_empty() => Ok(Some(value)),
             _ => Ok(None),
         }
@@ -48,7 +48,7 @@ impl CkbadgerStore {
         &self,
         outpoints: &[(&[u8], i16)],
     ) -> anyhow::Result<Vec<MnftOutpointLookup>> {
-        let cf = self.cf_stats_nft();
+        let cf = self.cf_stats_object();
         let keys: Vec<[u8; keys::MNFT_TOKEN_OUTPOINT_KEY_SIZE]> = outpoints
             .iter()
             .map(|(tx_hash, idx)| keys::encode_mnft_token_outpoint_key(tx_hash, *idx))
@@ -100,13 +100,13 @@ impl CkbadgerStore {
         }
 
         let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
         let mut resolved: MnftLiveOutpointMap = HashMap::with_capacity(targets.len());
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_nft in get_live_mnft_token_outpoints_by_token_ids: {}",
+                    "failed to iterate stats_object in get_live_mnft_token_outpoints_by_token_ids: {}",
                     e
                 )
             })?;
@@ -158,13 +158,13 @@ impl CkbadgerStore {
         token_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
         let prefix = [keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_nft(), &prefix);
+        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_nft in list_mnft_token_outpoints_by_token_id: {}",
+                    "failed to iterate stats_object in list_mnft_token_outpoints_by_token_id: {}",
                     e
                 )
             })?;
@@ -239,7 +239,7 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_a = [0xC1u8; 32];
         let key = keys::encode_mnft_token_outpoint_key(&tx_a, 4);
-        store.put_cf(store.cf_stats_nft(), &key, b"").unwrap();
+        store.put_cf(store.cf_stats_object(), &key, b"").unwrap();
 
         let mnft_outpoints: Vec<(&[u8], i16)> = vec![(&tx_a, 4)];
         let err = store

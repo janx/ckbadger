@@ -95,9 +95,6 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow:
 
 const ROLLBACK_PROGRESS_CHECK_EVERY: u64 = 16_384;
 const ROLLBACK_PROGRESS_MIN_INTERVAL: Duration = Duration::from_secs(5);
-const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
-const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
-
 fn should_log_rollback_progress(scanned: u64, since_last_log: Duration) -> bool {
     scanned > 0
         && scanned.is_multiple_of(ROLLBACK_PROGRESS_CHECK_EVERY)
@@ -528,7 +525,7 @@ impl CkbadgerStore {
     /// expose append-only history CFs. Split-store callers must use
     /// `rollback_to_block_with_tx_index_store` and pass the append-only store.
     pub fn rollback_to_block(&self, rollback_to: i64) -> anyhow::Result<RollbackResult> {
-        if !self.has_cf(CF_ADDR_TXS) || !self.has_cf(CF_NFT_COLLECTION_ACTIVITIES) {
+        if !self.has_cf(CF_ADDR_TXS) || !self.has_cf(CF_OBJECT_COLLECTION_ACTIVITIES) {
             anyhow::bail!(
                 "rollback_to_block requires tx_index_store when store lacks append-only history CFs; \
                  use rollback_to_block_with_tx_index_store(..., append_only_store)"
@@ -1070,7 +1067,7 @@ impl CkbadgerStore {
                 self.cf_stats_script(),
                 self.cf_stats_token(),
                 self.cf_stats_spore(),
-                self.cf_stats_nft(),
+                self.cf_stats_object(),
             ];
             for cf in stats_cfs {
                 let iter = self.iterator_cf(cf, IteratorMode::Start);
@@ -1315,8 +1312,8 @@ impl CkbadgerStore {
         let secondary_cfs = [
             self.cf_spore_by_cluster(),
             self.cf_cluster_agg(),
-            self.cf_nft_by_collection(),
-            self.cf_nft_collection_agg(),
+            self.cf_object_by_collection(),
+            self.cf_object_collection_agg(),
         ];
         for cf in secondary_cfs {
             let iter = self.iterator_cf(cf, IteratorMode::Start);
@@ -1364,7 +1361,7 @@ impl CkbadgerStore {
         }
 
         // NFT collection-owner counters are stored in stats_nft CF under a dedicated prefix.
-        let iter = self.iterator_cf(self.cf_stats_nft(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_stats_object(), IteratorMode::Start);
         for item in iter {
             let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -1373,7 +1370,7 @@ impl CkbadgerStore {
                 )
             })?;
             if key.first() == Some(&keys::STATS_PREFIX_NFT_COLLECTION_OWNER) {
-                batch.delete_cf(self.cf_stats_nft(), &key);
+                batch.delete_cf(self.cf_stats_object(), &key);
                 secondary_keys_deleted += 1;
             }
             stage.tick(
@@ -1388,7 +1385,7 @@ impl CkbadgerStore {
 
         let mut cluster_aggs: HashMap<Vec<u8>, ClusterAggregate> = HashMap::new();
         let mut cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
-        let mut nft_collection_aggs: HashMap<Vec<u8>, NftCollectionAggregate> = HashMap::new();
+        let mut nft_collection_aggs: HashMap<Vec<u8>, ObjectCollectionAggregate> = HashMap::new();
         let mut nft_collection_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
 
         let iter = self.iterator_cf(self.cf_spore_data(), IteratorMode::Start);
@@ -1400,7 +1397,7 @@ impl CkbadgerStore {
                 )
             })?;
             let spore_id = key.to_vec();
-            let entry: DobEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore_data entry during rollback repair: spore_id=0x{}, error={}",
                     bytes_to_hex(&spore_id),
@@ -1423,12 +1420,12 @@ impl CkbadgerStore {
             }
 
             match entry.standard {
-                DobStandard::SporeCluster => {
+                ObjectStandard::SporeCluster => {
                     let agg = cluster_aggs.entry(spore_id).or_default();
                     agg.name = entry.name.clone();
                     agg.description = entry.description.clone();
                 }
-                DobStandard::Spore => {
+                ObjectStandard::Spore => {
                     if let Some(cluster_id) = entry.collection_id.as_ref() {
                         let idx_key = keys::encode_spore_by_cluster_key(cluster_id, &spore_id);
                         batch.put_cf(self.cf_spore_by_cluster(), idx_key, []);
@@ -1462,7 +1459,7 @@ impl CkbadgerStore {
                             }
 
                             let tier = match &entry.extra {
-                                DobExtra::Spore { media_profile, .. } => media_profile.tier,
+                                ObjectExtra::Spore { media_profile, .. } => media_profile.tier,
                                 _ => StorageDependencyTier::Unknown,
                             };
                             let tier_slot = match tier {
@@ -1485,47 +1482,8 @@ impl CkbadgerStore {
                         }
                     }
                 }
-                DobStandard::DidCkb => {
-                    let idx_key =
-                        keys::encode_nft_by_collection_key(&DID_CKB_SENTINEL_COLLECTION, &spore_id);
-                    batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
-                    secondary_keys_written += 1;
-
-                    let agg = nft_collection_aggs
-                        .entry(DID_CKB_SENTINEL_COLLECTION.to_vec())
-                        .or_insert_with(|| NftCollectionAggregate {
-                            name: Some("did:ckb".to_string()),
-                            standard: NftStandard::DidCkb,
-                            ..Default::default()
-                        });
-                    agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "did:ckb total_count overflow while repairing rollback state"
-                        )
-                    })?;
-                    if entry.is_live {
-                        agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "did:ckb live_count overflow while repairing rollback state"
-                            )
-                        })?;
-                        let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "did:ckb live entry missing owner_lock_hash while repairing rollback state: spore_id=0x{}",
-                                bytes_to_hex(&spore_id)
-                            )
-                        })?;
-                        let owner_key = (
-                            DID_CKB_SENTINEL_COLLECTION.to_vec(),
-                            owner_lock_hash.clone(),
-                        );
-                        let owner_count = nft_collection_owner_counts.entry(owner_key).or_insert(0);
-                        *owner_count = owner_count.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "did:ckb owner count overflow while repairing rollback state"
-                            )
-                        })?;
-                    }
+                _ => {
+                    // MnftIssuer, MnftClass, MnftToken are not stored in spore_data
                 }
             }
             stage.tick(
@@ -1538,7 +1496,7 @@ impl CkbadgerStore {
             );
         }
 
-        let iter = self.iterator_cf(self.cf_nft_data(), IteratorMode::Start);
+        let iter = self.iterator_cf(self.cf_object_data(), IteratorMode::Start);
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -1547,7 +1505,7 @@ impl CkbadgerStore {
                 )
             })?;
             let nft_id = key.to_vec();
-            let entry: NftEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize nft_data entry during rollback repair: nft_id=0x{}, error={}",
                     bytes_to_hex(&nft_id),
@@ -1556,7 +1514,7 @@ impl CkbadgerStore {
             })?;
 
             if entry.created_at_block > rollback_to {
-                batch.delete_cf(self.cf_nft_data(), &key);
+                batch.delete_cf(self.cf_object_data(), &key);
                 nft_deleted += 1;
                 stage.tick(
                     spore_deleted
@@ -1570,66 +1528,27 @@ impl CkbadgerStore {
             }
 
             match entry.standard {
-                NftStandard::DotBit => {
-                    let idx_key =
-                        keys::encode_nft_by_collection_key(&DOTBIT_SENTINEL_COLLECTION, &nft_id);
-                    batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
-                    secondary_keys_written += 1;
-                    let agg = nft_collection_aggs
-                        .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
-                        .or_insert_with(|| NftCollectionAggregate {
-                            name: Some(".bit".to_string()),
-                            standard: NftStandard::DotBit,
-                            ..Default::default()
-                        });
-                    agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "dotbit total_count overflow while repairing rollback state"
-                        )
-                    })?;
-                    if entry.is_live {
-                        agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "dotbit live_count overflow while repairing rollback state"
-                            )
-                        })?;
-                        let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "dotbit live entry missing owner_lock_hash while repairing rollback state: nft_id=0x{}",
-                                bytes_to_hex(&nft_id)
-                            )
-                        })?;
-                        let owner_key =
-                            (DOTBIT_SENTINEL_COLLECTION.to_vec(), owner_lock_hash.clone());
-                        let owner_count = nft_collection_owner_counts.entry(owner_key).or_insert(0);
-                        *owner_count = owner_count.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "dotbit owner count overflow while repairing rollback state"
-                            )
-                        })?;
-                    }
-                }
-                NftStandard::MnftClass => {
+                ObjectStandard::MnftClass => {
                     let agg = nft_collection_aggs.entry(nft_id).or_insert_with(|| {
-                        NftCollectionAggregate {
-                            standard: NftStandard::MnftClass,
+                        ObjectCollectionAggregate {
+                            standard: ObjectStandard::MnftClass,
                             ..Default::default()
                         }
                     });
-                    agg.standard = NftStandard::MnftClass;
+                    agg.standard = ObjectStandard::MnftClass;
                     if entry.name.is_some() {
                         agg.name = entry.name.clone();
                     }
                 }
-                NftStandard::MnftToken => {
+                ObjectStandard::MnftToken => {
                     if let Some(collection_id) = entry.collection_id.as_ref() {
                         let idx_key = keys::encode_nft_by_collection_key(collection_id, &nft_id);
-                        batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
+                        batch.put_cf(self.cf_object_by_collection(), idx_key, []);
                         secondary_keys_written += 1;
                         let agg = nft_collection_aggs
                             .entry(collection_id.clone())
-                            .or_insert_with(|| NftCollectionAggregate {
-                                standard: NftStandard::MnftClass,
+                            .or_insert_with(|| ObjectCollectionAggregate {
+                                standard: ObjectStandard::MnftClass,
                                 ..Default::default()
                             });
                         agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
@@ -1664,48 +1583,12 @@ impl CkbadgerStore {
                         }
                     }
                 }
-                NftStandard::DidCkb => {
-                    let idx_key =
-                        keys::encode_nft_by_collection_key(&DID_CKB_SENTINEL_COLLECTION, &nft_id);
-                    batch.put_cf(self.cf_nft_by_collection(), idx_key, []);
-                    secondary_keys_written += 1;
-                    let agg = nft_collection_aggs
-                        .entry(DID_CKB_SENTINEL_COLLECTION.to_vec())
-                        .or_insert_with(|| NftCollectionAggregate {
-                            name: Some("did:ckb".to_string()),
-                            standard: NftStandard::DidCkb,
-                            ..Default::default()
-                        });
-                    agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "did:ckb total_count overflow while repairing rollback state"
-                        )
-                    })?;
-                    if entry.is_live {
-                        agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "did:ckb live_count overflow while repairing rollback state"
-                            )
-                        })?;
-                        let owner_lock_hash = entry.owner_lock_hash.as_ref().ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "did:ckb live entry missing owner_lock_hash while repairing rollback state: nft_id=0x{}",
-                                bytes_to_hex(&nft_id)
-                            )
-                        })?;
-                        let owner_key = (
-                            DID_CKB_SENTINEL_COLLECTION.to_vec(),
-                            owner_lock_hash.clone(),
-                        );
-                        let owner_count = nft_collection_owner_counts.entry(owner_key).or_insert(0);
-                        *owner_count = owner_count.checked_add(1).ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "did:ckb owner count overflow while repairing rollback state"
-                            )
-                        })?;
-                    }
+                ObjectStandard::MnftIssuer
+                | ObjectStandard::Spore
+                | ObjectStandard::SporeCluster => {
+                    // Spore/SporeCluster are in spore_data CF, not object_data CF.
+                    // MnftIssuer has no collection-level aggregation.
                 }
-                NftStandard::MnftIssuer => {}
             }
             stage.tick(
                 spore_deleted
@@ -1751,7 +1634,7 @@ impl CkbadgerStore {
         for ((collection_id, lock_hash), count) in &nft_collection_owner_counts {
             let owner_key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
             batch.put_cf(
-                self.cf_stats_nft(),
+                self.cf_stats_object(),
                 owner_key,
                 count.to_le_bytes().as_slice(),
             );
@@ -1768,7 +1651,7 @@ impl CkbadgerStore {
         let activity_store = tx_index_store.unwrap_or(self);
         let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
         let iter = activity_store.iterator_cf(
-            activity_store.cf_nft_collection_activities(),
+            activity_store.cf_object_collection_activities(),
             IteratorMode::Start,
         );
         for item in iter {
@@ -1831,7 +1714,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            batch.put_cf(self.cf_nft_collection_agg(), collection_id, &encoded);
+            batch.put_cf(self.cf_object_collection_agg(), collection_id, &encoded);
             aggregate_rows_written += 1;
         }
         stage.finish(
@@ -1936,10 +1819,10 @@ mod tests {
     use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{
-        AddressBalance, AssetAction, CachedBlockHeader, DaoDepositCacheEntry, DobEntry, DobExtra,
-        DobStandard, HodlTrackerState, LiveCellInfo, NftCollectionActivityEntry,
-        NftCollectionAggregate, NftEntry, NftExtra, NftStandard, ScriptInfo, SporeMediaProfile,
-        StorageDependencyTier, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        AddressBalance, AssetAction, CachedBlockHeader, DaoDepositCacheEntry, HodlTrackerState,
+        LiveCellInfo, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry,
+        ObjectExtra, ObjectStandard, ScriptInfo, SporeMediaProfile, StorageDependencyTier,
+        TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -2141,17 +2024,19 @@ mod tests {
         let mut domain_batch = StoreBatch::new(&domain);
         domain_batch.put_block_header(0, &header0);
         domain_batch.put_block_header(1, &header1);
-        domain_batch.put_nft(
+        domain_batch.put_object(
             &nft_id,
-            &NftEntry {
-                standard: NftStandard::MnftToken,
+            &ObjectEntry {
+                standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
                 token_id: Some(nft_id.clone()),
                 owner_lock_hash: Some(vec![0x66; 32]),
                 name: None,
+                description: None,
                 is_live: true,
                 created_at_block: 0,
-                extra: NftExtra::MnftToken {
+                created_at_tx: vec![],
+                extra: ObjectExtra::MnftToken {
                     token_index: 1,
                     characteristic: vec![],
                     configure: 0,
@@ -2159,11 +2044,11 @@ mod tests {
                 },
             },
         );
-        domain_batch.put_nft_collection_aggregate(
+        domain_batch.put_object_collection_aggregate(
             &class_id,
-            &NftCollectionAggregate {
+            &ObjectCollectionAggregate {
                 name: Some("stale".to_string()),
-                standard: NftStandard::MnftClass,
+                standard: ObjectStandard::MnftClass,
                 total_count: 99,
                 live_count: 99,
                 holders_count: 99,
@@ -2174,22 +2059,22 @@ mod tests {
         domain_batch.commit().unwrap();
 
         let mut append_batch = StoreBatch::new(&append);
-        append_batch.put_nft_collection_activity(
+        append_batch.put_object_collection_activity(
             &class_id,
             0,
             0,
-            &NftCollectionActivityEntry {
+            &ObjectCollectionActivityEntry {
                 tx_hash: vec![0xA1; 32],
                 block_hash: header0.hash.clone(),
                 timestamp_ms: 1_700_000_000_000,
                 actions: vec![AssetAction::Mint],
             },
         );
-        append_batch.put_nft_collection_activity(
+        append_batch.put_object_collection_activity(
             &class_id,
             0,
             0,
-            &NftCollectionActivityEntry {
+            &ObjectCollectionActivityEntry {
                 tx_hash: vec![0xB2; 32],
                 block_hash: vec![0xC2; 32],
                 timestamp_ms: 1_700_000_000_001,
@@ -2203,7 +2088,7 @@ mod tests {
             .unwrap();
 
         let rebuilt = domain
-            .get_nft_collection_aggregate(&class_id)
+            .get_object_collection_aggregate(&class_id)
             .unwrap()
             .unwrap();
         assert_eq!(rebuilt.total_count, 1);
@@ -3219,30 +3104,32 @@ mod tests {
         batch.put_block_header(2, &header2);
         batch.put_spore(
             &cluster_id,
-            &DobEntry {
-                standard: DobStandard::SporeCluster,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
                 collection_id: None,
+                token_id: None,
                 owner_lock_hash: None,
                 name: Some("cluster-a".to_string()),
                 description: Some("desc".to_string()),
                 is_live: true,
                 created_at_block: 1,
                 created_at_tx: vec![0x01; 32],
-                extra: DobExtra::SporeCluster,
+                extra: ObjectExtra::SporeCluster,
             },
         );
         batch.put_spore(
             &spore_keep_id,
-            &DobEntry {
-                standard: DobStandard::Spore,
+            &ObjectEntry {
+                standard: ObjectStandard::Spore,
                 collection_id: Some(cluster_id.clone()),
+                token_id: None,
                 owner_lock_hash: Some(owner.clone()),
                 name: None,
                 description: None,
                 is_live: true,
                 created_at_block: 1,
                 created_at_tx: vec![0x02; 32],
-                extra: DobExtra::Spore {
+                extra: ObjectExtra::Spore {
                     content_type: "image/png".to_string(),
                     content_length: 8,
                     media_profile: SporeMediaProfile {
@@ -3254,16 +3141,17 @@ mod tests {
         );
         batch.put_spore(
             &spore_drop_id,
-            &DobEntry {
-                standard: DobStandard::Spore,
+            &ObjectEntry {
+                standard: ObjectStandard::Spore,
                 collection_id: Some(cluster_id.clone()),
+                token_id: None,
                 owner_lock_hash: Some(owner.clone()),
                 name: None,
                 description: None,
                 is_live: true,
                 created_at_block: 2,
                 created_at_tx: vec![0x03; 32],
-                extra: DobExtra::Spore {
+                extra: ObjectExtra::Spore {
                     content_type: "image/png".to_string(),
                     content_length: 8,
                     media_profile: SporeMediaProfile {
@@ -3273,17 +3161,19 @@ mod tests {
                 },
             },
         );
-        batch.put_nft(
+        batch.put_object(
             &nft_keep_id,
-            &NftEntry {
-                standard: NftStandard::MnftToken,
+            &ObjectEntry {
+                standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
                 token_id: Some(nft_keep_id.clone()),
                 owner_lock_hash: Some(owner.clone()),
                 name: None,
+                description: None,
                 is_live: true,
                 created_at_block: 1,
-                extra: NftExtra::MnftToken {
+                created_at_tx: vec![],
+                extra: ObjectExtra::MnftToken {
                     token_index: 1,
                     characteristic: vec![],
                     configure: 0,
@@ -3291,17 +3181,19 @@ mod tests {
                 },
             },
         );
-        batch.put_nft(
+        batch.put_object(
             &nft_drop_id,
-            &NftEntry {
-                standard: NftStandard::MnftToken,
+            &ObjectEntry {
+                standard: ObjectStandard::MnftToken,
                 collection_id: Some(class_id.clone()),
                 token_id: Some(nft_drop_id.clone()),
                 owner_lock_hash: Some(owner.clone()),
                 name: None,
+                description: None,
                 is_live: true,
                 created_at_block: 2,
-                extra: NftExtra::MnftToken {
+                created_at_tx: vec![],
+                extra: ObjectExtra::MnftToken {
                     token_index: 2,
                     characteristic: vec![],
                     configure: 0,
@@ -3320,12 +3212,12 @@ mod tests {
                 ..Default::default()
             },
         );
-        batch.put_nft_by_collection(&class_id, &[0xEE; 32]);
-        batch.put_nft_collection_aggregate(
+        batch.put_object_by_collection(&class_id, &[0xEE; 32]);
+        batch.put_object_collection_aggregate(
             &class_id,
-            &NftCollectionAggregate {
+            &ObjectCollectionAggregate {
                 name: Some("stale".to_string()),
-                standard: NftStandard::MnftClass,
+                standard: ObjectStandard::MnftClass,
                 total_count: 99,
                 live_count: 99,
                 holders_count: 99,
@@ -3338,15 +3230,15 @@ mod tests {
 
         assert!(store.get_spore(&spore_keep_id).unwrap().is_some());
         assert!(store.get_spore(&spore_drop_id).unwrap().is_none());
-        assert!(store.get_nft(&nft_keep_id).unwrap().is_some());
-        assert!(store.get_nft(&nft_drop_id).unwrap().is_none());
+        assert!(store.get_object(&nft_keep_id).unwrap().is_some());
+        assert!(store.get_object(&nft_drop_id).unwrap().is_none());
 
         let spores_in_cluster = store.list_spores_by_cluster(&cluster_id, 10).unwrap();
         assert_eq!(spores_in_cluster.len(), 1);
         assert_eq!(spores_in_cluster[0].0, spore_keep_id);
 
         let class_tokens = store
-            .list_nft_ids_by_collection(&class_id, None, 10)
+            .list_object_ids_by_collection(&class_id, None, 10)
             .unwrap();
         assert_eq!(class_tokens.len(), 1);
         assert_eq!(class_tokens[0], nft_keep_id);
@@ -3358,7 +3250,7 @@ mod tests {
         assert_eq!(cluster_agg.fully_onchain_count, 1);
 
         let class_agg = store
-            .get_nft_collection_aggregate(&class_id)
+            .get_object_collection_aggregate(&class_id)
             .unwrap()
             .unwrap();
         assert_eq!(class_agg.total_count, 1);

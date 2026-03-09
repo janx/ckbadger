@@ -5,8 +5,8 @@ use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeC
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    ClusterAggregate, DobEntry, DobExtra, DobStandard, NftCollectionAggregate, NftStandard,
-    SporeTypeIndex, StorageDependencyTier,
+    ClusterAggregate, IdentityEntry, IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra,
+    ObjectStandard, SporeTypeIndex, StorageDependencyTier,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -15,25 +15,21 @@ use ckbadger_store::types::SporeMediaProfile;
 
 use super::BatchWriter;
 
-/// Sentinel collection key for did:ckb IDs (which have no collection_id).
-/// 32-byte key: "did_ckb_collection______________" (padded to 32 bytes).
-const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+// did:ckb entries are now written to the identity store (not spore/object).
+// No sentinel collection is needed.
 
 #[derive(Default)]
 pub(crate) struct SporeBatchState {
-    spores: HashMap<Vec<u8>, Option<DobEntry>>,
+    spores: HashMap<Vec<u8>, Option<ObjectEntry>>,
+    identities: HashMap<Vec<u8>, Option<IdentityEntry>>,
     cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
     cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     spore_hourly_transfers: HashMap<Vec<u8>, i64>,
-    did_collection_agg_loaded: bool,
-    did_collection_agg: Option<NftCollectionAggregate>,
-    did_owner_counts: HashMap<Vec<u8>, i64>,
-    did_hourly_transfers: HashMap<Vec<u8>, i64>,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
 }
 
 impl SporeBatchState {
-    fn get_spore(&mut self, store: &CkbadgerStore, spore_id: &[u8]) -> Result<Option<DobEntry>> {
+    fn get_spore(&mut self, store: &CkbadgerStore, spore_id: &[u8]) -> Result<Option<ObjectEntry>> {
         if let Some(cached) = self.spores.get(spore_id) {
             return Ok(cached.clone());
         }
@@ -42,8 +38,25 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
-    fn put_spore(&mut self, spore_id: &[u8], entry: DobEntry) {
+    fn put_spore(&mut self, spore_id: &[u8], entry: ObjectEntry) {
         self.spores.insert(spore_id.to_vec(), Some(entry));
+    }
+
+    fn get_identity(
+        &mut self,
+        store: &CkbadgerStore,
+        identity_id: &[u8],
+    ) -> Result<Option<IdentityEntry>> {
+        if let Some(cached) = self.identities.get(identity_id) {
+            return Ok(cached.clone());
+        }
+        let loaded = store.get_identity(identity_id)?;
+        self.identities.insert(identity_id.to_vec(), loaded.clone());
+        Ok(loaded)
+    }
+
+    fn put_identity(&mut self, identity_id: &[u8], entry: IdentityEntry) {
+        self.identities.insert(identity_id.to_vec(), Some(entry));
     }
 
     fn get_cluster_aggregate(
@@ -68,15 +81,6 @@ impl SporeBatchState {
     ) {
         batch.put_cluster_aggregate(cluster_id, &agg);
         self.cluster_aggs.insert(cluster_id.to_vec(), agg);
-    }
-
-    pub(crate) fn extend_pending_nft_collection_aggregates(
-        &self,
-        target: &mut HashMap<Vec<u8>, NftCollectionAggregate>,
-    ) {
-        if let Some(agg) = &self.did_collection_agg {
-            target.insert(DID_CKB_SENTINEL_COLLECTION.to_vec(), agg.clone());
-        }
     }
 
     fn get_cluster_owner_count(
@@ -145,79 +149,6 @@ impl SporeBatchState {
 
     fn put_spore_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
         self.spore_hourly_transfers.insert(key, count);
-    }
-
-    fn get_did_collection_aggregate(
-        &mut self,
-        store: &CkbadgerStore,
-    ) -> Result<Option<NftCollectionAggregate>> {
-        if self.did_collection_agg_loaded {
-            return Ok(self.did_collection_agg.clone());
-        }
-        let loaded = store.get_nft_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)?;
-        self.did_collection_agg = loaded.clone();
-        self.did_collection_agg_loaded = true;
-        Ok(loaded)
-    }
-
-    fn put_did_collection_aggregate(
-        &mut self,
-        agg: NftCollectionAggregate,
-        batch: &mut StoreBatch,
-    ) {
-        batch.put_nft_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION, &agg);
-        self.did_collection_agg = Some(agg);
-        self.did_collection_agg_loaded = true;
-    }
-
-    fn get_did_owner_count(&mut self, store: &CkbadgerStore, lock_hash: &[u8]) -> Result<i64> {
-        if let Some(cached) = self.did_owner_counts.get(lock_hash) {
-            return Ok(*cached);
-        }
-        let loaded =
-            store.get_nft_collection_owner_count(&DID_CKB_SENTINEL_COLLECTION, lock_hash)?;
-        self.did_owner_counts.insert(lock_hash.to_vec(), loaded);
-        Ok(loaded)
-    }
-
-    fn put_did_owner_count(&mut self, lock_hash: &[u8], count: i64, batch: &mut StoreBatch) {
-        batch.put_nft_collection_owner_count(&DID_CKB_SENTINEL_COLLECTION, lock_hash, count);
-        self.did_owner_counts.insert(lock_hash.to_vec(), count);
-    }
-
-    fn delete_did_owner(&mut self, lock_hash: &[u8], batch: &mut StoreBatch) {
-        batch.delete_nft_collection_owner(&DID_CKB_SENTINEL_COLLECTION, lock_hash);
-        self.did_owner_counts.insert(lock_hash.to_vec(), 0);
-    }
-
-    fn get_did_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
-        if let Some(cached) = self.did_hourly_transfers.get(key) {
-            return Ok(*cached);
-        }
-        let loaded = match store.get_stats_key(key)? {
-            Some(v) => {
-                if v.len() != 8 {
-                    bail!(
-                        "invalid did:ckb hourly transfer value length in stats CF: key=0x{}, len={}",
-                        hex::encode(key),
-                        v.len()
-                    );
-                }
-                i64::from_le_bytes(v[..8].try_into().map_err(|_| {
-                    anyhow::anyhow!(
-                        "failed to decode did:ckb hourly transfer value as i64: key=0x{}",
-                        hex::encode(key)
-                    )
-                })?)
-            }
-            None => 0,
-        };
-        self.did_hourly_transfers.insert(key.to_vec(), loaded);
-        Ok(loaded)
-    }
-
-    fn put_did_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
-        self.did_hourly_transfers.insert(key, count);
     }
 
     pub(crate) fn put_spore_outpoint(
@@ -302,66 +233,9 @@ impl BatchWriter {
         Ok(())
     }
 
-    fn apply_did_owner_transition(
-        &self,
-        old_owner: Option<&[u8]>,
-        new_owner: Option<&[u8]>,
-        agg: &mut NftCollectionAggregate,
-        batch: &mut StoreBatch,
-        state: &mut SporeBatchState,
-    ) -> Result<()> {
-        if old_owner == new_owner {
-            return Ok(());
-        }
-
-        if let Some(old_lock) = old_owner {
-            let old_count = state.get_did_owner_count(self.store.as_ref(), old_lock)?;
-            if old_count <= 0 {
-                bail!(
-                    "did:ckb owner count underflow: lock_hash=0x{}, owner_count={}",
-                    hex::encode(old_lock),
-                    old_count
-                );
-            } else if old_count == 1 {
-                if agg.holders_count <= 0 {
-                    bail!(
-                        "did:ckb holders_count underflow: holders_count={}",
-                        agg.holders_count
-                    );
-                }
-                state.delete_did_owner(old_lock, batch);
-                agg.holders_count -= 1;
-            } else {
-                state.put_did_owner_count(old_lock, old_count - 1, batch);
-            }
-        }
-
-        if let Some(new_lock) = new_owner {
-            let current = state.get_did_owner_count(self.store.as_ref(), new_lock)?;
-            if current == 0 {
-                agg.holders_count = agg.holders_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb holders_count overflow: lock_hash=0x{}",
-                        hex::encode(new_lock)
-                    )
-                })?;
-            }
-            let next = current.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "did:ckb owner count overflow: lock_hash=0x{}, current={}",
-                    hex::encode(new_lock),
-                    current
-                )
-            })?;
-            state.put_did_owner_count(new_lock, next, batch);
-        }
-
-        Ok(())
-    }
-
-    fn spore_media_tier(entry: &DobEntry) -> StorageDependencyTier {
+    fn spore_media_tier(entry: &ObjectEntry) -> StorageDependencyTier {
         match &entry.extra {
-            DobExtra::Spore { media_profile, .. } => media_profile.tier,
+            ObjectExtra::Spore { media_profile, .. } => media_profile.tier,
             _ => StorageDependencyTier::Unknown,
         }
     }
@@ -416,9 +290,10 @@ impl BatchWriter {
         state: &mut SporeBatchState,
     ) -> Result<()> {
         let existing = state.get_spore(self.store.as_ref(), &cluster.cluster_id)?;
-        let entry = DobEntry {
-            standard: DobStandard::SporeCluster,
+        let entry = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
             collection_id: None, // This IS a cluster, not a spore in a cluster
+            token_id: None,
             owner_lock_hash: Some(cluster.owner_lock_hash.clone()),
             name: cluster.name.clone(),
             description: cluster.description.clone(),
@@ -431,7 +306,7 @@ impl BatchWriter {
                 .as_ref()
                 .map(|e| e.created_at_tx.clone())
                 .unwrap_or_else(|| tx_hash.to_vec()),
-            extra: DobExtra::SporeCluster,
+            extra: ObjectExtra::SporeCluster,
         };
         batch.put_spore(&cluster.cluster_id, &entry);
         state.put_spore(&cluster.cluster_id, entry);
@@ -455,24 +330,43 @@ impl BatchWriter {
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
-        let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
-        let was_live = existing.as_ref().is_some_and(|e| e.is_live);
-        let old_is_did = existing
-            .as_ref()
-            .is_some_and(|e| e.standard == DobStandard::DidCkb);
         let new_is_did = spore.is_did;
-        if old_is_did && !new_is_did {
-            bail!(
-                "did:ckb entry type mismatch on upsert: spore_id=0x{}",
-                hex::encode(&spore.spore_id)
-            );
-        }
+
         if new_is_did && spore.cluster_id.is_some() {
             bail!(
                 "did:ckb entry unexpectedly has cluster_id: spore_id=0x{}",
                 hex::encode(&spore.spore_id)
             );
         }
+
+        // did:ckb entries are written to the identity store, not the spore/object store.
+        if new_is_did {
+            let existing = state.get_identity(self.store.as_ref(), &spore.spore_id)?;
+            let identity = IdentityEntry {
+                standard: IdentityStandard::DidCkb,
+                owner_lock_hash: Some(spore.owner_lock_hash.clone()),
+                name: None,
+                is_live: true,
+                created_at_block: existing
+                    .as_ref()
+                    .map(|e| e.created_at_block)
+                    .unwrap_or(block_number),
+                created_at_tx: existing
+                    .as_ref()
+                    .map(|e| e.created_at_tx.clone())
+                    .unwrap_or_else(|| tx_hash.to_vec()),
+                extra: IdentityExtra::DidCkb,
+            };
+            batch.put_identity(&spore.spore_id, &identity);
+            state.put_identity(&spore.spore_id, identity);
+            batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
+            state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
+            return Ok(());
+        }
+
+        // Regular spore/object handling below.
+        let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
+        let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_live_tier = if was_live {
             existing
                 .as_ref()
@@ -487,11 +381,7 @@ impl BatchWriter {
         } else {
             None
         };
-        let new_cluster = if new_is_did {
-            None
-        } else {
-            spore.cluster_id.clone()
-        };
+        let new_cluster = spore.cluster_id.clone();
         let media_profile = if let Some(precomputed) = &spore.media_profile {
             precomputed.clone()
         } else {
@@ -499,7 +389,7 @@ impl BatchWriter {
                 state
                     .get_spore(self.store.as_ref(), cluster_id)?
                     .and_then(|entry| {
-                        if entry.standard == DobStandard::SporeCluster {
+                        if entry.standard == ObjectStandard::SporeCluster {
                             entry.description
                         } else {
                             None
@@ -514,137 +404,33 @@ impl BatchWriter {
                 cluster_description.as_deref(),
             )
         };
-        let new_live_tier = if new_is_did {
-            StorageDependencyTier::Unknown
-        } else {
-            media_profile.tier
-        };
-        let entry = if new_is_did {
-            DobEntry {
-                standard: DobStandard::DidCkb,
-                collection_id: None,
-                owner_lock_hash: Some(spore.owner_lock_hash.clone()),
-                name: None,
-                description: None,
-                is_live: true,
-                created_at_block: existing
-                    .as_ref()
-                    .map(|e| e.created_at_block)
-                    .unwrap_or(block_number),
-                created_at_tx: existing
-                    .as_ref()
-                    .map(|e| e.created_at_tx.clone())
-                    .unwrap_or_else(|| tx_hash.to_vec()),
-                extra: DobExtra::DidCkb,
-            }
-        } else {
-            DobEntry {
-                standard: DobStandard::Spore,
-                collection_id: new_cluster.clone(),
-                owner_lock_hash: Some(spore.owner_lock_hash.clone()),
-                name: None,
-                description: None,
-                is_live: true,
-                created_at_block: existing
-                    .as_ref()
-                    .map(|e| e.created_at_block)
-                    .unwrap_or(block_number),
-                created_at_tx: existing
-                    .as_ref()
-                    .map(|e| e.created_at_tx.clone())
-                    .unwrap_or_else(|| tx_hash.to_vec()),
-                extra: DobExtra::Spore {
-                    content_type: spore.content_type.clone(),
-                    content_length: spore.content.len() as i64,
-                    media_profile,
-                },
-            }
+        let new_live_tier = media_profile.tier;
+        let entry = ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: new_cluster.clone(),
+            token_id: None,
+            owner_lock_hash: Some(spore.owner_lock_hash.clone()),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: existing
+                .as_ref()
+                .map(|e| e.created_at_block)
+                .unwrap_or(block_number),
+            created_at_tx: existing
+                .as_ref()
+                .map(|e| e.created_at_tx.clone())
+                .unwrap_or_else(|| tx_hash.to_vec()),
+            extra: ObjectExtra::Spore {
+                content_type: spore.content_type.clone(),
+                content_length: spore.content.len() as i64,
+                media_profile,
+            },
         };
         batch.put_spore(&spore.spore_id, &entry);
         state.put_spore(&spore.spore_id, entry);
         batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
         state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
-
-        if new_is_did {
-            if !(old_is_did && was_live) {
-                batch.put_nft_by_collection(&DID_CKB_SENTINEL_COLLECTION, &spore.spore_id);
-            }
-            let mut agg = state
-                .get_did_collection_aggregate(self.store.as_ref())?
-                .unwrap_or_else(|| NftCollectionAggregate {
-                    name: Some("did:ckb".to_string()),
-                    standard: NftStandard::DidCkb,
-                    ..Default::default()
-                });
-
-            if existing.is_none() {
-                agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb collection total_count overflow while inserting: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    )
-                })?;
-                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb collection live_count overflow while inserting: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    )
-                })?;
-                self.apply_did_owner_transition(
-                    None,
-                    Some(spore.owner_lock_hash.as_slice()),
-                    &mut agg,
-                    batch,
-                    state,
-                )?;
-            } else if !was_live {
-                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb collection live_count overflow while reactivating: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    )
-                })?;
-                self.apply_did_owner_transition(
-                    None,
-                    Some(spore.owner_lock_hash.as_slice()),
-                    &mut agg,
-                    batch,
-                    state,
-                )?;
-            } else {
-                if old_owner.is_none() {
-                    bail!(
-                        "did:ckb live entry missing owner_lock_hash during transfer: spore_id=0x{}",
-                        hex::encode(&spore.spore_id)
-                    );
-                }
-                self.apply_did_owner_transition(
-                    old_owner.as_deref(),
-                    Some(spore.owner_lock_hash.as_slice()),
-                    &mut agg,
-                    batch,
-                    state,
-                )?;
-                let hour_bucket = timestamp_ms / 3_600_000;
-                let key = ckbadger_store::keys::encode_nft_hourly_key(
-                    &DID_CKB_SENTINEL_COLLECTION,
-                    hour_bucket,
-                );
-                let current = state.get_did_hourly_transfer(self.store.as_ref(), &key)?;
-                let next = current.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "did:ckb hourly transfer overflow: hour_bucket={}, current={}",
-                        hour_bucket,
-                        current
-                    )
-                })?;
-                batch.put_nft_hourly_transfer(&DID_CKB_SENTINEL_COLLECTION, hour_bucket, next);
-                state.put_did_hourly_transfer(key, next);
-            }
-
-            state.put_did_collection_aggregate(agg, batch);
-            return Ok(());
-        }
 
         if old_cluster != new_cluster {
             if let Some(ref old_cluster_id) = old_cluster {
@@ -785,10 +571,13 @@ impl BatchWriter {
         Ok(())
     }
 
-    /// Consume a spore. Returns the effective collection_id:
-    /// - `DID_CKB_SENTINEL_COLLECTION` for did:ckb entries
-    /// - `cluster_id` for regular spores with a cluster
-    /// - `None` if entry not found, already consumed, or clusterless
+    /// Consume a spore/object or did:ckb identity.
+    ///
+    /// For did:ckb entries: marks the identity as consumed in the identity store.
+    /// Returns `None` (identities have no collection hierarchy).
+    ///
+    /// For regular spores: returns the `cluster_id` if consumed, or `None` if
+    /// entry not found, already consumed, or clusterless.
     pub(crate) fn consume_spore(
         &self,
         spore_id: &[u8],
@@ -797,6 +586,20 @@ impl BatchWriter {
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<Option<Vec<u8>>> {
+        // Check identity store first (did:ckb)
+        if let Some(mut identity) = state.get_identity(self.store.as_ref(), spore_id)? {
+            if !identity.is_live {
+                return Ok(None);
+            }
+            identity.is_live = false;
+            identity.owner_lock_hash = None;
+            batch.put_identity(spore_id, &identity);
+            state.put_identity(spore_id, identity);
+            // Identities do not participate in collection hierarchy
+            return Ok(None);
+        }
+
+        // Check object store (regular spore)
         if let Some(mut entry) = state.get_spore(self.store.as_ref(), spore_id)? {
             if !entry.is_live {
                 return Ok(None);
@@ -805,41 +608,11 @@ impl BatchWriter {
             let old_owner = entry.owner_lock_hash.clone();
             let cluster_id = entry.collection_id.clone();
             let old_tier = Self::spore_media_tier(&entry);
-            let is_did = entry.standard == DobStandard::DidCkb;
 
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_spore(spore_id, &entry);
             state.put_spore(spore_id, entry);
-
-            if is_did {
-                let Some(mut agg) = state.get_did_collection_aggregate(self.store.as_ref())? else {
-                    bail!("did:ckb collection aggregate missing");
-                };
-                if old_owner.is_none() {
-                    bail!(
-                        "did:ckb live entry missing owner_lock_hash during consume: spore_id=0x{}",
-                        hex::encode(spore_id)
-                    );
-                }
-                if agg.live_count <= 0 {
-                    bail!(
-                        "did:ckb collection live_count underflow on consume: live_count={}, spore_id=0x{}",
-                        agg.live_count,
-                        hex::encode(spore_id)
-                    );
-                }
-                agg.live_count -= 1;
-                self.apply_did_owner_transition(
-                    old_owner.as_deref(),
-                    None,
-                    &mut agg,
-                    batch,
-                    state,
-                )?;
-                state.put_did_collection_aggregate(agg, batch);
-                return Ok(Some(DID_CKB_SENTINEL_COLLECTION.to_vec()));
-            }
 
             // Update cluster aggregate
             if let Some(ref cid) = cluster_id {
@@ -1003,17 +776,18 @@ mod tests {
     use ckbadger_store::store::CkbadgerStore;
     use std::sync::Arc;
 
-    fn make_spore_entry(cluster_id: &[u8], owner_lock: &[u8]) -> DobEntry {
-        DobEntry {
-            standard: DobStandard::Spore,
+    fn make_spore_entry(cluster_id: &[u8], owner_lock: &[u8]) -> ObjectEntry {
+        ObjectEntry {
+            standard: ObjectStandard::Spore,
             collection_id: Some(cluster_id.to_vec()),
+            token_id: None,
             owner_lock_hash: Some(owner_lock.to_vec()),
             name: None,
             description: None,
             is_live: true,
             created_at_block: 1,
             created_at_tx: vec![0xAA; 32],
-            extra: DobExtra::Spore {
+            extra: ObjectExtra::Spore {
                 content_type: "image/png".to_string(),
                 content_length: 4,
                 media_profile: SporeMediaProfile {
@@ -1463,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_did_ckb_cell_updates_nft_collection_aggregate_and_index() {
+    fn test_insert_did_ckb_cell_writes_identity_entry() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
@@ -1484,42 +1258,17 @@ mod tests {
                 &mut state,
             )
             .unwrap();
-        writer
-            .insert_spore_cell(
-                &make_parsed_did(&did_id, &owner),
-                &[0x11; 32],
-                0,
-                201,
-                7_200_000,
-                &mut batch,
-                &mut state,
-            )
-            .unwrap();
         batch.commit().unwrap();
 
-        let agg = store
-            .get_nft_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+        // Verify identity was written to identity store
+        let identity = store
+            .get_identity(&did_id)
             .unwrap()
-            .unwrap();
-        assert_eq!(agg.standard, NftStandard::DidCkb);
-        assert_eq!(agg.name.as_deref(), Some("did:ckb"));
-        assert_eq!(agg.total_count, 1);
-        assert_eq!(agg.live_count, 1);
-        assert_eq!(agg.holders_count, 1);
-
-        let ids = store
-            .list_nft_ids_by_collection(&DID_CKB_SENTINEL_COLLECTION, None, 10)
-            .unwrap();
-        assert_eq!(ids, vec![did_id.clone()]);
-
-        let transfers = store.scan_all_nft_24h_transfers(7_200_000).unwrap();
-        assert_eq!(
-            transfers
-                .get(DID_CKB_SENTINEL_COLLECTION.as_slice())
-                .copied()
-                .unwrap_or(0),
-            1
-        );
+            .expect("identity exists");
+        assert_eq!(identity.standard, IdentityStandard::DidCkb);
+        assert!(identity.is_live);
+        assert_eq!(identity.owner_lock_hash, Some(owner));
+        assert!(matches!(identity.extra, IdentityExtra::DidCkb));
     }
 
     #[test]
@@ -1544,27 +1293,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_did_hourly_transfer_errors_on_invalid_existing_value_length() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone());
-        let mut state = writer.new_spore_batch_state();
-
-        let key = ckbadger_store::keys::encode_nft_hourly_key(&DID_CKB_SENTINEL_COLLECTION, 7);
-        let mut seed = StoreBatch::new(writer.store());
-        seed.put_stats(&key, &[1, 2, 3]);
-        seed.commit().unwrap();
-
-        let err = state
-            .get_did_hourly_transfer(writer.store(), &key)
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("invalid did:ckb hourly transfer value length"));
-    }
-
-    #[test]
-    fn test_consume_did_ckb_cell_decrements_live_count() {
+    fn test_consume_did_ckb_cell_marks_identity_consumed() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone());
@@ -1591,18 +1320,20 @@ mod tests {
 
         let mut batch = StoreBatch::new(writer.store());
         let mut state = writer.new_spore_batch_state();
-        writer
+        let result = writer
             .consume_spore(&did_id, 301, &[0x23; 32], &mut batch, &mut state)
             .unwrap();
         batch.commit().unwrap();
 
-        let agg = store
-            .get_nft_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+        // Identities return None (no collection hierarchy)
+        assert!(result.is_none());
+
+        let identity = store
+            .get_identity(&did_id)
             .unwrap()
-            .unwrap();
-        assert_eq!(agg.live_count, 0);
-        assert_eq!(agg.total_count, 1);
-        assert_eq!(agg.holders_count, 0);
+            .expect("identity exists");
+        assert!(!identity.is_live);
+        assert!(identity.owner_lock_hash.is_none());
     }
 
     #[test]

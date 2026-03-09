@@ -11,11 +11,11 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, DobEntry, DobExtra,
-    DobStandard, EpochStats, HourlyStats, LiveCellInfo, MinerStats, NftCollectionActivityEntry,
-    NftCollectionAggregate, NftDailyDelta, NftEntry, NftExtra, NftStandard, ReorgEvent,
-    ScriptDailyDelta, ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo,
-    TxIndexEntry,
+    DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, EpochStats, HourlyStats,
+    IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats,
+    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
+    ObjectExtra, ObjectStandard, ReorgEvent, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -1808,11 +1808,11 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             ..Default::default()
         },
     );
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &nft_collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some("NFT Collection".to_string()),
-            standard: NftStandard::MnftClass,
+            standard: ObjectStandard::MnftClass,
             total_count: 6,
             live_count: 6,
             holders_count: 0,
@@ -1832,10 +1832,10 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
         )
         .unwrap();
     store
-        .put_nft_daily_delta(
+        .put_object_daily_delta(
             &nft_collection_id,
             20240101,
-            &NftDailyDelta {
+            &ObjectDailyDelta {
                 live_capacity_delta: 700,
                 live_occupied_capacity_delta: 600,
             },
@@ -3230,16 +3230,17 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let cluster_id = [0x42u8; 32];
     let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
 
-    let cluster_entry = DobEntry {
-        standard: DobStandard::SporeCluster,
+    let cluster_entry = ObjectEntry {
+        standard: ObjectStandard::SporeCluster,
         collection_id: None,
+        token_id: None,
         owner_lock_hash: Some(vec![0x11; 32]),
         name: Some("Test Cluster".to_string()),
         description: None,
         is_live: true,
         created_at_block: 123,
         created_at_tx: vec![0x22; 32],
-        extra: DobExtra::SporeCluster,
+        extra: ObjectExtra::SporeCluster,
     };
     store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
     store
@@ -3328,16 +3329,17 @@ async fn test_spore_cluster_holders_supports_pagination() {
     store
         .put_spore_direct(
             &cluster_id,
-            &DobEntry {
-                standard: DobStandard::SporeCluster,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
                 collection_id: None,
+                token_id: None,
                 owner_lock_hash: Some(owner_a.to_vec()),
                 name: Some("Holders Cluster".to_string()),
                 description: None,
                 is_live: true,
                 created_at_block: 88,
                 created_at_tx: vec![0x33; 32],
-                extra: DobExtra::SporeCluster,
+                extra: ObjectExtra::SporeCluster,
             },
         )
         .unwrap();
@@ -3402,16 +3404,17 @@ async fn test_spore_cluster_activities_supports_action_filter() {
     core_store
         .put_spore_direct(
             &cluster_id,
-            &DobEntry {
-                standard: DobStandard::SporeCluster,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
                 collection_id: None,
+                token_id: None,
                 owner_lock_hash: Some(vec![0x21; 32]),
                 name: Some("Activities Cluster".to_string()),
                 description: None,
                 is_live: true,
                 created_at_block: 80,
                 created_at_tx: vec![0x31; 32],
-                extra: DobExtra::SporeCluster,
+                extra: ObjectExtra::SporeCluster,
             },
         )
         .unwrap();
@@ -3499,33 +3502,33 @@ async fn test_spore_cluster_activities_supports_action_filter() {
     core_batch.commit().unwrap();
 
     let mut append_batch = StoreBatch::new(append_only_store.as_ref());
-    append_batch.put_nft_collection_activity(
+    append_batch.put_object_collection_activity(
         &cluster_id,
         100,
         0,
-        &NftCollectionActivityEntry {
+        &ObjectCollectionActivityEntry {
             tx_hash: mint_tx.clone(),
             block_hash: vec![0xA1; 32],
             timestamp_ms: 1_700_000_100,
             actions: vec![AssetAction::Mint],
         },
     );
-    append_batch.put_nft_collection_activity(
+    append_batch.put_object_collection_activity(
         &cluster_id,
         200,
         0,
-        &NftCollectionActivityEntry {
+        &ObjectCollectionActivityEntry {
             tx_hash: transfer_tx.clone(),
             block_hash: vec![0xA2; 32],
             timestamp_ms: 1_700_000_200,
             actions: vec![AssetAction::Transfer],
         },
     );
-    append_batch.put_nft_collection_activity(
+    append_batch.put_object_collection_activity(
         &cluster_id,
         300,
         0,
-        &NftCollectionActivityEntry {
+        &ObjectCollectionActivityEntry {
             tx_hash: burn_tx.clone(),
             block_hash: vec![0xA3; 32],
             timestamp_ms: 1_700_000_300,
@@ -3590,16 +3593,17 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let spore_id = [0x77u8; 32];
     let spore_id_hex = format!("0x{}", hex::encode(spore_id));
 
-    let spore_entry = DobEntry {
-        standard: DobStandard::Spore,
+    let spore_entry = ObjectEntry {
+        standard: ObjectStandard::Spore,
         collection_id: None,
+        token_id: None,
         owner_lock_hash: Some(vec![0xAA; 32]),
         name: None,
         description: None,
         is_live: true,
         created_at_block: 321,
         created_at_tx: vec![0xBB; 32],
-        extra: DobExtra::Spore {
+        extra: ObjectExtra::Spore {
             content_type: "image/png".to_string(),
             content_length: 1024,
             media_profile: SporeMediaProfile::default(),
@@ -3686,9 +3690,10 @@ async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
     let spore_id = [0x55u8; 32];
     let spore_id_hex = format!("0x{}", hex::encode(spore_id));
 
-    let cluster_entry = DobEntry {
-        standard: DobStandard::SporeCluster,
+    let cluster_entry = ObjectEntry {
+        standard: ObjectStandard::SporeCluster,
         collection_id: None,
+        token_id: None,
         owner_lock_hash: Some(vec![0x11; 32]),
         name: Some("DOB Cluster".to_string()),
         description: Some(
@@ -3712,20 +3717,21 @@ async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
         is_live: true,
         created_at_block: 100,
         created_at_tx: vec![0x22; 32],
-        extra: DobExtra::SporeCluster,
+        extra: ObjectExtra::SporeCluster,
     };
     store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
 
-    let spore_entry = DobEntry {
-        standard: DobStandard::Spore,
+    let spore_entry = ObjectEntry {
+        standard: ObjectStandard::Spore,
         collection_id: Some(cluster_id.to_vec()),
+        token_id: None,
         owner_lock_hash: Some(vec![0xAA; 32]),
         name: None,
         description: None,
         is_live: true,
         created_at_block: 321,
         created_at_tx: vec![0xBB; 32],
-        extra: DobExtra::Spore {
+        extra: ObjectExtra::Spore {
             content_type: "dob/0".to_string(),
             content_length: 128,
             media_profile: SporeMediaProfile::default(),
@@ -3758,16 +3764,17 @@ async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing
     let store = test_store();
 
     let cluster_id = [0x42u8; 32];
-    let cluster_entry = DobEntry {
-        standard: DobStandard::SporeCluster,
+    let cluster_entry = ObjectEntry {
+        standard: ObjectStandard::SporeCluster,
         collection_id: None,
+        token_id: None,
         owner_lock_hash: Some(vec![0x11; 32]),
         name: Some("Recovered Cluster Name".to_string()),
         description: Some("desc".to_string()),
         is_live: true,
         created_at_block: 123,
         created_at_tx: vec![0x22; 32],
-        extra: DobExtra::SporeCluster,
+        extra: ObjectExtra::SporeCluster,
     };
     store.put_spore_direct(&cluster_id, &cluster_entry).unwrap();
 
@@ -3864,16 +3871,17 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
     store
         .put_spore_direct(
             &spore_cluster_id,
-            &DobEntry {
-                standard: DobStandard::SporeCluster,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
                 collection_id: None,
+                token_id: None,
                 owner_lock_hash: Some(vec![0x11; 32]),
                 name: Some("Spore Filter Cluster".to_string()),
                 description: None,
                 is_live: true,
                 created_at_block: 100,
                 created_at_tx: vec![0x22; 32],
-                extra: DobExtra::SporeCluster,
+                extra: ObjectExtra::SporeCluster,
             },
         )
         .unwrap();
@@ -3890,11 +3898,11 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
             ..Default::default()
         },
     );
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &dotbit_collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 1,
             live_count: 1,
             holders_count: 0,
@@ -4022,11 +4030,11 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
     let did_collection_id = *b"did_ckb_collection______________";
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &did_collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some("did:ckb".to_string()),
-            standard: NftStandard::DidCkb,
+            standard: ObjectStandard::default(),
             total_count: 2,
             live_count: 2,
             holders_count: 0,
@@ -4060,36 +4068,31 @@ async fn test_nft_collection_items_supports_did_ckb_collection_from_spore_data()
     let did_collection_id = *b"did_ckb_collection______________";
     let did_id = [0xD3u8; 32];
 
-    store
-        .put_spore_direct(
-            &did_id,
-            &DobEntry {
-                standard: DobStandard::DidCkb,
-                collection_id: None,
-                owner_lock_hash: Some(vec![0x11; 32]),
-                name: Some("did:alice.ckb".to_string()),
-                description: None,
-                is_live: true,
-                created_at_block: 321,
-                created_at_tx: vec![0x22; 32],
-                extra: DobExtra::DidCkb,
-            },
-        )
-        .unwrap();
-
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_identity(
+        &did_id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x11; 32]),
+            name: Some("did:alice.ckb".to_string()),
+            is_live: true,
+            created_at_block: 321,
+            created_at_tx: vec![0x22; 32],
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.put_object_collection_aggregate(
         &did_collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some("did:ckb".to_string()),
-            standard: NftStandard::DidCkb,
+            standard: ObjectStandard::default(),
             total_count: 1,
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    batch.put_nft_by_collection(&did_collection_id, &did_id);
+    batch.put_object_by_collection(&did_collection_id, &did_id);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -4307,11 +4310,11 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let collection_id_hex = format!("0x{}", hex::encode(collection_id));
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some("Test NFT Collection".to_string()),
-            standard: NftStandard::MnftToken,
+            standard: ObjectStandard::MnftToken,
             total_count: 100,
             live_count: 60,
             holders_count: 0,
@@ -4321,20 +4324,20 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     batch.commit().unwrap();
 
     store
-        .put_nft_daily_delta(
+        .put_object_daily_delta(
             &collection_id,
             20240115,
-            &NftDailyDelta {
+            &ObjectDailyDelta {
                 live_capacity_delta: 100,
                 live_occupied_capacity_delta: 60,
             },
         )
         .unwrap();
     store
-        .put_nft_daily_delta(
+        .put_object_daily_delta(
             &collection_id,
             20240117,
-            &NftDailyDelta {
+            &ObjectDailyDelta {
                 live_capacity_delta: -20,
                 live_occupied_capacity_delta: -10,
             },
@@ -4397,11 +4400,11 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: None,
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 200,
             live_count: 120,
             holders_count: 0,
@@ -4411,10 +4414,10 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     batch.commit().unwrap();
 
     store
-        .put_nft_daily_delta(
+        .put_object_daily_delta(
             &collection_id,
             20240115,
-            &NftDailyDelta {
+            &ObjectDailyDelta {
                 live_capacity_delta: 100,
                 live_occupied_capacity_delta: 60,
             },
@@ -4474,11 +4477,11 @@ async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 200,
             live_count: 120,
             holders_count: 77,
@@ -4508,43 +4511,38 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let collection_id = b"did_ckb_collection______________".to_vec();
     let did_id = [0xA5u8; 32];
 
-    store
-        .put_spore_direct(
-            &did_id,
-            &DobEntry {
-                standard: DobStandard::DidCkb,
-                collection_id: None,
-                owner_lock_hash: Some(vec![0x21; 32]),
-                name: Some("did:alice.ckb".to_string()),
-                description: None,
-                is_live: true,
-                created_at_block: 888,
-                created_at_tx: vec![0x33; 32],
-                extra: DobExtra::DidCkb,
-            },
-        )
-        .unwrap();
-
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_identity(
+        &did_id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(vec![0x21; 32]),
+            name: Some("did:alice.ckb".to_string()),
+            is_live: true,
+            created_at_block: 888,
+            created_at_tx: vec![0x33; 32],
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: None,
-            standard: NftStandard::DidCkb,
+            standard: ObjectStandard::default(),
             total_count: 1,
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    batch.put_nft_by_collection(&collection_id, &did_id);
+    batch.put_object_by_collection(&collection_id, &did_id);
     batch.commit().unwrap();
 
     store
-        .put_nft_daily_delta(
+        .put_object_daily_delta(
             &collection_id,
             20240115,
-            &NftDailyDelta {
+            &ObjectDailyDelta {
                 live_capacity_delta: 120,
                 live_occupied_capacity_delta: 70,
             },
@@ -4597,22 +4595,22 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
     let mint_tx = vec![0x91; 32];
     let transfer_tx = vec![0x92; 32];
 
-    store
-        .put_spore_direct(
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
             &did_id,
-            &DobEntry {
-                standard: DobStandard::DidCkb,
-                collection_id: None,
+            &IdentityEntry {
+                standard: IdentityStandard::DidCkb,
                 owner_lock_hash: Some(vec![0x31; 32]),
                 name: Some("did:alice.ckb".to_string()),
-                description: None,
                 is_live: true,
                 created_at_block: 100,
                 created_at_tx: mint_tx.clone(),
-                extra: DobExtra::DidCkb,
+                extra: IdentityExtra::DidCkb,
             },
-        )
-        .unwrap();
+        );
+        batch.commit().unwrap();
+    }
 
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_spore_outpoint(&mint_tx, 0, &did_id);
@@ -4725,11 +4723,11 @@ async fn test_assets_nft_list_uses_dotbit_display_name_when_aggregate_name_missi
     let collection_id = b"dotbit_collection_______________".to_vec();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: None,
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 20,
             live_count: 12,
             holders_count: 0,
@@ -4767,53 +4765,51 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     let nft_a_output_index = 2i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 2,
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_a,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_a.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(vec![0x31; 32]),
             name: Some("alice.bit".to_string()),
             is_live: true,
             created_at_block: 100,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_b,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_b.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: None,
             name: Some("bob.bit".to_string()),
             is_live: false,
             created_at_block: 101,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_900_000_000),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft_by_collection(&collection_id, &nft_a);
-    batch.put_nft_by_collection(&collection_id, &nft_b);
+    batch.put_object_by_collection(&collection_id, &nft_a);
+    batch.put_object_by_collection(&collection_id, &nft_b);
     batch.put_cell(
         &nft_a_tx_hash,
         nft_a_output_index,
@@ -4947,35 +4943,34 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
     let output_index = 3i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 1,
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_id,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_id.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(vec![0x31; 32]),
             name: Some("indexed.bit".to_string()),
             is_live: true,
             created_at_block: 100,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft_by_collection(&collection_id, &nft_id);
+    batch.put_object_by_collection(&collection_id, &nft_id);
     batch.put_cell(
         &tx_hash,
         output_index,
@@ -5023,35 +5018,34 @@ async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fas
     let nft_id = [0x67u8; 20];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 1,
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_id,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_id.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(vec![0x31; 32]),
             name: Some("broken.bit".to_string()),
             is_live: true,
             created_at_block: 100,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft_by_collection(&collection_id, &nft_id);
+    batch.put_object_by_collection(&collection_id, &nft_id);
     // Intentionally no outpoint index and no fallback-resolvable live cell.
     batch.commit().unwrap();
 
@@ -5084,28 +5078,30 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
     let collection_id_hex = format!("0x{}", hex::encode(class_id));
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &class_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some("Genesis Class".to_string()),
-            standard: NftStandard::MnftClass,
+            standard: ObjectStandard::MnftClass,
             total_count: 1,
             live_count: 1,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    batch.put_nft(
+    batch.put_object(
         &class_id,
-        &NftEntry {
-            standard: NftStandard::MnftClass,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftClass,
             collection_id: Some(issuer_id.to_vec()),
             token_id: None,
             owner_lock_hash: Some(vec![0x11; 32]),
             name: Some("Genesis Class".to_string()),
+            description: None,
             is_live: true,
             created_at_block: 100,
-            extra: NftExtra::MnftClass {
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftClass {
                 description: Some("Class description".to_string()),
                 renderer: Some("renderer:v1".to_string()),
                 total: 1000,
@@ -5114,17 +5110,19 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             },
         },
     );
-    batch.put_nft(
+    batch.put_object(
         &token_id,
-        &NftEntry {
-            standard: NftStandard::MnftToken,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftToken,
             collection_id: Some(class_id.to_vec()),
             token_id: Some(token_id.to_vec()),
             owner_lock_hash: Some(vec![0x22; 32]),
             name: None,
+            description: None,
             is_live: true,
             created_at_block: 101,
-            extra: NftExtra::MnftToken {
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftToken {
                 token_index: 1,
                 characteristic: vec![1, 2, 3, 4, 5, 6, 7, 8],
                 configure: 3,
@@ -5132,7 +5130,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             },
         },
     );
-    batch.put_nft_by_collection(&class_id, &token_id);
+    batch.put_object_by_collection(&class_id, &token_id);
     batch.put_mnft_token_outpoint(&tx_hash, output_index, &token_id);
     batch.put_cell(
         &tx_hash,
@@ -5190,91 +5188,87 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
     let owner_c = vec![0x33u8; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft_collection_aggregate(
+    batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 4,
             live_count: 3,
             holders_count: 2,
             activities_count: 0,
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_a,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_a.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(owner_a.clone()),
             name: Some("alpha.bit".to_string()),
             is_live: true,
             created_at_block: 100,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_b,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_b.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(owner_a.clone()),
             name: Some("beta.bit".to_string()),
             is_live: true,
             created_at_block: 101,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_001),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_c,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_c.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(owner_b.clone()),
             name: Some("gamma.bit".to_string()),
             is_live: true,
             created_at_block: 102,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_002),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft(
+    batch.put_identity(
         &nft_d,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(nft_d.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(owner_c),
             name: Some("dead.bit".to_string()),
             is_live: false,
             created_at_block: 103,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_003),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    batch.put_nft_by_collection(&collection_id, &nft_a);
-    batch.put_nft_by_collection(&collection_id, &nft_b);
-    batch.put_nft_by_collection(&collection_id, &nft_c);
-    batch.put_nft_by_collection(&collection_id, &nft_d);
-    batch.put_nft_collection_owner_count(&collection_id, &owner_a, 2);
-    batch.put_nft_collection_owner_count(&collection_id, &owner_b, 1);
+    batch.put_object_by_collection(&collection_id, &nft_a);
+    batch.put_object_by_collection(&collection_id, &nft_b);
+    batch.put_object_by_collection(&collection_id, &nft_c);
+    batch.put_object_by_collection(&collection_id, &nft_d);
+    batch.put_object_collection_owner_count(&collection_id, &owner_a, 2);
+    batch.put_object_collection_owner_count(&collection_id, &owner_b, 1);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -5325,35 +5319,34 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     let burn_tx = vec![0xa3; 32];
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_nft_collection_aggregate(
+    core_batch.put_object_collection_aggregate(
         &collection_id,
-        &NftCollectionAggregate {
+        &ObjectCollectionAggregate {
             name: Some(".bit".to_string()),
-            standard: NftStandard::DotBit,
+            standard: ObjectStandard::default(),
             total_count: 1,
             live_count: 0,
             holders_count: 0,
             activities_count: 0,
         },
     );
-    core_batch.put_nft(
+    core_batch.put_identity(
         &account_id,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(account_id.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: None,
             name: Some("burned.bit".to_string()),
             is_live: false,
             created_at_block: 100,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,
             },
         },
     );
-    core_batch.put_nft_by_collection(&collection_id, &account_id);
+    core_batch.put_object_by_collection(&collection_id, &account_id);
     core_batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
     core_batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
     core_batch.put_consumed_cell_with_consumer(
@@ -5477,33 +5470,33 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     core_batch.commit().unwrap();
 
     let mut append_batch = StoreBatch::new(append_only_store.as_ref());
-    append_batch.put_nft_collection_activity(
+    append_batch.put_object_collection_activity(
         &collection_id,
         100,
         0,
-        &NftCollectionActivityEntry {
+        &ObjectCollectionActivityEntry {
             tx_hash: mint_tx.clone(),
             block_hash: vec![0xB1; 32],
             timestamp_ms: 1_700_000_100,
             actions: vec![AssetAction::Mint],
         },
     );
-    append_batch.put_nft_collection_activity(
+    append_batch.put_object_collection_activity(
         &collection_id,
         200,
         0,
-        &NftCollectionActivityEntry {
+        &ObjectCollectionActivityEntry {
             tx_hash: transfer_tx.clone(),
             block_hash: vec![0xB2; 32],
             timestamp_ms: 1_700_000_200,
             actions: vec![AssetAction::Transfer],
         },
     );
-    append_batch.put_nft_collection_activity(
+    append_batch.put_object_collection_activity(
         &collection_id,
         300,
         0,
-        &NftCollectionActivityEntry {
+        &ObjectCollectionActivityEntry {
             tx_hash: burn_tx.clone(),
             block_hash: vec![0xB3; 32],
             timestamp_ms: 1_700_000_300,
@@ -5559,34 +5552,38 @@ async fn test_assets_nft_item_detail_mnft() {
     let output_index = 4i16;
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft(
+    batch.put_object(
         &issuer_id,
-        &NftEntry {
-            standard: NftStandard::MnftIssuer,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftIssuer,
             collection_id: None,
             token_id: None,
             owner_lock_hash: Some(vec![0x01; 32]),
             name: Some("Issuer-A".to_string()),
+            description: None,
             is_live: true,
             created_at_block: 90,
-            extra: NftExtra::MnftIssuer {
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftIssuer {
                 class_count: 2,
                 set_count: 3,
                 info: Some(br#"{"name":"Issuer-A"}"#.to_vec()),
             },
         },
     );
-    batch.put_nft(
+    batch.put_object(
         &class_id,
-        &NftEntry {
-            standard: NftStandard::MnftClass,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftClass,
             collection_id: Some(issuer_id.to_vec()),
             token_id: None,
             owner_lock_hash: Some(vec![0x02; 32]),
             name: Some("Class-A".to_string()),
+            description: None,
             is_live: true,
             created_at_block: 95,
-            extra: NftExtra::MnftClass {
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftClass {
                 description: Some("Class description".to_string()),
                 renderer: Some("renderer:v1".to_string()),
                 total: 500,
@@ -5595,17 +5592,19 @@ async fn test_assets_nft_item_detail_mnft() {
             },
         },
     );
-    batch.put_nft(
+    batch.put_object(
         &token_id,
-        &NftEntry {
-            standard: NftStandard::MnftToken,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftToken,
             collection_id: Some(class_id.to_vec()),
             token_id: Some(token_id.to_vec()),
             owner_lock_hash: Some(vec![0x03; 32]),
             name: None,
+            description: None,
             is_live: true,
             created_at_block: 120,
-            extra: NftExtra::MnftToken {
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftToken {
                 token_index: 128,
                 characteristic: vec![0xaa; 8],
                 configure: 5,
@@ -5672,17 +5671,19 @@ async fn test_assets_nft_item_activities_mnft() {
     let transfer_tx = vec![0x91; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft(
+    batch.put_object(
         &token_id,
-        &NftEntry {
-            standard: NftStandard::MnftToken,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftToken,
             collection_id: Some(class_id.to_vec()),
             token_id: Some(token_id.to_vec()),
             owner_lock_hash: Some(owner_lock_hash.clone()),
             name: None,
+            description: None,
             is_live: true,
             created_at_block: 120,
-            extra: NftExtra::MnftToken {
+            created_at_tx: vec![],
+            extra: ObjectExtra::MnftToken {
                 token_index: 128,
                 characteristic: vec![0xaa; 8],
                 configure: 5,
@@ -5833,17 +5834,16 @@ async fn test_assets_nft_item_activities_dotbit() {
     let transfer_tx_2 = vec![0xa4; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft(
+    batch.put_identity(
         &account_id,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(account_id.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(owner_c.clone()),
             name: Some("alice.bit".to_string()),
             is_live: true,
             created_at_block: 120,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,
@@ -6019,17 +6019,16 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     let burn_tx = vec![0xb3; 32];
 
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_nft(
+    batch.put_identity(
         &account_id,
-        &NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(account_id.to_vec()),
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: None,
             name: Some("recycled.bit".to_string()),
             is_live: false,
             created_at_block: 100,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_800_000_000),
                 registered_at: None,
                 status: None,

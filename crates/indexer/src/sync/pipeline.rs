@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use ckbadger_store::types::{LiveCellInfo, NftTypeIndex, SporeTypeIndex};
+use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, SporeTypeIndex};
 
 use crate::db::writer::dotbit::DOTBIT_SENTINEL_COLLECTION;
 use crate::parser::{
@@ -316,8 +316,8 @@ impl Indexer {
             HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
             HashMap<(Vec<u8>, u32), (i128, i128)>, // spore_daily_changes
             HashMap<(Vec<u8>, u32), (i128, i128)>, // cluster_daily_changes
-            HashMap<Vec<u8>, NftTypeIndex>,        // nft_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // nft_daily_changes
+            HashMap<Vec<u8>, ObjectTypeIndex>,     // object_type_index_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>, // object_daily_changes
             PreParsedSporeData,                    // pre-parsed spore/cluster data
             PreParsedNftData,                      // pre-parsed mNFT/DotBit data
             ParserBatchPerfSample,                 // parser hotpath timings
@@ -1134,11 +1134,13 @@ impl Indexer {
                 let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
                 let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
                     HashMap::new();
-                let mut nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex> = HashMap::new();
-                let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+                let mut object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex> =
+                    HashMap::new();
+                let mut object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> =
+                    HashMap::new();
                 let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> =
                     HashMap::new();
-                let mut nft_type_index_cache: HashMap<Vec<u8>, Option<NftTypeIndex>> =
+                let mut object_type_index_cache: HashMap<Vec<u8>, Option<ObjectTypeIndex>> =
                     HashMap::new();
 
                 for tx_data in &all_tx_data {
@@ -1302,18 +1304,18 @@ impl Indexer {
                             let collection_id =
                                 classify_nft_collection_id(type_code_hash, type_args);
                             if let Some(collection_id) = collection_id {
-                                let index = NftTypeIndex {
+                                let index = ObjectTypeIndex {
                                     collection_id: collection_id.clone(),
                                 };
-                                nft_type_index_cache
+                                object_type_index_cache
                                     .insert(type_script_hash.clone(), Some(index.clone()));
-                                nft_type_index_changes.insert(type_script_hash.clone(), index);
+                                object_type_index_changes.insert(type_script_hash.clone(), index);
 
-                                let nft_daily = nft_daily_changes
+                                let object_daily = object_daily_changes
                                     .entry((collection_id, date_yyyymmdd))
                                     .or_insert((0, 0));
-                                nft_daily.0 += i128::from(cell.capacity);
-                                nft_daily.1 += i128::from(cell_occupied);
+                                object_daily.0 += i128::from(cell.capacity);
+                                object_daily.1 += i128::from(cell_occupied);
                             }
                         }
                     }
@@ -1442,18 +1444,18 @@ impl Indexer {
                                             ) {
                                                 Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
                                             } else if let Some(cached) =
-                                                nft_type_index_cache.get(type_script_hash)
+                                                object_type_index_cache.get(type_script_hash)
                                             {
                                                 cached.clone().map(|idx| idx.collection_id)
                                             } else {
                                                 match load_optional_index_from_store(
-                                                    &mut nft_type_index_cache,
+                                                    &mut object_type_index_cache,
                                                     type_script_hash,
                                                     "nft_type",
                                                     || {
                                                         writer_for_parser
                                                             .store()
-                                                            .get_nft_type_index(type_script_hash)
+                                                            .get_object_type_index(type_script_hash)
                                                     },
                                                 ) {
                                                     Ok(loaded) => {
@@ -1478,11 +1480,11 @@ impl Indexer {
                                                 }
                                             };
                                         if let Some(collection_id) = collection_id {
-                                            let nft_daily = nft_daily_changes
+                                            let object_daily = object_daily_changes
                                                 .entry((collection_id, date_yyyymmdd))
                                                 .or_insert((0, 0));
-                                            nft_daily.0 -= i128::from(info.capacity);
-                                            nft_daily.1 -= i128::from(info.occupied_capacity);
+                                            object_daily.0 -= i128::from(info.capacity);
+                                            object_daily.1 -= i128::from(info.occupied_capacity);
                                         }
                                     }
                                 }
@@ -1619,7 +1621,8 @@ impl Indexer {
                         };
                         for (id, entry) in stored_clusters {
                             let desc = entry.and_then(|e| {
-                                if e.standard == ckbadger_store::types::DobStandard::SporeCluster {
+                                if e.standard == ckbadger_store::types::ObjectStandard::SporeCluster
+                                {
                                     e.description
                                 } else {
                                     None
@@ -1773,8 +1776,8 @@ impl Indexer {
                         spore_type_index_changes,
                         spore_daily_changes,
                         cluster_daily_changes,
-                        nft_type_index_changes,
-                        nft_daily_changes,
+                        object_type_index_changes,
+                        object_daily_changes,
                         pre_parsed_spore_data,
                         pre_parsed_nft_data,
                         parser_perf_sample,
@@ -1844,8 +1847,8 @@ impl Indexer {
                     spore_type_index_changes,
                     spore_daily_changes,
                     cluster_daily_changes,
-                    nft_type_index_changes,
-                    nft_daily_changes,
+                    object_type_index_changes,
+                    object_daily_changes,
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
                     parser_perf_sample,
@@ -2017,8 +2020,8 @@ impl Indexer {
                             spore_type_index_changes,
                             spore_daily_changes,
                             cluster_daily_changes,
-                            nft_type_index_changes,
-                            nft_daily_changes,
+                            object_type_index_changes,
+                            object_daily_changes,
                             pre_parsed_spore_data,
                             pre_parsed_nft_data,
                             chain_tip,

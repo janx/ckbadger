@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Result};
-use ckbadger_store::types::DobStandard;
+use ckbadger_store::types::ObjectStandard;
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -167,7 +167,7 @@ pub fn resolve_dob_collection_name(
     }
 
     match store.get_spore(cluster_id) {
-        Ok(Some(entry)) if entry.standard == DobStandard::SporeCluster => {
+        Ok(Some(entry)) if entry.standard == ObjectStandard::SporeCluster => {
             non_empty_name(entry.name.as_deref())
         }
         _ => None,
@@ -197,7 +197,7 @@ pub fn resolve_nft_collection_name(standard: &str, aggregate_name: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ckbadger_store::types::{DobEntry, DobExtra};
+    use ckbadger_store::types::{ObjectEntry, ObjectExtra};
     use tempfile::TempDir;
 
     fn test_store() -> (TempDir, CkbadgerStore) {
@@ -220,16 +220,17 @@ mod tests {
         let (_dir, store) = test_store();
         let cluster_id = [0x22u8; 32];
 
-        let entry = DobEntry {
-            standard: DobStandard::SporeCluster,
+        let entry = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
             collection_id: None,
+            token_id: None,
             owner_lock_hash: Some(vec![0x33; 32]),
             name: Some("Cluster Entry Name".to_string()),
             description: Some("desc".to_string()),
             is_live: true,
             created_at_block: 100,
             created_at_tx: vec![0x44; 32],
-            extra: DobExtra::SporeCluster,
+            extra: ObjectExtra::SporeCluster,
         };
         store.put_spore_direct(&cluster_id, &entry).unwrap();
 
@@ -242,16 +243,17 @@ mod tests {
         let (_dir, store) = test_store();
         let cluster_id = [0x55u8; 32];
 
-        let entry = DobEntry {
-            standard: DobStandard::SporeCluster,
+        let entry = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
             collection_id: None,
+            token_id: None,
             owner_lock_hash: Some(vec![0x66; 32]),
             name: Some("   ".to_string()),
             description: None,
             is_live: true,
             created_at_block: 1,
             created_at_tx: vec![0x77; 32],
-            extra: DobExtra::SporeCluster,
+            extra: ObjectExtra::SporeCluster,
         };
         store.put_spore_direct(&cluster_id, &entry).unwrap();
 

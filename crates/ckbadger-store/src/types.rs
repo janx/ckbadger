@@ -221,46 +221,6 @@ pub struct TokenTransferRecord {
     pub timestamp: i64,
 }
 
-/// DOB (Digital Object) standard identifier.
-///
-/// DOB is an asset type on CKB. Each variant represents a specific standard
-/// or entity type within the DOB ecosystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum DobStandard {
-    /// A Spore item (individual DOB).
-    #[default]
-    Spore,
-    /// A Spore cluster (collection of Spores).
-    SporeCluster,
-    /// A did:ckb decentralized identity (single-collection DOB standard).
-    DidCkb,
-}
-
-impl DobStandard {
-    /// Wire-level name for logging/debugging.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DobStandard::Spore => "spore",
-            DobStandard::SporeCluster => "spore_cluster",
-            DobStandard::DidCkb => "did_ckb",
-        }
-    }
-
-    /// Asset-level standard name for API grouping (collapses cluster → "spore").
-    pub fn asset_standard(&self) -> &'static str {
-        match self {
-            DobStandard::Spore | DobStandard::SporeCluster => "spore",
-            DobStandard::DidCkb => "did_ckb",
-        }
-    }
-
-    /// Returns `true` for collection-level entries (clusters), `false` for items.
-    pub fn is_cluster(&self) -> bool {
-        matches!(self, DobStandard::SporeCluster)
-    }
-}
-
-/// Standard-specific data for DOB entries, stored inline via bincode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StorageDependencyTier {
@@ -305,9 +265,59 @@ pub struct SporeMediaProfile {
     pub issues: Vec<String>,
 }
 
-/// Standard-specific data for DOB entries, stored inline via bincode.
+/// Object standard identifier.
+///
+/// Object is the unified asset type on CKB covering Spore/DOB and mNFT.
+/// Each variant represents a specific standard or entity type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ObjectStandard {
+    /// A Spore item (individual DOB).
+    #[default]
+    Spore,
+    /// A Spore cluster (collection of Spores).
+    SporeCluster,
+    /// mNFT issuer (top-level entity that creates classes).
+    MnftIssuer,
+    /// mNFT class (a collection of mNFT tokens).
+    MnftClass,
+    /// mNFT token (individual NFT item).
+    MnftToken,
+}
+
+impl ObjectStandard {
+    /// Wire-level name for logging/debugging.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ObjectStandard::Spore => "spore",
+            ObjectStandard::SporeCluster => "spore_cluster",
+            ObjectStandard::MnftIssuer => "mnft_issuer",
+            ObjectStandard::MnftClass => "mnft_class",
+            ObjectStandard::MnftToken => "mnft",
+        }
+    }
+
+    /// Asset-level standard name for API grouping (collapses cluster → "spore").
+    pub fn asset_standard(&self) -> &'static str {
+        match self {
+            ObjectStandard::Spore | ObjectStandard::SporeCluster => "spore",
+            ObjectStandard::MnftIssuer | ObjectStandard::MnftClass | ObjectStandard::MnftToken => {
+                "m-nft"
+            }
+        }
+    }
+
+    /// Returns `true` for collection-level entries (clusters/classes/issuers), `false` for items.
+    pub fn is_cluster(&self) -> bool {
+        matches!(
+            self,
+            ObjectStandard::SporeCluster | ObjectStandard::MnftIssuer | ObjectStandard::MnftClass
+        )
+    }
+}
+
+/// Standard-specific data for Object entries, stored inline via bincode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DobExtra {
+pub enum ObjectExtra {
     /// Spore item: MIME content type and content byte length.
     Spore {
         content_type: String,
@@ -315,78 +325,8 @@ pub enum DobExtra {
         #[serde(default)]
         media_profile: SporeMediaProfile,
     },
-    /// Spore cluster: no extra fields (name/description live on `DobEntry`).
+    /// Spore cluster: no extra fields (name/description live on `ObjectEntry`).
     SporeCluster,
-    /// did:ckb identity: reserved for future fields.
-    DidCkb,
-}
-
-/// A DOB (Digital Object) entry stored in the `spore_data` column family.
-///
-/// Covers all DOB standards: Spore, Spore clusters, did:ckb.
-/// Standard-specific data lives in `extra`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DobEntry {
-    pub standard: DobStandard,
-    /// Parent collection. `Some(id)` = belongs to that cluster/collection.
-    /// `None` = default collection for this standard (grouped by standard name in API).
-    pub collection_id: Option<Vec<u8>>,
-    pub owner_lock_hash: Option<Vec<u8>>,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub is_live: bool,
-    pub created_at_block: i64,
-    pub created_at_tx: Vec<u8>,
-    /// Standard-specific payload (bincode-serialized, no JSON).
-    pub extra: DobExtra,
-}
-
-/// NFT standard identifier.
-///
-/// NFT is an asset type on CKB, separate from DOB. Each variant represents
-/// a specific standard or entity type within the NFT ecosystem.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum NftStandard {
-    /// mNFT issuer (top-level entity that creates classes).
-    MnftIssuer,
-    /// mNFT class (a collection of mNFT tokens).
-    #[default]
-    MnftClass,
-    /// mNFT token (individual NFT item).
-    MnftToken,
-    /// .bit (DotBit) domain name account. Single-collection standard:
-    /// all .bit accounts belong to one implicit ".bit" collection.
-    DotBit,
-    /// did:ckb decentralized identity. Single-collection standard:
-    /// all did:ckb IDs belong to one implicit did:ckb collection.
-    DidCkb,
-}
-
-impl NftStandard {
-    /// Wire-level name for logging/debugging.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            NftStandard::MnftIssuer => "mnft_issuer",
-            NftStandard::MnftClass => "mnft_class",
-            NftStandard::MnftToken => "mnft",
-            NftStandard::DotBit => "dotbit",
-            NftStandard::DidCkb => "did_ckb",
-        }
-    }
-
-    /// Asset-level standard name for API grouping.
-    pub fn asset_standard(&self) -> &'static str {
-        match self {
-            NftStandard::MnftIssuer | NftStandard::MnftClass | NftStandard::MnftToken => "m-nft",
-            NftStandard::DotBit => "dotbit",
-            NftStandard::DidCkb => "did_ckb",
-        }
-    }
-}
-
-/// Standard-specific data for NFT entries, stored inline via bincode.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum NftExtra {
     /// mNFT issuer metadata.
     MnftIssuer {
         class_count: u32,
@@ -409,6 +349,62 @@ pub enum NftExtra {
         configure: u8,
         state: u8,
     },
+}
+
+/// An Object entry stored in the `spore_data` or `object_data` column family.
+///
+/// Covers all Object standards: Spore (item/cluster), mNFT (issuer/class/token).
+/// Standard-specific data lives in `extra`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObjectEntry {
+    pub standard: ObjectStandard,
+    /// Parent collection. Spore → cluster_id, mNFT tokens → class_id, mNFT classes → issuer_id.
+    /// `None` = default collection for this standard.
+    pub collection_id: Option<Vec<u8>>,
+    pub token_id: Option<Vec<u8>>,
+    pub owner_lock_hash: Option<Vec<u8>>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub is_live: bool,
+    pub created_at_block: i64,
+    pub created_at_tx: Vec<u8>,
+    /// Standard-specific payload (bincode-serialized, no JSON).
+    pub extra: ObjectExtra,
+}
+
+/// Identity standard identifier.
+///
+/// Identity is a CKB asset type covering on-chain identities and domain names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum IdentityStandard {
+    /// .bit (DotBit) domain name account.
+    #[default]
+    DotBit,
+    /// did:ckb decentralized identity.
+    DidCkb,
+}
+
+impl IdentityStandard {
+    /// Wire-level name for logging/debugging.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IdentityStandard::DotBit => "dotbit",
+            IdentityStandard::DidCkb => "did_ckb",
+        }
+    }
+
+    /// Asset-level standard name for API grouping.
+    pub fn asset_standard(&self) -> &'static str {
+        match self {
+            IdentityStandard::DotBit => "dotbit",
+            IdentityStandard::DidCkb => "did_ckb",
+        }
+    }
+}
+
+/// Standard-specific data for Identity entries, stored inline via bincode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IdentityExtra {
     /// .bit account metadata.
     DotBit {
         /// Account expiration timestamp (Unix epoch seconds).
@@ -420,25 +416,24 @@ pub enum NftExtra {
         #[serde(default)]
         status: Option<u8>,
     },
+    /// did:ckb identity: reserved for future fields.
+    DidCkb,
 }
 
-/// An NFT entry stored in the `nft_data` column family.
+/// An Identity entry stored in the `identity_data` column family.
 ///
-/// Covers all NFT standards: mNFT (issuer/class/token), .bit (DotBit).
+/// Covers all identity standards: .bit (DotBit), did:ckb.
 /// Standard-specific data lives in `extra`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NftEntry {
-    pub standard: NftStandard,
-    /// Parent collection. mNFT tokens → class_id, mNFT classes → issuer_id.
-    /// `None` = default collection for this standard (e.g. all .bit accounts).
-    pub collection_id: Option<Vec<u8>>,
-    pub token_id: Option<Vec<u8>>,
+pub struct IdentityEntry {
+    pub standard: IdentityStandard,
     pub owner_lock_hash: Option<Vec<u8>>,
     pub name: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
+    pub created_at_tx: Vec<u8>,
     /// Standard-specific payload (bincode-serialized, no JSON).
-    pub extra: NftExtra,
+    pub extra: IdentityExtra,
 }
 
 /// Pre-aggregated cluster (DOB collection) data, maintained inline by the indexer.
@@ -459,11 +454,11 @@ pub struct ClusterAggregate {
     pub unknown_count: i64,
 }
 
-/// Pre-aggregated NFT collection data, maintained inline by the indexer.
+/// Pre-aggregated Object collection data, maintained inline by the indexer.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NftCollectionAggregate {
+pub struct ObjectCollectionAggregate {
     pub name: Option<String>,
-    pub standard: NftStandard,
+    pub standard: ObjectStandard,
     pub total_count: i64,
     pub live_count: i64,
     #[serde(default)]
@@ -615,15 +610,15 @@ pub struct SporeTypeIndex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NftDailyDelta {
-    /// Net live capacity change in shannons for this NFT collection on a day.
+pub struct ObjectDailyDelta {
+    /// Net live capacity change in shannons for this Object collection on a day.
     pub live_capacity_delta: i128,
-    /// Net live occupied capacity change in shannons for this NFT collection on a day.
+    /// Net live occupied capacity change in shannons for this Object collection on a day.
     pub live_occupied_capacity_delta: i128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct NftTypeIndex {
+pub struct ObjectTypeIndex {
     pub collection_id: Vec<u8>,
 }
 
@@ -882,13 +877,13 @@ pub enum AssetChange {
         symbol: Option<String>,
         decimals: Option<u8>,
     },
-    Dob {
-        dob_id: Vec<u8>,
+    Object {
+        object_id: Vec<u8>,
         standard: String,
         action: AssetAction,
     },
-    Nft {
-        nft_id: Vec<u8>,
+    Identity {
+        identity_id: Vec<u8>,
         standard: String,
         action: AssetAction,
     },
@@ -934,8 +929,11 @@ pub struct DailyActivityStats {
     pub dao_withdraw_complete_count: u32,
     /// Token (xUDT/sUDT) transfer activities
     pub token_count: u32,
-    /// NFT activities (Spore + .bit + M-NFT + did:ckb)
-    pub nft_count: u32,
+    /// Object activities (Spore + M-NFT)
+    pub object_count: u32,
+    /// Identity activities (.bit + did:ckb)
+    #[serde(default)]
+    pub identity_count: u32,
     /// Coinbase (miner reward) activities
     pub coinbase_count: u32,
     /// Number of unique addresses active this day
@@ -948,11 +946,11 @@ pub struct DailyActivityStats {
 }
 
 // ============================================
-// Group I-b: NFT Collection Activities (pre-computed)
+// Group I-b: Object Collection Activities (pre-computed)
 // ============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NftCollectionActivityEntry {
+pub struct ObjectCollectionActivityEntry {
     pub tx_hash: Vec<u8>,
     #[serde(default)]
     pub block_hash: Vec<u8>,
@@ -1187,42 +1185,42 @@ mod tests {
         assert!(index.cluster_id.is_none());
     }
 
-    // ---- NftDailyDelta ----
+    // ---- ObjectDailyDelta ----
 
     #[test]
-    fn test_nft_daily_delta_roundtrip() {
-        let delta = NftDailyDelta {
+    fn test_object_daily_delta_roundtrip() {
+        let delta = ObjectDailyDelta {
             live_capacity_delta: 222_000_000_000,
             live_occupied_capacity_delta: -33_000_000_000,
         };
         let bytes = bincode::serialize(&delta).unwrap();
-        let decoded: NftDailyDelta = bincode::deserialize(&bytes).unwrap();
+        let decoded: ObjectDailyDelta = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.live_capacity_delta, 222_000_000_000);
         assert_eq!(decoded.live_occupied_capacity_delta, -33_000_000_000);
     }
 
     #[test]
-    fn test_nft_daily_delta_default() {
-        let delta = NftDailyDelta::default();
+    fn test_object_daily_delta_default() {
+        let delta = ObjectDailyDelta::default();
         assert_eq!(delta.live_capacity_delta, 0);
         assert_eq!(delta.live_occupied_capacity_delta, 0);
     }
 
-    // ---- NftTypeIndex ----
+    // ---- ObjectTypeIndex ----
 
     #[test]
-    fn test_nft_type_index_roundtrip() {
-        let index = NftTypeIndex {
+    fn test_object_type_index_roundtrip() {
+        let index = ObjectTypeIndex {
             collection_id: vec![0xEE; 24],
         };
         let bytes = bincode::serialize(&index).unwrap();
-        let decoded: NftTypeIndex = bincode::deserialize(&bytes).unwrap();
+        let decoded: ObjectTypeIndex = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.collection_id, vec![0xEE; 24]);
     }
 
     #[test]
-    fn test_nft_type_index_default() {
-        let index = NftTypeIndex::default();
+    fn test_object_type_index_default() {
+        let index = ObjectTypeIndex::default();
         assert!(index.collection_id.is_empty());
     }
 
@@ -1282,14 +1280,14 @@ mod tests {
                     symbol: None,
                     decimals: None,
                 },
-                AssetChange::Dob {
-                    dob_id: vec![0xBB; 32],
+                AssetChange::Object {
+                    object_id: vec![0xBB; 32],
                     standard: "spore".to_string(),
                     action: AssetAction::Mint,
                 },
-                AssetChange::Nft {
-                    nft_id: vec![0xCC; 20],
-                    standard: "m-nft".to_string(),
+                AssetChange::Identity {
+                    identity_id: vec![0xCC; 20],
+                    standard: "dotbit".to_string(),
                     action: AssetAction::Transfer,
                 },
                 AssetChange::DaoDeposit { capacity: 500 },
@@ -1312,13 +1310,13 @@ mod tests {
 
         // Verify each variant survived roundtrip
         match &decoded.asset_changes[1] {
-            AssetChange::Dob {
+            AssetChange::Object {
                 standard, action, ..
             } => {
                 assert_eq!(standard, "spore");
                 assert!(matches!(action, AssetAction::Mint));
             }
-            _ => panic!("expected Dob variant"),
+            _ => panic!("expected Object variant"),
         }
         match &decoded.asset_changes[5] {
             AssetChange::DaoWithdrawComplete {
@@ -1353,73 +1351,132 @@ mod tests {
         assert!(decoded.peers.is_empty());
     }
 
-    // ---- DobStandard ----
+    // ---- ObjectStandard ----
 
     #[test]
-    fn test_dob_standard_as_str() {
-        assert_eq!(DobStandard::Spore.as_str(), "spore");
-        assert_eq!(DobStandard::SporeCluster.as_str(), "spore_cluster");
-        assert_eq!(DobStandard::DidCkb.as_str(), "did_ckb");
+    fn test_object_standard_as_str() {
+        assert_eq!(ObjectStandard::Spore.as_str(), "spore");
+        assert_eq!(ObjectStandard::SporeCluster.as_str(), "spore_cluster");
+        assert_eq!(ObjectStandard::MnftIssuer.as_str(), "mnft_issuer");
+        assert_eq!(ObjectStandard::MnftClass.as_str(), "mnft_class");
+        assert_eq!(ObjectStandard::MnftToken.as_str(), "mnft");
     }
 
     #[test]
-    fn test_dob_standard_asset_standard() {
-        assert_eq!(DobStandard::Spore.asset_standard(), "spore");
-        assert_eq!(DobStandard::SporeCluster.asset_standard(), "spore");
-        assert_eq!(DobStandard::DidCkb.asset_standard(), "did_ckb");
+    fn test_object_standard_asset_standard() {
+        assert_eq!(ObjectStandard::Spore.asset_standard(), "spore");
+        assert_eq!(ObjectStandard::SporeCluster.asset_standard(), "spore");
+        assert_eq!(ObjectStandard::MnftIssuer.asset_standard(), "m-nft");
+        assert_eq!(ObjectStandard::MnftClass.asset_standard(), "m-nft");
+        assert_eq!(ObjectStandard::MnftToken.asset_standard(), "m-nft");
     }
 
     #[test]
-    fn test_dob_standard_is_cluster() {
-        assert!(!DobStandard::Spore.is_cluster());
-        assert!(DobStandard::SporeCluster.is_cluster());
-        assert!(!DobStandard::DidCkb.is_cluster());
+    fn test_object_standard_is_cluster() {
+        assert!(!ObjectStandard::Spore.is_cluster());
+        assert!(ObjectStandard::SporeCluster.is_cluster());
+        assert!(ObjectStandard::MnftIssuer.is_cluster());
+        assert!(ObjectStandard::MnftClass.is_cluster());
+        assert!(!ObjectStandard::MnftToken.is_cluster());
     }
 
-    // ---- NftStandard ----
+    // ---- IdentityStandard ----
 
     #[test]
-    fn test_nft_standard_as_str() {
-        assert_eq!(NftStandard::MnftIssuer.as_str(), "mnft_issuer");
-        assert_eq!(NftStandard::MnftClass.as_str(), "mnft_class");
-        assert_eq!(NftStandard::MnftToken.as_str(), "mnft");
-        assert_eq!(NftStandard::DotBit.as_str(), "dotbit");
-        assert_eq!(NftStandard::DidCkb.as_str(), "did_ckb");
+    fn test_identity_standard_as_str() {
+        assert_eq!(IdentityStandard::DotBit.as_str(), "dotbit");
+        assert_eq!(IdentityStandard::DidCkb.as_str(), "did_ckb");
     }
 
     #[test]
-    fn test_nft_standard_asset_standard() {
-        assert_eq!(NftStandard::MnftIssuer.asset_standard(), "m-nft");
-        assert_eq!(NftStandard::MnftClass.asset_standard(), "m-nft");
-        assert_eq!(NftStandard::MnftToken.asset_standard(), "m-nft");
-        assert_eq!(NftStandard::DotBit.asset_standard(), "dotbit");
-        assert_eq!(NftStandard::DidCkb.asset_standard(), "did_ckb");
+    fn test_identity_standard_asset_standard() {
+        assert_eq!(IdentityStandard::DotBit.asset_standard(), "dotbit");
+        assert_eq!(IdentityStandard::DidCkb.asset_standard(), "did_ckb");
     }
 
-    // ---- Bincode roundtrip: NftEntry variants ----
+    // ---- Bincode roundtrip: ObjectEntry variants ----
 
     #[test]
-    fn test_nft_entry_mnft_issuer_roundtrip() {
-        let entry = NftEntry {
-            standard: NftStandard::MnftIssuer,
+    fn test_object_entry_spore_roundtrip() {
+        let entry = ObjectEntry {
+            standard: ObjectStandard::Spore,
+            collection_id: Some(vec![0xAA; 32]),
+            token_id: None,
+            owner_lock_hash: Some(vec![0xBB; 32]),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 500,
+            created_at_tx: vec![0xCC; 32],
+            extra: ObjectExtra::Spore {
+                content_type: "image/png".to_string(),
+                content_length: 4096,
+                media_profile: SporeMediaProfile::default(),
+            },
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, ObjectStandard::Spore);
+        match decoded.extra {
+            ObjectExtra::Spore {
+                content_type,
+                content_length,
+                media_profile,
+            } => {
+                assert_eq!(content_type, "image/png");
+                assert_eq!(content_length, 4096);
+                assert_eq!(media_profile.tier, StorageDependencyTier::Unknown);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_object_entry_cluster_roundtrip() {
+        let entry = ObjectEntry {
+            standard: ObjectStandard::SporeCluster,
+            collection_id: None,
+            token_id: None,
+            owner_lock_hash: Some(vec![0xDD; 32]),
+            name: Some("My Cluster".to_string()),
+            description: Some("A test cluster".to_string()),
+            is_live: true,
+            created_at_block: 600,
+            created_at_tx: vec![0xEE; 32],
+            extra: ObjectExtra::SporeCluster,
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, ObjectStandard::SporeCluster);
+        assert_eq!(decoded.name.as_deref(), Some("My Cluster"));
+        assert_eq!(decoded.description.as_deref(), Some("A test cluster"));
+        assert!(matches!(decoded.extra, ObjectExtra::SporeCluster));
+    }
+
+    #[test]
+    fn test_object_entry_mnft_issuer_roundtrip() {
+        let entry = ObjectEntry {
+            standard: ObjectStandard::MnftIssuer,
             collection_id: None,
             token_id: None,
             owner_lock_hash: Some(vec![0xAA; 32]),
             name: Some("Test Issuer".to_string()),
+            description: None,
             is_live: true,
             created_at_block: 100,
-            extra: NftExtra::MnftIssuer {
+            created_at_tx: vec![0xBB; 32],
+            extra: ObjectExtra::MnftIssuer {
                 class_count: 5,
                 set_count: 2,
                 info: Some(vec![0x01, 0x02]),
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: NftEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, NftStandard::MnftIssuer);
+        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, ObjectStandard::MnftIssuer);
         assert_eq!(decoded.name.as_deref(), Some("Test Issuer"));
         match decoded.extra {
-            NftExtra::MnftIssuer {
+            ObjectExtra::MnftIssuer {
                 class_count,
                 set_count,
                 info,
@@ -1433,16 +1490,18 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_entry_mnft_class_roundtrip() {
-        let entry = NftEntry {
-            standard: NftStandard::MnftClass,
+    fn test_object_entry_mnft_class_roundtrip() {
+        let entry = ObjectEntry {
+            standard: ObjectStandard::MnftClass,
             collection_id: Some(vec![0xBB; 32]),
             token_id: None,
             owner_lock_hash: Some(vec![0xCC; 32]),
             name: Some("Test Class".to_string()),
+            description: None,
             is_live: true,
             created_at_block: 200,
-            extra: NftExtra::MnftClass {
+            created_at_tx: vec![0xDD; 32],
+            extra: ObjectExtra::MnftClass {
                 description: Some("desc".to_string()),
                 renderer: None,
                 total: 100,
@@ -1451,10 +1510,10 @@ mod tests {
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: NftEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, NftStandard::MnftClass);
+        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, ObjectStandard::MnftClass);
         match decoded.extra {
-            NftExtra::MnftClass {
+            ObjectExtra::MnftClass {
                 total,
                 issued,
                 configure,
@@ -1469,16 +1528,18 @@ mod tests {
     }
 
     #[test]
-    fn test_nft_entry_mnft_token_roundtrip() {
-        let entry = NftEntry {
-            standard: NftStandard::MnftToken,
+    fn test_object_entry_mnft_token_roundtrip() {
+        let entry = ObjectEntry {
+            standard: ObjectStandard::MnftToken,
             collection_id: Some(vec![0x11; 32]),
             token_id: Some(vec![0x22; 32]),
             owner_lock_hash: Some(vec![0x33; 32]),
             name: None,
+            description: None,
             is_live: true,
             created_at_block: 300,
-            extra: NftExtra::MnftToken {
+            created_at_tx: vec![0x44; 32],
+            extra: ObjectExtra::MnftToken {
                 token_index: 7,
                 characteristic: vec![0xDE, 0xAD],
                 configure: 0x01,
@@ -1486,10 +1547,10 @@ mod tests {
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: NftEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, NftStandard::MnftToken);
+        let decoded: ObjectEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, ObjectStandard::MnftToken);
         match decoded.extra {
-            NftExtra::MnftToken {
+            ObjectExtra::MnftToken {
                 token_index,
                 characteristic,
                 configure,
@@ -1504,28 +1565,29 @@ mod tests {
         }
     }
 
+    // ---- Bincode roundtrip: IdentityEntry variants ----
+
     #[test]
-    fn test_nft_entry_dotbit_roundtrip() {
-        let entry = NftEntry {
-            standard: NftStandard::DotBit,
-            collection_id: None,
-            token_id: Some(vec![0x44; 20]),
+    fn test_identity_entry_dotbit_roundtrip() {
+        let entry = IdentityEntry {
+            standard: IdentityStandard::DotBit,
             owner_lock_hash: Some(vec![0x55; 32]),
             name: Some("test.bit".to_string()),
             is_live: true,
             created_at_block: 400,
-            extra: NftExtra::DotBit {
+            created_at_tx: vec![0x66; 32],
+            extra: IdentityExtra::DotBit {
                 expired_at: Some(1_700_000_000),
                 registered_at: Some(1_600_000_000),
                 status: Some(1),
             },
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: NftEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, NftStandard::DotBit);
+        let decoded: IdentityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, IdentityStandard::DotBit);
         assert_eq!(decoded.name.as_deref(), Some("test.bit"));
         match decoded.extra {
-            NftExtra::DotBit {
+            IdentityExtra::DotBit {
                 expired_at,
                 registered_at,
                 status,
@@ -1538,81 +1600,22 @@ mod tests {
         }
     }
 
-    // ---- Bincode roundtrip: DobEntry variants ----
-
     #[test]
-    fn test_dob_entry_spore_roundtrip() {
-        let entry = DobEntry {
-            standard: DobStandard::Spore,
-            collection_id: Some(vec![0xAA; 32]),
-            owner_lock_hash: Some(vec![0xBB; 32]),
-            name: None,
-            description: None,
-            is_live: true,
-            created_at_block: 500,
-            created_at_tx: vec![0xCC; 32],
-            extra: DobExtra::Spore {
-                content_type: "image/png".to_string(),
-                content_length: 4096,
-                media_profile: SporeMediaProfile::default(),
-            },
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: DobEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, DobStandard::Spore);
-        match decoded.extra {
-            DobExtra::Spore {
-                content_type,
-                content_length,
-                media_profile,
-            } => {
-                assert_eq!(content_type, "image/png");
-                assert_eq!(content_length, 4096);
-                assert_eq!(media_profile.tier, StorageDependencyTier::Unknown);
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn test_dob_entry_cluster_roundtrip() {
-        let entry = DobEntry {
-            standard: DobStandard::SporeCluster,
-            collection_id: None,
-            owner_lock_hash: Some(vec![0xDD; 32]),
-            name: Some("My Cluster".to_string()),
-            description: Some("A test cluster".to_string()),
-            is_live: true,
-            created_at_block: 600,
-            created_at_tx: vec![0xEE; 32],
-            extra: DobExtra::SporeCluster,
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: DobEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, DobStandard::SporeCluster);
-        assert_eq!(decoded.name.as_deref(), Some("My Cluster"));
-        assert_eq!(decoded.description.as_deref(), Some("A test cluster"));
-        assert!(matches!(decoded.extra, DobExtra::SporeCluster));
-    }
-
-    #[test]
-    fn test_dob_entry_did_ckb_roundtrip() {
-        let entry = DobEntry {
-            standard: DobStandard::DidCkb,
-            collection_id: None,
+    fn test_identity_entry_did_ckb_roundtrip() {
+        let entry = IdentityEntry {
+            standard: IdentityStandard::DidCkb,
             owner_lock_hash: Some(vec![0xFF; 32]),
             name: Some("did:ckb:test".to_string()),
-            description: None,
             is_live: true,
             created_at_block: 700,
             created_at_tx: vec![0x11; 32],
-            extra: DobExtra::DidCkb,
+            extra: IdentityExtra::DidCkb,
         };
         let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: DobEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.standard, DobStandard::DidCkb);
+        let decoded: IdentityEntry = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.standard, IdentityStandard::DidCkb);
         assert_eq!(decoded.name.as_deref(), Some("did:ckb:test"));
-        assert!(matches!(decoded.extra, DobExtra::DidCkb));
+        assert!(matches!(decoded.extra, IdentityExtra::DidCkb));
     }
 
     // ---- AddressBalance ----

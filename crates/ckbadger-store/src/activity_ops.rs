@@ -114,10 +114,10 @@ impl CkbadgerStore {
                 .asset_changes
                 .iter()
                 .any(|c| matches!(c, AssetChange::Token { .. })),
-            Some("nft") => entry
+            Some("object") | Some("nft") => entry
                 .asset_changes
                 .iter()
-                .any(|c| matches!(c, AssetChange::Nft { .. } | AssetChange::Dob { .. })),
+                .any(|c| matches!(c, AssetChange::Object { .. })),
             Some("dao") => entry.asset_changes.iter().any(|c| {
                 matches!(
                     c,

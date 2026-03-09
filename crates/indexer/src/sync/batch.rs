@@ -16,13 +16,13 @@ use tracing::{debug, error, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, LiveCellInfo, NftTypeIndex, SporeTypeIndex,
+    DailyActivityStats, DaoDailySnapshot, LiveCellInfo, ObjectTypeIndex, SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::BatchSample;
 use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
-use crate::db::writer::nft_activity_acc::NftCollectionActivityAccumulator;
+use crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
     BlockParser, CellParser, DaoParser, DotbitParser, MnftParser, ParsedClusterCell,
@@ -144,17 +144,17 @@ fn dao_withdraw_outpoints_from_map(
         .collect()
 }
 
-fn apply_nft_collection_activity_count_deltas_with_pending(
+fn apply_object_collection_activity_count_deltas_with_pending(
     store: &CkbadgerStore,
     batch: &mut StoreBatch,
     deltas: HashMap<Vec<u8>, i64>,
-    pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::NftCollectionAggregate>,
+    pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::ObjectCollectionAggregate>,
 ) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
     }
 
-    let mut aggregates: HashMap<Vec<u8>, ckbadger_store::types::NftCollectionAggregate> =
+    let mut aggregates: HashMap<Vec<u8>, ckbadger_store::types::ObjectCollectionAggregate> =
         HashMap::new();
 
     for (collection_id, delta) in deltas {
@@ -167,7 +167,7 @@ fn apply_nft_collection_activity_count_deltas_with_pending(
             let loaded = if let Some(pending) = pending_aggregates.get(&collection_id) {
                 Some(pending.clone())
             } else {
-                store.get_nft_collection_aggregate(&collection_id)?
+                store.get_object_collection_aggregate(&collection_id)?
             };
             match loaded {
                 Some(loaded) => aggregates.entry(collection_id.clone()).or_insert(loaded),
@@ -205,7 +205,7 @@ fn apply_nft_collection_activity_count_deltas_with_pending(
     }
 
     for (collection_id, agg) in aggregates {
-        batch.put_nft_collection_aggregate(&collection_id, &agg);
+        batch.put_object_collection_aggregate(&collection_id, &agg);
     }
     Ok(())
 }
@@ -1574,10 +1574,10 @@ impl Indexer {
         let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
         let mut spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
         let mut cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
-        let mut nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex> = HashMap::new();
-        let mut nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
+        let mut object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex> = HashMap::new();
+        let mut object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)> = HashMap::new();
         let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> = HashMap::new();
-        let mut nft_type_index_cache: HashMap<Vec<u8>, Option<NftTypeIndex>> = HashMap::new();
+        let mut object_type_index_cache: HashMap<Vec<u8>, Option<ObjectTypeIndex>> = HashMap::new();
         for tx_data in &all_tx_data {
             let date_yyyymmdd =
                 ckbadger_store::keys::timestamp_ms_to_date(tx_data.timestamp.timestamp_millis());
@@ -1666,17 +1666,18 @@ impl Indexer {
                 ) {
                     let collection_id = classify_nft_collection_id(type_code_hash, type_args);
                     if let Some(collection_id) = collection_id {
-                        let index = NftTypeIndex {
+                        let index = ObjectTypeIndex {
                             collection_id: collection_id.clone(),
                         };
-                        nft_type_index_cache.insert(type_script_hash.clone(), Some(index.clone()));
-                        nft_type_index_changes.insert(type_script_hash.clone(), index);
+                        object_type_index_cache
+                            .insert(type_script_hash.clone(), Some(index.clone()));
+                        object_type_index_changes.insert(type_script_hash.clone(), index);
 
-                        let nft_daily = nft_daily_changes
+                        let object_daily = object_daily_changes
                             .entry((collection_id, date_yyyymmdd))
                             .or_insert((0, 0));
-                        nft_daily.0 += i128::from(cell.capacity);
-                        nft_daily.1 += i128::from(cell_occupied);
+                        object_daily.0 += i128::from(cell.capacity);
+                        object_daily.1 += i128::from(cell_occupied);
                     }
                 }
             }
@@ -1773,24 +1774,24 @@ impl Indexer {
                                     } else if SporeParser::is_did_type_script(type_code_hash) {
                                         Some(DID_CKB_SENTINEL_COLLECTION.to_vec())
                                     } else if let Some(cached) =
-                                        nft_type_index_cache.get(type_script_hash)
+                                        object_type_index_cache.get(type_script_hash)
                                     {
                                         cached.clone().map(|idx| idx.collection_id)
                                     } else {
                                         let loaded = self
                                             .writer
                                             .store()
-                                            .get_nft_type_index(type_script_hash)?;
-                                        nft_type_index_cache
+                                            .get_object_type_index(type_script_hash)?;
+                                        object_type_index_cache
                                             .insert(type_script_hash.clone(), loaded.clone());
                                         loaded.map(|idx| idx.collection_id)
                                     };
                                 if let Some(collection_id) = collection_id {
-                                    let nft_daily = nft_daily_changes
+                                    let object_daily = object_daily_changes
                                         .entry((collection_id, date_yyyymmdd))
                                         .or_insert((0, 0));
-                                    nft_daily.0 -= i128::from(info.capacity);
-                                    nft_daily.1 -= i128::from(info.occupied_capacity);
+                                    object_daily.0 -= i128::from(info.capacity);
+                                    object_daily.1 -= i128::from(info.occupied_capacity);
                                 }
                             }
                         }
@@ -1887,13 +1888,17 @@ impl Indexer {
                 &mut domain_analytics_batch,
             )?;
         }
-        if !nft_type_index_changes.is_empty() {
-            self.writer
-                .update_nft_type_index_batch(&nft_type_index_changes, &mut consume_addr_batch)?;
+        if !object_type_index_changes.is_empty() {
+            self.writer.update_object_type_index_batch(
+                &object_type_index_changes,
+                &mut consume_addr_batch,
+            )?;
         }
-        if !nft_daily_changes.is_empty() {
-            self.writer
-                .update_nft_daily_deltas_batch(&nft_daily_changes, &mut domain_analytics_batch)?;
+        if !object_daily_changes.is_empty() {
+            self.writer.update_object_daily_deltas_batch(
+                &object_daily_changes,
+                &mut domain_analytics_batch,
+            )?;
         }
         if !cluster_daily_changes.is_empty() {
             self.writer.update_cluster_daily_deltas_batch(
@@ -2528,7 +2533,7 @@ impl Indexer {
         let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> = HashMap::new();
         let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
 
-        let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
+        let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
         {
             let mut nft_batch = StoreBatch::new(self.writer.store());
             let mut spore_state = self.writer.new_spore_batch_state();
@@ -2587,7 +2592,7 @@ impl Indexer {
                             } else {
                                 continue;
                             };
-                            nft_activity_acc.record(
+                            object_activity_acc.record(
                                 coll_id,
                                 &tx_data.hash,
                                 &spore.spore_id,
@@ -2645,7 +2650,7 @@ impl Indexer {
                             &mut nft_batch,
                             &mut mnft_state,
                         )?;
-                        nft_activity_acc.record(
+                        object_activity_acc.record(
                             &token.class_id,
                             &tx_data.hash,
                             &token.token_id,
@@ -2752,7 +2757,7 @@ impl Indexer {
                                     &mut consume_batch,
                                     &mut spore_state,
                                 )? {
-                                    nft_activity_acc.record(
+                                    object_activity_acc.record(
                                         &coll_id,
                                         &tx_data.hash,
                                         &spore_id,
@@ -2810,8 +2815,8 @@ impl Indexer {
             }
             block_tx_idx += tx_count_for_block;
         }
-        let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
-        let mut nft_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut object_activity_batch = StoreBatch::new(&self.append_only_store);
+        let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Write .bit collection activities directly (bypassing accumulator)
         for (_tx_hash, activity) in &dotbit_tx_activity_data {
             let inserted = resolve_dotbit_tx_activity(
@@ -2823,7 +2828,7 @@ impl Indexer {
                 activity.block_number,
                 activity.tx_idx,
                 activity.timestamp_ms,
-                &mut nft_activity_batch,
+                &mut object_activity_batch,
             );
             if inserted {
                 let append_key = keys::encode_nft_collection_activity_key(
@@ -2837,13 +2842,13 @@ impl Indexer {
                     put_append_delete_undo_entry(
                         &mut consume_batch,
                         &mut append_undo_seq_by_block,
-                        UndoSeqScope::AppendNftCollectionActivity,
+                        UndoSeqScope::AppendObjectCollectionActivity,
                         activity.block_number,
-                        ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                        ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
                         &append_key,
                     );
                 }
-                let delta = nft_activity_count_deltas
+                let delta = object_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
                 *delta = delta.checked_add(1).ok_or_else(|| {
@@ -2852,7 +2857,7 @@ impl Indexer {
             }
         }
         for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
-            nft_activity_acc.flush(&mut nft_activity_batch)
+            object_activity_acc.flush(&mut object_activity_batch)
         {
             let append_key = keys::encode_nft_collection_activity_key(
                 &collection_id,
@@ -2865,32 +2870,32 @@ impl Indexer {
                 put_append_delete_undo_entry(
                     &mut consume_batch,
                     &mut append_undo_seq_by_block,
-                    UndoSeqScope::AppendNftCollectionActivity,
+                    UndoSeqScope::AppendObjectCollectionActivity,
                     block_number,
-                    ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                    ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
                     &append_key,
                 );
             }
-            let delta = nft_activity_count_deltas.entry(collection_id).or_insert(0);
+            let delta = object_activity_count_deltas
+                .entry(collection_id)
+                .or_insert(0);
             *delta = delta
                 .checked_add(1)
                 .ok_or_else(|| anyhow!("nft activity delta overflow while writing batch"))?;
         }
-        let mut pending_nft_collection_aggs = HashMap::new();
-        dotbit_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
-        spore_state.extend_pending_nft_collection_aggregates(&mut pending_nft_collection_aggs);
-        apply_nft_collection_activity_count_deltas_with_pending(
+        let pending_object_collection_aggs = HashMap::new();
+        apply_object_collection_activity_count_deltas_with_pending(
             self.writer.store(),
             &mut consume_batch,
-            nft_activity_count_deltas,
-            &pending_nft_collection_aggs,
+            object_activity_count_deltas,
+            &pending_object_collection_aggs,
         )?;
         let commit_started = Instant::now();
         consume_batch.commit()?;
         commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
-        if !nft_activity_batch.is_empty() {
+        if !object_activity_batch.is_empty() {
             let commit_started = Instant::now();
-            nft_activity_batch.commit()?;
+            object_activity_batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
 
@@ -2996,8 +3001,8 @@ impl Indexer {
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
         spore_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         cluster_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
-        nft_type_index_changes: HashMap<Vec<u8>, NftTypeIndex>,
-        nft_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
+        object_type_index_changes: HashMap<Vec<u8>, ObjectTypeIndex>,
+        object_daily_changes: HashMap<(Vec<u8>, u32), (i128, i128)>,
         pre_parsed_spore_data: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>,
         pre_parsed_nft_data: PreParsedNftData,
         chain_tip: u64,
@@ -3807,12 +3812,17 @@ impl Indexer {
                                 &mut batch,
                             )?;
                         }
-                        if !nft_type_index_changes.is_empty() {
-                            writer
-                                .update_nft_type_index_batch(&nft_type_index_changes, &mut batch)?;
+                        if !object_type_index_changes.is_empty() {
+                            writer.update_object_type_index_batch(
+                                &object_type_index_changes,
+                                &mut batch,
+                            )?;
                         }
-                        if !nft_daily_changes.is_empty() {
-                            writer.update_nft_daily_deltas_batch(&nft_daily_changes, &mut batch)?;
+                        if !object_daily_changes.is_empty() {
+                            writer.update_object_daily_deltas_batch(
+                                &object_daily_changes,
+                                &mut batch,
+                            )?;
                         }
                         if !cluster_daily_changes.is_empty() {
                             writer.update_cluster_daily_deltas_batch(
@@ -4147,7 +4157,7 @@ impl Indexer {
                         let mut batch = StoreBatch::new(store);
                         let mut activity_batch = StoreBatch::new(append_only_store);
                         let mut spore_state = writer.new_spore_batch_state();
-                        let mut spore_activity_acc = NftCollectionActivityAccumulator::new();
+                        let mut spore_activity_acc = ObjectCollectionActivityAccumulator::new();
                         let mut block_tx_idx = 0usize;
                         for (block_idx, _block_response) in blocks.iter().enumerate() {
                             let parsed = &all_parsed_blocks[block_idx];
@@ -4237,7 +4247,7 @@ impl Indexer {
                     // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
                     let mut dotbit_state = writer.new_dotbit_batch_state();
                     let mut mnft_state = writer.new_mnft_batch_state();
-                    let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
+                    let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
 
                     // Build tx_global_index → (tx_idx_in_block, block_number, ts_ms) lookup.
                     let mut tx_lookup: Vec<(usize, i64, i64, Vec<u8>)> =
@@ -4299,7 +4309,7 @@ impl Indexer {
                             &mut batch,
                             &mut mnft_state,
                         )?;
-                        nft_activity_acc.record(
+                        object_activity_acc.record(
                             &token.class_id,
                             &all_tx_data[tx_gi].hash,
                             &token.token_id,
@@ -4394,7 +4404,7 @@ impl Indexer {
                         );
                     }
                     // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
-                    nft_activity_acc.flush(&mut activity_batch);
+                    object_activity_acc.flush(&mut activity_batch);
                     let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     if !activity_batch.is_empty() {
@@ -4936,13 +4946,13 @@ impl Indexer {
                     &mut domain_analytics_batch,
                 )?;
             }
-            if !nft_type_index_changes.is_empty() {
+            if !object_type_index_changes.is_empty() {
                 self.writer
-                    .update_nft_type_index_batch(&nft_type_index_changes, &mut data_batch)?;
+                    .update_object_type_index_batch(&object_type_index_changes, &mut data_batch)?;
             }
-            if !nft_daily_changes.is_empty() {
-                self.writer.update_nft_daily_deltas_batch(
-                    &nft_daily_changes,
+            if !object_daily_changes.is_empty() {
+                self.writer.update_object_daily_deltas_batch(
+                    &object_daily_changes,
                     &mut domain_analytics_batch,
                 )?;
             }
@@ -5371,10 +5381,10 @@ impl Indexer {
                 }
             }
 
-            let mut nft_activity_batch = StoreBatch::new(&self.append_only_store);
-            let mut nft_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+            let mut object_activity_batch = StoreBatch::new(&self.append_only_store);
+            let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
-            let mut pending_nft_collection_aggs = HashMap::new();
+            let mut pending_object_collection_aggs = HashMap::new();
 
             // Group C: NFT/Spore processing
             {
@@ -5387,7 +5397,7 @@ impl Indexer {
                 let mut spore_state = self.writer.new_spore_batch_state();
                 let mut dotbit_state = self.writer.new_dotbit_batch_state();
                 let mut mnft_state = self.writer.new_mnft_batch_state();
-                let mut nft_activity_acc = NftCollectionActivityAccumulator::new();
+                let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
                 let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
                     HashMap::new();
                 let mut block_tx_idx = 0usize;
@@ -5442,7 +5452,7 @@ impl Indexer {
                                 } else {
                                     continue;
                                 };
-                                nft_activity_acc.record(
+                                object_activity_acc.record(
                                     coll_id,
                                     &tx_data.hash,
                                     &spore.spore_id,
@@ -5509,7 +5519,7 @@ impl Indexer {
                             );
                             batch_mnft_last_output_tx_index
                                 .insert(token.token_id.clone(), tx_global_index);
-                            nft_activity_acc.record(
+                            object_activity_acc.record(
                                 &token.class_id,
                                 &tx_data.hash,
                                 &token.token_id,
@@ -5703,7 +5713,7 @@ impl Indexer {
                                         &mut data_batch,
                                         &mut spore_state,
                                     )? {
-                                        nft_activity_acc.record(
+                                        object_activity_acc.record(
                                             &coll_id,
                                             consuming_tx_hash,
                                             spore_id,
@@ -5731,7 +5741,7 @@ impl Indexer {
                                             &mut mnft_state,
                                         )?
                                     {
-                                        nft_activity_acc.record(
+                                        object_activity_acc.record(
                                             &coll_id,
                                             consuming_tx_hash,
                                             token_id,
@@ -5793,7 +5803,7 @@ impl Indexer {
                         activity.block_number,
                         activity.tx_idx,
                         activity.timestamp_ms,
-                        &mut nft_activity_batch,
+                        &mut object_activity_batch,
                     );
                     if inserted {
                         let append_key = keys::encode_nft_collection_activity_key(
@@ -5806,12 +5816,12 @@ impl Indexer {
                         put_append_delete_undo_entry(
                             &mut data_batch,
                             &mut append_undo_seq_by_block,
-                            UndoSeqScope::AppendNftCollectionActivity,
+                            UndoSeqScope::AppendObjectCollectionActivity,
                             activity.block_number,
-                            ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                            ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
                             &append_key,
                         );
-                        let delta = nft_activity_count_deltas
+                        let delta = object_activity_count_deltas
                             .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                             .or_insert(0);
                         *delta = delta.checked_add(1).ok_or_else(|| {
@@ -5822,7 +5832,7 @@ impl Indexer {
                     }
                 }
                 for (collection_id, block_number, tx_idx, block_hash, tx_hash) in
-                    nft_activity_acc.flush(&mut nft_activity_batch)
+                    object_activity_acc.flush(&mut object_activity_batch)
                 {
                     let append_key = keys::encode_nft_collection_activity_key(
                         &collection_id,
@@ -5834,27 +5844,27 @@ impl Indexer {
                     put_append_delete_undo_entry(
                         &mut data_batch,
                         &mut append_undo_seq_by_block,
-                        UndoSeqScope::AppendNftCollectionActivity,
+                        UndoSeqScope::AppendObjectCollectionActivity,
                         block_number,
-                        ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+                        ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
                         &append_key,
                     );
-                    let delta = nft_activity_count_deltas.entry(collection_id).or_insert(0);
+                    let delta = object_activity_count_deltas
+                        .entry(collection_id)
+                        .or_insert(0);
                     *delta = delta.checked_add(1).ok_or_else(|| {
                         anyhow!("nft activity delta overflow while writing grouped batch")
                     })?;
                 }
 
-                mnft_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
-                dotbit_state.extend_pending_collection_aggregates(&mut pending_nft_collection_aggs);
-                spore_state
-                    .extend_pending_nft_collection_aggregates(&mut pending_nft_collection_aggs);
+                mnft_state
+                    .extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
             }
-            apply_nft_collection_activity_count_deltas_with_pending(
+            apply_object_collection_activity_count_deltas_with_pending(
                 self.writer.store(),
                 &mut data_batch,
-                nft_activity_count_deltas,
-                &pending_nft_collection_aggs,
+                object_activity_count_deltas,
+                &pending_object_collection_aggs,
             )?;
 
             // Activity writes (live sync)
@@ -5946,9 +5956,9 @@ impl Indexer {
                 domain_analytics_batch.commit()?;
                 write_commit_ms += script_commit_started.elapsed().as_secs_f64() * 1000.0;
             }
-            if !nft_activity_batch.is_empty() {
+            if !object_activity_batch.is_empty() {
                 let nft_activity_commit_started = Instant::now();
-                nft_activity_batch.commit()?;
+                object_activity_batch.commit()?;
                 write_commit_ms += nft_activity_commit_started.elapsed().as_secs_f64() * 1000.0;
             }
             if !append_history_batch.is_empty() {
@@ -6695,14 +6705,14 @@ mod tests {
     fn test_apply_nft_collection_activity_count_deltas_updates_only_nft_collections() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let nft_collection_id = vec![0x11; 32];
+        let object_collection_id = vec![0x11; 32];
         let cluster_id = vec![0x22; 32];
 
         let mut seed = StoreBatch::new(&store);
-        seed.put_nft_collection_aggregate(
-            &nft_collection_id,
-            &ckbadger_store::types::NftCollectionAggregate {
-                standard: ckbadger_store::types::NftStandard::MnftClass,
+        seed.put_object_collection_aggregate(
+            &object_collection_id,
+            &ckbadger_store::types::ObjectCollectionAggregate {
+                standard: ckbadger_store::types::ObjectStandard::MnftClass,
                 activities_count: 3,
                 ..Default::default()
             },
@@ -6717,11 +6727,11 @@ mod tests {
         seed.commit().unwrap();
 
         let mut deltas = HashMap::new();
-        deltas.insert(nft_collection_id.clone(), 2);
+        deltas.insert(object_collection_id.clone(), 2);
         deltas.insert(cluster_id, 4);
 
         let mut batch = StoreBatch::new(&store);
-        apply_nft_collection_activity_count_deltas_with_pending(
+        apply_object_collection_activity_count_deltas_with_pending(
             &store,
             &mut batch,
             deltas,
@@ -6731,7 +6741,7 @@ mod tests {
         batch.commit().unwrap();
 
         let agg = store
-            .get_nft_collection_aggregate(&nft_collection_id)
+            .get_object_collection_aggregate(&object_collection_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.activities_count, 5);
@@ -6742,14 +6752,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let collection_id = vec![0x33; 32];
-        let pending_agg = ckbadger_store::types::NftCollectionAggregate {
-            standard: ckbadger_store::types::NftStandard::MnftClass,
+        let pending_agg = ckbadger_store::types::ObjectCollectionAggregate {
+            standard: ckbadger_store::types::ObjectStandard::MnftClass,
             name: Some("fresh collection".to_string()),
             ..Default::default()
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_aggregate(&collection_id, &pending_agg);
+        batch.put_object_collection_aggregate(&collection_id, &pending_agg);
 
         let mut pending = HashMap::new();
         pending.insert(collection_id.clone(), pending_agg);
@@ -6757,14 +6767,14 @@ mod tests {
         let mut deltas = HashMap::new();
         deltas.insert(collection_id.clone(), 1);
 
-        apply_nft_collection_activity_count_deltas_with_pending(
+        apply_object_collection_activity_count_deltas_with_pending(
             &store, &mut batch, deltas, &pending,
         )
         .unwrap();
         batch.commit().unwrap();
 
         let agg = store
-            .get_nft_collection_aggregate(&collection_id)
+            .get_object_collection_aggregate(&collection_id)
             .unwrap()
             .unwrap();
         assert_eq!(agg.activities_count, 1);

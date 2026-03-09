@@ -520,7 +520,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
     }
 
     // NFT collections from pre-aggregated nft_collection_agg CF
-    let nft_aggs = state.store.list_nft_collection_aggregates()?;
+    let nft_aggs = state.store.list_object_collection_aggregates()?;
     let nft_transfers_24h_map = state.store.scan_all_nft_24h_transfers(now_ms)?;
     nft_assets.reserve(nft_aggs.len());
 
@@ -544,7 +544,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             0
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
-        let nft_daily = state.store.list_nft_daily_deltas(collection_id_bytes)?;
+        let nft_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
         let (live_capacity, live_occupied_capacity) =
             accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
                 (

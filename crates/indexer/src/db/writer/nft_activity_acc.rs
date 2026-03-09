@@ -1,9 +1,9 @@
-//! Accumulates NFT lifecycle events within a batch and flushes them as
-//! pre-computed `NftCollectionActivityEntry` rows into the
+//! Accumulates object lifecycle events within a batch and flushes them as
+//! pre-computed `ObjectCollectionActivityEntry` rows into the
 //! `CF_NFT_COLLECTION_ACTIVITIES` column family.
 //!
 //! Each `record()` call captures one raw event (Create or Consume) for a
-//! single NFT.  `flush()` resolves per-NFT actions:
+//! single object.  `flush()` resolves per-object actions:
 //!   - Create-only  → Mint
 //!   - Both         → Transfer
 //!   - Consume-only → Burn
@@ -12,7 +12,7 @@
 //! unique (collection, block, tx) triple.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{AssetAction, NftCollectionActivityEntry};
+use ckbadger_store::types::{AssetAction, ObjectCollectionActivityEntry};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,39 +22,39 @@ enum RawAction {
 }
 
 /// Key: `(collection_id, tx_hash)`.
-/// Value: block/tx metadata + per-NFT raw actions.
+/// Value: block/tx metadata + per-object raw actions.
 struct AccEntry {
     block_number: i64,
     tx_idx: i32,
     timestamp_ms: i64,
     block_hash: Vec<u8>,
-    /// `(nft_id, action)` pairs collected for this (collection, tx).
-    nft_actions: Vec<(Vec<u8>, RawAction)>,
+    /// `(object_id, action)` pairs collected for this (collection, tx).
+    object_actions: Vec<(Vec<u8>, RawAction)>,
 }
 
-pub(crate) struct NftCollectionActivityAccumulator {
+pub(crate) struct ObjectCollectionActivityAccumulator {
     entries: HashMap<(Vec<u8>, Vec<u8>), AccEntry>,
 }
 
-impl NftCollectionActivityAccumulator {
+impl ObjectCollectionActivityAccumulator {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
         }
     }
 
-    /// Record a raw NFT lifecycle event.
+    /// Record a raw object lifecycle event.
     ///
     /// `collection_id`: padded 32-byte collection identifier.
     /// `tx_hash`: the transaction where this event occurs.
-    /// `nft_id`: the individual NFT identifier.
+    /// `object_id`: the individual object identifier.
     /// `block_number`, `tx_idx`, `timestamp_ms`: positional metadata.
     /// `is_create`: `true` for Create (insert), `false` for Consume.
     pub fn record(
         &mut self,
         collection_id: &[u8],
         tx_hash: &[u8],
-        nft_id: &[u8],
+        object_id: &[u8],
         block_hash: &[u8],
         block_number: i64,
         tx_idx: i32,
@@ -72,9 +72,9 @@ impl NftCollectionActivityAccumulator {
             tx_idx,
             timestamp_ms,
             block_hash: block_hash.to_vec(),
-            nft_actions: Vec::new(),
+            object_actions: Vec::new(),
         });
-        entry.nft_actions.push((nft_id.to_vec(), action));
+        entry.object_actions.push((object_id.to_vec(), action));
     }
 
     /// Resolve raw actions into Mint/Transfer/Burn and write to the batch.
@@ -84,10 +84,12 @@ impl NftCollectionActivityAccumulator {
     pub fn flush(self, batch: &mut StoreBatch) -> Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)> {
         let mut inserted = Vec::new();
         for ((collection_id, tx_hash), entry) in self.entries {
-            // Group by nft_id to detect transfers (create + consume of same NFT)
-            let mut per_nft: HashMap<Vec<u8>, (bool, bool)> = HashMap::new();
-            for (nft_id, action) in &entry.nft_actions {
-                let pair = per_nft.entry(nft_id.clone()).or_insert((false, false));
+            // Group by object_id to detect transfers (create + consume of same object)
+            let mut per_object: HashMap<Vec<u8>, (bool, bool)> = HashMap::new();
+            for (object_id, action) in &entry.object_actions {
+                let pair = per_object
+                    .entry(object_id.clone())
+                    .or_insert((false, false));
                 match action {
                     RawAction::Create => pair.0 = true,
                     RawAction::Consume => pair.1 = true,
@@ -98,7 +100,7 @@ impl NftCollectionActivityAccumulator {
             let mut has_mint = false;
             let mut has_transfer = false;
             let mut has_burn = false;
-            for (created, consumed) in per_nft.values() {
+            for (created, consumed) in per_object.values() {
                 match (*created, *consumed) {
                     (true, true) => has_transfer = true,
                     (true, false) => has_mint = true,
@@ -122,14 +124,14 @@ impl NftCollectionActivityAccumulator {
                 continue;
             }
 
-            let activity_entry = NftCollectionActivityEntry {
+            let activity_entry = ObjectCollectionActivityEntry {
                 tx_hash: tx_hash.clone(),
                 block_hash: entry.block_hash.clone(),
                 timestamp_ms: entry.timestamp_ms,
                 actions,
             };
 
-            batch.put_nft_collection_activity(
+            batch.put_object_collection_activity(
                 &collection_id,
                 entry.block_number,
                 entry.tx_idx,
@@ -162,7 +164,7 @@ mod tests {
     #[test]
     fn test_mint_only() {
         let (_dir, store) = test_store();
-        let mut acc = NftCollectionActivityAccumulator::new();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA1u8; 32];
@@ -184,7 +186,7 @@ mod tests {
         batch.commit().unwrap();
 
         let results = store
-            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, 100); // block_number
@@ -196,7 +198,7 @@ mod tests {
     #[test]
     fn test_transfer_create_and_consume_same_nft() {
         let (_dir, store) = test_store();
-        let mut acc = NftCollectionActivityAccumulator::new();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA2u8; 32];
@@ -229,7 +231,7 @@ mod tests {
         batch.commit().unwrap();
 
         let results = store
-            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].2.actions.len(), 1);
@@ -239,7 +241,7 @@ mod tests {
     #[test]
     fn test_burn_only() {
         let (_dir, store) = test_store();
-        let mut acc = NftCollectionActivityAccumulator::new();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA3u8; 32];
@@ -261,7 +263,7 @@ mod tests {
         batch.commit().unwrap();
 
         let results = store
-            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].2.actions.len(), 1);
@@ -271,7 +273,7 @@ mod tests {
     #[test]
     fn test_batch_mint_multiple_nfts() {
         let (_dir, store) = test_store();
-        let mut acc = NftCollectionActivityAccumulator::new();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA4u8; 32];
@@ -304,7 +306,7 @@ mod tests {
         batch.commit().unwrap();
 
         let results = store
-            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
         assert_eq!(results.len(), 1);
         // Both mints → single Mint action
@@ -315,7 +317,7 @@ mod tests {
     #[test]
     fn test_mixed_actions_same_tx() {
         let (_dir, store) = test_store();
-        let mut acc = NftCollectionActivityAccumulator::new();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
         let collection_id = [1u8; 32];
         let tx_hash = [2u8; 32];
         let block_hash = [0xA5u8; 32];
@@ -348,7 +350,7 @@ mod tests {
         batch.commit().unwrap();
 
         let results = store
-            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].2.actions.len(), 2);
@@ -359,7 +361,7 @@ mod tests {
     #[test]
     fn test_multiple_collections_multiple_txs() {
         let (_dir, store) = test_store();
-        let mut acc = NftCollectionActivityAccumulator::new();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
         let coll_a = [1u8; 32];
         let coll_b = [2u8; 32];
         let tx1 = [10u8; 32];
@@ -376,12 +378,12 @@ mod tests {
         batch.commit().unwrap();
 
         let results_a = store
-            .list_nft_collection_activities(&coll_a, 10, None, None)
+            .list_object_collection_activities(&coll_a, 10, None, None)
             .unwrap();
         assert_eq!(results_a.len(), 1);
 
         let results_b = store
-            .list_nft_collection_activities(&coll_b, 10, None, None)
+            .list_object_collection_activities(&coll_b, 10, None, None)
             .unwrap();
         assert_eq!(results_b.len(), 1);
     }

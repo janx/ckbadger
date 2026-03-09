@@ -545,7 +545,8 @@ impl BatchWriter {
         // Check asset changes for specific types
         let mut has_dao = false;
         let mut has_token = false;
-        let mut has_nft = false;
+        let mut has_object = false;
+        let mut has_identity = false;
 
         for change in &entry.asset_changes {
             match change {
@@ -564,8 +565,11 @@ impl BatchWriter {
                 AssetChange::Token { .. } => {
                     has_token = true;
                 }
-                AssetChange::Dob { .. } | AssetChange::Nft { .. } => {
-                    has_nft = true;
+                AssetChange::Object { .. } => {
+                    has_object = true;
+                }
+                AssetChange::Identity { .. } => {
+                    has_identity = true;
                 }
             }
         }
@@ -573,11 +577,14 @@ impl BatchWriter {
         if has_token {
             stats.token_count += 1;
         }
-        if has_nft {
-            stats.nft_count += 1;
+        if has_object {
+            stats.object_count += 1;
+        }
+        if has_identity {
+            stats.identity_count += 1;
         }
         // Plain transfer: no asset changes, not coinbase
-        if !has_dao && !has_token && !has_nft {
+        if !has_dao && !has_token && !has_object && !has_identity {
             stats.transfer_count += 1;
         }
     }
@@ -599,7 +606,8 @@ impl BatchWriter {
                 e.dao_withdraw_request_count += accumulated.dao_withdraw_request_count;
                 e.dao_withdraw_complete_count += accumulated.dao_withdraw_complete_count;
                 e.token_count += accumulated.token_count;
-                e.nft_count += accumulated.nft_count;
+                e.object_count += accumulated.object_count;
+                e.identity_count += accumulated.identity_count;
                 e.coinbase_count += accumulated.coinbase_count;
                 e.unique_address_count = unique_addresses;
                 e.total_ckb_moved = e
@@ -641,10 +649,10 @@ impl BatchWriter {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
 
-        let collections = self.store.list_nft_collection_aggregates()?;
+        let collections = self.store.list_object_collection_aggregates()?;
         let mut total_deleted = 0u64;
         for (collection_id, agg) in collections {
-            if agg.standard == NftStandard::MnftClass {
+            if agg.standard == ObjectStandard::MnftClass {
                 total_deleted += self
                     .store
                     .cleanup_old_nft_hourly_buckets(&collection_id, cutoff_hour)?;
@@ -1204,26 +1212,26 @@ mod tests {
         let old_hour = current_hour - 100;
 
         let mnft_collection = vec![0x10; 32];
-        let dotbit_collection = vec![0x20; 32];
+        let spore_collection = vec![0x20; 32];
 
         let mut seed = StoreBatch::new(&store);
-        seed.put_nft_collection_aggregate(
+        seed.put_object_collection_aggregate(
             &mnft_collection,
-            &NftCollectionAggregate {
-                standard: NftStandard::MnftClass,
+            &ObjectCollectionAggregate {
+                standard: ObjectStandard::MnftClass,
                 ..Default::default()
             },
         );
-        seed.put_nft_collection_aggregate(
-            &dotbit_collection,
-            &NftCollectionAggregate {
-                standard: NftStandard::DotBit,
+        seed.put_object_collection_aggregate(
+            &spore_collection,
+            &ObjectCollectionAggregate {
+                standard: ObjectStandard::SporeCluster,
                 ..Default::default()
             },
         );
-        seed.put_nft_hourly_transfer(&mnft_collection, old_hour, 9);
-        seed.put_nft_hourly_transfer(&mnft_collection, current_hour, 3);
-        seed.put_nft_hourly_transfer(&dotbit_collection, old_hour, 7);
+        seed.put_object_hourly_transfer(&mnft_collection, old_hour, 9);
+        seed.put_object_hourly_transfer(&mnft_collection, current_hour, 3);
+        seed.put_object_hourly_transfer(&spore_collection, old_hour, 7);
         seed.commit().unwrap();
 
         let deleted = writer.refresh_mnft_24h_transfers().unwrap();
@@ -1231,11 +1239,11 @@ mod tests {
 
         let mnft_old_key = keys::encode_nft_hourly_key(&mnft_collection, old_hour);
         let mnft_new_key = keys::encode_nft_hourly_key(&mnft_collection, current_hour);
-        let dotbit_old_key = keys::encode_nft_hourly_key(&dotbit_collection, old_hour);
+        let spore_old_key = keys::encode_nft_hourly_key(&spore_collection, old_hour);
 
         assert!(store.get_stats_key(&mnft_old_key).unwrap().is_none());
         assert!(store.get_stats_key(&mnft_new_key).unwrap().is_some());
-        assert!(store.get_stats_key(&dotbit_old_key).unwrap().is_some());
+        assert!(store.get_stats_key(&spore_old_key).unwrap().is_some());
     }
 
     #[test]
@@ -1578,38 +1586,38 @@ mod activity_stats_tests {
     }
 
     #[test]
-    fn test_nft_dob_classified_correctly() {
+    fn test_object_classified_correctly() {
         let mut stats = DailyActivityStats::default();
         let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             0,
             false,
-            vec![AssetChange::Dob {
-                dob_id: vec![0xBB; 32],
+            vec![AssetChange::Object {
+                object_id: vec![0xBB; 32],
                 standard: "spore".to_string(),
                 action: AssetAction::Mint,
             }],
         );
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
-        assert_eq!(stats.nft_count, 1);
+        assert_eq!(stats.object_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
 
     #[test]
-    fn test_nft_legacy_classified_correctly() {
+    fn test_identity_classified_correctly() {
         let mut stats = DailyActivityStats::default();
         let scripts = vec![vec![0x11; 32]];
         let entry = make_entry(
             0,
             false,
-            vec![AssetChange::Nft {
-                nft_id: vec![0xCC; 32],
-                standard: "m-nft".to_string(),
+            vec![AssetChange::Identity {
+                identity_id: vec![0xCC; 32],
+                standard: "dotbit".to_string(),
                 action: AssetAction::Transfer,
             }],
         );
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
-        assert_eq!(stats.nft_count, 1);
+        assert_eq!(stats.identity_count, 1);
         assert_eq!(stats.transfer_count, 0);
     }
 

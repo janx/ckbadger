@@ -585,26 +585,31 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_spore(), key, count.to_le_bytes());
     }
 
-    pub fn put_nft_hourly_transfer(&mut self, collection_id: &[u8], hour_bucket: i64, count: i64) {
+    pub fn put_object_hourly_transfer(
+        &mut self,
+        collection_id: &[u8],
+        hour_bucket: i64,
+        count: i64,
+    ) {
         let key = keys::encode_nft_hourly_key(collection_id, hour_bucket);
-        self.put_cf(self.store.cf_stats_nft(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_object(), key, count.to_le_bytes());
     }
 
-    pub fn put_nft_daily_delta(
+    pub fn put_object_daily_delta(
         &mut self,
         collection_id: &[u8],
         date_yyyymmdd: u32,
-        delta: &NftDailyDelta,
+        delta: &ObjectDailyDelta,
     ) {
         let key = keys::encode_nft_daily_key(collection_id, date_yyyymmdd);
-        let value = bincode::serialize(delta).expect("serialize NftDailyDelta");
-        self.put_cf(self.store.cf_stats_nft(), key, &value);
+        let value = bincode::serialize(delta).expect("serialize ObjectDailyDelta");
+        self.put_cf(self.store.cf_stats_object(), key, &value);
     }
 
-    pub fn put_nft_type_index(&mut self, type_script_hash: &[u8], index: &NftTypeIndex) {
+    pub fn put_object_type_index(&mut self, type_script_hash: &[u8], index: &ObjectTypeIndex) {
         let key = keys::encode_nft_type_index_key(type_script_hash);
-        let value = bincode::serialize(index).expect("serialize NftTypeIndex");
-        self.put_cf(self.store.cf_stats_nft(), key, &value);
+        let value = bincode::serialize(index).expect("serialize ObjectTypeIndex");
+        self.put_cf(self.store.cf_stats_object(), key, &value);
     }
 
     pub fn put_cluster_daily_delta(
@@ -645,12 +650,12 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_mnft_class_outpoint(&mut self, tx_hash: &[u8], output_index: i16, class_id: &[u8]) {
         let key = keys::encode_mnft_class_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_nft(), key, class_id);
+        self.put_cf(self.store.cf_stats_object(), key, class_id);
     }
 
     pub fn put_mnft_token_outpoint(&mut self, tx_hash: &[u8], output_index: i16, token_id: &[u8]) {
         let key = keys::encode_mnft_token_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_nft(), key, token_id);
+        self.put_cf(self.store.cf_stats_object(), key, token_id);
     }
 
     pub fn put_dotbit_account_outpoint(
@@ -660,7 +665,7 @@ impl<'a> StoreBatch<'a> {
         account_id: &[u8],
     ) {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
-        self.put_cf(self.store.cf_stats_nft(), key, account_id);
+        self.put_cf(self.store.cf_stats_object(), key, account_id);
     }
 
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
@@ -680,10 +685,10 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_token_transfers(), key, &value);
     }
 
-    // ---- Spore/NFT ----
+    // ---- Spore/Object ----
 
-    pub fn put_spore(&mut self, id: &[u8], entry: &DobEntry) {
-        let value = bincode::serialize(entry).expect("serialize DobEntry");
+    pub fn put_spore(&mut self, id: &[u8], entry: &ObjectEntry) {
+        let value = bincode::serialize(entry).expect("serialize ObjectEntry");
         self.put_cf(self.store.cf_spore_data(), id, &value);
     }
 
@@ -697,14 +702,21 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_spore_by_cluster(), key);
     }
 
-    pub fn put_nft(&mut self, id: &[u8], entry: &NftEntry) {
-        let value = bincode::serialize(entry).expect("serialize NftEntry");
-        self.put_cf(self.store.cf_nft_data(), id, &value);
+    pub fn put_object(&mut self, id: &[u8], entry: &ObjectEntry) {
+        let value = bincode::serialize(entry).expect("serialize ObjectEntry");
+        self.put_cf(self.store.cf_object_data(), id, &value);
     }
 
-    pub fn put_nft_by_collection(&mut self, collection_id: &[u8], nft_id: &[u8]) {
-        let key = keys::encode_nft_by_collection_key(collection_id, nft_id);
-        self.put_cf(self.store.cf_nft_by_collection(), key, []);
+    pub fn put_object_by_collection(&mut self, collection_id: &[u8], object_id: &[u8]) {
+        let key = keys::encode_nft_by_collection_key(collection_id, object_id);
+        self.put_cf(self.store.cf_object_by_collection(), key, []);
+    }
+
+    // ---- Identity ----
+
+    pub fn put_identity(&mut self, id: &[u8], entry: &IdentityEntry) {
+        let value = bincode::serialize(entry).expect("serialize IdentityEntry");
+        self.put_cf(self.store.cf_identity_data(), id, &value);
     }
 
     // ---- Cluster aggregates ----
@@ -724,30 +736,30 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_stats_spore(), key);
     }
 
-    // ---- NFT collection aggregates ----
+    // ---- Object collection aggregates ----
 
-    pub fn put_nft_collection_aggregate(
+    pub fn put_object_collection_aggregate(
         &mut self,
         collection_id: &[u8],
-        agg: &NftCollectionAggregate,
+        agg: &ObjectCollectionAggregate,
     ) {
-        let value = bincode::serialize(agg).expect("serialize NftCollectionAggregate");
-        self.put_cf(self.store.cf_nft_collection_agg(), collection_id, &value);
+        let value = bincode::serialize(agg).expect("serialize ObjectCollectionAggregate");
+        self.put_cf(self.store.cf_object_collection_agg(), collection_id, &value);
     }
 
-    pub fn put_nft_collection_owner_count(
+    pub fn put_object_collection_owner_count(
         &mut self,
         collection_id: &[u8],
         lock_hash: &[u8],
         count: i64,
     ) {
         let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
-        self.put_cf(self.store.cf_stats_nft(), key, count.to_le_bytes());
+        self.put_cf(self.store.cf_stats_object(), key, count.to_le_bytes());
     }
 
-    pub fn delete_nft_collection_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
+    pub fn delete_object_collection_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_nft_collection_owner_key(collection_id, lock_hash);
-        self.delete_cf(self.store.cf_stats_nft(), key);
+        self.delete_cf(self.store.cf_stats_object(), key);
     }
 
     // ---- Activities ----
@@ -770,14 +782,14 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_activities(), key, &value);
     }
 
-    // ---- NFT collection activities ----
+    // ---- Object collection activities ----
 
-    pub fn put_nft_collection_activity(
+    pub fn put_object_collection_activity(
         &mut self,
         collection_id: &[u8],
         block_num: i64,
         tx_idx: i32,
-        entry: &NftCollectionActivityEntry,
+        entry: &ObjectCollectionActivityEntry,
     ) {
         let key = keys::encode_nft_collection_activity_key(
             collection_id,
@@ -786,8 +798,8 @@ impl<'a> StoreBatch<'a> {
             &entry.block_hash,
             &entry.tx_hash,
         );
-        let value = bincode::serialize(entry).expect("serialize NftCollectionActivityEntry");
-        self.put_cf(self.store.cf_nft_collection_activities(), key, &value);
+        let value = bincode::serialize(entry).expect("serialize ObjectCollectionActivityEntry");
+        self.put_cf(self.store.cf_object_collection_activities(), key, &value);
     }
 
     // ---- Statistics ----
@@ -1018,8 +1030,8 @@ mod tests {
         }
     }
 
-    fn make_nft_collection_activity(tx_hash_byte: u8) -> NftCollectionActivityEntry {
-        NftCollectionActivityEntry {
+    fn make_nft_collection_activity(tx_hash_byte: u8) -> ObjectCollectionActivityEntry {
+        ObjectCollectionActivityEntry {
             tx_hash: vec![tx_hash_byte; 32],
             block_hash: vec![tx_hash_byte.wrapping_add(1); 32],
             timestamp_ms: 1_700_000_000_000 + i64::from(tx_hash_byte),
@@ -1185,7 +1197,7 @@ mod tests {
         let collection_id = [0x11u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_activity(
+        batch.put_object_collection_activity(
             &collection_id,
             100,
             0,
@@ -1194,11 +1206,11 @@ mod tests {
         batch.commit().unwrap();
 
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_nft_collection_activity(
+        overwrite_batch.put_object_collection_activity(
             &collection_id,
             100,
             0,
-            &NftCollectionActivityEntry {
+            &ObjectCollectionActivityEntry {
                 tx_hash: vec![0x01; 32],
                 block_hash: vec![0x02; 32],
                 timestamp_ms: 1_700_000_000_999,
@@ -1246,13 +1258,13 @@ mod tests {
         let collection_id = [0x12u8; 32];
         let tx_hash = vec![0x44; 32];
 
-        let first = NftCollectionActivityEntry {
+        let first = ObjectCollectionActivityEntry {
             tx_hash: tx_hash.clone(),
             block_hash: vec![0x31; 32],
             timestamp_ms: 1_700_000_000_100,
             actions: vec![AssetAction::Mint],
         };
-        let second = NftCollectionActivityEntry {
+        let second = ObjectCollectionActivityEntry {
             tx_hash: tx_hash.clone(),
             block_hash: vec![0x32; 32],
             timestamp_ms: 1_700_000_000_200,
@@ -1260,12 +1272,12 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_nft_collection_activity(&collection_id, 100, 0, &first);
-        batch.put_nft_collection_activity(&collection_id, 100, 0, &second);
+        batch.put_object_collection_activity(&collection_id, 100, 0, &first);
+        batch.put_object_collection_activity(&collection_id, 100, 0, &second);
         batch.commit().unwrap();
 
         let rows = store
-            .list_nft_collection_activities(&collection_id, 10, None, None)
+            .list_object_collection_activities(&collection_id, 10, None, None)
             .unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows

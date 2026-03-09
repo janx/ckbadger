@@ -59,15 +59,15 @@ pub enum AssetChangeResponse {
         symbol: Option<String>,
         decimals: Option<u8>,
     },
-    #[serde(rename = "dob")]
-    Dob {
-        dob_id: String,
+    #[serde(rename = "object")]
+    Object {
+        object_id: String,
         standard: String,
         action: String,
     },
-    #[serde(rename = "nft")]
-    Nft {
-        nft_id: String,
+    #[serde(rename = "identity")]
+    Identity {
+        identity_id: String,
         standard: String,
         action: String,
     },
@@ -134,21 +134,21 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
             symbol: symbol.clone(),
             decimals: *decimals,
         },
-        AssetChange::Dob {
-            dob_id,
+        AssetChange::Object {
+            object_id,
             standard,
             action,
-        } => AssetChangeResponse::Dob {
-            dob_id: format!("0x{}", hex::encode(dob_id)),
+        } => AssetChangeResponse::Object {
+            object_id: format!("0x{}", hex::encode(object_id)),
             standard: standard.clone(),
             action: action_to_string(action),
         },
-        AssetChange::Nft {
-            nft_id,
+        AssetChange::Identity {
+            identity_id,
             standard,
             action,
-        } => AssetChangeResponse::Nft {
-            nft_id: format!("0x{}", hex::encode(nft_id)),
+        } => AssetChangeResponse::Identity {
+            identity_id: format!("0x{}", hex::encode(identity_id)),
             standard: standard.clone(),
             action: action_to_string(action),
         },

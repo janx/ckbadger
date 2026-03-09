@@ -282,18 +282,18 @@ fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager
                                         "decimals": decimals,
                                     })
                                 },
-                                ckbadger_store::types::AssetChange::Dob { dob_id, standard, action } => {
+                                ckbadger_store::types::AssetChange::Object { object_id, standard, action } => {
                                     serde_json::json!({
-                                        "type": "dob",
-                                        "dobId": format!("0x{}", hex::encode(dob_id)),
+                                        "type": "object",
+                                        "objectId": format!("0x{}", hex::encode(object_id)),
                                         "standard": standard,
                                         "action": format!("{:?}", action).to_lowercase(),
                                     })
                                 },
-                                ckbadger_store::types::AssetChange::Nft { nft_id, standard, action } => {
+                                ckbadger_store::types::AssetChange::Identity { identity_id, standard, action } => {
                                     serde_json::json!({
-                                        "type": "nft",
-                                        "nftId": format!("0x{}", hex::encode(nft_id)),
+                                        "type": "identity",
+                                        "identityId": format!("0x{}", hex::encode(identity_id)),
                                         "standard": standard,
                                         "action": format!("{:?}", action).to_lowercase(),
                                     })

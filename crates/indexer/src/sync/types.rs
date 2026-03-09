@@ -18,7 +18,7 @@ pub(crate) enum UndoSeqScope {
     TxContext = 0x0001,
     AppendAddrTx = 0x0002,
     AppendActivity = 0x0003,
-    AppendNftCollectionActivity = 0x0004,
+    AppendObjectCollectionActivity = 0x0004,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────

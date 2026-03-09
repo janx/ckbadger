@@ -316,14 +316,14 @@ mod tests {
         );
         append_store
             .put_cf(
-                append_store.cf_nft_collection_activities(),
+                append_store.cf_object_collection_activities(),
                 &nft_keep,
                 &[0x05],
             )
             .unwrap();
         append_store
             .put_cf(
-                append_store.cf_nft_collection_activities(),
+                append_store.cf_object_collection_activities(),
                 &nft_drop,
                 &[0x06],
             )
@@ -350,9 +350,9 @@ mod tests {
         put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
-            UndoSeqScope::AppendNftCollectionActivity,
+            UndoSeqScope::AppendObjectCollectionActivity,
             22,
-            ckbadger_store::CF_NFT_COLLECTION_ACTIVITIES,
+            ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES,
             &nft_drop,
         );
         domain_batch.commit().unwrap();
@@ -378,11 +378,11 @@ mod tests {
             .unwrap()
             .is_some());
         assert!(append_store
-            .get_cf(append_store.cf_nft_collection_activities(), &nft_keep)
+            .get_cf(append_store.cf_object_collection_activities(), &nft_keep)
             .unwrap()
             .is_some());
         assert!(append_store
-            .get_cf(append_store.cf_nft_collection_activities(), &nft_drop)
+            .get_cf(append_store.cf_object_collection_activities(), &nft_drop)
             .unwrap()
             .is_some());
     }

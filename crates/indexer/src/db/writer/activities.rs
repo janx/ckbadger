@@ -279,39 +279,35 @@ fn build_tx_activities(
             });
         }
 
-        // Spore/DOB changes
-        emit_nft_changes(
+        // Spore/DOB changes → Object
+        emit_object_changes(
             &accum.spore_inputs,
             &accum.spore_outputs,
             "spore",
-            true,
             &mut asset_changes,
         );
 
-        // mNFT changes
-        emit_nft_changes(
+        // mNFT changes → Object
+        emit_object_changes(
             &accum.nft_inputs,
             &accum.nft_outputs,
             "m-nft",
-            false,
             &mut asset_changes,
         );
 
-        // DotBit changes
-        emit_nft_changes(
+        // DotBit changes → Identity
+        emit_identity_changes(
             &accum.dotbit_inputs,
             &accum.dotbit_outputs,
             "dotbit",
-            false,
             &mut asset_changes,
         );
 
-        // did:ckb changes
-        emit_nft_changes(
+        // did:ckb changes → Identity
+        emit_identity_changes(
             &accum.did_ckb_inputs,
             &accum.did_ckb_outputs,
             "did_ckb",
-            true,
             &mut asset_changes,
         );
 
@@ -481,15 +477,14 @@ fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Opti
     Some(account_id)
 }
 
-/// Emit DOB/NFT asset changes by comparing input vs output ID sets.
-fn emit_nft_changes(
+/// Emit Object asset changes (Spore/DOB, mNFT) by comparing input vs output ID sets.
+fn emit_object_changes(
     inputs: &[Vec<u8>],
     outputs: &[Vec<u8>],
     standard: &str,
-    is_dob: bool,
     asset_changes: &mut Vec<AssetChange>,
 ) {
-    // IDs only in outputs = Mint
+    // IDs in outputs = Mint or Transfer
     for id in outputs {
         let in_inputs = inputs.iter().any(|i| i == id);
         let action = if in_inputs {
@@ -497,38 +492,55 @@ fn emit_nft_changes(
         } else {
             AssetAction::Mint
         };
-        if is_dob {
-            asset_changes.push(AssetChange::Dob {
-                dob_id: id.clone(),
-                standard: standard.to_string(),
-                action,
-            });
-        } else {
-            asset_changes.push(AssetChange::Nft {
-                nft_id: id.clone(),
-                standard: standard.to_string(),
-                action,
-            });
-        }
+        asset_changes.push(AssetChange::Object {
+            object_id: id.clone(),
+            standard: standard.to_string(),
+            action,
+        });
     }
     // IDs only in inputs = Burn
     for id in inputs {
         let in_outputs = outputs.iter().any(|o| o == id);
         if !in_outputs {
-            let action = AssetAction::Burn;
-            if is_dob {
-                asset_changes.push(AssetChange::Dob {
-                    dob_id: id.clone(),
-                    standard: standard.to_string(),
-                    action,
-                });
-            } else {
-                asset_changes.push(AssetChange::Nft {
-                    nft_id: id.clone(),
-                    standard: standard.to_string(),
-                    action,
-                });
-            }
+            asset_changes.push(AssetChange::Object {
+                object_id: id.clone(),
+                standard: standard.to_string(),
+                action: AssetAction::Burn,
+            });
+        }
+    }
+}
+
+/// Emit Identity asset changes (.bit, did:ckb) by comparing input vs output ID sets.
+fn emit_identity_changes(
+    inputs: &[Vec<u8>],
+    outputs: &[Vec<u8>],
+    standard: &str,
+    asset_changes: &mut Vec<AssetChange>,
+) {
+    // IDs in outputs = Mint or Transfer
+    for id in outputs {
+        let in_inputs = inputs.iter().any(|i| i == id);
+        let action = if in_inputs {
+            AssetAction::Transfer
+        } else {
+            AssetAction::Mint
+        };
+        asset_changes.push(AssetChange::Identity {
+            identity_id: id.clone(),
+            standard: standard.to_string(),
+            action,
+        });
+    }
+    // IDs only in inputs = Burn
+    for id in inputs {
+        let in_outputs = outputs.iter().any(|o| o == id);
+        if !in_outputs {
+            asset_changes.push(AssetChange::Identity {
+                identity_id: id.clone(),
+                standard: standard.to_string(),
+                action: AssetAction::Burn,
+            });
         }
     }
 }
@@ -955,15 +967,15 @@ mod tests {
         let dotbit_change = entry
             .asset_changes
             .iter()
-            .find(|c| matches!(c, AssetChange::Nft { standard, .. } if standard == "dotbit"))
-            .expect("dotbit nft change should be present");
+            .find(|c| matches!(c, AssetChange::Identity { standard, .. } if standard == "dotbit"))
+            .expect("dotbit identity change should be present");
         match dotbit_change {
-            AssetChange::Nft {
-                nft_id,
+            AssetChange::Identity {
+                identity_id,
                 standard,
                 action,
             } => {
-                assert_eq!(nft_id, &account_id);
+                assert_eq!(identity_id, &account_id);
                 assert_eq!(standard, "dotbit");
                 assert!(matches!(action, AssetAction::Mint));
             }
@@ -972,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn test_did_ckb_changes_are_labeled_as_did_ckb_dob() {
+    fn test_did_ckb_changes_are_labeled_as_did_ckb_identity() {
         let owner = 0xBB;
         let did_code_hash =
             crate::rpc::parse_hex_to_bytes(crate::parser::spore::SPORE_CODE_HASH_MAINNET_DID);
@@ -1005,15 +1017,15 @@ mod tests {
         let did_change = entry
             .asset_changes
             .iter()
-            .find(|c| matches!(c, AssetChange::Dob { standard, .. } if standard == "did_ckb"))
-            .expect("did_ckb dob change should be present");
+            .find(|c| matches!(c, AssetChange::Identity { standard, .. } if standard == "did_ckb"))
+            .expect("did_ckb identity change should be present");
         match did_change {
-            AssetChange::Dob {
-                dob_id,
+            AssetChange::Identity {
+                identity_id,
                 standard,
                 action,
             } => {
-                assert_eq!(dob_id, &did_id);
+                assert_eq!(identity_id, &did_id);
                 assert_eq!(standard, "did_ckb");
                 assert!(matches!(action, AssetAction::Mint));
             }

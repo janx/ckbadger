@@ -1,13 +1,13 @@
-//! Spore/DOB-specific store operations.
+//! Spore-specific store operations.
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{ClusterDailyDelta, DobEntry, SporeDailyDelta, SporeTypeIndex};
+use crate::types::{ClusterDailyDelta, ObjectEntry, SporeDailyDelta, SporeTypeIndex};
 
 #[cfg(test)]
 use crate::batch::StoreBatch;
 
-pub(crate) type SporeBatchEntry = (Vec<u8>, Option<DobEntry>);
+pub(crate) type SporeBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 pub(crate) type SporeOutpointLookup = (Vec<u8>, i16, Vec<u8>);
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -21,7 +21,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 impl CkbadgerStore {
-    pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<DobEntry>> {
+    pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
         match self.get_cf(self.cf_spore_data(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
             None => Ok(None),
@@ -40,7 +40,7 @@ impl CkbadgerStore {
         let mut result = Vec::with_capacity(ids.len());
         for (id, value_result) in ids.iter().zip(values) {
             let entry = match value_result {
-                Ok(Some(value)) => Some(bincode::deserialize::<DobEntry>(&value).map_err(
+                Ok(Some(value)) => Some(bincode::deserialize::<ObjectEntry>(&value).map_err(
                     |e| {
                         anyhow::anyhow!(
                             "failed to deserialize spore entry in get_spores_batch: spore_id=0x{}, error={}",
@@ -63,13 +63,13 @@ impl CkbadgerStore {
         Ok(result)
     }
 
-    pub fn put_spore_direct(&self, id: &[u8], entry: &DobEntry) -> anyhow::Result<()> {
+    pub fn put_spore_direct(&self, id: &[u8], entry: &ObjectEntry) -> anyhow::Result<()> {
         let value = bincode::serialize(entry)?;
         self.put_cf(self.cf_spore_data(), id, &value)
     }
 
     /// List all spores.
-    pub fn list_spores(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, DobEntry)>> {
+    pub fn list_spores(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, ObjectEntry)>> {
         let iter = self.iterator_cf(self.cf_spore_data(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
@@ -77,7 +77,7 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate spore_data in list_spores: {}", e)
             })?;
-            let entry: DobEntry = bincode::deserialize(&value).map_err(|e| {
+            let entry: ObjectEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to deserialize spore entry in list_spores: spore_id=0x{}, error={}",
                     bytes_to_hex(&key),
@@ -97,7 +97,7 @@ impl CkbadgerStore {
         &self,
         cluster_id: &[u8],
         limit: usize,
-    ) -> anyhow::Result<Vec<(Vec<u8>, DobEntry)>> {
+    ) -> anyhow::Result<Vec<(Vec<u8>, ObjectEntry)>> {
         let iter = self.prefix_iterator_cf(self.cf_spore_by_cluster(), cluster_id);
         let mut spore_ids: Vec<Vec<u8>> = Vec::new();
 
@@ -411,7 +411,7 @@ impl CkbadgerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::DobExtra;
+    use crate::types::ObjectExtra;
     use crate::types::{ClusterDailyDelta, SporeDailyDelta, SporeTypeIndex};
     use tempfile::TempDir;
 
@@ -546,16 +546,17 @@ mod tests {
         let other_cluster = [0x55u8; 32];
         let spore_other = [0xC3u8; 32];
 
-        let make_entry = |created_at_block: i64| DobEntry {
-            standard: crate::types::DobStandard::Spore,
+        let make_entry = |created_at_block: i64| ObjectEntry {
+            standard: crate::types::ObjectStandard::Spore,
             collection_id: Some(cluster_id.to_vec()),
+            token_id: None,
             owner_lock_hash: Some(vec![0x11; 32]),
             name: Some("spore".to_string()),
             description: None,
             is_live: true,
             created_at_block,
             created_at_tx: vec![0x22; 32],
-            extra: DobExtra::Spore {
+            extra: ObjectExtra::Spore {
                 content_type: "text/plain".to_string(),
                 content_length: 5,
                 media_profile: Default::default(),
@@ -567,7 +568,7 @@ mod tests {
         batch.put_spore(&spore_b, &make_entry(20));
         batch.put_spore(
             &spore_other,
-            &DobEntry {
+            &ObjectEntry {
                 collection_id: Some(other_cluster.to_vec()),
                 ..make_entry(30)
             },

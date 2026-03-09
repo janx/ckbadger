@@ -18,7 +18,7 @@ use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
-type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::DobEntry)>;
+type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -256,15 +256,15 @@ pub struct SporeDobDecodeResponse {
     pub issues: Vec<String>,
 }
 
-/// Convert a DobEntry from the store into a SporeResponse.
+/// Convert an ObjectEntry from the store into a SporeResponse.
 fn spore_to_response(
     spore_id: &[u8],
-    entry: &ckbadger_store::DobEntry,
+    entry: &ckbadger_store::ObjectEntry,
     live_capacity: Option<i128>,
     live_occupied_capacity: Option<i128>,
 ) -> SporeResponse {
     let (content_type, content_size, media_profile) = match &entry.extra {
-        ckbadger_store::DobExtra::Spore {
+        ckbadger_store::ObjectExtra::Spore {
             content_type,
             content_length,
             media_profile,
@@ -825,7 +825,7 @@ fn is_text_like_content_type(content_type: &str) -> bool {
 fn load_spore_content_from_ckb(
     state: &Arc<AppState>,
     spore_id: &[u8],
-    entry: &ckbadger_store::DobEntry,
+    entry: &ckbadger_store::ObjectEntry,
 ) -> anyhow::Result<(String, Vec<u8>)> {
     let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
         anyhow::anyhow!("CKB direct store unavailable; set [ckb].workdir in ckbadger.toml")
@@ -1100,7 +1100,7 @@ fn serve_clusters_from_cache(
         .store
         .get_spores_batch(&cluster_ids)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut spore_map: HashMap<Vec<u8>, ckbadger_store::DobEntry> =
+    let mut spore_map: HashMap<Vec<u8>, ckbadger_store::ObjectEntry> =
         HashMap::with_capacity(spore_entries.len());
     for (cluster_id, entry_opt) in spore_entries {
         if let Some(entry) = entry_opt {
@@ -1167,7 +1167,7 @@ fn unique_cluster_ids_from_cached_entries(cached: &[CachedAssetEntry]) -> Vec<Ve
 
 fn build_cluster_responses_from_cached_entries(
     cached: Vec<CachedAssetEntry>,
-    spore_map: &HashMap<Vec<u8>, ckbadger_store::DobEntry>,
+    spore_map: &HashMap<Vec<u8>, ckbadger_store::ObjectEntry>,
     cluster_agg_map: &HashMap<Vec<u8>, ckbadger_store::ClusterAggregate>,
 ) -> Vec<ClusterResponse> {
     let mut clusters = Vec::new();
@@ -1219,14 +1219,14 @@ fn load_spores_cached_or_store(state: &Arc<AppState>) -> Result<CachedSporeRows,
 }
 
 fn collect_spore_page<F>(
-    all_spores: &[(Vec<u8>, ckbadger_store::DobEntry)],
+    all_spores: &[(Vec<u8>, ckbadger_store::ObjectEntry)],
     limit: usize,
     mut predicate: F,
-) -> Vec<(&Vec<u8>, &ckbadger_store::DobEntry)>
+) -> Vec<(&Vec<u8>, &ckbadger_store::ObjectEntry)>
 where
-    F: FnMut(&ckbadger_store::DobEntry) -> bool,
+    F: FnMut(&ckbadger_store::ObjectEntry) -> bool,
 {
-    let mut page: Vec<(&Vec<u8>, &ckbadger_store::DobEntry)> = Vec::with_capacity(limit + 1);
+    let mut page: Vec<(&Vec<u8>, &ckbadger_store::ObjectEntry)> = Vec::with_capacity(limit + 1);
     for (spore_id, entry) in all_spores {
         if !predicate(entry) {
             continue;
@@ -1613,7 +1613,7 @@ async fn decode_spore(
         .ok_or_else(|| ApiError::not_found("Spore not found"))?;
 
     let mut content_type = match &entry.extra {
-        ckbadger_store::DobExtra::Spore { content_type, .. } => content_type.clone(),
+        ckbadger_store::ObjectExtra::Spore { content_type, .. } => content_type.clone(),
         _ => String::new(),
     };
 
@@ -1856,17 +1856,18 @@ mod tests {
     fn make_spore_entry(
         created_at_block: i64,
         owner_lock_hash: Option<Vec<u8>>,
-    ) -> ckbadger_store::DobEntry {
-        ckbadger_store::DobEntry {
-            standard: ckbadger_store::DobStandard::Spore,
+    ) -> ckbadger_store::ObjectEntry {
+        ckbadger_store::ObjectEntry {
+            standard: ckbadger_store::ObjectStandard::Spore,
             collection_id: None,
+            token_id: None,
             owner_lock_hash,
             name: Some("sample".to_string()),
             description: None,
             is_live: true,
             created_at_block,
             created_at_tx: vec![0x11; 32],
-            extra: ckbadger_store::DobExtra::Spore {
+            extra: ckbadger_store::ObjectExtra::Spore {
                 content_type: "text/plain".to_string(),
                 content_length: 5,
                 media_profile: ckbadger_store::SporeMediaProfile::default(),
@@ -1995,30 +1996,32 @@ mod tests {
         let mut spore_map = HashMap::new();
         spore_map.insert(
             first_cluster.clone(),
-            ckbadger_store::DobEntry {
-                standard: ckbadger_store::DobStandard::SporeCluster,
+            ckbadger_store::ObjectEntry {
+                standard: ckbadger_store::ObjectStandard::SporeCluster,
                 collection_id: None,
+                token_id: None,
                 owner_lock_hash: Some(vec![0xAA; 32]),
                 name: Some("Cluster A".to_string()),
                 description: Some("A".to_string()),
                 is_live: true,
                 created_at_block: 100,
                 created_at_tx: vec![0xAA; 32],
-                extra: ckbadger_store::DobExtra::SporeCluster,
+                extra: ckbadger_store::ObjectExtra::SporeCluster,
             },
         );
         spore_map.insert(
             second_cluster.clone(),
-            ckbadger_store::DobEntry {
-                standard: ckbadger_store::DobStandard::SporeCluster,
+            ckbadger_store::ObjectEntry {
+                standard: ckbadger_store::ObjectStandard::SporeCluster,
                 collection_id: None,
+                token_id: None,
                 owner_lock_hash: Some(vec![0xBB; 32]),
                 name: Some("Cluster B".to_string()),
                 description: Some("B".to_string()),
                 is_live: true,
                 created_at_block: 200,
                 created_at_tx: vec![0xBB; 32],
-                extra: ckbadger_store::DobExtra::SporeCluster,
+                extra: ckbadger_store::ObjectExtra::SporeCluster,
             },
         );
 
