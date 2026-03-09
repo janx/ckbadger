@@ -2009,4 +2009,72 @@ export const api = {
     }
     return res.json();
   },
+
+  getActivityVolumeChart: async (): Promise<ChartResponse> => {
+    const stats = await api.getDailyActivityStats(365);
+    return {
+      data: stats.map((s) => ({
+        date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+        value: String(
+          s.transferCount +
+            s.daoDepositCount +
+            s.daoWithdrawRequestCount +
+            s.daoWithdrawCompleteCount +
+            s.tokenCount +
+            s.nftCount +
+            s.coinbaseCount
+        ),
+      })),
+      title: 'Daily Activity Volume',
+      yAxisLabel: 'Activities',
+    };
+  },
+
+  getActivityTypeBreakdownChart: async (): Promise<StackedAreaChartResponse> => {
+    const stats = await api.getDailyActivityStats(365);
+    return {
+      data: stats.map((s) => ({
+        date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+        values: {
+          transfer: String(s.transferCount),
+          dao: String(s.daoDepositCount + s.daoWithdrawRequestCount + s.daoWithdrawCompleteCount),
+          token: String(s.tokenCount),
+          nft: String(s.nftCount),
+          coinbase: String(s.coinbaseCount),
+        },
+      })),
+      series: [
+        { key: 'transfer', label: 'Transfer', color: '#8ce00a' },
+        { key: 'dao', label: 'DAO', color: '#00d7eb' },
+        { key: 'token', label: 'Token', color: '#a78bfa' },
+        { key: 'nft', label: 'NFT', color: '#f472b6' },
+        { key: 'coinbase', label: 'Coinbase', color: '#64748b' },
+      ],
+      title: 'Activity Type Breakdown',
+    };
+  },
+
+  getActiveAddressesChart: async (): Promise<ChartResponse> => {
+    const stats = await api.getDailyActivityStats(365);
+    return {
+      data: stats.map((s) => ({
+        date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+        value: String(s.uniqueAddressCount),
+      })),
+      title: 'Daily Active Addresses',
+      yAxisLabel: 'Addresses',
+    };
+  },
+
+  getCkbVolumeChart: async (): Promise<ChartResponse> => {
+    const stats = await api.getDailyActivityStats(365);
+    return {
+      data: stats.map((s) => ({
+        date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+        value: s.totalCkbMoved,
+      })),
+      title: 'Daily CKB Transfer Volume',
+      yAxisLabel: 'CKB (shannons)',
+    };
+  },
 };

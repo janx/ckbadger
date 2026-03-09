@@ -366,6 +366,26 @@ export default function ChartsPage() {
     queryFn: () => api.getHodlWaveChart(),
   });
 
+  const { data: activityVolume } = useQuery({
+    queryKey: ['chart-activity-volume'],
+    queryFn: () => api.getActivityVolumeChart(),
+  });
+
+  const { data: activityTypeBreakdown } = useQuery({
+    queryKey: ['chart-activity-type-breakdown'],
+    queryFn: () => api.getActivityTypeBreakdownChart(),
+  });
+
+  const { data: activeAddresses } = useQuery({
+    queryKey: ['chart-active-addresses'],
+    queryFn: () => api.getActiveAddressesChart(),
+  });
+
+  const { data: ckbVolume } = useQuery({
+    queryKey: ['chart-ckb-volume'],
+    queryFn: () => api.getCkbVolumeChart(),
+  });
+
   const { data: hardforkTimeline } = useQuery({
     queryKey: ['hardforks-for-charts'],
     queryFn: () => api.getHardforks(),
@@ -425,6 +445,10 @@ export default function ChartsPage() {
             defaultSeries="liveCells"
           />
           <StackedAreaPreview data={hodlWave} href="/charts/hodl-wave" isPercentage />
+          <LineChartPreview data={activityVolume} href="/charts/activity-volume" />
+          <StackedAreaPreview data={activityTypeBreakdown} href="/charts/activity-type-breakdown" />
+          <LineChartPreview data={activeAddresses} href="/charts/active-addresses" />
+          <LineChartPreview data={ckbVolume} href="/charts/ckb-volume" chartType="bar" />
         </ChartSection>
 
         <ChartSection title="Common Knowledge Bytes">
