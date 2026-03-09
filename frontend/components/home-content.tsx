@@ -9,6 +9,7 @@ import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
 import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
 import { LatestActivities } from '@/components/latest-activities';
+import { ActivityBreakdown } from '@/components/activity-breakdown';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
 import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
 
@@ -63,8 +64,9 @@ export function HomeContent({ initialData }: HomeContentProps) {
         <PipelinePreview initialBlocks={initialData.blocks} />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <LatestActivities isRealtime={isConnected} />
+        <ActivityBreakdown isRealtime={isConnected} />
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">

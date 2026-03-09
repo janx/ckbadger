@@ -112,7 +112,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
     isFetching,
   } = useQuery({
     queryKey: ['latest-activities'],
-    queryFn: () => api.getLatestActivities(8),
+    queryFn: () => api.getLatestActivities(6),
     refetchInterval: 10000,
   });
 
@@ -169,7 +169,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                 </div>
               </TerminalRow>
             ))
-          : activities?.slice(0, 8).map((activity) => {
+          : activities?.slice(0, 6).map((activity) => {
               const activityKey = `${activity.blockNumber}:${activity.txIndex}:${activity.address}`;
               const badge = getTypeBadge(activity);
               const delta = BigInt(activity.ckbDelta);
