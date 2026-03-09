@@ -454,6 +454,19 @@ interface GlobalActivity {
   peers: string[];
 }
 
+interface DailyActivityStats {
+  date: string;
+  transferCount: number;
+  daoDepositCount: number;
+  daoWithdrawRequestCount: number;
+  daoWithdrawCompleteCount: number;
+  tokenCount: number;
+  nftCount: number;
+  coinbaseCount: number;
+  uniqueAddressCount: number;
+  totalCkbMoved: string;
+}
+
 interface GraphNode {
   id: string;
   nodeType: string;
@@ -1273,6 +1286,7 @@ export type {
   Activity,
   ActivityAssetChange,
   GlobalActivity,
+  DailyActivityStats,
 };
 
 export const api = {
@@ -1395,6 +1409,13 @@ export const api = {
 
   getLatestActivities: (limit: number = 8): Promise<GlobalActivity[]> => {
     return fetchApi(`/activities/latest?limit=${limit}`);
+  },
+
+  getDailyActivityStats: async (days: number = 30): Promise<DailyActivityStats[]> => {
+    const res = await fetch(`${API_BASE}/stats/daily-activities?days=${days}`);
+    if (!res.ok) throw new Error('Failed to fetch daily activity stats');
+    const json = await res.json();
+    return json.data;
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {
