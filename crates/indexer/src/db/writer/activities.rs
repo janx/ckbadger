@@ -14,17 +14,21 @@ fn code_hashes() -> &'static CodeHashes {
     CODE_HASHES.get_or_init(CodeHashes::new)
 }
 
-/// Pre-computed code hashes for asset detection.
+/// Asset kind for single-lookup classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssetKind {
+    Udt,
+    Dao,
+    SporeDid,
+    Spore,
+    Cluster,
+    MnftToken,
+    Dotbit,
+}
+
+/// Pre-computed code hashes for asset detection via HashMap lookup.
 struct CodeHashes {
-    dao: Vec<u8>,
-    sudt: Vec<u8>,
-    xudt_data1: Vec<u8>,
-    xudt_type: Vec<u8>,
-    spore_did: Vec<u8>,
-    spore_hashes: Vec<Vec<u8>>,
-    cluster_hashes: Vec<Vec<u8>>,
-    mnft_token: Vec<u8>,
-    dotbit: Vec<u8>,
+    lookup: HashMap<Vec<u8>, AssetKind>,
 }
 
 impl CodeHashes {
@@ -40,37 +44,32 @@ impl CodeHashes {
         use crate::parser::udt::{SUDT_CODE_HASH, XUDT_CODE_HASH_DATA1, XUDT_CODE_HASH_TYPE};
         use crate::rpc::parse_hex_to_bytes;
 
-        Self {
-            dao: parse_hex_to_bytes(DAO_CODE_HASH),
-            sudt: parse_hex_to_bytes(SUDT_CODE_HASH),
-            xudt_data1: parse_hex_to_bytes(XUDT_CODE_HASH_DATA1),
-            xudt_type: parse_hex_to_bytes(XUDT_CODE_HASH_TYPE),
-            spore_did: parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID),
-            spore_hashes: vec![
-                parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
-                parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V2),
-                parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V1),
-            ],
-            cluster_hashes: vec![
-                parse_hex_to_bytes(CLUSTER_CODE_HASH_MAINNET_V2),
-                parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V2),
-                parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V1),
-            ],
-            mnft_token: parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH),
-            dotbit: parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID),
-        }
+        let entries: &[(&str, AssetKind)] = &[
+            (SUDT_CODE_HASH, AssetKind::Udt),
+            (XUDT_CODE_HASH_DATA1, AssetKind::Udt),
+            (XUDT_CODE_HASH_TYPE, AssetKind::Udt),
+            (DAO_CODE_HASH, AssetKind::Dao),
+            (SPORE_CODE_HASH_MAINNET_DID, AssetKind::SporeDid),
+            (SPORE_CODE_HASH_MAINNET_V2, AssetKind::Spore),
+            (SPORE_CODE_HASH_TESTNET_V2, AssetKind::Spore),
+            (SPORE_CODE_HASH_TESTNET_V1, AssetKind::Spore),
+            (CLUSTER_CODE_HASH_MAINNET_V2, AssetKind::Cluster),
+            (CLUSTER_CODE_HASH_TESTNET_V2, AssetKind::Cluster),
+            (CLUSTER_CODE_HASH_TESTNET_V1, AssetKind::Cluster),
+            (MNFT_TOKEN_CODE_HASH, AssetKind::MnftToken),
+            (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
+        ];
+
+        let lookup = entries
+            .iter()
+            .map(|(hex, kind)| (parse_hex_to_bytes(hex), *kind))
+            .collect();
+
+        Self { lookup }
     }
 
-    fn is_udt(&self, code_hash: &[u8]) -> bool {
-        code_hash == self.sudt || code_hash == self.xudt_data1 || code_hash == self.xudt_type
-    }
-
-    fn is_spore(&self, code_hash: &[u8]) -> bool {
-        self.spore_hashes.iter().any(|h| h == code_hash)
-    }
-
-    fn is_cluster(&self, code_hash: &[u8]) -> bool {
-        self.cluster_hashes.iter().any(|h| h == code_hash)
+    fn classify(&self, code_hash: &[u8]) -> Option<AssetKind> {
+        self.lookup.get(code_hash).copied()
     }
 }
 
@@ -336,41 +335,47 @@ fn classify_input(
     hashes: &CodeHashes,
     capacity: i64,
 ) {
-    if hashes.is_udt(type_code_hash) {
-        if let Some(tsh) = type_script_hash {
-            if let Some(amount) = udt_amount.or_else(|| UdtParser::parse_amount(data)) {
-                let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
-                entry.0 += amount as i128;
+    match hashes.classify(type_code_hash) {
+        Some(AssetKind::Udt) => {
+            if let Some(tsh) = type_script_hash {
+                if let Some(amount) = udt_amount.or_else(|| UdtParser::parse_amount(data)) {
+                    let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
+                    entry.0 += amount as i128;
+                }
             }
         }
-    } else if type_code_hash == hashes.dao {
-        // DAO withdraw request cell consumed as input = withdrawal completing.
-        // This is determined from DAO secondary indexes at input-view build time.
-        if is_dao_withdraw_request {
-            accum.dao_withdraw_completes.push(capacity);
-        }
-    } else if type_code_hash == hashes.spore_did {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.did_ckb_inputs.push(args.to_vec());
+        Some(AssetKind::Dao) => {
+            if is_dao_withdraw_request {
+                accum.dao_withdraw_completes.push(capacity);
             }
         }
-    } else if hashes.is_spore(type_code_hash) || hashes.is_cluster(type_code_hash) {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.spore_inputs.push(args.to_vec());
+        Some(AssetKind::SporeDid) => {
+            if let Some(args) = type_args {
+                if !args.is_empty() {
+                    accum.did_ckb_inputs.push(args.to_vec());
+                }
             }
         }
-    } else if type_code_hash == hashes.mnft_token {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.nft_inputs.push(args.to_vec());
+        Some(AssetKind::Spore | AssetKind::Cluster) => {
+            if let Some(args) = type_args {
+                if !args.is_empty() {
+                    accum.spore_inputs.push(args.to_vec());
+                }
             }
         }
-    } else if type_code_hash == hashes.dotbit {
-        if let Some(account_id) = resolve_dotbit_account_id(type_args, data) {
-            accum.dotbit_inputs.push(account_id);
+        Some(AssetKind::MnftToken) => {
+            if let Some(args) = type_args {
+                if !args.is_empty() {
+                    accum.nft_inputs.push(args.to_vec());
+                }
+            }
         }
+        Some(AssetKind::Dotbit) => {
+            if let Some(account_id) = resolve_dotbit_account_id(type_args, data) {
+                accum.dotbit_inputs.push(account_id);
+            }
+        }
+        None => {}
     }
 }
 
@@ -383,53 +388,60 @@ fn classify_output(
     hashes: &CodeHashes,
     capacity: i64,
 ) {
-    if hashes.is_udt(type_code_hash) {
-        if let Some(tsh) = type_script_hash {
-            if let Some(amount) = UdtParser::parse_amount(cell_data) {
-                let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
-                entry.1 += amount as i128;
+    match hashes.classify(type_code_hash) {
+        Some(AssetKind::Udt) => {
+            if let Some(tsh) = type_script_hash {
+                if let Some(amount) = UdtParser::parse_amount(cell_data) {
+                    let entry = accum.udt_deltas.entry(tsh.to_vec()).or_insert((0, 0));
+                    entry.1 += amount as i128;
+                }
             }
         }
-    } else if type_code_hash == hashes.dao {
-        // DAO output: deposit vs withdraw request
-        if cell_data.len() == 8 {
-            let bytes: [u8; 8] = cell_data.try_into().unwrap_or_else(|_| {
-                panic!(
-                    "failed to decode DAO output data while classifying activity: len={}",
-                    cell_data.len()
-                )
-            });
-            let deposit_block = u64::from_le_bytes(bytes);
-            if deposit_block == 0 {
-                accum.dao_deposits.push(capacity);
-            } else {
-                accum
-                    .dao_withdraw_requests
-                    .push((capacity, deposit_block as i64));
+        Some(AssetKind::Dao) => {
+            if cell_data.len() == 8 {
+                let bytes: [u8; 8] = cell_data.try_into().unwrap_or_else(|_| {
+                    panic!(
+                        "failed to decode DAO output data while classifying activity: len={}",
+                        cell_data.len()
+                    )
+                });
+                let deposit_block = u64::from_le_bytes(bytes);
+                if deposit_block == 0 {
+                    accum.dao_deposits.push(capacity);
+                } else {
+                    accum
+                        .dao_withdraw_requests
+                        .push((capacity, deposit_block as i64));
+                }
             }
         }
-    } else if type_code_hash == hashes.spore_did {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.did_ckb_outputs.push(args.to_vec());
+        Some(AssetKind::SporeDid) => {
+            if let Some(args) = type_args {
+                if !args.is_empty() {
+                    accum.did_ckb_outputs.push(args.to_vec());
+                }
             }
         }
-    } else if hashes.is_spore(type_code_hash) || hashes.is_cluster(type_code_hash) {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.spore_outputs.push(args.to_vec());
+        Some(AssetKind::Spore | AssetKind::Cluster) => {
+            if let Some(args) = type_args {
+                if !args.is_empty() {
+                    accum.spore_outputs.push(args.to_vec());
+                }
             }
         }
-    } else if type_code_hash == hashes.mnft_token {
-        if let Some(args) = type_args {
-            if !args.is_empty() {
-                accum.nft_outputs.push(args.to_vec());
+        Some(AssetKind::MnftToken) => {
+            if let Some(args) = type_args {
+                if !args.is_empty() {
+                    accum.nft_outputs.push(args.to_vec());
+                }
             }
         }
-    } else if type_code_hash == hashes.dotbit {
-        if let Some(account_id) = resolve_dotbit_account_id(type_args, cell_data) {
-            accum.dotbit_outputs.push(account_id);
+        Some(AssetKind::Dotbit) => {
+            if let Some(account_id) = resolve_dotbit_account_id(type_args, cell_data) {
+                accum.dotbit_outputs.push(account_id);
+            }
         }
+        None => {}
     }
 }
 

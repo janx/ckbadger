@@ -151,13 +151,25 @@ fn run_nft_precompute(
     let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
     let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
 
+    let dotbit_code_hash =
+        crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
+
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
         let tx_count_for_block = parsed.transactions_count as usize;
         let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
         for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
             let tx_global_index = block_tx_idx + tx_idx;
-            let witness_bundle = parse_dotbit_witness_bundle(&tx_data.witnesses);
+            let has_dotbit_output = tx_data.cells.iter().any(|cell| {
+                cell.type_code_hash
+                    .as_ref()
+                    .is_some_and(|tc| tc.as_slice() == dotbit_code_hash.as_slice())
+            });
+            let witness_bundle = if has_dotbit_output {
+                parse_dotbit_witness_bundle(&tx_data.witnesses)
+            } else {
+                DotbitWitnessBundle::default()
+            };
             let scanned = scan_preparsed_nft_tx(tx_data, &witness_bundle).with_context(|| {
                 format!(
                     "block={}, tx=0x{}",
