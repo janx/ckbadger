@@ -590,6 +590,76 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         });
     }
 
+    // Identity collections from pre-aggregated identity_agg CF
+    let identity_aggs = state.store.list_identity_collection_aggregates()?;
+    nft_assets.reserve(identity_aggs.len());
+
+    for (collection_id_bytes, agg) in &identity_aggs {
+        if agg.total_count == 0 {
+            continue;
+        }
+        let collection_hex = format!("0x{}", hex::encode(collection_id_bytes));
+        let transfers_24h = nft_transfers_24h_map
+            .get(collection_id_bytes.as_slice())
+            .copied()
+            .unwrap_or(0);
+        let standard_str = agg.standard.asset_standard().to_string();
+        let standard = resolve_collection_standard(collection_id_bytes, &standard_str);
+        let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
+        let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
+            .unwrap_or("unknown")
+            .to_string();
+        let fully_onchain_count = if storage_tier == "fully_onchain" {
+            agg.live_count
+        } else {
+            0
+        };
+        let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
+        let id_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
+        let (live_capacity, live_occupied_capacity) =
+            accumulate_live_capacity(id_daily.into_iter().map(|(_, delta)| {
+                (
+                    delta.live_capacity_delta,
+                    delta.live_occupied_capacity_delta,
+                )
+            }))
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid identity daily capacity deltas for collection_id=0x{}: {}",
+                    hex::encode(collection_id_bytes),
+                    e
+                )
+            })?;
+
+        nft_assets.push(CachedAssetEntry {
+            id: collection_hex.clone(),
+            asset_type: "nft".to_string(),
+            standard,
+            name: display_name.clone(),
+            symbol: None,
+            icon_url: None,
+            holders_count: agg.holders_count,
+            transfers_count: agg.total_count,
+            transfers_24h,
+            decimals: None,
+            total_supply: Some(agg.total_count.to_string()),
+            maximum_supply: None,
+            content_type: None,
+            content_size: None,
+            cluster_id: Some(collection_hex.clone()),
+            cluster_name: display_name,
+            live_capacity: Some(live_capacity.to_string()),
+            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            storage_tier: Some(storage_tier),
+            fully_onchain_ratio: Some(fully_onchain_ratio),
+            fully_onchain_count: Some(fully_onchain_count),
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            description: None,
+        });
+    }
+
     nft_assets.sort_by(|a, b| {
         b.transfers_24h
             .cmp(&a.transfers_24h)

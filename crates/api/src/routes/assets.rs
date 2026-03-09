@@ -3,7 +3,10 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use ckbadger_store::{types::ObjectCollectionActivityEntry, CkbadgerStore};
+use ckbadger_store::{
+    types::{ObjectCollectionActivityEntry, ObjectCollectionAggregate},
+    CkbadgerStore,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -22,6 +25,42 @@ use crate::AppState;
 
 const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+
+fn is_identity_sentinel(collection_id: &[u8]) -> bool {
+    collection_id == DOTBIT_SENTINEL_COLLECTION || collection_id == DID_CKB_SENTINEL_COLLECTION
+}
+
+/// Read the collection aggregate from the correct CF (identity vs object).
+///
+/// Identity sentinel collections store aggregates in `CF_IDENTITY_AGG`;
+/// all other collections use `CF_OBJECT_COLLECTION_AGG`.  The returned
+/// [`ObjectCollectionAggregate`] is a normalised view so callers don't
+/// need to branch on the collection type.
+fn get_collection_aggregate(
+    store: &CkbadgerStore,
+    collection_id: &[u8],
+) -> anyhow::Result<Option<ObjectCollectionAggregate>> {
+    if is_identity_sentinel(collection_id) {
+        let opt = store.get_identity_collection_aggregate(collection_id)?;
+        Ok(opt.map(|id_agg| {
+            use ckbadger_store::types::ObjectStandard;
+            ObjectCollectionAggregate {
+                name: id_agg.name,
+                standard: match id_agg.standard {
+                    ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
+                    ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
+                },
+                total_count: id_agg.total_count,
+                live_count: id_agg.live_count,
+                holders_count: id_agg.holders_count,
+                activities_count: id_agg.activities_count,
+            }
+        }))
+    } else {
+        store.get_object_collection_aggregate(collection_id)
+    }
+}
+
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -829,14 +868,24 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     let scan_limit = NFT_ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
     let mut out = Vec::with_capacity(limit);
     let mut scan_cursor = cursor;
+    let identity = is_identity_sentinel(collection_id);
 
     loop {
-        let rows = append_only_store.list_object_collection_activities(
-            collection_id,
-            scan_limit,
-            scan_cursor,
-            action_filter,
-        )?;
+        let rows = if identity {
+            append_only_store.list_identity_collection_activities(
+                collection_id,
+                scan_limit,
+                scan_cursor,
+                action_filter,
+            )?
+        } else {
+            append_only_store.list_object_collection_activities(
+                collection_id,
+                scan_limit,
+                scan_cursor,
+                action_filter,
+            )?
+        };
         if rows.is_empty() {
             break;
         }
@@ -873,14 +922,24 @@ pub(crate) fn count_canonical_nft_collection_activities(
 ) -> anyhow::Result<i64> {
     let mut total = 0i64;
     let mut cursor = None;
+    let identity = is_identity_sentinel(collection_id);
 
     loop {
-        let rows = append_only_store.list_object_collection_activities(
-            collection_id,
-            NFT_ACTIVITY_SCAN_CHUNK_SIZE,
-            cursor,
-            None,
-        )?;
+        let rows = if identity {
+            append_only_store.list_identity_collection_activities(
+                collection_id,
+                NFT_ACTIVITY_SCAN_CHUNK_SIZE,
+                cursor,
+                None,
+            )?
+        } else {
+            append_only_store.list_object_collection_activities(
+                collection_id,
+                NFT_ACTIVITY_SCAN_CHUNK_SIZE,
+                cursor,
+                None,
+            )?
+        };
         if rows.is_empty() {
             break;
         }
@@ -1616,9 +1675,7 @@ async fn get_nft_collection(
 ) -> ApiResult<NftCollectionDetailResponse> {
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
-    let agg = state
-        .store
-        .get_object_collection_aggregate(&collection_id_bytes)
+    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
@@ -1801,9 +1858,7 @@ async fn list_nft_collection_items(
         .map(decode_nft_item_cursor)
         .transpose()?;
 
-    let agg = state
-        .store
-        .get_object_collection_aggregate(&collection_id_bytes)
+    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
@@ -2339,9 +2394,7 @@ async fn list_nft_collection_holders(
         .map(decode_nft_collection_holders_cursor)
         .transpose()?;
 
-    let agg = state
-        .store
-        .get_object_collection_aggregate(&collection_id_bytes)
+    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
     if agg.holders_count < 0 {
@@ -2413,9 +2466,7 @@ async fn list_nft_collection_activities(
     let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
 
     // Validate collection exists
-    let _agg = state
-        .store
-        .get_object_collection_aggregate(&collection_id_bytes)
+    let _agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 
@@ -2583,9 +2634,7 @@ async fn get_nft_collection_occupation_chart(
 
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
 
-    let agg = state
-        .store
-        .get_object_collection_aggregate(&collection_id_bytes)
+    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
 

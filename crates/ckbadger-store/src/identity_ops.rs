@@ -58,6 +58,33 @@ impl CkbadgerStore {
         }
     }
 
+    /// List all identity collection aggregates.
+    pub fn list_identity_collection_aggregates(
+        &self,
+    ) -> anyhow::Result<Vec<(Vec<u8>, IdentityCollectionAggregate)>> {
+        let iter = self.iterator_cf(self.cf_identity_agg(), rocksdb::IteratorMode::Start);
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate identity_agg in list_identity_collection_aggregates: {}",
+                    e
+                )
+            })?;
+            let agg: IdentityCollectionAggregate =
+                bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize identity collection aggregate in list_identity_collection_aggregates: collection_id=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+            results.push((key.to_vec(), agg));
+        }
+        Ok(results)
+    }
+
     /// List pre-computed activities for an identity collection, newest first.
     ///
     /// Returns `(block_number, tx_index, entry)` tuples. Simple prefix scan
