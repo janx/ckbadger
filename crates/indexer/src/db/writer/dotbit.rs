@@ -37,7 +37,9 @@ pub(crate) fn das_action_to_asset_action(action: &str) -> Option<AssetAction> {
         | "edit_account_sale"
         | "force_recover_account_status"
         | "lock_account_for_cross_chain"
-        | "unlock_account_for_cross_chain" => Some(AssetAction::Update),
+        | "unlock_account_for_cross_chain"
+        | "create_approval"
+        | "revoke_approval" => Some(AssetAction::Update),
         // Sub-account infrastructure — suppress collection activity
         "enable_sub_account"
         | "create_sub_account"
@@ -956,5 +958,22 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid .bit hourly transfer value length"));
+    }
+
+    #[test]
+    fn test_das_action_to_asset_action_approval_actions() {
+        assert!(matches!(
+            das_action_to_asset_action("create_approval"),
+            Some(AssetAction::Update)
+        ));
+        assert!(matches!(
+            das_action_to_asset_action("revoke_approval"),
+            Some(AssetAction::Update)
+        ));
+        // fulfill_approval is a transfer (existing mapping)
+        assert!(matches!(
+            das_action_to_asset_action("fulfill_approval"),
+            Some(AssetAction::Transfer)
+        ));
     }
 }
