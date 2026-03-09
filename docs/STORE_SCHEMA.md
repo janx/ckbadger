@@ -35,12 +35,13 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `token_transfers`                | type_hash + block + tx_index                          | TransferInfo            | Token transfer records                                       |
 | `spore_data`                     | spore_id (32B)                                        | SporeData               | Spore NFT metadata                                           |
 | `spore_by_cluster`               | cluster_id + spore_id                                 | empty                   | Spore index by cluster                                       |
-| `nft_data`                       | nft_id                                                | NftData                 | Unified NFT metadata (.bit, mNFT, etc.)                      |
-| `nft_by_collection`              | collection_id + nft_id                                | empty                   | NFT index by collection                                      |
-| `nft_collection_agg`             | collection_id                                         | NftCollectionAgg        | NFT collection aggregate stats                               |
-| `nft_collection_activities`      | collection_id + block + tx                            | ActivityRecord          | Pre-computed Object collection activity feed                 |
+| `object_data`                    | object_id                                             | ObjectData              | Unified Object metadata (mNFT, etc.)                         |
+| `object_by_collection`           | collection_id + object_id                             | empty                   | Object index by collection                                   |
+| `identity_data`                  | identity_id (32B)                                     | IdentityEntry           | Identity metadata (.bit, did:ckb)                            |
+| `object_collection_agg`          | collection_id                                         | ObjectCollectionAgg     | Object collection aggregate stats                            |
+| `object_collection_activities`   | collection_id + block + tx                            | ActivityRecord          | Pre-computed Object collection activity feed                 |
 | `identity_agg`                   | collection_id (sentinel 32B)                          | IdentityCollectionAgg   | Identity collection aggregate stats (domain)                 |
-| `identity_collection_activities` | collection_id + block + tx                            | ActivityRecord          | Pre-computed Identity collection activity feed (append-only) |
+| `identity_collection_activities` | collection_id + block + tx                            | ActivityRecord          | Pre-computed Identity collection activity feed (domain)      |
 | `activities`                     | addr/token/entity + block+tx                          | ActivityRecord          | Unified activity feed                                        |
 | `cluster_agg`                    | cluster_id                                            | ClusterAgg              | Spore cluster aggregate stats                                |
 | `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Known script metadata                                        |
@@ -50,7 +51,7 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `stats_script`                   | prefixed keys                                         | ScriptDailyDelta        | Script daily deltas                                          |
 | `stats_token`                    | prefixed keys                                         | token rollups + deltas  | Token transfer/hourly/daily stats                            |
 | `stats_spore`                    | prefixed keys                                         | spore rollups/indexes   | Spore/cluster daily + owner/index stats                      |
-| `stats_nft`                      | prefixed keys                                         | nft rollups/indexes     | NFT/mNFT/.bit daily + hourly + indexes                       |
+| `stats_object`                   | prefixed keys                                         | object rollups/indexes  | Object/mNFT daily + hourly + indexes                         |
 | `sync_meta`                      | fixed keys                                            | SyncStatus/ReorgEvent   | Sync progress, deep-fork, reorg metadata                     |
 
 ### DAO Secondary Index Notes

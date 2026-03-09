@@ -35,14 +35,14 @@ Derived Truth: various indices and aggregations on blocks, transactions, cells f
 
 3 rocksdb for reading: ckb node rocksdb, ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
 
-1 rocksdb for writing: ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
+2 rocksdb for writing: ckbadger rocksdb 'domain', ckbadger rocksdb 'append-only'
 
 # Principles
 
 1. Keep single source of truth.
 2. Don't store redundant data, don't write the same data multiple times/places.
 3. Use 'pointers' to link derived data with raw data, associate extended fields with original/core fields.
-4. Append-only stores serve as archives never delete - uncle blocks, reverted transactions, etc. are histories kept. Reorgs should not delete from append-only store. Hashes should be used as keys in append-only store because hashes are permanent ids. Block number should not be used as keys in append-only store because 'block number -> hash' mapping could change on reorgs.
+4. Append-only should keep all happened histories, never delete - uncle blocks, reverted transactions, etc. are histories kept. Reorgs should not delete from append-only store. Hashes should be used as keys in append-only store because hashes are global unique content addresses. Block number should not be used as keys in append-only store because 'block number -> hash' mapping could change on reorgs.
 
 # Column Family Suggestions
 
@@ -74,7 +74,7 @@ CF 7: `consumed_cells`, index to `cells`
 Key: `outpoint`
 Purpose: Spent cell archive for history queries.
 
-CF 8: `tx_meta`, append only
+CF 8: `tx_meta`,
 Key: `tx_hash` (32B)
 Purpose: Per-tx metadata not in CKB node
 
@@ -82,7 +82,7 @@ CF 9: `tx_index`, index to `tx_meta`
 Key: `block_number` + `tx_index`
 Value: `tx_hash`
 
-CF 10: `block_meta`, append only
+CF 10: `block_meta`,
 Key: `block_hash` (32B)
 Purpose: Per-block metadata not in CKB node
 
@@ -96,26 +96,26 @@ Key: `script_hash`
 Value: fungible token and non-fungible token information
 Purpose: Token metadata from info cells and label import. No aggregate stored.
 
-CF 13: `nft_item_meta`
-Key: `nft_type` + `nft_id`
-Enums `nft_type`: Spore, SporeCluster, DIDCKB, MnftIssuer, MnftClass, MnftToken, DOTBIT
+CF 13: `object_meta`
+Key: `object_type` + `object_id`
+Enums `object_type`: Spore, SporeCluster, DIDCKB, MnftIssuer, MnftClass, MnftToken, DOTBIT
 
-CF 14: `nft_item_index`, append only
-Key: `nft_type` + `nft_id` + `outpoint`
+CF 14: `object_item_index`,
+Key: `object_type` + `object_id` + `outpoint`
 Value: empty
-Purpose: Find all outpoints for an nft. Check which is live to get current owner/capacity.
+Purpose: Find all outpoints for a digital object. Check which is live to get current owner/capacity.
 
-CF 15: `nft_outpoints`, index to `nft_item_meta`
+CF 15: `object_outpoints`, index to `object_item_meta`
 Key: `outpoint`
-Value: `nft_type` + `nft_id`
+Value: `object_type` + `object_id`
 Purpose: Map cell outpoint to NFT.
 
-CF 16: `nft_item_by_collection`
-Key: `nft_type` + `collection_id` + `nft_id`
+CF 16: `object_item_by_collection`
+Key: `object_type` + `collection_id` + `object_id`
 Value: empty
-Purpose: List nfts in a collection/cluster. Derive collection counts from scan.
+Purpose: List digital objects in a collection/cluster. Derive collection counts from scan.
 
-CF 17: `ft_index`, append only
+CF 17: `ft_index`,
 Key: `ft_type` + `script_hash` + `outpoint`
 Value: empty
 Purpose: Find all outpoints for a fungible token.
@@ -142,7 +142,7 @@ Purpose: Pre-computed aggregates for addresses.
 CF 23: `ft_stats`
 Purpose: Pre-computed aggregates for fungible tokens.
 
-CF 24: `nft_collection_stats`
+CF 24: `object_collection_stats`
 Purpose: Pre-computed aggregates for non-fungible token collections.
 
 CF 24: `addr_txs`, index to `tx_meta`
@@ -151,7 +151,7 @@ Purpose: Per-address tx history for paginated listing.
 CF 25: `addr_assets`
 Purpose: Per-address asset holdings.
 
-CF 26: `activities`, append only
+CF 26: `activities`,
 Key: `activity_id` (associated transaction's `block_number` + `tx_index` + generated sequential index)
 Value: Activity data
 Purpose: All activities parsed from transactions.
@@ -160,8 +160,8 @@ CF 27: `addr_activities`, index to `activities`
 Key: `lock_hash`
 value: empty
 
-CF 28: `nft_collection_activities`, index to `activities`
-Key: `nft_type` + `collection_id` + `activity_id`
+CF 28: `object_collection_activities`, index to `activities`
+Key: `object_type` + `collection_id` + `activity_id`
 value: empty
 
 CF 29: `ft_activities`, index to `activities`

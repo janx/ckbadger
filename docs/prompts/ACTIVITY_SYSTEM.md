@@ -14,13 +14,13 @@ This document describes the concepts, principles and ideas of activity. The docu
 
 For each transaction, every address (lock_script_hash) that appears as an input or output owner gets exactly one `ActivityEntry`. That entry captures:
 
-| Field            | Meaning                                                         |
-| ---------------- | --------------------------------------------------------------- |
-| `ckb_delta`      | Net CKB change in shannons (`output_capacity - input_capacity`) |
-| `occupied_delta` | Net occupied capacity change in shannons                        |
-| `asset_changes`  | Token transfers, DAO operations, NFT/DOB mints/transfers/burns  |
-| `peers`          | All OTHER lock_script_hashes in the same transaction            |
-| `is_cellbase`    | Whether this is a mining reward transaction                     |
+| Field            | Meaning                                                                |
+| ---------------- | ---------------------------------------------------------------------- |
+| `ckb_delta`      | Net CKB change in shannons (`output_capacity - input_capacity`)        |
+| `occupied_delta` | Net occupied capacity change in shannons                               |
+| `asset_changes`  | Token transfers, DAO operations, Object/Identity mints/transfers/burns |
+| `peers`          | All OTHER lock_script_hashes in the same transaction                   |
+| `is_cellbase`    | Whether this is a mining reward transaction                            |
 
 ### Why `occupied_delta`?
 
@@ -67,13 +67,13 @@ pub enum AssetChange {
         symbol: Option<String>,  // e.g. "SEAL"
         decimals: Option<u8>,    // e.g. 8
     },
-    Dob {                        // Spore, did:ckb
-        dob_id: Vec<u8>,
+    Object {                     // Spore, did:ckb
+        object_id: Vec<u8>,
         standard: String,        // "spore", "did_ckb"
         action: AssetAction,     // Mint | Transfer | Burn
     },
-    Nft {                        // mNFT, .bit
-        nft_id: Vec<u8>,
+    Identity {                   // mNFT, .bit
+        identity_id: Vec<u8>,
         standard: String,        // "m-nft", "dotbit"
         action: AssetAction,
     },
@@ -112,14 +112,14 @@ NFT/DOB action detection uses set comparison:
 ### Key Encoding
 
 ```
-lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 76 bytes
+lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B) = 108 bytes
 ```
 
 `block_num_desc = i64::MAX - block_num`, `tx_idx_desc = i32::MAX - tx_idx` — descending order so prefix scan returns newest activities first.
 
 ```rust
-pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8>;
-pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>);
+pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32, block_hash: &[u8], tx_hash: &[u8]) -> Vec<u8>;
+pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>, Vec<u8>);
 ```
 
 ### Value Encoding

@@ -1,6 +1,6 @@
 //! Accumulates object lifecycle events within a batch and flushes them as
 //! pre-computed `ObjectCollectionActivityEntry` rows into the
-//! `CF_NFT_COLLECTION_ACTIVITIES` column family.
+//! `CF_OBJECT_COLLECTION_ACTIVITIES` and `CF_IDENTITY_COLLECTION_ACTIVITIES` column families.
 //!
 //! Each `record()` call captures one raw event (Create or Consume) for a
 //! single object.  `flush()` resolves per-object actions:

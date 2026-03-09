@@ -20,7 +20,7 @@ This layer contains on-chain primitive objects:
 
 Raw data is the factual foundation, because they come from and are verified by CKB nodes, however it should not be the default entry point for most users.
 
-The append-only store should record all known facts.
+The append-only store should record all happened histories.
 
 ### Layer 1: Domain Knowledge (Semantics)
 
@@ -36,8 +36,6 @@ This layer contains user-facing semantic concepts:
 Domain knowledge are like opinions about fact, for example, the activities of a transaction can be interpreted as either two payments or a swap, different nodes may see different canonical chain tip and reorgs. This is the primary focus of information presentation and navigation.
 
 Reorgs could change opinions but don't change facts. The domain store should keep latest opinions.
-
-`domain knowledge` does not imply `domain store`: immutable domain-level history may live in append-only storage when that layout is better for write performance and reorg handling.
 
 ### Layer 2: Aggregations and Intelligence
 
