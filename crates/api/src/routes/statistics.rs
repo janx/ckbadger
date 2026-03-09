@@ -1,6 +1,10 @@
 #![allow(clippy::type_complexity)]
 
-use axum::{extract::State, routing::get, Router};
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Router,
+};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
@@ -99,6 +103,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         )
         .route("/charts/inflation-rate", get(get_inflation_rate_chart))
         .route("/charts/hodl-wave", get(get_hodl_wave_chart))
+        // Activity stats
+        .route("/stats/daily-activities", get(get_daily_activity_stats))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3110,6 +3116,81 @@ async fn get_hodl_wave_chart(
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
 
     ok(response)
+}
+
+// ============================================
+// Daily Activity Stats
+// ============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyActivityStatsResponse {
+    pub date: String,
+    pub transfer_count: u32,
+    pub dao_deposit_count: u32,
+    pub dao_withdraw_request_count: u32,
+    pub dao_withdraw_complete_count: u32,
+    pub token_count: u32,
+    pub nft_count: u32,
+    pub coinbase_count: u32,
+    pub unique_address_count: u32,
+    pub total_ckb_moved: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DailyActivityStatsParams {
+    #[serde(default = "default_activity_days")]
+    days: u32,
+}
+
+fn default_activity_days() -> u32 {
+    30
+}
+
+async fn get_daily_activity_stats(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<DailyActivityStatsParams>,
+) -> ApiResult<Vec<DailyActivityStatsResponse>> {
+    let days = params.days.clamp(1, 365);
+    let cache_key = format!("stats:daily-activity-stats:{}", days);
+
+    if let Some(cached) = state
+        .cache
+        .get::<Vec<DailyActivityStatsResponse>>(&cache_key)
+        .await
+    {
+        return ok(cached);
+    }
+
+    let all_stats = state
+        .store
+        .list_daily_activity_stats()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Take the last N days (list is sorted ascending by date)
+    let result: Vec<DailyActivityStatsResponse> = all_stats
+        .into_iter()
+        .rev()
+        .take(days as usize)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|(date, s)| DailyActivityStatsResponse {
+            date,
+            transfer_count: s.transfer_count,
+            dao_deposit_count: s.dao_deposit_count,
+            dao_withdraw_request_count: s.dao_withdraw_request_count,
+            dao_withdraw_complete_count: s.dao_withdraw_complete_count,
+            token_count: s.token_count,
+            nft_count: s.nft_count,
+            coinbase_count: s.coinbase_count,
+            unique_address_count: s.unique_address_count,
+            total_ckb_moved: s.total_ckb_moved.to_string(),
+        })
+        .collect();
+
+    state.cache.set(&cache_key, &result, CacheTtl::CHART).await;
+    ok(result)
 }
 
 #[cfg(test)]
