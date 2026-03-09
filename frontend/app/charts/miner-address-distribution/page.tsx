@@ -73,20 +73,9 @@ function MinerRow({
   );
 }
 
-const COLORS = [
-  '#8b5cf6',
-  '#00ff41',
-  '#ffb000',
-  '#ef4444',
-  '#3b82f6',
-  '#ec4899',
-  '#14b8a6',
-  '#f97316',
-  '#6366f1',
-  '#84cc16',
-  '#a855f7',
-  '#22d3ee',
-];
+// Use centralized chart palette
+import { CHART_PALETTE } from '@/lib/chart-colors';
+const COLORS = CHART_PALETTE;
 
 export default function MinerAddressDistributionPage() {
   const { data, isLoading, error } = useQuery({
