@@ -3135,6 +3135,15 @@ pub struct DailyActivityStatsResponse {
     pub coinbase_count: u32,
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
+    pub script_counts: Vec<ScriptCountEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCountEntry {
+    pub code_hash: String,
+    pub name: Option<String>,
+    pub count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3168,24 +3177,63 @@ async fn get_daily_activity_stats(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Take the last N days (list is sorted ascending by date)
-    let result: Vec<DailyActivityStatsResponse> = all_stats
+    let selected: Vec<_> = all_stats
         .into_iter()
         .rev()
         .take(days as usize)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|(date, s)| DailyActivityStatsResponse {
-            date,
-            transfer_count: s.transfer_count,
-            dao_deposit_count: s.dao_deposit_count,
-            dao_withdraw_request_count: s.dao_withdraw_request_count,
-            dao_withdraw_complete_count: s.dao_withdraw_complete_count,
-            token_count: s.token_count,
-            nft_count: s.nft_count,
-            coinbase_count: s.coinbase_count,
-            unique_address_count: s.unique_address_count,
-            total_ckb_moved: s.total_ckb_moved.to_string(),
+        .collect();
+
+    // Collect all unique code_hashes across selected days and resolve names
+    let mut unique_code_hashes: HashSet<String> = HashSet::new();
+    for (_date, s) in &selected {
+        for code_hash in s.script_counts.keys() {
+            unique_code_hashes.insert(code_hash.clone());
+        }
+    }
+
+    let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
+    for code_hash_hex in &unique_code_hashes {
+        if let Ok(bytes) = hex::decode(code_hash_hex) {
+            let name = state
+                .store
+                .get_script_info(&bytes)
+                .ok()
+                .flatten()
+                .and_then(|info| info.name);
+            name_cache.insert(code_hash_hex.clone(), name);
+        }
+    }
+
+    let result: Vec<DailyActivityStatsResponse> = selected
+        .into_iter()
+        .map(|(date, s)| {
+            let mut script_counts: Vec<ScriptCountEntry> = s
+                .script_counts
+                .iter()
+                .map(|(code_hash_hex, &count)| ScriptCountEntry {
+                    code_hash: format!("0x{}", code_hash_hex),
+                    name: name_cache.get(code_hash_hex).cloned().flatten(),
+                    count,
+                })
+                .collect();
+            script_counts.sort_by(|a, b| b.count.cmp(&a.count));
+
+            DailyActivityStatsResponse {
+                date,
+                transfer_count: s.transfer_count,
+                dao_deposit_count: s.dao_deposit_count,
+                dao_withdraw_request_count: s.dao_withdraw_request_count,
+                dao_withdraw_complete_count: s.dao_withdraw_complete_count,
+                token_count: s.token_count,
+                nft_count: s.nft_count,
+                coinbase_count: s.coinbase_count,
+                unique_address_count: s.unique_address_count,
+                total_ckb_moved: s.total_ckb_moved.to_string(),
+                script_counts,
+            }
         })
         .collect();
 
