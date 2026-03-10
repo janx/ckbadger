@@ -16,6 +16,7 @@ use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL};
 use crate::AppState;
+use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>;
@@ -154,6 +155,25 @@ fn parse_fixed_len_hex(
         return Err(ApiError::bad_request(err_msg));
     }
     Ok(bytes)
+}
+
+/// Parse a cluster_id URL parameter. Accepts "sole-spores" alias
+/// or a 32-byte hex string.
+fn parse_cluster_id_param(
+    raw: &str,
+) -> Result<Vec<u8>, (axum::http::StatusCode, axum::Json<ApiError>)> {
+    if raw.eq_ignore_ascii_case("sole-spores") {
+        return Ok(SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+    }
+    parse_fixed_len_hex(
+        raw,
+        32,
+        "Invalid cluster ID (expected 32-byte hex or 'sole-spores')",
+    )
+}
+
+fn is_sole_spores_sentinel(id: &[u8]) -> bool {
+    id == SOLE_SPORES_SENTINEL_COLLECTION
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -296,6 +316,7 @@ fn spore_to_response(
         cluster_id: entry
             .collection_id
             .as_ref()
+            .filter(|c| !is_sole_spores_sentinel(c))
             .map(|c| format!("0x{}", hex::encode(c))),
         content_type,
         content_size,
@@ -1244,7 +1265,7 @@ async fn get_cluster_holders(
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterHoldersParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
-    let id = parse_fixed_len_hex(&cluster_id, 32, "Invalid cluster ID")?;
+    let id = parse_cluster_id_param(&cluster_id)?;
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
         .cursor
@@ -1256,7 +1277,7 @@ async fn get_cluster_holders(
         .store
         .list_cluster_owner_counts(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    if owners.is_empty() {
+    if owners.is_empty() && !is_sole_spores_sentinel(&id) {
         let cluster_exists = state
             .store
             .get_spore(&id)
@@ -1311,8 +1332,7 @@ async fn get_cluster_activities(
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterActivitiesParams>,
 ) -> ApiResult<CursorPaginatedResponse<ClusterActivityResponse>> {
-    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
-        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let id = parse_cluster_id_param(&cluster_id)?;
     let limit = params.limit.clamp(1, 100);
     let cursor = params
         .cursor
@@ -1321,14 +1341,16 @@ async fn get_cluster_activities(
         .transpose()?;
     let action_filter = normalize_cluster_activity_action_filter(params.action.as_deref())?;
 
-    // Validate cluster exists
-    let cluster_exists = state
-        .store
-        .get_spore(&id)
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .is_some();
-    if !cluster_exists {
-        return Err(ApiError::not_found("Cluster not found"));
+    // Validate cluster exists (sentinel always passes)
+    if !is_sole_spores_sentinel(&id) {
+        let cluster_exists = state
+            .store
+            .get_spore(&id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .is_some();
+        if !cluster_exists {
+            return Err(ApiError::not_found("Cluster not found"));
+        }
     }
 
     // Use pre-computed collection activity index and drop orphaned history rows.
@@ -1389,8 +1411,7 @@ async fn get_spores_by_cluster(
     Path(cluster_id): Path<String>,
     Query(params): Query<ListParams>,
 ) -> ApiResult<CursorPaginatedResponse<SporeResponse>> {
-    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
-        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let id = parse_cluster_id_param(&cluster_id)?;
 
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor_block = params.cursor.unwrap_or(i64::MAX);
@@ -1436,8 +1457,7 @@ async fn get_cluster(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
 ) -> ApiResult<ClusterResponse> {
-    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
-        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let id = parse_cluster_id_param(&cluster_id)?;
 
     // Look up the cluster entry directly
     let cluster_entry = state
@@ -1455,7 +1475,7 @@ async fn get_cluster(
         .count_spores_in_cluster(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    if spores_count == 0 && cluster_entry.is_none() {
+    if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
         return Err(ApiError::not_found("Cluster not found"));
     }
 
@@ -1471,15 +1491,25 @@ async fn get_cluster(
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
-    let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
-    let created_at_block = cluster_entry
-        .as_ref()
-        .map(|e| e.created_at_block)
-        .unwrap_or(0);
-    let owner_lock_hash = cluster_entry
-        .as_ref()
-        .and_then(|e| e.owner_lock_hash.clone());
+    let (name, description, owner_lock_hash, created_at_block) = if is_sole_spores_sentinel(&id) {
+        (
+            Some("Sole Spores".to_string()),
+            Some("Spores not belonging to any cluster".to_string()),
+            None,
+            0i64,
+        )
+    } else {
+        let name = cluster_entry.as_ref().and_then(|e| e.name.clone());
+        let description = cluster_entry.as_ref().and_then(|e| e.description.clone());
+        let owner_lock_hash = cluster_entry
+            .as_ref()
+            .and_then(|e| e.owner_lock_hash.clone());
+        let created_at_block = cluster_entry
+            .as_ref()
+            .map(|e| e.created_at_block)
+            .unwrap_or(0);
+        (name, description, owner_lock_hash, created_at_block)
+    };
     let daily = state
         .store
         .list_cluster_daily_deltas(&id)
@@ -1673,8 +1703,7 @@ async fn get_cluster_occupation_chart(
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
-    let id = hex::decode(cluster_id.strip_prefix("0x").unwrap_or(&cluster_id))
-        .map_err(|_| ApiError::bad_request("Invalid cluster ID"))?;
+    let id = parse_cluster_id_param(&cluster_id)?;
 
     let cluster_entry = state
         .store
@@ -1684,14 +1713,18 @@ async fn get_cluster_occupation_chart(
         .store
         .count_spores_in_cluster(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    if spores_count == 0 && cluster_entry.is_none() {
+    if spores_count == 0 && cluster_entry.is_none() && !is_sole_spores_sentinel(&id) {
         return Err(ApiError::not_found("Cluster not found"));
     }
 
-    let name = cluster_entry
-        .as_ref()
-        .and_then(|e| e.name.clone())
-        .unwrap_or_else(|| "Spore Cluster".to_string());
+    let name = if is_sole_spores_sentinel(&id) {
+        "Sole Spores".to_string()
+    } else {
+        cluster_entry
+            .as_ref()
+            .and_then(|e| e.name.clone())
+            .unwrap_or_else(|| "Spore Cluster".to_string())
+    };
     let daily = state
         .store
         .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
@@ -2204,5 +2237,31 @@ mod tests {
     fn test_parse_fixed_len_hex_rejects_non_32_bytes() {
         let err = parse_fixed_len_hex("0x1234", 32, "Invalid cluster ID").unwrap_err();
         assert_eq!(err.0, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_parse_cluster_id_param_sole_spores_alias() {
+        let result = parse_cluster_id_param("sole-spores").unwrap();
+        assert_eq!(result, SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+
+        let result = parse_cluster_id_param("Sole-Spores").unwrap();
+        assert_eq!(result, SOLE_SPORES_SENTINEL_COLLECTION.to_vec());
+    }
+
+    #[test]
+    fn test_parse_cluster_id_param_hex() {
+        let hex_id = "ab".repeat(32);
+        let result = parse_cluster_id_param(&hex_id).unwrap();
+        assert_eq!(result, vec![0xab; 32]);
+
+        let hex_id_0x = format!("0x{}", "cd".repeat(32));
+        let result = parse_cluster_id_param(&hex_id_0x).unwrap();
+        assert_eq!(result, vec![0xcd; 32]);
+    }
+
+    #[test]
+    fn test_is_sole_spores_sentinel() {
+        assert!(is_sole_spores_sentinel(&SOLE_SPORES_SENTINEL_COLLECTION));
+        assert!(!is_sole_spores_sentinel(&[0xab; 32]));
     }
 }

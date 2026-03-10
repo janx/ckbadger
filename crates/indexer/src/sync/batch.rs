@@ -2639,9 +2639,13 @@ impl Indexer {
                                     parsed.timestamp.timestamp_millis(),
                                     true,
                                 );
-                            } else if let Some(ref cid) = spore.cluster_id {
+                            } else {
+                                let cid = spore
+                                    .cluster_id
+                                    .as_deref()
+                                    .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
                                 object_activity_acc.record(
-                                    cid.as_slice(),
+                                    cid,
                                     &tx_data.hash,
                                     &spore.spore_id,
                                     &parsed.hash,
@@ -5579,9 +5583,13 @@ impl Indexer {
                                         ts_ms,
                                         true,
                                     );
-                                } else if let Some(ref cid) = spore.cluster_id {
+                                } else {
+                                    let cid = spore
+                                        .cluster_id
+                                        .as_deref()
+                                        .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
                                     object_activity_acc.record(
-                                        cid.as_slice(),
+                                        cid,
                                         &tx_data.hash,
                                         &spore.spore_id,
                                         &parsed.hash,

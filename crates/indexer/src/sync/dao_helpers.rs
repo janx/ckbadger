@@ -13,7 +13,9 @@ use chrono::NaiveDate;
 
 use ckbadger_store::types::AddressBalance;
 
-pub(crate) use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
+pub(crate) use ckbadger_store::types::{
+    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+};
 
 use crate::parser::{DaoParser, DotbitParser, MnftParser, SporeParser};
 

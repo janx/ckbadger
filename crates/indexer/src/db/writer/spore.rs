@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::DID_CKB_SENTINEL_COLLECTION;
 use ckbadger_store::types::{
     ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
     ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex, StorageDependencyTier,
 };
+use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
 use ckbadger_store::CkbadgerStore;
 
 #[cfg(test)]
@@ -554,6 +554,9 @@ impl BatchWriter {
             None
         };
         let new_cluster = spore.cluster_id.clone();
+        let effective_cluster = new_cluster
+            .clone()
+            .or_else(|| Some(SOLE_SPORES_SENTINEL_COLLECTION.to_vec()));
         let media_profile = if let Some(precomputed) = &spore.media_profile {
             precomputed.clone()
         } else {
@@ -579,7 +582,7 @@ impl BatchWriter {
         let new_live_tier = media_profile.tier;
         let entry = ObjectEntry {
             standard: ObjectStandard::Spore,
-            collection_id: new_cluster.clone(),
+            collection_id: effective_cluster.clone(),
             token_id: None,
             owner_lock_hash: Some(spore.owner_lock_hash.clone()),
             name: None,
@@ -604,7 +607,7 @@ impl BatchWriter {
         batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
         state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
 
-        if old_cluster != new_cluster {
+        if old_cluster != effective_cluster {
             if let Some(ref old_cluster_id) = old_cluster {
                 batch.delete_spore_by_cluster(old_cluster_id, &spore.spore_id);
 
@@ -640,7 +643,7 @@ impl BatchWriter {
         }
 
         // Write spore-by-cluster secondary index and update target cluster aggregates.
-        if let Some(ref cluster_id) = new_cluster {
+        if let Some(ref cluster_id) = effective_cluster {
             if !(was_live && old_cluster.as_ref() == Some(cluster_id)) {
                 batch.put_spore_by_cluster(cluster_id, &spore.spore_id);
             }
@@ -748,8 +751,8 @@ impl BatchWriter {
     /// For did:ckb entries: marks the identity as consumed in the identity store.
     /// Returns `None` (identities have no collection hierarchy).
     ///
-    /// For regular spores: returns the `cluster_id` if consumed, or `None` if
-    /// entry not found, already consumed, or clusterless.
+    /// For regular spores: returns the `collection_id` (cluster_id or sentinel)
+    /// if consumed, or `None` if entry not found or already consumed.
     pub(crate) fn consume_spore(
         &self,
         spore_id: &[u8],
@@ -1001,6 +1004,19 @@ mod tests {
             content_type: "image/png".to_string(),
             content: vec![0x89, 0x50, 0x4e, 0x47],
             cluster_id: Some(cluster_id.to_vec()),
+            owner_lock_hash: owner_lock.to_vec(),
+            media_profile: None,
+        }
+    }
+
+    fn make_parsed_spore_no_cluster(spore_id: &[u8], owner_lock: &[u8]) -> ParsedSporeCell {
+        ParsedSporeCell {
+            spore_id: spore_id.to_vec(),
+            type_script_hash: vec![0x99; 32],
+            is_did: false,
+            content_type: "image/png".to_string(),
+            content: vec![0x89, 0x50, 0x4e, 0x47],
+            cluster_id: None,
             owner_lock_hash: owner_lock.to_vec(),
             media_profile: None,
         }
@@ -1821,5 +1837,89 @@ mod tests {
         );
         assert_eq!(agg.live_count, 1);
         assert_eq!(agg.holders_count, 1);
+    }
+
+    #[test]
+    fn test_insert_clusterless_spore_uses_sole_spores_sentinel() {
+        use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+
+        let spore_id = [0x11u8; 32];
+        let owner = [0x22u8; 32];
+        let tx_hash = [0x33u8; 32];
+
+        let spore = make_parsed_spore_no_cluster(&spore_id, &owner);
+        writer
+            .insert_spore_cell(&spore, &tx_hash, 0, 100, 100_000, &mut batch, &mut state)
+            .unwrap();
+
+        // Verify the spore was stored with the sentinel collection_id
+        let cached = state
+            .spores
+            .get(spore_id.as_slice())
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            cached.collection_id.as_deref(),
+            Some(SOLE_SPORES_SENTINEL_COLLECTION.as_slice()),
+            "clusterless spore must get SOLE_SPORES_SENTINEL_COLLECTION"
+        );
+
+        // Verify cluster aggregate was updated
+        let agg = state
+            .cluster_aggs
+            .get(SOLE_SPORES_SENTINEL_COLLECTION.as_slice())
+            .expect("sentinel aggregate must exist");
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.owner_count, 1);
+    }
+
+    #[test]
+    fn test_consume_clusterless_spore_returns_sentinel_and_decrements() {
+        use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+
+        let spore_id = [0x11u8; 32];
+        let owner = [0x22u8; 32];
+        let tx_hash = [0x33u8; 32];
+
+        // Insert a clusterless spore
+        let spore = make_parsed_spore_no_cluster(&spore_id, &owner);
+        writer
+            .insert_spore_cell(&spore, &tx_hash, 0, 100, 100_000, &mut batch, &mut state)
+            .unwrap();
+
+        // Consume it
+        let result = writer
+            .consume_spore(&spore_id, 101, &[0x44u8; 32], &mut batch, &mut state)
+            .unwrap();
+
+        // Should return the sentinel collection_id
+        assert_eq!(
+            result.as_deref(),
+            Some(SOLE_SPORES_SENTINEL_COLLECTION.as_slice()),
+            "consuming a clusterless spore must return SOLE_SPORES_SENTINEL_COLLECTION"
+        );
+
+        // Aggregate: total_count stays 1, live_count decremented to 0
+        let agg = state
+            .cluster_aggs
+            .get(SOLE_SPORES_SENTINEL_COLLECTION.as_slice())
+            .expect("sentinel aggregate must exist");
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.owner_count, 0);
     }
 }

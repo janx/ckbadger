@@ -416,6 +416,8 @@ impl IdentityStandard {
 pub const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
 /// Sentinel collection key for the did:ckb identity collection (32 bytes).
 pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
+/// Sentinel collection key for clusterless Spore NFTs (32 bytes).
+pub const SOLE_SPORES_SENTINEL_COLLECTION: [u8; 32] = *b"sole_spores_collection__________";
 
 /// Standard-specific data for Identity entries, stored inline via bincode.
 #[derive(Debug, Clone, Serialize, Deserialize)]
