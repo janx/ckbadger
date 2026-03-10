@@ -183,9 +183,12 @@ type CanonicalActivityLocationMap = HashMap<Vec<u8>, CanonicalActivityLocation>;
 
 fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
-        if !matches!(value, "all" | "ckb" | "token" | "nft" | "dao") {
+        if !matches!(
+            value,
+            "all" | "ckb" | "token" | "nft" | "dao" | "script_call"
+        ) {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, script_call",
                 value
             )));
         }

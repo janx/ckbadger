@@ -109,7 +109,7 @@ impl CkbadgerStore {
     fn matches_activity_filter(entry: &ActivityEntry, filter: Option<&str>) -> bool {
         match filter {
             None | Some("all") => true,
-            Some("ckb") => entry.asset_changes.is_empty(),
+            Some("ckb") => entry.asset_changes.is_empty() && !entry.has_type_script,
             Some("token") => entry
                 .asset_changes
                 .iter()
@@ -126,6 +126,10 @@ impl CkbadgerStore {
                         | AssetChange::DaoWithdrawComplete { .. }
                 )
             }),
+            Some("script_call") => entry
+                .asset_changes
+                .iter()
+                .any(|c| matches!(c, AssetChange::ScriptCall { .. })),
             Some(_) => false,
         }
     }
