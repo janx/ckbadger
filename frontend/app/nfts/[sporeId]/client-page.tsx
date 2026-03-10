@@ -75,6 +75,19 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const isDidCkbCollection = isDidCkbAlias(rawAssetId);
   const assetId = normalizeNftAssetId(rawAssetId);
 
+  // Redirect identity collection aliases to /identities/ routes
+  useEffect(() => {
+    if (isDotbitCollection) {
+      router.replace('/identities/dotbit');
+    } else if (isDidCkbCollection) {
+      router.replace('/identities/did:ckb');
+    }
+  }, [isDotbitCollection, isDidCkbCollection, router]);
+
+  if (isDotbitCollection || isDidCkbCollection) {
+    return null; // redirecting
+  }
+
   useEffect(() => {
     const timeout = window.setTimeout(() => {
       setSearchKeyword(searchInput.trim());
