@@ -3747,6 +3747,7 @@ impl Indexer {
         let mut thread_times: Option<[f64; 9]> = None;
         let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
+        let mut data_batch = StoreBatch::new(self.writer.store());
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
             // DAO/UDT/addr/script DB reads are pre-fetched above via rayon::join, so threads only do writes.
@@ -4942,7 +4943,6 @@ impl Indexer {
             thread_times = Some(tt);
         } else {
             // Live sync: serial writes in a single batch
-            let mut data_batch = StoreBatch::new(self.writer.store());
             let mut append_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
             if !all_tx_data.is_empty() {
                 put_tx_context_undo_entries(
@@ -6078,36 +6078,12 @@ impl Indexer {
                 }
             }
 
-            // Commit all data writes in a single batch
-            let data_commit_started = Instant::now();
-            data_batch.commit()?;
-            write_commit_ms += data_commit_started.elapsed().as_secs_f64() * 1000.0;
-            if !domain_analytics_batch.is_empty() {
-                let script_commit_started = Instant::now();
-                domain_analytics_batch.commit()?;
-                write_commit_ms += script_commit_started.elapsed().as_secs_f64() * 1000.0;
-            }
-            if !object_activity_batch.is_empty() {
-                let nft_activity_commit_started = Instant::now();
-                object_activity_batch.commit()?;
-                write_commit_ms += nft_activity_commit_started.elapsed().as_secs_f64() * 1000.0;
-            }
-            if !identity_activity_batch.is_empty() {
-                let identity_activity_commit_started = Instant::now();
-                identity_activity_batch.commit()?;
-                write_commit_ms +=
-                    identity_activity_commit_started.elapsed().as_secs_f64() * 1000.0;
-            }
-            if !append_history_batch.is_empty() {
-                let append_commit_started = Instant::now();
-                append_history_batch.commit()?;
-                write_commit_ms += append_commit_started.elapsed().as_secs_f64() * 1000.0;
-            }
-            if !activity_batch.is_empty() {
-                let activity_commit_started = Instant::now();
-                activity_batch.commit()?;
-                write_commit_ms += activity_commit_started.elapsed().as_secs_f64() * 1000.0;
-            }
+            // Merge all secondary domain batches into data_batch for atomic commit
+            data_batch.merge_from(domain_analytics_batch);
+            data_batch.merge_from(object_activity_batch);
+            data_batch.merge_from(identity_activity_batch);
+            data_batch.merge_from(append_history_batch);
+            data_batch.merge_from(activity_batch);
 
             // Stats accumulation for live sync (serial — before finalize)
             batch_stats = BatchStats::default();
@@ -6404,7 +6380,7 @@ impl Indexer {
         }
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
 
-        // Finalization: block headers + stats commit
+        // Finalization: block headers + stats
         let t_finalize = Instant::now();
         {
             let mut core_batch = StoreBatch::new(self.writer.store());
@@ -6422,15 +6398,17 @@ impl Indexer {
                     &mut stats_batch,
                 )?;
             }
-            debug!(
-                phase = "finalize_headers_stats",
-                batch_start = first_block,
-                batch_end = last_block,
-                bulk_sync_mode,
-                "Batch finalize commit start"
-            );
-            let finalize_commit_started = Instant::now();
+            let commit_started = Instant::now();
             if bulk_sync_mode {
+                // Bulk sync: data already committed in parallel threads; commit
+                // headers and stats separately with WAL disabled.
+                debug!(
+                    phase = "finalize_headers_stats",
+                    batch_start = first_block,
+                    batch_end = last_block,
+                    bulk_sync_mode,
+                    "Batch finalize commit start"
+                );
                 core_batch.commit_no_wal().with_context(|| {
                     format!(
                         "core finalize commit_no_wal failed for blocks {}-{}",
@@ -6444,38 +6422,43 @@ impl Indexer {
                     )
                 })?;
             } else {
-                core_batch.commit().with_context(|| {
+                // Live sync: merge headers and stats into the single data_batch
+                // that already holds all domain writes, then commit atomically.
+                data_batch.merge_from(core_batch);
+                data_batch.merge_from(stats_batch);
+                debug!(
+                    phase = "domain_atomic_commit",
+                    batch_start = first_block,
+                    batch_end = last_block,
+                    bulk_sync_mode,
+                    "Atomic domain batch commit start"
+                );
+                data_batch.commit().with_context(|| {
                     format!(
-                        "core finalize commit failed for blocks {}-{}",
-                        first_block, last_block
-                    )
-                })?;
-                stats_batch.commit().with_context(|| {
-                    format!(
-                        "stats finalize commit failed for blocks {}-{}",
+                        "atomic domain commit failed for blocks {}-{}",
                         first_block, last_block
                     )
                 })?;
             }
-            let finalize_commit_ms = finalize_commit_started.elapsed().as_secs_f64() * 1000.0;
-            write_commit_ms += finalize_commit_ms;
-            if finalize_commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
+            let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
+            write_commit_ms += commit_ms;
+            if commit_ms >= BULK_PHASE_COMMIT_SLOW_WARN_MS {
                 warn!(
-                    phase = "finalize_headers_stats",
+                    phase = "finalize_commit",
                     batch_start = first_block,
                     batch_end = last_block,
-                    commit_ms = format!("{:.1}", finalize_commit_ms),
+                    commit_ms = format!("{:.1}", commit_ms),
                     bulk_sync_mode,
-                    "Batch finalize commit slow"
+                    "Finalize commit slow"
                 );
             } else {
                 debug!(
-                    phase = "finalize_headers_stats",
+                    phase = "finalize_commit",
                     batch_start = first_block,
                     batch_end = last_block,
-                    commit_ms = format!("{:.1}", finalize_commit_ms),
+                    commit_ms = format!("{:.1}", commit_ms),
                     bulk_sync_mode,
-                    "Batch finalize commit done"
+                    "Finalize commit done"
                 );
             }
         }
