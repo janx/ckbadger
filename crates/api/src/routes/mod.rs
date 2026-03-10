@@ -6,6 +6,7 @@ mod dao;
 mod forks;
 mod graph;
 mod hardforks;
+mod identities;
 mod mempool;
 mod scripts;
 mod search;
@@ -23,6 +24,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(activities::routes())
         .merge(assets::routes())
+        .merge(identities::routes())
         .merge(blocks::routes())
         .merge(transactions::routes())
         .merge(cells::routes())

@@ -794,7 +794,7 @@ fn decode_nft_item_id(raw: &str) -> Result<Vec<u8>, (axum::http::StatusCode, Jso
         .map_err(|_| ApiError::bad_request("Invalid NFT item ID"))
 }
 
-fn decode_activity_cursor(
+pub(crate) fn decode_activity_cursor(
     raw: &str,
 ) -> Result<(i64, i32), (axum::http::StatusCode, Json<ApiError>)> {
     let mut parts = raw.split(':');
@@ -841,7 +841,7 @@ fn decode_nft_collection_holders_cursor(
     Ok((count, lock_hash))
 }
 
-fn normalize_nft_activity_action_filter(
+pub(crate) fn normalize_nft_activity_action_filter(
     raw: Option<&str>,
 ) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
     let Some(raw_value) = raw else {
