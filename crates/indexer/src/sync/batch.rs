@@ -636,6 +636,16 @@ fn truncate_to_hour(dt: DateTime<Utc>) -> DateTime<Utc> {
 
 pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
 
+/// Pre-computed cell index keys for T1b (parallel cell index writes).
+/// Each op holds the 74-byte encoded keys so T1b can write them without
+/// re-encoding or needing access to ParsedCell / LiveCellInfo.
+pub(super) struct CellIndexOp {
+    pub lock_hash_key: Vec<u8>,
+    pub lock_code_hash_key: Vec<u8>,
+    pub type_hash_key: Option<Vec<u8>>,
+    pub type_code_hash_key: Option<Vec<u8>>,
+}
+
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -3163,16 +3173,6 @@ impl Indexer {
                     }
                 }
             }
-        }
-
-        // Pre-compute cell index keys for T1b (parallel cell index writes).
-        // Each op holds the 74-byte encoded keys so T1b can write them without
-        // re-encoding or needing access to ParsedCell / LiveCellInfo.
-        struct CellIndexOp {
-            lock_hash_key: Vec<u8>,
-            lock_code_hash_key: Vec<u8>,
-            type_hash_key: Option<Vec<u8>>,
-            type_code_hash_key: Option<Vec<u8>>,
         }
 
         let cell_index_puts: Vec<CellIndexOp> =
