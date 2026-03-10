@@ -2,11 +2,12 @@ use anyhow::{bail, Result};
 use std::collections::HashMap;
 
 use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
+use crate::sync::dao_helpers::DID_CKB_SENTINEL_COLLECTION;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    ClusterAggregate, IdentityEntry, IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra,
-    ObjectStandard, SporeTypeIndex, StorageDependencyTier,
+    ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
+    ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex, StorageDependencyTier,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -15,15 +16,14 @@ use ckbadger_store::types::SporeMediaProfile;
 
 use super::BatchWriter;
 
-// did:ckb entries are now written to the identity store (not spore/object).
-// No sentinel collection is needed.
-
 #[derive(Default)]
 pub(crate) struct SporeBatchState {
     spores: HashMap<Vec<u8>, Option<ObjectEntry>>,
     identities: HashMap<Vec<u8>, Option<IdentityEntry>>,
     cluster_aggs: HashMap<Vec<u8>, ClusterAggregate>,
     cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
+    identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
+    identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
     spore_hourly_transfers: HashMap<Vec<u8>, i64>,
     spore_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>>,
 }
@@ -121,6 +121,74 @@ impl SporeBatchState {
             .insert((cluster_id.to_vec(), lock_hash.to_vec()), 0);
     }
 
+    fn get_identity_agg(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+    ) -> Result<IdentityCollectionAggregate> {
+        if let Some(cached) = self.identity_aggs.get(collection_id) {
+            return Ok(cached.clone());
+        }
+        let loaded = store
+            .get_identity_collection_aggregate(collection_id)?
+            .unwrap_or_default();
+        self.identity_aggs
+            .insert(collection_id.to_vec(), loaded.clone());
+        Ok(loaded)
+    }
+
+    fn put_identity_agg(
+        &mut self,
+        collection_id: &[u8],
+        agg: IdentityCollectionAggregate,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_identity_collection_aggregate(collection_id, &agg);
+        self.identity_aggs.insert(collection_id.to_vec(), agg);
+    }
+
+    fn get_identity_owner_count(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+    ) -> Result<i64> {
+        let key = (collection_id.to_vec(), lock_hash.to_vec());
+        if let Some(cached) = self.identity_owner_counts.get(&key) {
+            return Ok(*cached);
+        }
+        let loaded = store.get_cluster_owner_count(collection_id, lock_hash)?;
+        self.identity_owner_counts.insert(key, loaded);
+        Ok(loaded)
+    }
+
+    fn put_identity_owner_count(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        count: i64,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_cluster_owner_count(collection_id, lock_hash, count);
+        self.identity_owner_counts
+            .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
+    }
+
+    fn delete_identity_owner(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        batch: &mut StoreBatch,
+    ) {
+        batch.delete_cluster_owner(collection_id, lock_hash);
+        self.identity_owner_counts
+            .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
+    }
+
+    pub(crate) fn pending_identity_aggs(&self) -> &HashMap<Vec<u8>, IdentityCollectionAggregate> {
+        &self.identity_aggs
+    }
+
     fn get_spore_hourly_transfer(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<i64> {
         if let Some(cached) = self.spore_hourly_transfers.get(key) {
             return Ok(*cached);
@@ -175,6 +243,62 @@ impl SporeBatchState {
 impl BatchWriter {
     pub(crate) fn new_spore_batch_state(&self) -> SporeBatchState {
         SporeBatchState::default()
+    }
+
+    fn apply_identity_owner_transition(
+        &self,
+        collection_id: &[u8],
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut IdentityCollectionAggregate,
+        batch: &mut StoreBatch,
+        state: &mut SporeBatchState,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_lock) = old_owner {
+            let old_count =
+                state.get_identity_owner_count(self.store.as_ref(), collection_id, old_lock)?;
+            if old_count <= 0 {
+                bail!(
+                    "identity owner count underflow: collection_id=0x{}, lock_hash=0x{}, owner_count={}",
+                    hex::encode(collection_id),
+                    hex::encode(old_lock),
+                    old_count
+                );
+            } else if old_count == 1 {
+                if agg.holders_count <= 0 {
+                    bail!(
+                        "identity aggregate holders_count underflow: collection_id=0x{}, holders_count={}",
+                        hex::encode(collection_id),
+                        agg.holders_count
+                    );
+                }
+                state.delete_identity_owner(collection_id, old_lock, batch);
+                agg.holders_count -= 1;
+            } else {
+                state.put_identity_owner_count(collection_id, old_lock, old_count - 1, batch);
+            }
+        }
+
+        if let Some(new_lock) = new_owner {
+            let cur_count =
+                state.get_identity_owner_count(self.store.as_ref(), collection_id, new_lock)?;
+            if cur_count == 0 {
+                agg.holders_count = agg
+                    .holders_count
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow::anyhow!("identity aggregate holders_count overflow"))?;
+            }
+            let next = cur_count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("identity owner count overflow"))?;
+            state.put_identity_owner_count(collection_id, new_lock, next, batch);
+        }
+
+        Ok(())
     }
 
     fn apply_owner_transition(
@@ -342,6 +466,12 @@ impl BatchWriter {
         // did:ckb entries are written to the identity store, not the spore/object store.
         if new_is_did {
             let existing = state.get_identity(self.store.as_ref(), &spore.spore_id)?;
+            let was_live = existing.as_ref().is_some_and(|e| e.is_live);
+            let old_owner = if was_live {
+                existing.as_ref().and_then(|e| e.owner_lock_hash.clone())
+            } else {
+                None
+            };
             let identity = IdentityEntry {
                 standard: IdentityStandard::DidCkb,
                 owner_lock_hash: Some(spore.owner_lock_hash.clone()),
@@ -361,6 +491,47 @@ impl BatchWriter {
             state.put_identity(&spore.spore_id, identity);
             batch.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
             state.put_spore_outpoint(tx_hash, output_index, &spore.spore_id);
+
+            // Update identity collection aggregate
+            let cid = &DID_CKB_SENTINEL_COLLECTION;
+            let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
+            if agg.standard == IdentityStandard::default() && agg.total_count == 0 {
+                agg.standard = IdentityStandard::DidCkb;
+                agg.name = Some("did:ckb".to_string());
+            }
+            if existing.is_none() {
+                // New identity
+                agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "did:ckb identity total_count overflow: spore_id=0x{}",
+                        hex::encode(&spore.spore_id)
+                    )
+                })?;
+                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "did:ckb identity live_count overflow: spore_id=0x{}",
+                        hex::encode(&spore.spore_id)
+                    )
+                })?;
+            } else if !was_live {
+                // Re-activate consumed identity
+                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "did:ckb identity live_count overflow on reactivate: spore_id=0x{}",
+                        hex::encode(&spore.spore_id)
+                    )
+                })?;
+            }
+            let owner_from = if was_live { old_owner.as_deref() } else { None };
+            self.apply_identity_owner_transition(
+                cid,
+                owner_from,
+                Some(spore.owner_lock_hash.as_slice()),
+                &mut agg,
+                batch,
+                state,
+            )?;
+            state.put_identity_agg(cid, agg, batch);
             return Ok(());
         }
 
@@ -591,11 +762,32 @@ impl BatchWriter {
             if !identity.is_live {
                 return Ok(None);
             }
+            let old_owner = identity.owner_lock_hash.clone();
             identity.is_live = false;
             identity.owner_lock_hash = None;
             batch.put_identity(spore_id, &identity);
             state.put_identity(spore_id, identity);
-            // Identities do not participate in collection hierarchy
+
+            // Update identity collection aggregate
+            let cid = &DID_CKB_SENTINEL_COLLECTION;
+            let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
+            if agg.live_count <= 0 {
+                bail!(
+                    "did:ckb identity live_count underflow on consume: spore_id=0x{}, live_count={}",
+                    hex::encode(spore_id),
+                    agg.live_count
+                );
+            }
+            agg.live_count -= 1;
+            self.apply_identity_owner_transition(
+                cid,
+                old_owner.as_deref(),
+                None,
+                &mut agg,
+                batch,
+                state,
+            )?;
+            state.put_identity_agg(cid, agg, batch);
             return Ok(None);
         }
 
@@ -1429,5 +1621,204 @@ mod tests {
             "expected hourly overflow error, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_insert_did_ckb_updates_identity_collection_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let spore_id_a = vec![0x01; 32];
+        let spore_id_b = vec![0x02; 32];
+        let owner_a = vec![0xA1; 32];
+        let owner_b = vec![0xB2; 32];
+        let tx_hash_a = vec![0xF1; 32];
+        let tx_hash_b = vec![0xF2; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&spore_id_a, &owner_a),
+                &tx_hash_a,
+                0,
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&spore_id_b, &owner_b),
+                &tx_hash_b,
+                0,
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .expect("identity aggregate should exist");
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 2);
+        assert_eq!(agg.holders_count, 2);
+        assert_eq!(agg.standard, IdentityStandard::DidCkb);
+    }
+
+    #[test]
+    fn test_consume_did_ckb_decrements_identity_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let spore_id = vec![0x01; 32];
+        let owner = vec![0xA1; 32];
+        let tx_hash = vec![0xF1; 32];
+
+        // Insert
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&spore_id, &owner),
+                &tx_hash,
+                0,
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Consume
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        let result = writer
+            .consume_spore(&spore_id, 200, &[0xFF; 32], &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        // consume_spore returns None for identities (no collection hierarchy)
+        assert!(result.is_none());
+
+        let agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .expect("identity aggregate should exist");
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.holders_count, 0);
+    }
+
+    #[test]
+    fn test_did_ckb_same_owner_two_identities_holders_count_is_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let owner = vec![0xA1; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&[0x01; 32], &owner),
+                &[0xF1; 32],
+                0,
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&[0x02; 32], &owner),
+                &[0xF2; 32],
+                1,
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 2);
+        assert_eq!(agg.holders_count, 1, "same owner should count as 1 holder");
+    }
+
+    #[test]
+    fn test_reactivate_did_ckb_increments_live_count_not_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let spore_id = vec![0x01; 32];
+        let owner = vec![0xA1; 32];
+
+        // Insert
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&spore_id, &owner),
+                &[0xF1; 32],
+                0,
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Consume
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .consume_spore(&spore_id, 200, &[0xFF; 32], &mut batch, &mut state)
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Reactivate
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_spore_batch_state();
+        writer
+            .insert_spore_cell(
+                &make_parsed_did(&spore_id, &owner),
+                &[0xF3; 32],
+                0,
+                300,
+                300_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_identity_collection_aggregate(&DID_CKB_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            agg.total_count, 1,
+            "reactivation should not increment total"
+        );
+        assert_eq!(agg.live_count, 1);
+        assert_eq!(agg.holders_count, 1);
     }
 }

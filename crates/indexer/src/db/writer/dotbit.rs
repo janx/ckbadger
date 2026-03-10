@@ -4,7 +4,8 @@ use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AssetAction, IdentityEntry, IdentityExtra, IdentityStandard, ObjectCollectionActivityEntry,
+    AssetAction, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
+    ObjectCollectionActivityEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -183,6 +184,8 @@ fn resolve_generic_dotbit_actions(
 pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<IdentityEntry>>,
     hourly_transfers: HashMap<Vec<u8>, i64>,
+    identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
+    identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
 }
 
 impl DotbitBatchState {
@@ -232,11 +235,135 @@ impl DotbitBatchState {
     fn put_hourly_transfer(&mut self, key: Vec<u8>, count: i64) {
         self.hourly_transfers.insert(key, count);
     }
+
+    fn get_identity_agg(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+    ) -> Result<IdentityCollectionAggregate> {
+        if let Some(cached) = self.identity_aggs.get(collection_id) {
+            return Ok(cached.clone());
+        }
+        let loaded = store
+            .get_identity_collection_aggregate(collection_id)?
+            .unwrap_or_default();
+        self.identity_aggs
+            .insert(collection_id.to_vec(), loaded.clone());
+        Ok(loaded)
+    }
+
+    fn put_identity_agg(
+        &mut self,
+        collection_id: &[u8],
+        agg: IdentityCollectionAggregate,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_identity_collection_aggregate(collection_id, &agg);
+        self.identity_aggs.insert(collection_id.to_vec(), agg);
+    }
+
+    fn get_identity_owner_count(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+    ) -> Result<i64> {
+        let key = (collection_id.to_vec(), lock_hash.to_vec());
+        if let Some(cached) = self.identity_owner_counts.get(&key) {
+            return Ok(*cached);
+        }
+        let loaded = store.get_cluster_owner_count(collection_id, lock_hash)?;
+        self.identity_owner_counts.insert(key, loaded);
+        Ok(loaded)
+    }
+
+    fn put_identity_owner_count(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        count: i64,
+        batch: &mut StoreBatch,
+    ) {
+        batch.put_cluster_owner_count(collection_id, lock_hash, count);
+        self.identity_owner_counts
+            .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
+    }
+
+    fn delete_identity_owner(
+        &mut self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+        batch: &mut StoreBatch,
+    ) {
+        batch.delete_cluster_owner(collection_id, lock_hash);
+        self.identity_owner_counts
+            .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
+    }
+
+    pub(crate) fn pending_identity_aggs(&self) -> &HashMap<Vec<u8>, IdentityCollectionAggregate> {
+        &self.identity_aggs
+    }
 }
 
 impl BatchWriter {
     pub(crate) fn new_dotbit_batch_state(&self) -> DotbitBatchState {
         DotbitBatchState::default()
+    }
+
+    fn apply_dotbit_identity_owner_transition(
+        &self,
+        collection_id: &[u8],
+        old_owner: Option<&[u8]>,
+        new_owner: Option<&[u8]>,
+        agg: &mut IdentityCollectionAggregate,
+        batch: &mut StoreBatch,
+        state: &mut DotbitBatchState,
+    ) -> Result<()> {
+        if old_owner == new_owner {
+            return Ok(());
+        }
+
+        if let Some(old_lock) = old_owner {
+            let old_count =
+                state.get_identity_owner_count(self.store.as_ref(), collection_id, old_lock)?;
+            if old_count <= 0 {
+                bail!(
+                    "dotbit identity owner count underflow: collection_id=0x{}, lock_hash=0x{}, owner_count={}",
+                    hex::encode(collection_id),
+                    hex::encode(old_lock),
+                    old_count
+                );
+            } else if old_count == 1 {
+                if agg.holders_count <= 0 {
+                    bail!(
+                        "dotbit identity aggregate holders_count underflow: collection_id=0x{}, holders_count={}",
+                        hex::encode(collection_id),
+                        agg.holders_count
+                    );
+                }
+                state.delete_identity_owner(collection_id, old_lock, batch);
+                agg.holders_count -= 1;
+            } else {
+                state.put_identity_owner_count(collection_id, old_lock, old_count - 1, batch);
+            }
+        }
+
+        if let Some(new_lock) = new_owner {
+            let cur_count =
+                state.get_identity_owner_count(self.store.as_ref(), collection_id, new_lock)?;
+            if cur_count == 0 {
+                agg.holders_count = agg
+                    .holders_count
+                    .checked_add(1)
+                    .ok_or_else(|| anyhow!("dotbit identity aggregate holders_count overflow"))?;
+            }
+            let next = cur_count
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("dotbit identity owner count overflow"))?;
+            state.put_identity_owner_count(collection_id, new_lock, next, batch);
+        }
+
+        Ok(())
     }
 
     pub fn insert_dotbit_account(
@@ -303,6 +430,47 @@ impl BatchWriter {
         };
         batch.put_identity(&account.account_id, &entry);
         state.put_account(&account.account_id, entry);
+
+        // Update identity collection aggregate
+        let cid = &DOTBIT_SENTINEL_COLLECTION;
+        let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
+        if agg.standard == IdentityStandard::default() && agg.total_count == 0 {
+            agg.standard = IdentityStandard::DotBit;
+            agg.name = Some(".bit".to_string());
+        }
+        if existing.is_none() {
+            // New identity
+            agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit identity total_count overflow: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                )
+            })?;
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit identity live_count overflow: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                )
+            })?;
+        } else if !was_live {
+            // Re-activate consumed identity
+            agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "dotbit identity live_count overflow on reactivate: account_id=0x{}",
+                    hex::encode(&account.account_id)
+                )
+            })?;
+        }
+        let owner_from = if was_live { old_owner.as_deref() } else { None };
+        self.apply_dotbit_identity_owner_transition(
+            cid,
+            owner_from,
+            Some(account.owner_lock_hash.as_slice()),
+            &mut agg,
+            batch,
+            state,
+        )?;
+        state.put_identity_agg(cid, agg, batch);
 
         // Track hourly transfers for existing live accounts being transferred
         if was_live {
@@ -376,6 +544,27 @@ impl BatchWriter {
             entry.owner_lock_hash = None;
             batch.put_identity(account_id, &entry);
             state.put_account(account_id, entry);
+
+            // Update identity collection aggregate
+            let cid = &DOTBIT_SENTINEL_COLLECTION;
+            let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
+            if agg.live_count <= 0 {
+                bail!(
+                    "dotbit identity live_count underflow on consume: account_id=0x{}, live_count={}",
+                    hex::encode(account_id),
+                    agg.live_count
+                );
+            }
+            agg.live_count -= 1;
+            self.apply_dotbit_identity_owner_transition(
+                cid,
+                old_owner.as_deref(),
+                None,
+                &mut agg,
+                batch,
+                state,
+            )?;
+            state.put_identity_agg(cid, agg, batch);
 
             return Ok(Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
         }
@@ -657,5 +846,159 @@ mod tests {
             das_action_to_asset_action("fulfill_approval"),
             Some(AssetAction::Transfer)
         ));
+    }
+
+    fn make_test_account(
+        account_id: &[u8],
+        owner_lock_hash: &[u8],
+        name: &str,
+    ) -> ParsedDotbitAccountOutput {
+        ParsedDotbitAccountOutput {
+            output_index: 0,
+            account: crate::parser::dotbit::ParsedDotbitAccount {
+                account_id: account_id.to_vec(),
+                account: Some(name.to_string()),
+                type_script_hash: vec![0x21; 32],
+                next_account_id: None,
+                expired_at: None,
+                registered_at: None,
+                status: None,
+                owner_lock_hash: owner_lock_hash.to_vec(),
+            },
+        }
+    }
+
+    #[test]
+    fn test_insert_dotbit_updates_identity_collection_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let owner_a = vec![0xA1; 32];
+        let owner_b = vec![0xB2; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_dotbit_batch_state();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_test_account(&[0x01; 20], &owner_a, "alice.bit"),
+                &[0xF1; 32],
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_test_account(&[0x02; 20], &owner_b, "bob.bit"),
+                &[0xF2; 32],
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .expect("dotbit aggregate should exist");
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 2);
+        assert_eq!(agg.holders_count, 2);
+        assert_eq!(agg.standard, IdentityStandard::DotBit);
+    }
+
+    #[test]
+    fn test_consume_dotbit_decrements_identity_aggregate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let owner = vec![0xA1; 32];
+        let account_id = [0x01u8; 20];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_dotbit_batch_state();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_test_account(&account_id, &owner, "alice.bit"),
+                &[0xF1; 32],
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_dotbit_batch_state();
+        let result = writer
+            .consume_dotbit_account_with_state(
+                &account_id,
+                200,
+                &[0xFF; 32],
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(result, Some(DOTBIT_SENTINEL_COLLECTION.to_vec()));
+
+        let agg = store
+            .get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 1);
+        assert_eq!(agg.live_count, 0);
+        assert_eq!(agg.holders_count, 0);
+    }
+
+    #[test]
+    fn test_dotbit_same_owner_two_accounts_holders_count_is_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let store = Arc::new(store);
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let owner = vec![0xA1; 32];
+
+        let mut batch = StoreBatch::new(writer.store());
+        let mut state = writer.new_dotbit_batch_state();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_test_account(&[0x01; 20], &owner, "alice.bit"),
+                &[0xF1; 32],
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        writer
+            .insert_dotbit_account_with_state(
+                &make_test_account(&[0x02; 20], &owner, "bob.bit"),
+                &[0xF2; 32],
+                100,
+                100_000,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_identity_collection_aggregate(&DOTBIT_SENTINEL_COLLECTION)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.total_count, 2);
+        assert_eq!(agg.live_count, 2);
+        assert_eq!(agg.holders_count, 1, "same owner should count as 1 holder");
     }
 }

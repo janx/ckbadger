@@ -16,7 +16,8 @@ use tracing::{debug, error, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, LiveCellInfo, ObjectTypeIndex, SporeTypeIndex,
+    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellInfo,
+    ObjectTypeIndex, SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -213,6 +214,7 @@ fn apply_identity_collection_activity_count_deltas(
     store: &CkbadgerStore,
     batch: &mut StoreBatch,
     deltas: HashMap<Vec<u8>, i64>,
+    pending_identity_aggs: &HashMap<Vec<u8>, IdentityCollectionAggregate>,
 ) -> Result<()> {
     if deltas.is_empty() {
         return Ok(());
@@ -221,9 +223,13 @@ fn apply_identity_collection_activity_count_deltas(
         if delta == 0 {
             continue;
         }
-        let mut agg = store
-            .get_identity_collection_aggregate(&collection_id)?
-            .unwrap_or_default();
+        let mut agg = if let Some(pending) = pending_identity_aggs.get(&collection_id) {
+            pending.clone()
+        } else {
+            store
+                .get_identity_collection_aggregate(&collection_id)?
+                .unwrap_or_default()
+        };
         let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
             anyhow!(
                 "identity collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
@@ -2925,10 +2931,25 @@ impl Indexer {
             object_activity_count_deltas,
             &pending_object_collection_aggs,
         )?;
+        let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
+            HashMap::new();
+        pending_identity_aggs.extend(
+            spore_state
+                .pending_identity_aggs()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
+        pending_identity_aggs.extend(
+            dotbit_state
+                .pending_identity_aggs()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
         apply_identity_collection_activity_count_deltas(
             self.writer.store(),
             &mut consume_batch,
             identity_activity_count_deltas,
+            &pending_identity_aggs,
         )?;
         let commit_started = Instant::now();
         consume_batch.commit()?;
@@ -5483,6 +5504,8 @@ impl Indexer {
             let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
 
             let mut pending_object_collection_aggs = HashMap::new();
+            let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
+                HashMap::new();
 
             // Group C: NFT/Spore processing
             {
@@ -5948,6 +5971,19 @@ impl Indexer {
 
                 mnft_state
                     .extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
+
+                pending_identity_aggs.extend(
+                    spore_state
+                        .pending_identity_aggs()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone())),
+                );
+                pending_identity_aggs.extend(
+                    dotbit_state
+                        .pending_identity_aggs()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone())),
+                );
             }
             apply_object_collection_activity_count_deltas_with_pending(
                 self.writer.store(),
@@ -5959,6 +5995,7 @@ impl Indexer {
                 self.writer.store(),
                 &mut data_batch,
                 identity_activity_count_deltas,
+                &pending_identity_aggs,
             )?;
 
             // Activity writes (live sync)

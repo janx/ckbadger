@@ -1,6 +1,6 @@
 mod adaptive;
 mod batch;
-mod dao_helpers;
+pub(crate) mod dao_helpers;
 mod diagnostics;
 mod helpers;
 mod indexer;
