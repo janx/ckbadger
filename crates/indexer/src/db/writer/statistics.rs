@@ -525,21 +525,21 @@ impl BatchWriter {
         scripts: &[Vec<u8>],
         stats: &mut DailyActivityStats,
     ) {
-        // Total CKB moved (absolute value)
+        // Coinbase transactions are counted but excluded from all other metrics
+        if entry.is_cellbase {
+            stats.coinbase_count += 1;
+            return;
+        }
+
+        // Total CKB moved (absolute value) — excludes coinbase
         stats.total_ckb_moved = stats
             .total_ckb_moved
             .saturating_add(entry.ckb_delta.unsigned_abs());
 
-        // Count each involved script
+        // Count each involved script — excludes coinbase
         for code_hash in scripts {
             let hex = hex::encode(code_hash);
             *stats.script_counts.entry(hex).or_insert(0) += 1;
-        }
-
-        // Classify by type
-        if entry.is_cellbase {
-            stats.coinbase_count += 1;
-            return;
         }
 
         // Check asset changes for specific types
@@ -1497,12 +1497,9 @@ mod activity_stats_tests {
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.transfer_count, 0);
-        assert_eq!(stats.total_ckb_moved, 500_00000000);
-        // Script counted even for coinbase
-        assert_eq!(
-            *stats.script_counts.get(&hex::encode([0x11; 32])).unwrap(),
-            1
-        );
+        // Coinbase excluded from total_ckb_moved and script_counts
+        assert_eq!(stats.total_ckb_moved, 0);
+        assert!(stats.script_counts.is_empty());
     }
 
     #[test]
@@ -1668,7 +1665,8 @@ mod activity_stats_tests {
         );
         assert_eq!(stats.transfer_count, 2);
         assert_eq!(stats.coinbase_count, 1);
-        assert_eq!(stats.total_ckb_moved, 180_00000000);
+        // Coinbase (100 CKB) excluded from total_ckb_moved: 50 + 30 = 80
+        assert_eq!(stats.total_ckb_moved, 80_00000000);
     }
 
     #[test]

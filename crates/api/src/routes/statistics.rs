@@ -3162,7 +3162,8 @@ async fn get_daily_activity_stats(
     State(state): State<Arc<AppState>>,
     Query(params): Query<DailyActivityStatsParams>,
 ) -> ApiResult<Vec<DailyActivityStatsResponse>> {
-    let days = params.days.clamp(1, 365);
+    // days=0 means return all data (used by charts)
+    let days = params.days;
     let cache_key = format!("stats:daily-activity-stats:{}", days);
 
     if let Some(cached) = state
@@ -3178,15 +3179,19 @@ async fn get_daily_activity_stats(
         .list_daily_activity_stats()
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // Take the last N days (list is sorted ascending by date)
-    let selected: Vec<_> = all_stats
-        .into_iter()
-        .rev()
-        .take(days as usize)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
+    // days=0 returns all data; otherwise take the last N days
+    let selected: Vec<_> = if days == 0 {
+        all_stats
+    } else {
+        all_stats
+            .into_iter()
+            .rev()
+            .take(days as usize)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect()
+    };
 
     // Collect all unique code_hashes across selected days and resolve names
     let mut unique_code_hashes: HashSet<String> = HashSet::new();

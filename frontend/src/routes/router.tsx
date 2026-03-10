@@ -69,6 +69,36 @@ const CellAgeVsOccupiedCapacityPage = lazyPage(
 const CommonKnowledgeCompositionPage = lazyPage(
   () => import('@/app/charts/common-knowledge-composition/page')
 );
+const ActivityVolumePage = lazyPage(() => import('@/app/charts/activity-volume/page'));
+const ActivityTypeBreakdownPage = lazyPage(
+  () => import('@/app/charts/activity-type-breakdown/page')
+);
+const ActiveAddressesPage = lazyPage(() => import('@/app/charts/active-addresses/page'));
+const CkbVolumePage = lazyPage(() => import('@/app/charts/ckb-volume/page'));
+const AddressCohortRetentionPage = lazyPage(
+  () => import('@/app/charts/address-cohort-retention/page')
+);
+const AverageBlockTimePage = lazyPage(() => import('@/app/charts/average-block-time/page'));
+const BlockTimeDistributionPage = lazyPage(
+  () => import('@/app/charts/block-time-distribution/page')
+);
+const CellCountPage = lazyPage(() => import('@/app/charts/cell-count/page'));
+const CellSizeDistributionPage = lazyPage(() => import('@/app/charts/cell-size-distribution/page'));
+const CirculationRatioPage = lazyPage(() => import('@/app/charts/circulation-ratio/page'));
+const DailyDepositPage = lazyPage(() => import('@/app/charts/daily-deposit/page'));
+const DifficultyPage = lazyPage(() => import('@/app/charts/difficulty/page'));
+const EpochTimeDistributionPage = lazyPage(
+  () => import('@/app/charts/epoch-time-distribution/page')
+);
+const HashRatePage = lazyPage(() => import('@/app/charts/hash-rate/page'));
+const InflationRatePage = lazyPage(() => import('@/app/charts/inflation-rate/page'));
+const MinerAddressDistributionPage = lazyPage(
+  () => import('@/app/charts/miner-address-distribution/page')
+);
+const NominalApcPage = lazyPage(() => import('@/app/charts/nominal-apc/page'));
+const TotalDepositPage = lazyPage(() => import('@/app/charts/total-deposit/page'));
+const TransactionCountPage = lazyPage(() => import('@/app/charts/transaction-count/page'));
+const UncleRatePage = lazyPage(() => import('@/app/charts/uncle-rate/page'));
 const DaoPage = lazyPage(() => import('@/app/dao/page'));
 const HardforksPage = lazyPage(() => import('@/app/hardforks/page'));
 const ScriptByCodeHashRoute = lazyParamPage(
@@ -213,6 +243,86 @@ export function createAppRouter(): RouteObject[] {
         {
           path: 'charts/common-knowledge-composition',
           element: <CommonKnowledgeCompositionPage />,
+        },
+        {
+          path: 'charts/activity-volume',
+          element: <ActivityVolumePage />,
+        },
+        {
+          path: 'charts/activity-type-breakdown',
+          element: <ActivityTypeBreakdownPage />,
+        },
+        {
+          path: 'charts/active-addresses',
+          element: <ActiveAddressesPage />,
+        },
+        {
+          path: 'charts/ckb-volume',
+          element: <CkbVolumePage />,
+        },
+        {
+          path: 'charts/address-cohort-retention',
+          element: <AddressCohortRetentionPage />,
+        },
+        {
+          path: 'charts/average-block-time',
+          element: <AverageBlockTimePage />,
+        },
+        {
+          path: 'charts/block-time-distribution',
+          element: <BlockTimeDistributionPage />,
+        },
+        {
+          path: 'charts/cell-count',
+          element: <CellCountPage />,
+        },
+        {
+          path: 'charts/cell-size-distribution',
+          element: <CellSizeDistributionPage />,
+        },
+        {
+          path: 'charts/circulation-ratio',
+          element: <CirculationRatioPage />,
+        },
+        {
+          path: 'charts/daily-deposit',
+          element: <DailyDepositPage />,
+        },
+        {
+          path: 'charts/difficulty',
+          element: <DifficultyPage />,
+        },
+        {
+          path: 'charts/epoch-time-distribution',
+          element: <EpochTimeDistributionPage />,
+        },
+        {
+          path: 'charts/hash-rate',
+          element: <HashRatePage />,
+        },
+        {
+          path: 'charts/inflation-rate',
+          element: <InflationRatePage />,
+        },
+        {
+          path: 'charts/miner-address-distribution',
+          element: <MinerAddressDistributionPage />,
+        },
+        {
+          path: 'charts/nominal-apc',
+          element: <NominalApcPage />,
+        },
+        {
+          path: 'charts/total-deposit',
+          element: <TotalDepositPage />,
+        },
+        {
+          path: 'charts/transaction-count',
+          element: <TransactionCountPage />,
+        },
+        {
+          path: 'charts/uncle-rate',
+          element: <UncleRatePage />,
         },
         {
           path: 'dao',

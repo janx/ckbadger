@@ -4834,7 +4834,8 @@ impl Indexer {
                                     BatchWriter::accumulate_activity_stats(
                                         &entry, &scripts, day_stats,
                                     );
-                                    if lock_hash.len() == 32 {
+                                    // Exclude coinbase from unique address count
+                                    if !entry.is_cellbase && lock_hash.len() == 32 {
                                         let mut hash = [0u8; 32];
                                         hash.copy_from_slice(&lock_hash);
                                         act_stats_addrs.entry(date).or_default().insert(hash);
@@ -6007,7 +6008,8 @@ impl Indexer {
                             .to_string();
                         let day_stats = daily_activity_accum.entry(date.clone()).or_default();
                         BatchWriter::accumulate_activity_stats(&entry, &scripts, day_stats);
-                        if lock_hash.len() == 32 {
+                        // Exclude coinbase from unique address count
+                        if !entry.is_cellbase && lock_hash.len() == 32 {
                             let mut hash = [0u8; 32];
                             hash.copy_from_slice(&lock_hash);
                             daily_activity_addrs.entry(date).or_default().insert(hash);

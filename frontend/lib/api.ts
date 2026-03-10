@@ -2017,7 +2017,7 @@ export const api = {
   },
 
   getActivityVolumeChart: async (): Promise<ChartResponse> => {
-    const stats = await api.getDailyActivityStats(365);
+    const stats = await api.getDailyActivityStats(0);
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
@@ -2028,8 +2028,7 @@ export const api = {
             s.daoWithdrawCompleteCount +
             s.tokenCount +
             s.objectCount +
-            s.identityCount +
-            s.coinbaseCount
+            s.identityCount
         ),
       })),
       title: 'Daily Activity Volume',
@@ -2038,7 +2037,7 @@ export const api = {
   },
 
   getActivityTypeBreakdownChart: async (): Promise<StackedAreaChartResponse> => {
-    const stats = await api.getDailyActivityStats(365);
+    const stats = await api.getDailyActivityStats(0);
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
@@ -2048,7 +2047,6 @@ export const api = {
           token: String(s.tokenCount),
           object: String(s.objectCount),
           identity: String(s.identityCount),
-          coinbase: String(s.coinbaseCount),
         },
       })),
       series: [
@@ -2057,14 +2055,13 @@ export const api = {
         { key: 'token', label: 'Token', color: '#a78bfa' },
         { key: 'object', label: 'Object', color: '#f472b6' },
         { key: 'identity', label: 'Identity', color: '#2dd4bf' },
-        { key: 'coinbase', label: 'Coinbase', color: '#64748b' },
       ],
       title: 'Activity Type Breakdown',
     };
   },
 
   getActiveAddressesChart: async (): Promise<ChartResponse> => {
-    const stats = await api.getDailyActivityStats(365);
+    const stats = await api.getDailyActivityStats(0);
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
@@ -2076,7 +2073,7 @@ export const api = {
   },
 
   getCkbVolumeChart: async (): Promise<ChartResponse> => {
-    const stats = await api.getDailyActivityStats(365);
+    const stats = await api.getDailyActivityStats(0);
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
