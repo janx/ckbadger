@@ -3469,38 +3469,56 @@ impl Indexer {
         let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
 
         // Fast cache lookups (no DB I/O needed) — run before parallel DB prefetch
-        let (prefetched_addr_balances, prefetched_script_info) = if bulk_sync_mode {
-            let addr_result = if !lock_hash_keys.is_empty() {
-                // Use in-memory cache instead of DB read
-                let cache_guard = self.addr_balance_cache.lock().unwrap();
-                let mut result = HashMap::with_capacity(lock_hash_keys.len());
-                for key in &lock_hash_keys {
-                    // None in cache → never seen → treat as None (new address)
-                    let value = cache_guard.get(*key).cloned().unwrap_or(None);
-                    result.insert((*key).clone(), value);
-                }
-                result
-            } else {
-                HashMap::new()
-            };
+        let t_cache = Instant::now();
+        let (prefetched_addr_balances, prefetched_script_info, addr_cache_size, script_cache_size) =
+            if bulk_sync_mode {
+                let (addr_result, a_cache_size) = if !lock_hash_keys.is_empty() {
+                    // Use in-memory cache instead of DB read
+                    let cache_guard = self.addr_balance_cache.lock().unwrap();
+                    let size = cache_guard.len();
+                    let mut result = HashMap::with_capacity(lock_hash_keys.len());
+                    for key in &lock_hash_keys {
+                        // None in cache → never seen → treat as None (new address)
+                        let value = cache_guard.get(*key).cloned().unwrap_or(None);
+                        result.insert((*key).clone(), value);
+                    }
+                    (result, size)
+                } else {
+                    let size = self.addr_balance_cache.lock().unwrap().len();
+                    (HashMap::new(), size)
+                };
 
-            let script_result = if !code_hash_refs.is_empty() {
-                // Use in-memory cache instead of DB read
-                let cache_guard = self.script_info_cache.lock().unwrap();
-                let mut result = HashMap::with_capacity(code_hash_refs.len());
-                for key in &code_hash_refs {
-                    let value = cache_guard.get(*key).cloned().unwrap_or(None);
-                    result.insert((*key).clone(), value);
-                }
-                result
-            } else {
-                HashMap::new()
-            };
+                let (script_result, s_cache_size) = if !code_hash_refs.is_empty() {
+                    // Use in-memory cache instead of DB read
+                    let cache_guard = self.script_info_cache.lock().unwrap();
+                    let size = cache_guard.len();
+                    let mut result = HashMap::with_capacity(code_hash_refs.len());
+                    for key in &code_hash_refs {
+                        let value = cache_guard.get(*key).cloned().unwrap_or(None);
+                        result.insert((*key).clone(), value);
+                    }
+                    (result, size)
+                } else {
+                    let size = self.script_info_cache.lock().unwrap().len();
+                    (HashMap::new(), size)
+                };
 
-            (addr_result, script_result)
-        } else {
-            (HashMap::new(), HashMap::new())
-        };
+                (addr_result, script_result, a_cache_size, s_cache_size)
+            } else {
+                (HashMap::new(), HashMap::new(), 0, 0)
+            };
+        let cache_lookup_ms = t_cache.elapsed().as_secs_f64() * 1000.0;
+
+        if bulk_sync_mode {
+            debug!(
+                addr_balance_cache_size = addr_cache_size,
+                script_info_cache_size = script_cache_size,
+                addr_keys_looked_up = lock_hash_keys.len(),
+                script_keys_looked_up = code_hash_refs.len(),
+                cache_lookup_ms = format!("{:.3}", cache_lookup_ms),
+                "bulk sync cache lookup stats"
+            );
+        }
 
         // Parallel DB prefetch: DAO + UDT only (2-way rayon::join)
         let (
