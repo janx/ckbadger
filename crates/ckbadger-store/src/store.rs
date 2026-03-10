@@ -152,12 +152,12 @@ impl MemoryProfile {
         let cache_bulk = budget - wbm_bulk;
 
         let wbm_scale = wbm_normal as f64 / (8.0 * GB as f64);
-        let write_buffer_mega = scale_clamp(256 * MB, wbm_scale, 64 * MB, 512 * MB);
-        let write_buffer_high = scale_clamp(128 * MB, wbm_scale, 32 * MB, 256 * MB);
+        let write_buffer_mega = scale_clamp(256 * MB, wbm_scale, 64 * MB, GB);
+        let write_buffer_high = scale_clamp(128 * MB, wbm_scale, 32 * MB, 512 * MB);
         let write_buffer_low = scale_clamp(32 * MB, wbm_scale, 8 * MB, 128 * MB);
 
         let wbm_bulk_scale = wbm_bulk as f64 / 13_635_534_029.0;
-        let write_buffer_hot = scale_clamp(512 * MB, wbm_bulk_scale, 128 * MB, GB);
+        let write_buffer_hot = scale_clamp(512 * MB, wbm_bulk_scale, 128 * MB, 2 * GB);
 
         let cpus = cpu_count.max(1);
         let max_background_jobs = cpus.clamp(4, 32) as i32;
@@ -165,7 +165,7 @@ impl MemoryProfile {
 
         let budget_scale = budget_u64 as f64 / (16.0 * GB as f64);
         let bulk_level_base = scale_clamp(2 * GB, budget_scale, 512 * MB, 8 * GB) as u64;
-        let bulk_file_base = scale_clamp(256 * MB, budget_scale, 64 * MB, GB) as u64;
+        let bulk_file_base = scale_clamp(256 * MB, budget_scale, 64 * MB, 2 * GB) as u64;
         let normal_level_base = scale_clamp(512 * MB, budget_scale, 128 * MB, 2 * GB) as u64;
         let normal_file_base = scale_clamp(64 * MB, budget_scale, 16 * MB, 256 * MB) as u64;
 
@@ -1525,7 +1525,14 @@ impl CkbadgerStore {
             }
         }
 
-        for &hot_cf_name in &[CF_TX_INDEX, CF_CELLS] {
+        for &hot_cf_name in &[
+            CF_TX_INDEX,
+            CF_CELLS,
+            CF_LIVE_CELLS,
+            CF_CONSUMED_CELLS,
+            CF_CELL_BY_LOCK,
+            CF_ACTIVITIES,
+        ] {
             if let Some(cf) = self.db.cf_handle(hot_cf_name) {
                 let result = self
                     .db
