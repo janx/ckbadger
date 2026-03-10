@@ -105,6 +105,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/charts/hodl-wave", get(get_hodl_wave_chart))
         // Activity stats
         .route("/stats/daily-activities", get(get_daily_activity_stats))
+        .route("/stats/activity-summary-24h", get(get_activity_summary_24h))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3148,6 +3149,25 @@ pub struct ScriptCountEntry {
     pub count: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivitySummary24hResponse {
+    pub transfer_count: u32,
+    pub dao_deposit_count: u32,
+    pub dao_withdraw_request_count: u32,
+    pub dao_withdraw_complete_count: u32,
+    pub token_count: u32,
+    pub object_count: u32,
+    pub identity_count: u32,
+    pub coinbase_count: u32,
+    /// Sum of per-hour unique address counts (approximate: overcounts cross-hour addresses)
+    pub unique_address_count: u32,
+    pub total_ckb_moved: String,
+    pub script_counts: Vec<ScriptCountEntry>,
+    /// Number of hourly buckets aggregated (0-24)
+    pub hours_covered: u32,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DailyActivityStatsParams {
     #[serde(default = "default_activity_days")]
@@ -3256,6 +3276,100 @@ async fn get_daily_activity_stats(
         };
         state.cache.set(&cache_key, &result, ttl).await;
     }
+    ok(result)
+}
+
+// ============================================
+// Activity Summary (24h rolling window)
+// ============================================
+
+async fn get_activity_summary_24h(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<ActivitySummary24hResponse> {
+    let cache_key = "stats:activity-summary-24h";
+
+    if let Some(cached) = state
+        .cache
+        .get::<ActivitySummary24hResponse>(cache_key)
+        .await
+    {
+        return ok(cached);
+    }
+
+    // Compute the hour key for 24 hours ago
+    let now = chrono::Utc::now();
+    let cutoff = now - chrono::Duration::hours(24);
+    let since_hour = cutoff.format("%Y%m%d%H").to_string();
+
+    let hourly_stats = state
+        .store
+        .list_hourly_activity_stats_since(&since_hour)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    // Aggregate all hourly buckets
+    let mut agg = ckbadger_store::DailyActivityStats::default();
+    let mut agg_script_counts: HashMap<String, u32> = HashMap::new();
+    let hours_covered = hourly_stats.len() as u32;
+
+    for (_hour, s) in &hourly_stats {
+        agg.transfer_count += s.transfer_count;
+        agg.dao_deposit_count += s.dao_deposit_count;
+        agg.dao_withdraw_request_count += s.dao_withdraw_request_count;
+        agg.dao_withdraw_complete_count += s.dao_withdraw_complete_count;
+        agg.token_count += s.token_count;
+        agg.object_count += s.object_count;
+        agg.identity_count += s.identity_count;
+        agg.coinbase_count += s.coinbase_count;
+        agg.unique_address_count += s.unique_address_count;
+        agg.total_ckb_moved = agg.total_ckb_moved.saturating_add(s.total_ckb_moved);
+        for (code_hash, count) in &s.script_counts {
+            *agg_script_counts.entry(code_hash.clone()).or_insert(0) += count;
+        }
+    }
+
+    // Resolve script names
+    let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
+    for code_hash_hex in agg_script_counts.keys() {
+        if let Ok(bytes) = hex::decode(code_hash_hex) {
+            let name = state
+                .store
+                .get_script_info(&bytes)
+                .ok()
+                .flatten()
+                .and_then(|info| info.name);
+            name_cache.insert(code_hash_hex.clone(), name);
+        }
+    }
+
+    let mut script_counts: Vec<ScriptCountEntry> = agg_script_counts
+        .iter()
+        .map(|(ch, &count)| ScriptCountEntry {
+            code_hash: format!("0x{}", ch),
+            name: name_cache.get(ch).cloned().flatten(),
+            count,
+        })
+        .collect();
+    script_counts.sort_by(|a, b| b.count.cmp(&a.count));
+
+    let result = ActivitySummary24hResponse {
+        transfer_count: agg.transfer_count,
+        dao_deposit_count: agg.dao_deposit_count,
+        dao_withdraw_request_count: agg.dao_withdraw_request_count,
+        dao_withdraw_complete_count: agg.dao_withdraw_complete_count,
+        token_count: agg.token_count,
+        object_count: agg.object_count,
+        identity_count: agg.identity_count,
+        coinbase_count: agg.coinbase_count,
+        unique_address_count: agg.unique_address_count,
+        total_ckb_moved: agg.total_ckb_moved.to_string(),
+        script_counts,
+        hours_covered,
+    };
+
+    state
+        .cache
+        .set(cache_key, &result, CacheTtl::NETWORK_STATS)
+        .await;
     ok(result)
 }
 
