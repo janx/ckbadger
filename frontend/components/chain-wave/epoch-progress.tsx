@@ -28,7 +28,7 @@ export function EpochProgress({
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-baseline gap-3">
           <span className="text-text-muted font-mono text-xs uppercase tracking-wider">Epoch</span>
-          <span className="text-emphasis font-mono text-2xl font-bold tabular-nums">
+          <span className="text-amber font-mono text-2xl font-bold tabular-nums">
             {epochNumber.toLocaleString()}
           </span>
           <span className="bg-base-elevated text-text-secondary rounded px-2 py-0.5 font-mono text-xs tabular-nums">
@@ -50,11 +50,11 @@ export function EpochProgress({
           className={cn(
             'absolute inset-y-0 left-0 rounded-full transition-all duration-1000',
             progress < 25
-              ? 'from-emphasis-dim to-emphasis-dim bg-gradient-to-r'
+              ? 'from-amber-dim to-amber-dim bg-gradient-to-r'
               : progress < 50
-                ? 'from-emphasis-dim to-emphasis bg-gradient-to-r'
+                ? 'from-amber-dim to-amber bg-gradient-to-r'
                 : progress < 75
-                  ? 'from-emphasis to-warning-dim bg-gradient-to-r'
+                  ? 'from-amber to-warning-dim bg-gradient-to-r'
                   : 'from-warning-dim to-warning bg-gradient-to-r'
           )}
           style={{ width: `${progressClamped}%` }}

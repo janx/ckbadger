@@ -291,7 +291,7 @@ export function CommandPalette() {
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleInputKeyDown}
                 placeholder="Type a command, or search block / tx / address"
-                className="focus:border-interactive focus:ring-interactive border-base-border bg-base-bg text-text-primary w-full rounded-md border px-3 py-2 font-mono text-sm outline-none focus:ring-1"
+                className="focus:border-amber focus:ring-amber border-base-border bg-base-bg text-text-primary w-full rounded-md border px-3 py-2 font-mono text-sm outline-none focus:ring-1"
                 aria-label="Command palette input"
               />
             </div>
@@ -305,7 +305,7 @@ export function CommandPalette() {
                         type="button"
                         className={`w-full rounded-md px-3 py-2 text-left font-mono text-sm transition-colors ${
                           index === selectedIndex
-                            ? 'text-interactive bg-base-elevated'
+                            ? 'text-amber bg-base-elevated'
                             : 'text-text-secondary hover:bg-base-elevated/60'
                         }`}
                         onClick={() => {

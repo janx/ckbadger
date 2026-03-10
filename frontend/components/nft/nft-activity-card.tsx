@@ -39,7 +39,7 @@ export function NftActivityCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-text-muted font-mono text-xs">
           Block{' '}
-          <Link href={`/blocks/${blockNumber}`} className="text-emphasis hover:underline">
+          <Link href={`/blocks/${blockNumber}`} className="text-amber hover:underline">
             #{formatNumber(blockNumber)}
           </Link>
           {txIndex !== undefined && (
@@ -68,7 +68,7 @@ export function NftActivityCard({
         href={`/tx/${txHash}`}
         className="text-text-secondary block font-mono text-xs hover:underline"
       >
-        <HexDisplay value={txHash} color="accent" size="sm" startChars={14} endChars={10} />
+        <HexDisplay value={txHash} size="sm" startChars={14} endChars={10} />
       </Link>
       {timestamp && <div className="text-text-muted font-mono text-xs">Timestamp: {timestamp}</div>}
     </div>

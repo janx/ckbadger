@@ -75,7 +75,7 @@ export function ChartPage({
         <div className="mb-6">
           <Link
             href={backLink}
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-amber text-text-muted text-sm transition-colors"
           >
             ← {backLabel}
           </Link>
@@ -109,9 +109,7 @@ export function ChartPage({
                   <div className="flex items-center gap-2">
                     <span
                       className={
-                        chartType === 'bar'
-                          ? 'bg-emphasis h-3 w-3 rounded'
-                          : 'bg-emphasis h-0.5 w-4'
+                        chartType === 'bar' ? 'bg-amber h-3 w-3 rounded' : 'bg-amber h-0.5 w-4'
                       }
                     />
                     <span className="text-text-muted">{data.yAxisLabel}</span>

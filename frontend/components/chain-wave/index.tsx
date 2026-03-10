@@ -76,7 +76,7 @@ function median(values: Array<number | null | undefined>): number | null {
 function stagePillClass(stage: FlowStage): string {
   if (stage === 'mempool') return 'border-warning/30 bg-warning/10 text-warning';
   if (stage === 'proposed') return 'border-positive/30 bg-positive/10 text-positive';
-  return 'border-emphasis/40 bg-emphasis/10 text-emphasis';
+  return 'border-amber/40 bg-amber/10 text-amber';
 }
 
 function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): string {
@@ -151,8 +151,8 @@ function StageConnector({ label }: { label: string }) {
     <div className="hidden items-center gap-1 px-2 lg:flex">
       <div className="bg-base-border h-px w-6" />
       <div className="relative">
-        <div className="bg-emphasis/80 h-2 w-2 rounded-full" />
-        <div className="bg-emphasis/35 absolute inset-0 animate-ping rounded-full" />
+        <div className="bg-amber/80 h-2 w-2 rounded-full" />
+        <div className="bg-amber/35 absolute inset-0 animate-ping rounded-full" />
       </div>
       <div className="text-text-muted text-[10px] uppercase tracking-widest">{label}</div>
       <div className="bg-base-border h-px w-6" />
@@ -315,7 +315,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           </h3>
           <div className="text-text-muted text-xs">New blocks stream in as txns get packed</div>
         </div>
-        <div className="border-emphasis/40 bg-emphasis/10 text-emphasis rounded-lg border px-2 py-1 text-xs">
+        <div className="border-amber/40 bg-amber/10 text-amber rounded-lg border px-2 py-1 text-xs">
           head #{blocks[0].block.number.toLocaleString()}
         </div>
       </div>
@@ -325,14 +325,14 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           <Link
             key={entry.block.number}
             href={`/blocks/${entry.block.number}`}
-            className="hover:border-emphasis/50 border-base-border/60 bg-base-bg/60 block rounded-xl border p-3 transition-colors"
+            className="hover:border-amber/50 border-base-border/60 bg-base-bg/60 block rounded-xl border p-3 transition-colors"
           >
             <div className="mb-2 flex items-center justify-between text-xs">
               <div className="text-text-primary font-medium">
                 #{entry.block.number.toLocaleString()}
               </div>
               {index === 0 ? (
-                <span className="border-emphasis/40 bg-emphasis/20 text-emphasis rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
+                <span className="border-amber/40 bg-amber/20 text-amber rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
                   New
                 </span>
               ) : (

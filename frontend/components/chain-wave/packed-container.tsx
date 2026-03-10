@@ -40,10 +40,10 @@ const TYPE_CONFIG = {
     countColor: 'text-warning-500/80',
   },
   tip: {
-    borderColor: 'border-emphasis/50',
-    bgGradient: 'from-emphasis-dim/20 to-base-surface/50',
-    titleColor: 'text-emphasis',
-    countColor: 'text-emphasis-dim',
+    borderColor: 'border-amber/50',
+    bgGradient: 'from-amber-dim/20 to-base-surface/50',
+    titleColor: 'text-amber',
+    countColor: 'text-amber-dim',
   },
 };
 
@@ -51,7 +51,7 @@ const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip'
   normal: {
     mempool: 'bg-base-border/80 hover:bg-base-border',
     proposals: 'bg-warning-600/80 hover:bg-warning',
-    tip: 'bg-emphasis/80 hover:bg-emphasis-dim',
+    tip: 'bg-amber/80 hover:bg-amber-dim',
   },
   cellbase: {
     mempool: 'bg-positive/80 hover:bg-positive',
@@ -283,7 +283,7 @@ export function PackedContainer({
         config.bgGradient,
         type === 'tip' &&
           blockNumber &&
-          'hover:border-emphasis/70 hover:shadow-glow cursor-pointer hover:shadow-lg'
+          'hover:border-amber/70 hover:shadow-glow cursor-pointer hover:shadow-lg'
       )}
     >
       <div className="mb-2 flex items-center justify-between sm:mb-3">

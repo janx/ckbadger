@@ -70,9 +70,9 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
           <p className="text-xs sm:text-sm">
             <span className="text-warning-300">Mempool ({formatCount(mempoolCount)})</span>
             <span className="text-text-muted"> {'->'} </span>
-            <span className="text-emphasis-dim">Proposals ({formatCount(proposalsCount)})</span>
+            <span className="text-amber-dim">Proposals ({formatCount(proposalsCount)})</span>
             <span className="text-text-muted"> {'->'} </span>
-            <span className="text-emphasis">New Committed ({formatCount(committedCount)})</span>
+            <span className="text-amber">New Committed ({formatCount(committedCount)})</span>
           </p>
           <p className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px] sm:text-right">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate

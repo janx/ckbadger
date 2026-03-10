@@ -64,7 +64,7 @@ export function NftCollectionStatCards({
             <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
               Live Items
             </div>
-            <div className="text-emphasis text-2xl font-semibold tabular-nums">
+            <div className="text-amber text-2xl font-semibold tabular-nums">
               {formatNumber(liveCount)}
             </div>
             <div className="text-text-muted font-mono text-xs">Currently on-chain</div>
@@ -78,7 +78,7 @@ export function NftCollectionStatCards({
             <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
               Storage Integrity
             </div>
-            <div className="text-emphasis text-base font-semibold">
+            <div className="text-amber text-base font-semibold">
               {formatStorageTier(storageTier)}
             </div>
             {storageOnchainRatio && (
@@ -120,7 +120,7 @@ export function NftCollectionStatCards({
             </div>
             <Link
               href={`/blocks/${createdAtBlock}`}
-              className="text-emphasis font-mono text-lg hover:underline"
+              className="text-amber font-mono text-lg hover:underline"
             >
               #{formatNumber(createdAtBlock)}
             </Link>
