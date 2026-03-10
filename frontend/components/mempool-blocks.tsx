@@ -313,13 +313,13 @@ function lensColor(
   missing: boolean,
   isCellbase: boolean
 ): string {
-  if (isCellbase) return 'rgba(74, 222, 128, 0.24)';
-  if (missing) return 'rgba(148, 163, 184, 0.55)';
+  if (isCellbase) return 'rgba(74, 140, 92, 0.24)';
+  if (missing) return 'rgba(176, 168, 152, 0.55)';
 
   const alpha = 0.35 + feeScore * 0.5;
-  if (stage === 'mempool') return `rgba(255, 176, 0, ${alpha})`;
-  if (stage === 'proposed') return `rgba(0, 204, 51, ${alpha})`;
-  return `rgba(140, 224, 10, ${alpha})`;
+  if (stage === 'mempool') return `rgba(184, 132, 32, ${alpha})`;
+  if (stage === 'proposed') return `rgba(74, 140, 92, ${alpha})`;
+  return `rgba(30, 122, 106, ${alpha})`;
 }
 
 function mempoolTxToLensItem(tx: {
@@ -445,10 +445,10 @@ function toTxBubble(item: LensTxItem, metrics: RectMetrics, jitterSeed: string):
     heightPx,
     color: lensColor(item.stage, metrics.feeRateScore, hasMissingMetrics, isCellbase),
     border: isCellbase
-      ? '1px solid rgba(167, 243, 208, 0.72)'
+      ? '1px solid rgba(74, 140, 92, 0.72)'
       : hasMissingMetrics
-        ? '1px dashed rgba(148, 163, 184, 0.82)'
-        : '1px solid rgba(226, 232, 240, 0.55)',
+        ? '1px dashed rgba(176, 168, 152, 0.82)'
+        : '1px solid rgba(200, 192, 176, 0.55)',
     opacity: isCellbase ? 0.42 : hasMissingMetrics ? 0.56 : 0.9,
     title: txBubbleTitle(item),
     txLabel: `${item.id.slice(0, 10)}...${item.id.slice(-6)}`,

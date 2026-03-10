@@ -33,10 +33,10 @@ export function ProgressBar({
   const colorClass = getColor();
 
   const barColors = {
-    green: 'bg-gradient-to-r from-emphasis-dim via-emphasis-dim to-emphasis',
-    amber: 'bg-gradient-to-r from-warning-dim via-warning-dim to-warning',
-    blue: 'bg-gradient-to-r from-blue-900 via-blue-600 to-blue-400',
-    red: 'bg-gradient-to-r from-red-900 via-red-600 to-red-400',
+    green: 'bg-gradient-to-r from-emphasis-dim via-emphasis to-emphasis-bright',
+    amber: 'bg-gradient-to-r from-warning-dim via-warning to-warning-bright',
+    blue: 'bg-gradient-to-r from-info-dim via-info to-info-bright',
+    red: 'bg-gradient-to-r from-negative-dim via-negative to-negative-bright',
   };
 
   const glowColors = {
@@ -98,15 +98,15 @@ export function UsageBar({ value, max, unit = '', className }: UsageBarProps) {
   const percent = max > 0 ? Math.min((value / max) * 100, 100) : 0;
 
   const getColorClass = () => {
-    if (percent < 33) return 'bg-green-500/30';
-    if (percent < 66) return 'bg-yellow-500/30';
-    return 'bg-red-500/30';
+    if (percent < 33) return 'bg-positive/30';
+    if (percent < 66) return 'bg-warning/30';
+    return 'bg-negative/30';
   };
 
   return (
     <span
       className={cn(
-        'bg-base-elevated relative inline-flex overflow-hidden rounded px-2 py-1 font-mono text-sm text-white',
+        'bg-base-elevated text-text-primary relative inline-flex overflow-hidden rounded px-2 py-1 font-mono text-sm',
         className
       )}
     >

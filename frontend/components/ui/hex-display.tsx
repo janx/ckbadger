@@ -26,22 +26,22 @@ const HexChar = memo(function HexChar({
     green: {
       base: 'text-emphasis-dim',
       hover: 'text-emphasis',
-      glow: '0 0 4px rgba(140, 224, 10, 0.6)',
+      glow: '0 0 4px rgba(30, 122, 106, 0.5)',
     },
     amber: {
       base: 'text-warning-dim',
       hover: 'text-warning',
-      glow: '0 0 4px rgba(255, 176, 0, 0.6)',
+      glow: '0 0 4px rgba(184, 132, 32, 0.5)',
     },
     white: {
       base: 'text-text-muted',
-      hover: 'text-white',
-      glow: '0 0 4px rgba(255, 255, 255, 0.4)',
+      hover: 'text-text-primary',
+      glow: '0 0 4px rgba(42, 37, 32, 0.3)',
     },
     accent: {
       base: 'text-emphasis',
       hover: 'text-emphasis',
-      glow: '0 0 4px rgba(140, 224, 10, 0.6)',
+      glow: '0 0 4px rgba(30, 122, 106, 0.5)',
     },
   };
 
@@ -248,7 +248,7 @@ export function ByteGroupDisplay({
   const colorClasses = {
     green: ['text-emphasis', 'text-emphasis-dim'],
     amber: ['text-warning', 'text-warning-dim'],
-    white: ['text-white', 'text-text-muted'],
+    white: ['text-text-primary', 'text-text-muted'],
     accent: ['text-emphasis', 'text-emphasis-dim'],
   };
 

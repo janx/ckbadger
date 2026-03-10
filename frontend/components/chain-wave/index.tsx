@@ -74,18 +74,18 @@ function median(values: Array<number | null | undefined>): number | null {
 }
 
 function stagePillClass(stage: FlowStage): string {
-  if (stage === 'mempool') return 'border-warning-500/30 bg-warning/10 text-warning';
-  if (stage === 'proposed') return 'border-green-500/30 bg-green-500/10 text-green-200';
+  if (stage === 'mempool') return 'border-warning/30 bg-warning/10 text-warning';
+  if (stage === 'proposed') return 'border-positive/30 bg-positive/10 text-positive';
   return 'border-emphasis/40 bg-emphasis/10 text-emphasis';
 }
 
 function bubbleColor(feeScore: number, stage: FlowStage, missing: boolean): string {
-  if (missing) return 'rgba(148, 163, 184, 0.6)';
+  if (missing) return 'rgba(176, 168, 152, 0.6)';
 
   const alpha = 0.4 + feeScore * 0.4;
-  if (stage === 'mempool') return `rgba(255, 176, 0, ${alpha})`;
-  if (stage === 'proposed') return `rgba(0, 204, 51, ${alpha})`;
-  return `rgba(140, 224, 10, ${alpha})`;
+  if (stage === 'mempool') return `rgba(184, 132, 32, ${alpha})`;
+  if (stage === 'proposed') return `rgba(74, 140, 92, ${alpha})`;
+  return `rgba(30, 122, 106, ${alpha})`;
 }
 
 function mempoolTxToItem(tx: MempoolTransaction): FlowTxItem {
@@ -219,8 +219,8 @@ function TxMetricScatter({
                   top: `calc(${point.y * 100}% - ${point.radius}px)`,
                   backgroundColor: bubbleColor(point.feeScore, stage, point.missingFeeRate),
                   border: point.missingCycles
-                    ? '1px dashed rgba(148, 163, 184, 0.9)'
-                    : '1px solid rgba(226, 232, 240, 0.5)',
+                    ? '1px dashed rgba(176, 168, 152, 0.9)'
+                    : '1px solid rgba(200, 192, 176, 0.5)',
                   opacity: point.missingCycles ? 0.55 : 0.86,
                 }}
                 title={title}
