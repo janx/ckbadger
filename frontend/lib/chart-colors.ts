@@ -1,28 +1,28 @@
-export const CHART_PRIMARY_COLOR = '#4a8c5c'; // 竹青
-export const CHART_SECONDARY_COLOR = '#1e7a6a'; // 石绿
-export const CHART_TERTIARY_COLOR = '#b88420'; // 琥珀
+export const CHART_PRIMARY_COLOR = '#f0b866'; // amber
+export const CHART_SECONDARY_COLOR = '#e87ea0'; // rose
+export const CHART_TERTIARY_COLOR = '#6ab0e8'; // sky
 
 export const CHART_PALETTE = [
-  '#4a8c5c', // 竹青
-  '#1e7a6a', // 石绿
-  '#3a6ea0', // 靛蓝
-  '#b88420', // 琥珀
-  '#c04040', // 朱砂
-  '#d4a828', // 藤黄
-  '#b84060', // 胭脂
-  '#7a5090', // 紫檀
-  '#68a8b8', // 月白
-  '#a06830', // 赭石
-  '#4a5868', // 黛色
-  '#8ab870', // 豆绿
+  '#f0b866', // amber
+  '#e87ea0', // rose
+  '#6ab0e8', // sky
+  '#5ce0b8', // mint
+  '#b08af0', // violet
+  '#f8ca80', // amber-bright
+  '#f07898', // rose-bright
+  '#82c0f0', // sky-bright
+  '#78f0d0', // mint-bright
+  '#c8a0f8', // violet-bright
+  '#c89440', // amber-dim
+  '#c0608a', // rose-dim
 ] as const;
 
-// Centralized chart UI colors
-export const CHART_GRID_COLOR = '#e0d8cc';
-export const CHART_AXIS_COLOR = '#b0a898';
-export const CHART_TOOLTIP_BG = '#f3ede5';
-export const CHART_TOOLTIP_BORDER = '#e0d8cc';
-export const CHART_HOVER_COLOR = '#d0c8bc';
+// Centralized chart UI colors (dark theme)
+export const CHART_GRID_COLOR = '#1a1f30';
+export const CHART_AXIS_COLOR = '#343c50';
+export const CHART_TOOLTIP_BG = '#10131c';
+export const CHART_TOOLTIP_BORDER = '#222840';
+export const CHART_HOVER_COLOR = '#161a25';
 
 export function getChartPaletteColor(index: number): string {
   const paletteLength = CHART_PALETTE.length;
