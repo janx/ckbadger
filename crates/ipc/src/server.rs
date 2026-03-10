@@ -73,11 +73,31 @@ impl IpcServer {
 
             tokio::spawn(async move {
                 if let Err(e) = handle_connection(stream, handler).await {
-                    warn!("IPC connection error: {:#}", e);
+                    if is_client_gone(&e) {
+                        debug!("IPC client disconnected: {:#}", e);
+                    } else {
+                        warn!("IPC connection error: {:#}", e);
+                    }
                 }
             });
         }
     }
+}
+
+/// Check if the error is caused by the client disconnecting (broken pipe or
+/// connection reset). This is normal during shutdown when child processes are
+/// killed before their IPC responses are written.
+fn is_client_gone(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| {
+                matches!(
+                    io_err.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                )
+            })
+    })
 }
 
 async fn handle_connection(
