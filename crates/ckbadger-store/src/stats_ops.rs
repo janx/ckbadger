@@ -1201,6 +1201,8 @@ mod daily_activity_stats_tests {
             token_count: 50,
             object_count: 20,
             identity_count: 5,
+            script_call_count: 0,
+            unknown_count: 0,
             coinbase_count: 8640,
             unique_address_count: 500,
             total_ckb_moved: 100_000_000_000_000,

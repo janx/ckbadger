@@ -1131,6 +1131,7 @@ mod tests {
             ckb_delta: delta,
             occupied_delta: 0,
             is_cellbase: tx_idx == 0,
+            has_type_script: false,
             asset_changes: vec![],
             peers: vec![],
         }
@@ -1463,6 +1464,7 @@ mod tests {
             ckb_delta: 1,
             occupied_delta: 0,
             is_cellbase: false,
+            has_type_script: false,
             asset_changes: vec![],
             peers: vec![],
         };
@@ -1475,6 +1477,7 @@ mod tests {
             ckb_delta: 2,
             occupied_delta: 0,
             is_cellbase: false,
+            has_type_script: false,
             asset_changes: vec![],
             peers: vec![],
         };

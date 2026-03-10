@@ -529,6 +529,7 @@ mod tests {
                 ckb_delta: 500_00000000,
                 occupied_delta: 0,
                 is_cellbase: false,
+                has_type_script: false,
                 asset_changes: vec![],
                 peers: vec![],
             },

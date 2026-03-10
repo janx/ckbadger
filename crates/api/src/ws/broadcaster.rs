@@ -307,6 +307,9 @@ fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager
                                 ckbadger_store::types::AssetChange::DaoWithdrawComplete { capacity, compensation } => {
                                     serde_json::json!({"type": "daoWithdrawComplete", "capacity": capacity.to_string(), "compensation": compensation.to_string()})
                                 },
+                                ckbadger_store::types::AssetChange::ScriptCall { type_code_hash } => {
+                                    serde_json::json!({"type": "scriptCall", "typeCodeHash": format!("0x{}", hex::encode(type_code_hash))})
+                                },
                             }
                         }).collect::<Vec<_>>(),
                         "peers": item.entry.peers.iter().map(|h| format!("0x{}", hex::encode(h))).collect::<Vec<_>>(),

@@ -83,6 +83,8 @@ pub enum AssetChangeResponse {
         capacity: String,
         compensation: String,
     },
+    #[serde(rename = "scriptCall", rename_all = "camelCase")]
+    ScriptCall { type_code_hash: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +170,9 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
         } => AssetChangeResponse::DaoWithdrawComplete {
             capacity: capacity.to_string(),
             compensation: compensation.to_string(),
+        },
+        AssetChange::ScriptCall { type_code_hash } => AssetChangeResponse::ScriptCall {
+            type_code_hash: format!("0x{}", hex::encode(type_code_hash)),
         },
     }
 }
@@ -426,6 +431,7 @@ mod tests {
             ckb_delta: 0,
             occupied_delta: 0,
             is_cellbase: false,
+            has_type_script: false,
             asset_changes: vec![],
             peers: vec![],
         }

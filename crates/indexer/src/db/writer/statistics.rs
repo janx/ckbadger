@@ -571,6 +571,9 @@ impl BatchWriter {
                 AssetChange::Identity { .. } => {
                     has_identity = true;
                 }
+                AssetChange::ScriptCall { .. } => {
+                    stats.script_call_count += 1;
+                }
             }
         }
 
@@ -1529,6 +1532,7 @@ mod activity_stats_tests {
             ckb_delta,
             occupied_delta: 0,
             is_cellbase,
+            has_type_script: false,
             asset_changes: changes,
             peers: vec![],
         }

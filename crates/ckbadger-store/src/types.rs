@@ -866,6 +866,9 @@ pub struct ActivityEntry {
     /// Net occupied capacity change in shannons.
     pub occupied_delta: i64,
     pub is_cellbase: bool,
+    /// Whether any cell for this owner in the transaction had a type script.
+    #[serde(default)]
+    pub has_type_script: bool,
     pub asset_changes: Vec<AssetChange>,
     /// Lock hashes of other parties in this transaction.
     pub peers: Vec<Vec<u8>>,
@@ -911,6 +914,9 @@ pub enum AssetChange {
         capacity: i64,
         compensation: i64,
     },
+    ScriptCall {
+        type_code_hash: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -947,6 +953,12 @@ pub struct DailyActivityStats {
     /// Identity activities (.bit + did:ckb)
     #[serde(default)]
     pub identity_count: u32,
+    /// Activities involving unrecognized type scripts
+    #[serde(default)]
+    pub script_call_count: u32,
+    /// Fallback — should always be 0; non-zero indicates a classification bug
+    #[serde(default)]
+    pub unknown_count: u32,
     /// Coinbase (miner reward) activities
     pub coinbase_count: u32,
     /// Number of unique addresses active this day
@@ -1251,6 +1263,7 @@ mod tests {
             ckb_delta: -500_00000000,
             occupied_delta: 610_000_000_000,
             is_cellbase: false,
+            has_type_script: false,
             asset_changes: vec![
                 AssetChange::Token {
                     type_script_hash: vec![0xAA; 32],
@@ -1287,6 +1300,7 @@ mod tests {
             ckb_delta: 0,
             occupied_delta: 0,
             is_cellbase: true,
+            has_type_script: false,
             asset_changes: vec![
                 AssetChange::Token {
                     type_script_hash: vec![0xAA; 32],
@@ -1313,12 +1327,15 @@ mod tests {
                     capacity: 700,
                     compensation: 42,
                 },
+                AssetChange::ScriptCall {
+                    type_code_hash: vec![0xDD; 32],
+                },
             ],
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.asset_changes.len(), 6);
+        assert_eq!(decoded.asset_changes.len(), 7);
         assert!(decoded.is_cellbase);
         assert!(decoded.peers.is_empty());
 
@@ -1355,6 +1372,7 @@ mod tests {
             ckb_delta: 0,
             occupied_delta: 0,
             is_cellbase: false,
+            has_type_script: false,
             asset_changes: vec![],
             peers: vec![],
         };
@@ -1363,6 +1381,35 @@ mod tests {
         assert_eq!(decoded.ckb_delta, 0);
         assert!(decoded.asset_changes.is_empty());
         assert!(decoded.peers.is_empty());
+    }
+
+    #[test]
+    fn test_activity_entry_script_call_roundtrip() {
+        let entry = ActivityEntry {
+            tx_hash: vec![0x10; 32],
+            block_hash: vec![0xF0; 32],
+            block_number: 500,
+            tx_index: 1,
+            timestamp: 1_700_000_000,
+            ckb_delta: -100_00000000,
+            occupied_delta: 0,
+            is_cellbase: false,
+            has_type_script: true,
+            asset_changes: vec![AssetChange::ScriptCall {
+                type_code_hash: vec![0xDD; 32],
+            }],
+            peers: vec![vec![0xEE; 32]],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
+        assert!(decoded.has_type_script);
+        assert_eq!(decoded.asset_changes.len(), 1);
+        match &decoded.asset_changes[0] {
+            AssetChange::ScriptCall { type_code_hash } => {
+                assert_eq!(type_code_hash, &vec![0xDD; 32]);
+            }
+            _ => panic!("expected ScriptCall variant"),
+        }
     }
 
     // ---- ObjectStandard ----

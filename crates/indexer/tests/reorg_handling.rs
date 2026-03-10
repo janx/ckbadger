@@ -346,6 +346,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             ckb_delta: block as i128 * 100_000_000,
             occupied_delta: 0,
             is_cellbase: false,
+            has_type_script: false,
             asset_changes: vec![],
             peers: vec![],
         };

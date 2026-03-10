@@ -6247,6 +6247,7 @@ async fn test_address_activities_reads_from_derived_store() {
         ckb_delta: 100,
         occupied_delta: 50,
         is_cellbase: false,
+        has_type_script: false,
         asset_changes: vec![],
         peers: vec![],
     };

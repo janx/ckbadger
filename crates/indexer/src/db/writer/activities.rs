@@ -320,6 +320,7 @@ fn build_tx_activities(
             ckb_delta,
             occupied_delta,
             is_cellbase: tx.is_cellbase,
+            has_type_script: false, // TODO: set correctly in Task 3
             asset_changes,
             peers,
         };
