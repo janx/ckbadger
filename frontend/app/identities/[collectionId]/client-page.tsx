@@ -90,7 +90,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
         search: searchKeyword || undefined,
         status: statusFilter,
       }),
-    enabled: !!collection,
+    enabled: !!collection && activeTab === 'identities',
     placeholderData: keepPreviousData,
   });
   // Fetch collection holders

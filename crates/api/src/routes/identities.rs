@@ -10,11 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::assets::{
-    count_nft_collection_activities_cached, decode_activity_cursor, decode_nft_item_cursor,
-    list_canonical_nft_collection_activities_page, list_identity_items_inner,
-    normalize_nft_activity_action_filter, normalize_nft_items_search, normalize_nft_items_status,
-    NftCollectionActivitiesParams, NftCollectionActivityResponse, NftCollectionHolderResponse,
-    NftCollectionItemResponse, NftItemsParams,
+    decode_activity_cursor, decode_nft_item_cursor, list_canonical_nft_collection_activities_page,
+    list_identity_items_inner, normalize_nft_activity_action_filter, normalize_nft_items_search,
+    normalize_nft_items_status, NftCollectionActivitiesParams, NftCollectionActivityResponse,
+    NftCollectionHolderResponse, NftCollectionItemResponse, NftItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
@@ -79,16 +78,9 @@ async fn get_identity_collection(
         )));
     }
 
-    let activities_count = count_nft_collection_activities_cached(
-        state.store.as_ref(),
-        state.append_only_store.as_ref(),
-        &state.mem_cache,
-        &collection_id_bytes,
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?;
-
     let standard = agg.standard.asset_standard().to_string();
     let name = agg.name;
+    let activities_count = agg.activities_count;
 
     ok(IdentityCollectionDetailResponse {
         collection_id: format!("0x{}", hex::encode(&collection_id_bytes)),
