@@ -88,9 +88,13 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
         Activity Breakdown
       </TerminalPanelHeader>
       <TerminalPanelContent>
-        {isLoading || !today ? (
+        {isLoading ? (
           <div className="flex h-full items-center justify-center py-8">
             <div className="bg-base-elevated h-32 w-32 animate-pulse rounded-full" />
+          </div>
+        ) : !today ? (
+          <div className="flex h-full items-center justify-center py-8">
+            <span className="text-text-muted font-mono text-xs">No activity data yet</span>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-4">
