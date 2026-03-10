@@ -3776,18 +3776,32 @@ impl Indexer {
                                 true,
                             )?;
                         }
-                        let commit_ms = commit_phase_no_wal(
-                            "T1_cells_domain",
-                            first_block,
-                            last_block,
-                            domain_batch,
-                        )?;
-                        let cells_commit_ms = commit_phase_no_wal(
-                            "T1_cells_append",
-                            first_block,
-                            last_block,
-                            cells_batch,
-                        )?;
+                        // Commit domain and append-only batches in parallel
+                        // (different RocksDB instances, no data dependency).
+                        let (domain_result, append_result) = std::thread::scope(|cs| {
+                            let hd = cs.spawn(|| {
+                                commit_phase_no_wal(
+                                    "T1_cells_domain",
+                                    first_block,
+                                    last_block,
+                                    domain_batch,
+                                )
+                            });
+                            let ha = cs.spawn(|| {
+                                commit_phase_no_wal(
+                                    "T1_cells_append",
+                                    first_block,
+                                    last_block,
+                                    cells_batch,
+                                )
+                            });
+                            (
+                                hd.join().expect("T1 domain commit panicked"),
+                                ha.join().expect("T1 append commit panicked"),
+                            )
+                        });
+                        let commit_ms = domain_result?;
+                        let cells_commit_ms = append_result?;
                         Ok((
                             t.elapsed().as_secs_f64() * 1000.0,
                             commit_ms + cells_commit_ms,
