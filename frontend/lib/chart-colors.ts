@@ -1,28 +1,28 @@
-export const CHART_PRIMARY_COLOR = '#ff6b9d'; // Citypop pink
-export const CHART_SECONDARY_COLOR = '#4dd0c8'; // Teal
-export const CHART_TERTIARY_COLOR = '#ff8c42'; // Citypop orange
+export const CHART_PRIMARY_COLOR = '#4a8c5c'; // 竹青
+export const CHART_SECONDARY_COLOR = '#1e7a6a'; // 石绿
+export const CHART_TERTIARY_COLOR = '#b88420'; // 琥珀
 
 export const CHART_PALETTE = [
-  '#ff6b9d', // Citypop pink
-  '#4dd0c8', // Teal
-  '#ff8c42', // Orange
-  '#b07cff', // Violet
-  '#64b5f6', // Sky blue
-  '#ffe066', // Warm yellow
-  '#ff4081', // Hot pink
-  '#78edd8', // Bright teal
-  '#d4a0ff', // Light violet
-  '#ffb070', // Light coral
-  '#80cbc4', // Muted teal
-  '#706068', // Muted
+  '#4a8c5c', // 竹青
+  '#1e7a6a', // 石绿
+  '#3a6ea0', // 靛蓝
+  '#b88420', // 琥珀
+  '#c04040', // 朱砂
+  '#d4a828', // 藤黄
+  '#b84060', // 胭脂
+  '#7a5090', // 紫檀
+  '#68a8b8', // 月白
+  '#a06830', // 赭石
+  '#4a5868', // 黛色
+  '#8ab870', // 豆绿
 ] as const;
 
 // Centralized chart UI colors
-export const CHART_GRID_COLOR = '#1e1a2a';
-export const CHART_AXIS_COLOR = '#453d42';
-export const CHART_TOOLTIP_BG = '#110e1a';
-export const CHART_TOOLTIP_BORDER = '#1e1a2a';
-export const CHART_HOVER_COLOR = '#453d42';
+export const CHART_GRID_COLOR = '#e0d8cc';
+export const CHART_AXIS_COLOR = '#b0a898';
+export const CHART_TOOLTIP_BG = '#f3ede5';
+export const CHART_TOOLTIP_BORDER = '#e0d8cc';
+export const CHART_HOVER_COLOR = '#d0c8bc';
 
 export function getChartPaletteColor(index: number): string {
   const paletteLength = CHART_PALETTE.length;
