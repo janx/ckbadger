@@ -21,7 +21,7 @@ export function Header() {
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <header className="border-base-border/80 bg-base-bg/85 sticky top-0 z-40 overflow-visible border-b backdrop-blur-md">
+    <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm">
       <div className="container relative mx-auto flex h-16 items-center justify-between gap-4 px-4">
         <Logo />
 
@@ -38,8 +38,8 @@ export function Header() {
               href={link.href}
               className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                 isLinkActive(link.href)
-                  ? 'border-interactive/50 bg-interactive/12 text-interactive shadow-[inset_0_0_0_1px_rgba(0,215,235,0.18)]'
-                  : 'text-text-secondary/85 hover:border-base-border/80 hover:bg-base-elevated/35 hover:text-text-primary border-transparent'
+                  ? 'border-amber/40 bg-amber/8 text-amber'
+                  : 'text-text-muted hover:text-text-secondary border-transparent'
               }`}
             >
               {link.label}
@@ -78,7 +78,7 @@ export function Header() {
       </div>
 
       {isMenuOpen && (
-        <div className="border-base-border/80 bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-md md:hidden">
+        <div className="border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm md:hidden">
           <nav className="container mx-auto px-4 py-4">
             <div className="mb-4">
               <SearchBar variant={isHomePage ? 'home' : 'compact'} />
@@ -90,8 +90,8 @@ export function Header() {
                 onClick={() => setIsMenuOpen(false)}
                 className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                   isLinkActive(link.href)
-                    ? 'border-interactive/50 bg-interactive/12 text-interactive'
-                    : 'text-text-secondary/85 hover:border-base-border/80 hover:bg-base-elevated/35 hover:text-text-primary border-transparent'
+                    ? 'border-amber/40 bg-amber/8 text-amber'
+                    : 'text-text-muted hover:text-text-secondary border-transparent'
                 }`}
               >
                 {link.label}

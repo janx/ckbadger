@@ -9,7 +9,7 @@ export function SiteFooter() {
   return (
     <footer className="border-base-border bg-base-bg/95 border-t">
       <div className="container mx-auto px-4 py-1.5">
-        <div className="from-base-elevated/75 via-base-bg to-base-bg text-text-muted rounded-xl bg-gradient-to-br px-4 py-2 font-mono text-xs sm:px-5">
+        <div className="bg-base-surface text-text-muted rounded-xl px-4 py-2 font-mono text-xs sm:px-5">
           <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-text-muted text-[11px] leading-snug">
               Built by{' '}
@@ -17,7 +17,7 @@ export function SiteFooter() {
                 href="https://x.com/busyforking"
                 target="_blank"
                 rel="noreferrer"
-                className="text-interactive hover:underline"
+                className="text-amber hover:underline"
               >
                 @busyforking
               </a>{' '}
