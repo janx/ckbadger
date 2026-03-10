@@ -475,6 +475,21 @@ interface DailyActivityStats {
   scriptCounts: ScriptCountEntry[];
 }
 
+interface ActivitySummary24h {
+  transferCount: number;
+  daoDepositCount: number;
+  daoWithdrawRequestCount: number;
+  daoWithdrawCompleteCount: number;
+  tokenCount: number;
+  objectCount: number;
+  identityCount: number;
+  coinbaseCount: number;
+  uniqueAddressCount: number;
+  totalCkbMoved: string;
+  scriptCounts: ScriptCountEntry[];
+  hoursCovered: number;
+}
+
 interface GraphNode {
   id: string;
   nodeType: string;
@@ -1306,6 +1321,7 @@ export type {
   GlobalActivity,
   ScriptCountEntry,
   DailyActivityStats,
+  ActivitySummary24h,
 };
 
 export const api = {
@@ -1432,6 +1448,10 @@ export const api = {
 
   getDailyActivityStats: (days: number = 30): Promise<DailyActivityStats[]> => {
     return fetchApi(`/stats/daily-activities?days=${days}`);
+  },
+
+  getActivitySummary24h: (): Promise<ActivitySummary24h> => {
+    return fetchApi('/stats/activity-summary-24h');
   },
 
   getLiveCells: (params: CellQueryParams = {}): Promise<CursorPaginatedResponse<Cell>> => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { api, type DailyActivityStats } from '@/lib/api';
+import { api, type ActivitySummary24h } from '@/lib/api';
 import { PieChart } from '@/components/ui/pie-chart';
 import {
   TerminalPanel,
@@ -23,7 +23,7 @@ const ACTIVITY_COLORS: Record<string, string> = {
   Identity: '#2dd4bf',
 };
 
-function buildChartData(stats: DailyActivityStats) {
+function buildChartData(stats: ActivitySummary24h) {
   return [
     { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_COLORS.Transfer },
     { label: 'DAO Deposit', value: stats.daoDepositCount, color: ACTIVITY_COLORS['DAO Deposit'] },
@@ -51,7 +51,7 @@ const SCRIPT_COLORS = [
   '#6366f1',
 ];
 
-function buildScriptChartData(stats: DailyActivityStats) {
+function buildScriptChartData(stats: ActivitySummary24h) {
   return stats.scriptCounts
     .filter((s) => s.count > 0)
     .sort((a, b) => b.count - a.count)
@@ -63,36 +63,35 @@ function buildScriptChartData(stats: DailyActivityStats) {
 }
 
 export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps) {
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ['daily-activity-stats-today'],
-    queryFn: () => api.getDailyActivityStats(1),
+  const { data: summary, isLoading } = useQuery({
+    queryKey: ['activity-summary-24h'],
+    queryFn: () => api.getActivitySummary24h(),
     refetchInterval: 30000,
   });
 
-  const today = stats?.[0];
-  const chartData = today ? buildChartData(today) : [];
-  const scriptChartData = today ? buildScriptChartData(today) : [];
-  const totalActivities = today
-    ? today.transferCount +
-      today.daoDepositCount +
-      today.daoWithdrawRequestCount +
-      today.daoWithdrawCompleteCount +
-      today.tokenCount +
-      today.objectCount +
-      today.identityCount
+  const chartData = summary ? buildChartData(summary) : [];
+  const scriptChartData = summary ? buildScriptChartData(summary) : [];
+  const totalActivities = summary
+    ? summary.transferCount +
+      summary.daoDepositCount +
+      summary.daoWithdrawRequestCount +
+      summary.daoWithdrawCompleteCount +
+      summary.tokenCount +
+      summary.objectCount +
+      summary.identityCount
     : 0;
 
   return (
     <TerminalPanel variant="default" glow={isRealtime}>
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'}>
-        Activity Breakdown
+        Activity Breakdown (24h)
       </TerminalPanelHeader>
       <TerminalPanelContent>
         {isLoading ? (
           <div className="flex h-full items-center justify-center py-8">
             <div className="bg-base-elevated h-32 w-32 animate-pulse rounded-full" />
           </div>
-        ) : !today ? (
+        ) : !summary ? (
           <div className="flex h-full items-center justify-center py-8">
             <span className="text-text-muted font-mono text-xs">No activity data yet</span>
           </div>
@@ -101,10 +100,10 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
             <PieChart data={chartData} size={200} formatValue={(v) => v.toLocaleString()} />
             <div className="grid w-full grid-cols-3 gap-x-4 gap-y-2">
               <StatItem label="Activities" value={totalActivities.toLocaleString()} />
-              <StatItem label="Addresses" value={today.uniqueAddressCount.toLocaleString()} />
+              <StatItem label="Addresses" value={summary.uniqueAddressCount.toLocaleString()} />
               <StatItem
                 label="Volume"
-                value={formatCkbCompact(today.totalCkbMoved).value + ' CKB'}
+                value={formatCkbCompact(summary.totalCkbMoved).value + ' CKB'}
               />
             </div>
             {scriptChartData.length > 0 && (
