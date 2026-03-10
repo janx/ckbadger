@@ -484,6 +484,71 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    // ---- Hourly activity stats ----
+
+    pub fn put_hourly_activity_stats(
+        &self,
+        hour_key: &str, // "YYYYMMDDHH"
+        stats: &DailyActivityStats,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
+        let value = bincode::serialize(stats)?;
+        self.put_cf(self.cf_stats_chain(), &key, &value)
+    }
+
+    pub fn get_hourly_activity_stats(
+        &self,
+        hour_key: &str,
+    ) -> anyhow::Result<Option<DailyActivityStats>> {
+        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
+        match self.get_cf(self.cf_stats_chain(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// List hourly activity stats from `since_hour` (inclusive) onwards.
+    /// `since_hour` is a "YYYYMMDDHH" string.
+    pub fn list_hourly_activity_stats_since(
+        &self,
+        since_hour: &str,
+    ) -> anyhow::Result<Vec<(String, DailyActivityStats)>> {
+        let start_key =
+            keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, since_hour.as_bytes());
+        let prefix = [keys::stats_prefix::ACTIVITY_HOURLY];
+        let iter = self.iterator_cf(
+            self.cf_stats_chain(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_chain in list_hourly_activity_stats_since: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let hour_bytes = &key[1..];
+            let hour_str = std::str::from_utf8(hour_bytes)
+                .map_err(|e| {
+                    anyhow::anyhow!("invalid UTF-8 hour in hourly activity stats key: {}", e)
+                })?
+                .to_string();
+            let stats: DailyActivityStats = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize hourly activity stats: hour={}, error={}",
+                    hour_str,
+                    e
+                )
+            })?;
+            results.push((hour_str, stats));
+        }
+        Ok(results)
+    }
+
     // ---- Script daily deltas ----
 
     pub fn get_script_daily_delta(
@@ -1169,5 +1234,63 @@ mod daily_activity_stats_tests {
         assert_eq!(all[0].1.transfer_count, 10);
         assert_eq!(all[1].0, "20260309");
         assert_eq!(all[1].1.transfer_count, 20);
+    }
+
+    #[test]
+    fn test_get_hourly_activity_stats_missing_returns_none() {
+        let (_dir, store) = open_test_store();
+        let result = store.get_hourly_activity_stats("2026030912").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_put_and_get_hourly_activity_stats_roundtrip() {
+        let (_dir, store) = open_test_store();
+        let stats = DailyActivityStats {
+            transfer_count: 42,
+            total_ckb_moved: 100_00000000,
+            unique_address_count: 5,
+            ..Default::default()
+        };
+        store
+            .put_hourly_activity_stats("2026030912", &stats)
+            .unwrap();
+        let got = store
+            .get_hourly_activity_stats("2026030912")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.transfer_count, 42);
+        assert_eq!(got.total_ckb_moved, 100_00000000);
+        assert_eq!(got.unique_address_count, 5);
+    }
+
+    #[test]
+    fn test_list_hourly_activity_stats_since_returns_range() {
+        let (_dir, store) = open_test_store();
+        let s1 = DailyActivityStats {
+            transfer_count: 10,
+            ..Default::default()
+        };
+        let s2 = DailyActivityStats {
+            transfer_count: 20,
+            ..Default::default()
+        };
+        let s3 = DailyActivityStats {
+            transfer_count: 30,
+            ..Default::default()
+        };
+        store.put_hourly_activity_stats("2026030910", &s1).unwrap();
+        store.put_hourly_activity_stats("2026030911", &s2).unwrap();
+        store.put_hourly_activity_stats("2026030912", &s3).unwrap();
+
+        // Query from hour 11 onwards
+        let results = store
+            .list_hourly_activity_stats_since("2026030911")
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, "2026030911");
+        assert_eq!(results[0].1.transfer_count, 20);
+        assert_eq!(results[1].0, "2026030912");
+        assert_eq!(results[1].1.transfer_count, 30);
     }
 }
