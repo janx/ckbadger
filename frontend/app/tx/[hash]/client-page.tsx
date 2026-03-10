@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -24,7 +23,6 @@ import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 import { analyzeWitness, buildScriptGroupLens } from '@/lib/witness-analysis';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
-
 type TxGraphView = 'flow' | 'graph';
 const SECTION_TAB_VALUES = ['io', 'scripts', 'celldeps', 'graph'] as const;
 type SectionTab = (typeof SECTION_TAB_VALUES)[number];
@@ -34,7 +32,6 @@ const SECTION_TAB_TITLES: Record<SectionTab, string> = {
   celldeps: 'Cell Deps',
   graph: 'Graph',
 };
-
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => (
     <div className="border-base-border/70 bg-base-surface/70 flex h-[240px] items-center justify-center rounded border">
@@ -42,7 +39,6 @@ const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
     </div>
   ),
 });
-
 const WITNESS_BYTES_PER_ROW = 24;
 const EMPTY_WITNESSES: string[] = [];
 const WITNESS_SEGMENT_TONES = [
@@ -91,15 +87,12 @@ const WITNESS_SEGMENT_TONES = [
       'rounded-sm bg-[#9a5090]/30 text-[#6a3060] shadow-[inset_0_0_0_1px_rgba(154,80,144,0.5)]',
   },
 ] as const;
-
 function getWitnessSegmentTone(segmentIndex: number) {
   return WITNESS_SEGMENT_TONES[Math.abs(segmentIndex) % WITNESS_SEGMENT_TONES.length];
 }
-
 function getPreferredSegmentLabelsByScriptGroupKind(kind: 'lock' | 'type'): string[] {
   return kind === 'lock' ? ['lock'] : ['inputType', 'outputType'];
 }
-
 function findPreferredSegmentIndex(
   kind: 'lock' | 'type',
   segments: Array<{ label: string }>
@@ -110,26 +103,21 @@ function findPreferredSegmentIndex(
   );
   return index >= 0 ? index : null;
 }
-
 function isSectionTabValue(value: string | null): value is SectionTab {
   return value !== null && (SECTION_TAB_VALUES as readonly string[]).includes(value);
 }
-
 function parseNonNegativeInt(value: string | null): number | null {
   if (value === null || !/^\d+$/.test(value)) return null;
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) return null;
   return parsed;
 }
-
 function normalizeScriptHashType(hashType: string | undefined): string {
   return hashType ?? 'unknown';
 }
-
 function normalizeScriptArgs(args: string | undefined): string {
   return args ?? '0x';
 }
-
 function getErrorMessage(error: unknown): string | null {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message.trim();
@@ -139,7 +127,6 @@ function getErrorMessage(error: unknown): string | null {
   }
   return null;
 }
-
 export default function TransactionDetailPage() {
   const params = useParams();
   const pathname = usePathname();
@@ -150,7 +137,6 @@ export default function TransactionDetailPage() {
   const [activeSectionTab, setActiveSectionTab] = useState<SectionTab>(() =>
     isSectionTabValue(tabFromQuery) ? tabFromQuery : 'io'
   );
-
   const {
     data: tx,
     isLoading,
@@ -161,32 +147,27 @@ export default function TransactionDetailPage() {
   });
   const errorMessage = getErrorMessage(error);
   const isNotFoundError = errorMessage?.startsWith('API error: 404') ?? false;
-
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
     tx?.cycles,
     tx?.isCellbase ?? false
   );
-
   const { data: graphData } = useQuery({
     queryKey: ['txGraph', hash],
     queryFn: () => api.getTransactionGraph(hash),
     enabled: !!hash,
   });
   const [txGraphView, setTxGraphView] = useState<TxGraphView>('flow');
-
   const { data: cellDeps, isLoading: cellDepsLoading } = useQuery({
     queryKey: ['txCellDeps', hash],
     queryFn: () => api.getTransactionCellDeps(hash),
     enabled: !!hash,
   });
-
   const { data: lifecycle } = useQuery({
     queryKey: ['txLifecycle', hash],
     queryFn: () => api.getTransactionLifecycle(hash),
     enabled: !!hash && !!tx && !tx.isCellbase,
   });
-
   const codeHashes = useMemo(() => {
     if (!tx) return [];
     const hashes = new Set<string>();
@@ -200,14 +181,12 @@ export default function TransactionDetailPage() {
     });
     return Array.from(hashes);
   }, [tx]);
-
   const { data: scriptLookup } = useQuery({
     queryKey: ['scriptLookup', codeHashes],
     queryFn: () => api.lookupScripts(codeHashes),
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
   });
-
   const graphInsights = useMemo(() => {
     if (!graphData) {
       return {
@@ -223,14 +202,12 @@ export default function TransactionDetailPage() {
         graphHeight: 240,
       };
     }
-
     const inputLinkCount = graphData.links.filter(
       (link) => link.linkType === 'input' || link.linkType === 'consumed_by'
     ).length;
     const outputLinkCount = graphData.links.filter(
       (link) => link.linkType === 'output' || link.linkType === 'creates'
     ).length;
-
     const outputNodes = graphData.nodes
       .filter(
         (node) =>
@@ -244,12 +221,10 @@ export default function TransactionDetailPage() {
         capacity: node.data?.capacity ?? null,
       }))
       .sort((a, b) => a.outputIndex - b.outputIndex);
-
     const graphHeight = Math.min(
       340,
       Math.max(220, 200 + graphData.nodes.length * 10 + graphData.links.length * 6)
     );
-
     return {
       nodeCount: graphData.nodes.length,
       linkCount: graphData.links.length,
@@ -259,7 +234,6 @@ export default function TransactionDetailPage() {
       graphHeight,
     };
   }, [graphData, hash]);
-
   const handleGraphNodeClick = (node: GraphNode) => {
     if (node.nodeType === 'transaction' && node.data?.hash) {
       router.push(`/tx/${node.data.hash}`);
@@ -271,21 +245,18 @@ export default function TransactionDetailPage() {
       router.push(`/cell/${node.data.txHash}-${node.data.outputIndex}`);
     }
   };
-
   useEffect(() => {
     const nextTab = isSectionTabValue(tabFromQuery) ? tabFromQuery : 'io';
     if (nextTab !== activeSectionTab) {
       setActiveSectionTab(nextTab);
     }
   }, [activeSectionTab, tabFromQuery]);
-
   const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     mutator(nextParams);
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
   };
-
   const handleSectionTabChange = (nextValue: string) => {
     if (!isSectionTabValue(nextValue)) return;
     setActiveSectionTab(nextValue);
@@ -297,7 +268,6 @@ export default function TransactionDetailPage() {
       }
     });
   };
-
   const clearLinkedWitnessSelection = () => {
     setLinkedWitnessIndex(null);
     setLinkedScriptGroupKey(null);
@@ -306,7 +276,6 @@ export default function TransactionDetailPage() {
       nextParams.delete('wg');
     });
   };
-
   const selectedWitnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
   const selectedScriptGroupFromQuery = searchParams.get('wg');
   const [linkedWitnessIndex, setLinkedWitnessIndex] = useState<number | null>(
@@ -315,17 +284,14 @@ export default function TransactionDetailPage() {
   const [linkedScriptGroupKey, setLinkedScriptGroupKey] = useState<string | null>(
     selectedScriptGroupFromQuery
   );
-
   useEffect(() => {
     setLinkedWitnessIndex(selectedWitnessFromQuery);
     setLinkedScriptGroupKey(selectedScriptGroupFromQuery);
   }, [hash, selectedScriptGroupFromQuery, selectedWitnessFromQuery]);
-
   const ioHighlightState = useMemo(() => {
     const highlightedInputIndices = new Set<number>();
     const highlightedOutputIndices = new Set<number>();
     if (!tx) return { highlightedInputIndices, highlightedOutputIndices };
-
     const groups = buildScriptGroupLens(tx);
     const focusedGroup =
       linkedScriptGroupKey !== null
@@ -337,17 +303,14 @@ export default function TransactionDetailPage() {
         : linkedWitnessIndex !== null
           ? groups.filter((group) => group.witnessIndex === linkedWitnessIndex)
           : [];
-
     associatedGroups.forEach((group) => {
       group.inputIndices.forEach((inputIndex) => highlightedInputIndices.add(inputIndex));
     });
-
     if (associatedGroups.length === 0 && linkedWitnessIndex !== null && tx.inputs) {
       if (linkedWitnessIndex >= 0 && linkedWitnessIndex < tx.inputs.length) {
         highlightedInputIndices.add(linkedWitnessIndex);
       }
     }
-
     if (associatedGroups.length > 0 && tx.outputs) {
       tx.outputs.forEach((output, outputIndex) => {
         const isLinked = associatedGroups.some((group) => {
@@ -362,10 +325,8 @@ export default function TransactionDetailPage() {
         if (isLinked) highlightedOutputIndices.add(outputIndex);
       });
     }
-
     return { highlightedInputIndices, highlightedOutputIndices };
   }, [linkedScriptGroupKey, linkedWitnessIndex, tx]);
-
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -380,7 +341,6 @@ export default function TransactionDetailPage() {
       </div>
     );
   }
-
   if (error || !tx) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -400,7 +360,6 @@ export default function TransactionDetailPage() {
       </div>
     );
   }
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -410,7 +369,6 @@ export default function TransactionDetailPage() {
           hash={tx.hash}
           badge={<Badge variant="green">{tx.confirmations.toLocaleString()} Confirmations</Badge>}
         />
-
         <TerminalPanel className="mb-8" glow>
           <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
           <TerminalPanelContent>
@@ -467,11 +425,9 @@ export default function TransactionDetailPage() {
                   </Link>
                 )}
               </DataField>
-
               <DataField label="Timestamp" copyValue={new Date(tx.timestamp).toISOString()}>
                 {new Date(tx.timestamp).toLocaleString()} ({formatTimeAgo(tx.timestamp)})
               </DataField>
-
               <DataField label="Type">
                 {tx.isCellbase ? (
                   <Badge variant="neutral">Cellbase (Mining Reward)</Badge>
@@ -479,7 +435,6 @@ export default function TransactionDetailPage() {
                   <Badge variant="neutral">Normal Transaction</Badge>
                 )}
               </DataField>
-
               <DataField label="Fee">
                 <div className="flex flex-col items-end gap-1">
                   <span className="text-text-primary">
@@ -495,13 +450,11 @@ export default function TransactionDetailPage() {
                   )}
                 </div>
               </DataField>
-
               {tx.txSize && (
                 <DataField label="Size">
                   <UsageBar value={tx.txSize} max={512000} unit="Bytes" />
                 </DataField>
               )}
-
               {!tx.isCellbase && (
                 <DataField label="Cycles">
                   {hasCycles && cycles !== null ? (
@@ -518,14 +471,12 @@ export default function TransactionDetailPage() {
                   )}
                 </DataField>
               )}
-
               <DataField label="Carried Capacity">
                 <Capacity
                   value={(BigInt(tx.outputsCapacity || '0') + BigInt(tx.fee)).toString()}
                   className="text-text-primary"
                 />
               </DataField>
-
               <DataField label="Occupied Capacity Change">
                 {(() => {
                   const inputOccupied = BigInt(tx.inputsOccupiedCapacity || '0');
@@ -564,7 +515,6 @@ export default function TransactionDetailPage() {
             </DataGrid>
           </TerminalPanelContent>
         </TerminalPanel>
-
         <TerminalPanel className="mb-8">
           <Tabs value={activeSectionTab} onValueChange={handleSectionTabChange}>
             <TerminalPanelHeader
@@ -592,15 +542,12 @@ export default function TransactionDetailPage() {
                   onHighlightedItemClick={clearLinkedWitnessSelection}
                 />
               </TabsContent>
-
               <TabsContent value="scripts" className="mt-0 p-0">
                 <ScriptsSummaryTab tx={tx} scriptLookup={scriptLookup} />
               </TabsContent>
-
               <TabsContent value="celldeps" className="mt-0 p-0">
                 <CellDepsTab cellDeps={cellDeps} isLoading={cellDepsLoading} />
               </TabsContent>
-
               <TabsContent
                 value="graph"
                 className="border-base-border/80 bg-base-surface/40 mt-0 rounded border p-4"
@@ -637,7 +584,6 @@ export default function TransactionDetailPage() {
                       </span>
                     )}
                   </div>
-
                   {txGraphView === 'flow' ? (
                     <div data-testid="tx-relationship-flow" className="space-y-3">
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -680,7 +626,6 @@ export default function TransactionDetailPage() {
                           </div>
                         </div>
                       </div>
-
                       <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
                         <div className="text-text-secondary text-xs uppercase tracking-wide">
                           Transaction Flow Snapshot
@@ -713,7 +658,6 @@ export default function TransactionDetailPage() {
             </TerminalPanelContent>
           </Tabs>
         </TerminalPanel>
-
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">
             Witness ({tx.witnesses?.length ?? 0})
@@ -733,28 +677,22 @@ export default function TransactionDetailPage() {
     </div>
   );
 }
-
 interface TabProps {
   tx: NonNullable<Awaited<ReturnType<typeof api.getTransactionDetail>>>;
   scriptLookup?: ScriptLookupResponse;
 }
-
 interface InputsOutputsTabProps extends TabProps {
   highlightedInputIndices?: Set<number>;
   highlightedOutputIndices?: Set<number>;
   onHighlightedItemClick?: () => void;
 }
-
 interface WitnessTabProps extends TabProps {
   onSelectionChange?: (witnessIndex: number | null, groupKey: string | null) => void;
 }
-
 const UNKNOWN_SCRIPT_NAME = 'unknown';
-
 function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
 }
-
 function getScriptHref({
   codeHash,
   hashType,
@@ -771,7 +709,6 @@ function getScriptHref({
   }
   return `/script/${codeHash}?hashType=${encodeURIComponent(getScriptRefQueryHashType(hashType))}&kind=${scriptKind}`;
 }
-
 function ScriptLabel({
   script,
   scriptLookup,
@@ -785,7 +722,6 @@ function ScriptLabel({
   const info = scriptLookup?.[script.codeHash];
   const trimmedScriptName = info?.name?.trim();
   if (!trimmedScriptName || trimmedScriptName.toLowerCase() === UNKNOWN_SCRIPT_NAME) return null;
-
   const label = trimmedScriptName;
   const href = getScriptHref({
     codeHash: script.codeHash,
@@ -793,7 +729,6 @@ function ScriptLabel({
     scriptKind: type,
     scriptName: trimmedScriptName,
   });
-
   return (
     <Link href={href}>
       <Badge variant="neutral" className="hover:opacity-80">
@@ -802,7 +737,6 @@ function ScriptLabel({
     </Link>
   );
 }
-
 function InputsOutputsTab({
   tx,
   scriptLookup,
@@ -851,7 +785,6 @@ function InputsOutputsTab({
                           value={input.previousOutput.txHash}
                           startChars={8}
                           endChars={6}
-                          color="accent"
                           size="sm"
                           copyable={false}
                         />
@@ -881,7 +814,6 @@ function InputsOutputsTab({
           <p className="text-text-muted text-sm">Loading inputs...</p>
         )}
       </div>
-
       <div>
         <h4 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           Outputs ({tx.outputsCount})
@@ -938,7 +870,6 @@ function InputsOutputsTab({
     </div>
   );
 }
-
 function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -947,13 +878,11 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   const witnessesAvailable = tx.witnessesAvailable ?? witnesses.length > 0;
   const witnessFromQuery = parseNonNegativeInt(searchParams.get('witness'));
   const scriptGroupFromQuery = searchParams.get('wg');
-
   const witnessAnalyses = useMemo(
     () => witnesses.map((witness, index) => analyzeWitness(witness, index, tx.inputsCount)),
     [tx.inputsCount, witnesses]
   );
   const scriptGroupLens = useMemo(() => buildScriptGroupLens(tx), [tx]);
-
   const [activeWitnessIndex, setActiveWitnessIndex] = useState<number | null>(
     () => witnessFromQuery
   );
@@ -964,7 +893,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   const [activeScriptGroupKey, setActiveScriptGroupKey] = useState<string | null>(
     () => scriptGroupFromQuery
   );
-
   useEffect(() => {
     setActiveWitnessIndex(witnessFromQuery);
     setHoveredSegmentIndex(null);
@@ -973,14 +901,12 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     setExpandedHeuristicIndex(null);
     setActiveScriptGroupKey(scriptGroupFromQuery);
   }, [scriptGroupFromQuery, tx.hash, witnessFromQuery]);
-
   useEffect(() => {
     setHoveredSegmentIndex(null);
     setPinnedSegmentIndex(null);
     setHoveredByteOffset(null);
     setExpandedHeuristicIndex(null);
   }, [activeWitnessIndex]);
-
   useEffect(() => {
     if (activeWitnessIndex === null) return;
     if (witnessAnalyses.length === 0) {
@@ -990,7 +916,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     if (activeWitnessIndex < witnessAnalyses.length) return;
     setActiveWitnessIndex(witnessAnalyses.length - 1);
   }, [activeWitnessIndex, witnessAnalyses.length]);
-
   useEffect(() => {
     const normalizedGroupKey =
       scriptGroupFromQuery && scriptGroupLens.some((group) => group.key === scriptGroupFromQuery)
@@ -1000,7 +925,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       setActiveScriptGroupKey(normalizedGroupKey);
     }
   }, [activeScriptGroupKey, scriptGroupFromQuery, scriptGroupLens]);
-
   useEffect(() => {
     if (activeScriptGroupKey === null) return;
     const linkedGroup = scriptGroupLens.find((group) => group.key === activeScriptGroupKey);
@@ -1009,7 +933,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       setActiveWitnessIndex(linkedGroup.witnessIndex);
     }
   }, [activeScriptGroupKey, activeWitnessIndex, scriptGroupLens]);
-
   const activeWitness =
     activeWitnessIndex !== null ? (witnessAnalyses[activeWitnessIndex] ?? null) : null;
   const activeScriptGroup =
@@ -1017,7 +940,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       ? (scriptGroupLens.find((group) => group.key === activeScriptGroupKey) ?? null)
       : null;
   const activeDeterministic = activeWitness?.deterministic ?? null;
-
   const syncWitnessQuery = (nextWitnessIndex: number | null, nextGroupKey: string | null) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     if (nextWitnessIndex === null) {
@@ -1034,7 +956,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
   };
-
   useEffect(() => {
     if (!activeScriptGroup || !activeDeterministic) return;
     if (activeWitnessIndex === null || activeScriptGroup.witnessIndex !== activeWitnessIndex)
@@ -1047,7 +968,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     setPinnedSegmentIndex(preferredSegmentIndex);
     setHoveredSegmentIndex(null);
   }, [activeScriptGroup, activeDeterministic, activeWitnessIndex]);
-
   if (!witnessesAvailable && witnessAnalyses.length === 0) {
     return (
       <div className="p-4" data-testid="tx-witness-tab">
@@ -1058,7 +978,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       </div>
     );
   }
-
   if (witnessAnalyses.length === 0) {
     return (
       <div className="p-4" data-testid="tx-witness-tab">
@@ -1068,12 +987,10 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       </div>
     );
   }
-
   const deterministicAnalysis = activeDeterministic;
   const heuristicGuesses = activeWitness?.heuristicGuesses ?? [];
   const dataSegments = deterministicAnalysis?.segments ?? [];
   const segmentOffsetMap = new Array<number>(activeWitness?.previewBytes ?? 0).fill(-1);
-
   dataSegments.forEach((segment, segmentIndex) => {
     const start = Math.max(0, segment.start);
     const end = Math.min(activeWitness?.previewBytes ?? 0, segment.end);
@@ -1081,7 +998,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       segmentOffsetMap[offset] = segmentIndex;
     }
   });
-
   const focusedSegmentIndex =
     pinnedSegmentIndex !== null ? pinnedSegmentIndex : hoveredSegmentIndex;
   const activeSegment =
@@ -1110,14 +1026,12 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       truncated: true,
     };
   })();
-
   const rows = [];
   if (activeWitness) {
     for (let i = 0; i < activeWitness.previewHex.length; i += WITNESS_BYTES_PER_ROW * 2) {
       rows.push(activeWitness.previewHex.slice(i, i + WITNESS_BYTES_PER_ROW * 2));
     }
   }
-
   const clearSelection = () => {
     setActiveScriptGroupKey(null);
     setActiveWitnessIndex(null);
@@ -1128,7 +1042,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     onSelectionChange?.(null, null);
     syncWitnessQuery(null, null);
   };
-
   const selectWitness = (witnessIndex: number) => {
     if (activeWitnessIndex === witnessIndex) {
       clearSelection();
@@ -1139,7 +1052,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     onSelectionChange?.(witnessIndex, null);
     syncWitnessQuery(witnessIndex, null);
   };
-
   const toggleScriptGroupFocus = (groupKey: string, witnessIndex: number) => {
     if (activeScriptGroupKey === groupKey) {
       clearSelection();
@@ -1150,10 +1062,8 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     onSelectionChange?.(witnessIndex, groupKey);
     syncWitnessQuery(witnessIndex, groupKey);
   };
-
   const inputWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'input').length;
   const extraWitnessCount = witnessAnalyses.filter((witness) => witness.role === 'extra').length;
-
   return (
     <div className="space-y-4 p-4" data-testid="tx-witness-tab">
       <div className={`grid gap-3 ${scriptGroupLens.length > 0 ? 'md:grid-cols-2' : ''}`}>
@@ -1187,7 +1097,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               </span>
             </div>
           </div>
-
           <div className="grid gap-1 sm:grid-cols-2">
             {witnessAnalyses.map((witness) => (
               <button
@@ -1281,7 +1190,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                         <HexDisplay
                           value={group.codeHash}
                           size="sm"
-                          color="accent"
                           className="group-hover:underline"
                         />
                       </Link>
@@ -1296,7 +1204,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
           </div>
         )}
       </div>
-
       {activeScriptGroup && (
         <div
           data-testid="tx-witness-focused-group"
@@ -1320,7 +1227,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
           </button>
         </div>
       )}
-
       {activeWitness ? (
         <>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
@@ -1354,7 +1260,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               )}
             </div>
           </div>
-
           {deterministicAnalysis && (
             <div
               data-testid="tx-witness-deterministic-section"
@@ -1421,7 +1326,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                     })}
                   </div>
                 </div>
-
                 <div
                   data-testid="tx-witness-active-segment"
                   className="border-base-border bg-base-bg/70 h-[132px] overflow-y-auto rounded border p-2 sm:h-[144px]"
@@ -1474,7 +1378,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               </div>
             </div>
           )}
-
           {heuristicGuesses.length > 0 && (
             <div
               data-testid="tx-witness-heuristics-list"
@@ -1555,7 +1458,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               </div>
             </div>
           )}
-
           <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
             {activeWitness.previewHex.length === 0 ? (
               <div className="text-text-muted">No bytes to render for this witness.</div>
@@ -1625,7 +1527,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                         : undefined;
                     const code = parseInt(byteHex, 16);
                     const asciiChar = code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
-
                     return {
                       byteHex,
                       asciiChar,
@@ -1638,7 +1539,6 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                       hoverBreatheClass,
                     };
                   });
-
                   const padCount = WITNESS_BYTES_PER_ROW - bytes.length;
                   return (
                     <div
@@ -1727,19 +1627,16 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
     </div>
   );
 }
-
 interface ScriptInfo {
   codeHash: string;
   hashType: string;
   name: string | null;
   count: number;
 }
-
 function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
   const scriptSummary = useMemo(() => {
     const lockScripts = new Map<string, ScriptInfo>();
     const typeScripts = new Map<string, ScriptInfo>();
-
     const addScript = (
       map: Map<string, ScriptInfo>,
       codeHash: string,
@@ -1755,14 +1652,12 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
         count: (existing?.count ?? 0) + 1,
       });
     };
-
     tx.inputs?.forEach((input) => {
       if (input.lock?.codeHash && input.lock?.hashType) {
         const name = scriptLookup?.[input.lock.codeHash]?.name ?? null;
         addScript(lockScripts, input.lock.codeHash, input.lock.hashType, name);
       }
     });
-
     tx.outputs?.forEach((output) => {
       if (output.lock?.codeHash && output.lock?.hashType) {
         const name = scriptLookup?.[output.lock.codeHash]?.name ?? null;
@@ -1773,10 +1668,8 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
         addScript(typeScripts, output.type.codeHash, output.type.hashType, name);
       }
     });
-
     return { lockScripts, typeScripts };
   }, [tx, scriptLookup]);
-
   return (
     <div className="grid gap-6 p-4 lg:grid-cols-2">
       <div>
@@ -1814,7 +1707,6 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                   >
                     <HexDisplay
                       value={script.codeHash}
-                      color="accent"
                       truncate
                       className="group-hover:underline"
                     />
@@ -1834,7 +1726,6 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
           )}
         </div>
       </div>
-
       <div>
         <h4 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           Type Scripts
@@ -1870,7 +1761,6 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
                   >
                     <HexDisplay
                       value={script.codeHash}
-                      color="accent"
                       truncate
                       className="group-hover:underline"
                     />
@@ -1893,21 +1783,17 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
     </div>
   );
 }
-
 interface CellDepsTabProps {
   cellDeps?: CellDep[];
   isLoading: boolean;
 }
-
 function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
   if (isLoading) {
     return <p className="text-text-muted py-8 text-center">Loading cell deps...</p>;
   }
-
   if (!cellDeps || cellDeps.length === 0) {
     return <p className="text-text-muted py-8 text-center">No cell dependencies</p>;
   }
-
   return (
     <div className="border-base-border bg-base-surface/50 m-4 rounded-lg border">
       {cellDeps.map((cellDep, index) => (
@@ -1925,7 +1811,6 @@ function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
                 value={cellDep.outPointTxHash}
                 startChars={10}
                 endChars={8}
-                color="accent"
                 copyable={false}
               />
               <span className="group-hover:text-interactive text-text-muted">:</span>

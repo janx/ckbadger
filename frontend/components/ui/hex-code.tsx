@@ -30,9 +30,9 @@ export function HexCode({
       : value;
 
   const variantClasses = {
-    default: 'text-emphasis-dim',
-    bright: 'text-emphasis',
-    dim: 'text-emphasis-dim',
+    default: 'text-sky-dim',
+    bright: 'text-sky',
+    dim: 'text-sky-dim',
   };
 
   const handleCopy = async () => {
@@ -51,7 +51,7 @@ export function HexCode({
       className={cn(
         'font-mono',
         variantClasses[variant],
-        copyable && 'hover:text-emphasis cursor-pointer',
+        copyable && 'hover:text-amber cursor-pointer',
         className
       )}
       onClick={handleCopy}

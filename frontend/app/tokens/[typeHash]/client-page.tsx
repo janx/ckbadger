@@ -1,5 +1,4 @@
 'use client';
-
 import { useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -23,25 +22,20 @@ import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-s
 import { api, TokenHolder, TokenActivity, TokenTransferDetail } from '@/lib/api';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { formatTimeAgo, formatNumber } from '@/lib/utils';
-
 function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
   if (action === 'mint') return 'green';
   if (action === 'burn') return 'red';
   return 'neutral';
 }
-
 export interface TokenDetailPageProps {
   typeHash: string;
 }
-
 export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
   const [activeTab, setActiveTab] = useState('activities');
   const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
-
   const holdersPagination = useCursorPagination();
   const activitiesPagination = useCursorPagination();
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
-
   const {
     data: token,
     isLoading,
@@ -50,14 +44,12 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
     queryKey: ['token', typeHash],
     queryFn: () => api.getToken(typeHash),
   });
-
   const { data: holders } = useQuery({
     queryKey: ['token-holders', typeHash, holdersPagination.cursor],
     queryFn: () => api.getTokenHolders(typeHash, { limit: 20, cursor: holdersPagination.cursor }),
     enabled: !!token && activeTab === 'holders',
     placeholderData: keepPreviousData,
   });
-
   const { data: activities } = useQuery({
     queryKey: ['token-activities', typeHash, activitiesPagination.cursor],
     queryFn: () =>
@@ -65,7 +57,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
     enabled: !!token && activeTab === 'activities',
     placeholderData: keepPreviousData,
   });
-
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
     queryKey: ['token-occupation-chart', typeHash, occupationRange],
     queryFn: () =>
@@ -74,7 +65,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
         : api.getTokenOccupationChart(typeHash),
     enabled: !!token,
   });
-
   const formatTokenAmount = (amount: string, decimals: number) => {
     const num = BigInt(amount);
     const divisor = BigInt(10 ** decimals);
@@ -87,7 +77,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
     const decimal = remainder.toString().padStart(decimals, '0');
     return { integer, decimal };
   };
-
   const TokenAmount = ({ amount, decimals }: { amount: string; decimals: number }) => {
     const { integer, decimal } = formatTokenAmount(amount, decimals);
     return (
@@ -97,7 +86,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
       </span>
     );
   };
-
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -115,7 +103,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
       </div>
     );
   }
-
   if (error || !token) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -130,7 +117,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
       </div>
     );
   }
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -139,7 +125,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
           title={token.symbol || token.name || 'Unknown Token'}
           subtitle={
             <div className="flex items-center gap-2">
-              <HexDisplay value={token.typeScriptHash} truncate color="accent" size="sm" />
+              <HexDisplay value={token.typeScriptHash} truncate size="sm" />
             </div>
           }
           badge={
@@ -166,7 +152,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
             </div>
           }
         />
-
         {token.tags && token.tags.length > 0 && (
           <div className="mb-6 flex flex-wrap gap-2">
             {token.tags.map((tag) => (
@@ -176,7 +161,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
             ))}
           </div>
         )}
-
         <div
           className={`mb-6 grid gap-6 ${token.operatorWebsite || token.manager || token.email ? 'lg:grid-cols-2' : ''}`}
         >
@@ -227,7 +211,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
               )}
             </TerminalPanelContent>
           </TerminalPanel>
-
           {(token.operatorWebsite || token.manager || token.email) && (
             <TerminalPanel>
               <TerminalPanelHeader indicator="none">Token Info</TerminalPanelHeader>
@@ -274,7 +257,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
             </TerminalPanel>
           )}
         </div>
-
         <CapacityOccupationSection
           className="mb-6"
           description="Daily cumulative live CKB occupation for token cells."
@@ -286,7 +268,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
           occupiedCapacity={token.totalOccupiedCapacity}
           totalCapacityLabel="Cells Capacity"
         />
-
         <TerminalPanel>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TerminalPanelHeader
@@ -303,7 +284,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
             >
               {activeTab === 'activities' ? 'Activities' : 'Holders'}
             </TerminalPanelHeader>
-
             <TabsContent value="activities">
               <TerminalPanelContent padding="none">
                 {activities?.data?.length ? (
@@ -343,7 +323,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                           >
                             <HexDisplay
                               value={activity.txHash}
-                              color="accent"
                               size="sm"
                               startChars={14}
                               endChars={10}
@@ -372,7 +351,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                     <Link href={`/address/${transfer.fromLockHash}`}>
                                       <HexDisplay
                                         value={transfer.fromLockHash}
-                                        color="accent"
                                         startChars={6}
                                         endChars={4}
                                         className="hover:underline"
@@ -405,7 +383,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                     <Link href={`/address/${transfer.toLockHash}`}>
                                       <HexDisplay
                                         value={transfer.toLockHash}
-                                        color="accent"
                                         startChars={6}
                                         endChars={4}
                                         className="hover:underline"
@@ -446,7 +423,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                 </TerminalPanelFooter>
               ) : null}
             </TabsContent>
-
             <TabsContent value="holders">
               <TerminalPanelContent padding="none">
                 {holders?.data?.length ? (
@@ -465,7 +441,6 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                               <Link href={`/address/${holder.lockScriptHash}`}>
                                 <HexDisplay
                                   value={holder.lockScriptHash}
-                                  color="accent"
                                   className="hover:underline"
                                 />
                               </Link>

@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Image from '@/components/ui/image';
@@ -21,7 +20,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, Asset } from '@/lib/api';
 import { getClusterDetailHref, getNftDetailHref, getTokenDetailHref } from '@/lib/detail-routes';
 import { formatCkbCompact } from '@/lib/utils';
-
 type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
 type StorageTierFilter = 'all' | 'fully_onchain' | 'offchain_dependent' | 'unknown';
@@ -35,7 +33,6 @@ type AssetSortKey =
   | 'occupied'
   | 'capacity'
   | 'onchainRatio';
-
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
 const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
 const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
@@ -45,7 +42,6 @@ const STORAGE_TIER_OPTIONS: StorageTierFilter[] = [
   'offchain_dependent',
   'unknown',
 ];
-
 function normalizeAssetTab(value: string | null): AssetTab {
   if (value === 'dob' || value === 'nft') {
     // Backward compatibility: old assets links used ?type=dob or ?type=nft.
@@ -56,7 +52,6 @@ function normalizeAssetTab(value: string | null): AssetTab {
   }
   return 'token';
 }
-
 function normalizeStandardFilter(value: string | null): string | undefined {
   if (!value) {
     return undefined;
@@ -64,7 +59,6 @@ function normalizeStandardFilter(value: string | null): string | undefined {
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : undefined;
 }
-
 function normalizeStorageTier(value: string | null): StorageTierFilter {
   if (!value) {
     return 'all';
@@ -86,7 +80,6 @@ function normalizeStorageTier(value: string | null): StorageTierFilter {
       return 'all';
   }
 }
-
 function formatStorageTierLabel(value: StorageTierFilter): string {
   switch (value) {
     case 'fully_onchain':
@@ -99,7 +92,6 @@ function formatStorageTierLabel(value: StorageTierFilter): string {
       return 'All Storage';
   }
 }
-
 function formatStandardLabel(standard: string): string {
   switch (standard) {
     case 'xudt':
@@ -117,7 +109,6 @@ function formatStandardLabel(standard: string): string {
       return standard.toUpperCase();
   }
 }
-
 function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
   const options =
     assetType === 'token'
@@ -130,7 +121,6 @@ function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
   }
   return options;
 }
-
 function AssetTable({
   assetType,
   search,
@@ -146,13 +136,11 @@ function AssetTable({
   const { reset } = pagination;
   const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-
   useEffect(() => {
     setSortKey('capacity');
     setSortDirection('desc');
     reset();
   }, [assetType, standard, storageTier, reset]);
-
   const { data, isLoading } = useQuery({
     queryKey: [
       'assets',
@@ -177,7 +165,6 @@ function AssetTable({
       }),
     placeholderData: keepPreviousData,
   });
-
   const assets = data?.data ?? [];
   const tableMinWidthClass = assetType === 'token' ? 'min-w-[1040px]' : 'min-w-[1120px]';
   const nameColumnClass = 'min-w-[17rem] flex-[1.8_0_17rem] pr-4';
@@ -185,16 +172,13 @@ function AssetTable({
   const smallNumberColumnClass = 'w-24 shrink-0 whitespace-nowrap text-right';
   const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
   const capacityColumnClass = 'w-32 shrink-0 whitespace-nowrap text-right';
-
   const formatNumber = (num: number | string) => {
     return new Intl.NumberFormat().format(Number(num));
   };
-
   const shortHash = (value: string) => {
     if (value.length <= 20) return value;
     return `${value.slice(0, 10)}...${value.slice(-8)}`;
   };
-
   const getAssetLink = (asset: Asset) => {
     if (asset.assetType === 'token') return getTokenDetailHref(asset.id);
     if (asset.standard === 'spore') {
@@ -202,14 +186,12 @@ function AssetTable({
     }
     return getNftDetailHref(asset.id, asset.standard);
   };
-
   const getAssetName = (asset: Asset) => {
     if (asset.assetType === 'token') {
       return asset.symbol || asset.name || shortHash(asset.id);
     }
     return asset.name || 'Unnamed Collection';
   };
-
   const getTypeBadgeLabel = (asset: Asset) => formatStandardLabel(asset.standard);
   const getStorageBadgeLabel = (asset: Asset) => {
     const tier = asset.storageTier;
@@ -224,7 +206,6 @@ function AssetTable({
     }
     return 'UNKNOWN';
   };
-
   const toggleSort = (nextKey: AssetSortKey) => {
     if (nextKey === sortKey) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
@@ -234,7 +215,6 @@ function AssetTable({
     }
     pagination.reset();
   };
-
   const renderSortHeader = (
     key: AssetSortKey,
     label: string,
@@ -253,7 +233,6 @@ function AssetTable({
       </span>
     </button>
   );
-
   if (isLoading) {
     return (
       <div className="space-y-2 py-4">
@@ -296,11 +275,9 @@ function AssetTable({
       </div>
     );
   }
-
   if (!data?.data?.length) {
     return <div className="text-text-muted py-8 text-center">No assets found</div>;
   }
-
   return (
     <>
       <div className="text-text-muted px-4 pb-1 pt-3 text-xs md:hidden">
@@ -381,13 +358,7 @@ function AssetTable({
                             </span>
                           )}
                         </div>
-                        <HexDisplay
-                          value={asset.id}
-                          color="accent"
-                          size="sm"
-                          startChars={8}
-                          endChars={6}
-                        />
+                        <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
                       </div>
                     </div>
                   </AppLink>
@@ -456,7 +427,6 @@ function AssetTable({
     </>
   );
 }
-
 export function AssetsPageClient() {
   const router = useRouter();
   const pathname = usePathname();
@@ -472,7 +442,6 @@ export function AssetsPageClient() {
   const [storageTier, setStorageTier] = useState<StorageTierFilter>(() =>
     normalizeStorageTier(searchParams.get('storageTier'))
   );
-
   useEffect(() => {
     const tabFromUrl = normalizeAssetTab(searchParams.get('type'));
     setActiveTab((prev) => (prev === tabFromUrl ? prev : tabFromUrl));
@@ -481,17 +450,14 @@ export function AssetsPageClient() {
     const storageTierFromUrl = normalizeStorageTier(searchParams.get('storageTier'));
     setStorageTier((prev) => (prev === storageTierFromUrl ? prev : storageTierFromUrl));
   }, [searchParams]);
-
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setSearch(searchInput.trim() || undefined);
   };
-
   const clearSearch = () => {
     setSearchInput('');
     setSearch(undefined);
   };
-
   const handleTabChange = (value: string) => {
     const nextTab = normalizeAssetTab(value);
     setActiveTab(nextTab);
@@ -506,7 +472,6 @@ export function AssetsPageClient() {
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
-
   const handleStandardChange = (value: string) => {
     const nextStandard = normalizeStandardFilter(value);
     setStandard(nextStandard);
@@ -519,7 +484,6 @@ export function AssetsPageClient() {
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
-
   const handleStorageTierChange = (value: string) => {
     const nextStorageTier = normalizeStorageTier(value);
     setStorageTier(nextStorageTier);
@@ -532,9 +496,7 @@ export function AssetsPageClient() {
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
   };
-
   const standardOptions = getStandardOptions(activeTab, standard);
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -574,7 +536,6 @@ export function AssetsPageClient() {
             </form>
           }
         />
-
         <TerminalPanel>
           <Tabs value={activeTab} onValueChange={handleTabChange}>
             <TerminalPanelHeader
@@ -618,7 +579,6 @@ export function AssetsPageClient() {
             >
               Asset List
             </TerminalPanelHeader>
-
             <TerminalPanelContent padding="none">
               <TabsContent value="token">
                 <AssetTable
@@ -628,7 +588,6 @@ export function AssetsPageClient() {
                   storageTier="all"
                 />
               </TabsContent>
-
               <TabsContent value="object">
                 <AssetTable
                   assetType="object"
@@ -637,7 +596,6 @@ export function AssetsPageClient() {
                   storageTier={storageTier}
                 />
               </TabsContent>
-
               <TabsContent value="identity">
                 <AssetTable
                   assetType="identity"
@@ -653,7 +611,6 @@ export function AssetsPageClient() {
     </div>
   );
 }
-
 export function AssetsPageFallback() {
   return (
     <div className="bg-base-bg min-h-screen">

@@ -240,14 +240,14 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                   </span>
                 </DataField>
                 <DataField label={labels.idLabel} layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.nftId} truncate={false} color="accent" />
+                  <HexDisplay value={detail.nftId} truncate={false} />
                 </DataField>
                 <DataField label="Owner" layout="vertical" valueClassName="w-full">
                   {ownerAddress ? (
                     <Address address={ownerAddress} truncate={false} />
                   ) : detail.ownerLockHash ? (
                     <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={detail.ownerLockHash} truncate={false} color="accent" />
+                      <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
                     <span className="text-text-muted font-mono">Unavailable</span>
@@ -256,7 +256,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                 <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
                   {detail.ownerLockHash ? (
                     <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={detail.ownerLockHash} truncate={false} color="accent" />
+                      <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
                     <span className="text-text-muted font-mono">Unavailable</span>
@@ -275,7 +275,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                     href={`/cell/${liveTxHash}-${liveOutputIndex}`}
                     className="text-emphasis font-mono hover:underline"
                   >
-                    <HexDisplay value={liveTxHash} color="accent" size="sm" />-{liveOutputIndex}
+                    <HexDisplay value={liveTxHash} size="sm" />-{liveOutputIndex}
                   </Link>
                 </DataField>
               ) : (

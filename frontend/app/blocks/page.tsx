@@ -83,12 +83,7 @@ export default function BlocksPage() {
                       </div>
                       <div className="flex-1">
                         <Link href={`/blocks/${block.hash}`} className="hover:underline">
-                          <HexDisplay
-                            value={block.hash}
-                            color="white"
-                            startChars={12}
-                            endChars={8}
-                          />
+                          <HexDisplay value={block.hash} startChars={12} endChars={8} />
                         </Link>
                       </div>
                       <div className="text-warning w-20 text-center font-mono">

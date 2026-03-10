@@ -9,7 +9,7 @@ interface HexCharProps {
   groupIndex: number;
   isHovered: boolean;
   onHover: (index: number | null) => void;
-  color: 'green' | 'amber' | 'white' | 'accent';
+  color: 'sky' | 'violet' | 'amber' | 'rose';
   showGroupHighlight: boolean;
 }
 
@@ -23,41 +23,41 @@ const HexChar = memo(function HexChar({
   showGroupHighlight,
 }: HexCharProps) {
   const colorClasses = {
-    green: {
-      base: 'text-emphasis-dim',
-      hover: 'text-emphasis',
-      glow: '0 0 4px rgba(30, 122, 106, 0.5)',
+    sky: {
+      base: 'text-sky-dim',
+      hover: 'text-sky',
+    },
+    violet: {
+      base: 'text-violet/70',
+      hover: 'text-violet',
     },
     amber: {
-      base: 'text-warning-dim',
-      hover: 'text-warning',
-      glow: '0 0 4px rgba(184, 132, 32, 0.5)',
+      base: 'text-amber-dim',
+      hover: 'text-amber',
     },
-    white: {
-      base: 'text-text-muted',
-      hover: 'text-text-primary',
-      glow: '0 0 4px rgba(42, 37, 32, 0.3)',
-    },
-    accent: {
-      base: 'text-emphasis',
-      hover: 'text-emphasis',
-      glow: '0 0 4px rgba(30, 122, 106, 0.5)',
+    rose: {
+      base: 'text-rose/70',
+      hover: 'text-rose',
     },
   };
 
-  const groupColors = ['opacity-100', 'opacity-80', 'opacity-90', 'opacity-75'];
-  const groupOpacity = showGroupHighlight ? groupColors[groupIndex % 4] : 'opacity-100';
+  const groupColorKeys: Array<'sky' | 'violet' | 'amber' | 'rose'> = [
+    'sky',
+    'violet',
+    'amber',
+    'rose',
+  ];
+  const effectiveColor = showGroupHighlight ? groupColorKeys[groupIndex % 4] : color;
 
   return (
     <span
       className={cn(
         'hex-char inline-block cursor-default transition-all duration-100',
         'font-mono tabular-nums',
-        isHovered ? colorClasses[color].hover : colorClasses[color].base,
-        groupOpacity
+        isHovered ? colorClasses[effectiveColor].hover : colorClasses[effectiveColor].base
       )}
       style={{
-        textShadow: isHovered ? colorClasses[color].glow : 'none',
+        textShadow: isHovered ? '0 0 6px currentColor' : 'none',
         transform: isHovered ? 'scale(1.05)' : 'scale(1)',
       }}
       onMouseEnter={() => onHover(index)}
@@ -76,7 +76,7 @@ interface HexDisplayProps {
   groupSize?: number;
   showGroupHighlight?: boolean;
   copyable?: boolean;
-  color?: 'green' | 'amber' | 'white' | 'accent';
+  color?: 'sky' | 'violet' | 'amber' | 'rose';
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   mono?: boolean;
@@ -90,7 +90,7 @@ export function HexDisplay({
   groupSize = 4,
   showGroupHighlight = true,
   copyable = true,
-  color = 'green',
+  color = 'sky',
   size = 'md',
   className,
   mono = true,
@@ -151,10 +151,10 @@ export function HexDisplay({
   };
 
   const prefixColorClasses = {
-    green: 'text-emphasis-dim',
-    amber: 'text-warning-dim',
-    white: 'text-text-muted',
-    accent: 'text-emphasis-dim',
+    sky: 'text-sky-dim',
+    violet: 'text-violet/70',
+    amber: 'text-amber-dim',
+    rose: 'text-rose/70',
   };
 
   const allowWrap = !truncate;
@@ -170,7 +170,7 @@ export function HexDisplay({
           className
         )}
       >
-        <span className="text-emphasis animate-subtle-bounce">Copied</span>
+        <span className="text-amber animate-subtle-bounce">Copied</span>
       </span>
     );
   }
@@ -220,7 +220,7 @@ interface ByteGroupDisplayProps {
   value: string;
   bytesPerGroup?: number;
   separator?: string;
-  color?: 'green' | 'amber' | 'white' | 'accent';
+  color?: 'sky' | 'violet' | 'amber' | 'rose';
   className?: string;
 }
 
@@ -228,7 +228,7 @@ export function ByteGroupDisplay({
   value,
   bytesPerGroup = 4,
   separator = ' ',
-  color = 'green',
+  color = 'sky',
   className,
 }: ByteGroupDisplayProps) {
   const cleanValue = value.startsWith('0x') ? value.slice(2) : value;
@@ -246,10 +246,10 @@ export function ByteGroupDisplay({
   }, [cleanValue, bytesPerGroup]);
 
   const colorClasses = {
-    green: ['text-emphasis', 'text-emphasis-dim'],
-    amber: ['text-warning', 'text-warning-dim'],
-    white: ['text-text-primary', 'text-text-muted'],
-    accent: ['text-emphasis', 'text-emphasis-dim'],
+    sky: ['text-sky', 'text-sky-dim'],
+    violet: ['text-violet', 'text-violet/70'],
+    amber: ['text-amber', 'text-amber-dim'],
+    rose: ['text-rose', 'text-rose/70'],
   };
 
   return (

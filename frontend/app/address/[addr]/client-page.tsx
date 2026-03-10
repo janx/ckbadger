@@ -1,5 +1,4 @@
 'use client';
-
 import { useState, useMemo } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -28,13 +27,11 @@ import {
 import { useParams } from '@/src/navigation';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
-
 export default function AddressDetailPage() {
   const params = useParams();
   const addr = params.addr as string;
   return <AddressDetailPageContent key={addr} addr={addr} />;
 }
-
 function AddressDetailPageContent({ addr }: { addr: string }) {
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
@@ -43,19 +40,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     'all' | 'ckb' | 'token' | 'object' | 'identity' | 'dao' | 'script_call'
   >('all');
   const [cellFilter, setCellFilter] = useState<'all' | 'ckb' | 'token' | 'dao'>('all');
-
   const DAO_CODE_HASH = '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e';
-
   const activitiesPagination = useCursorPagination();
   const cellsPagination = useCursorPagination();
   const txPagination = useCursorPagination();
   const daoPagination = useCursorPagination();
-
   const { data: address, isLoading } = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
   });
-
   const { data: tokens } = useQuery({
     queryKey: ['address-tokens', address?.lockScriptHash],
     queryFn: () =>
@@ -64,13 +57,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       }),
     enabled: !!address,
   });
-
   const { data: daoSummary } = useQuery({
     queryKey: ['address-dao-summary', address?.lockScriptHash],
     queryFn: () => api.getAddressDaoSummary(address!.lockScriptHash),
     enabled: !!address,
   });
-
   const { data: daoDeposits } = useQuery({
     queryKey: ['address-dao-deposits', address?.lockScriptHash, daoPagination.cursor],
     queryFn: () =>
@@ -81,7 +72,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address && !!daoSummary?.hasDaoActivity,
     placeholderData: keepPreviousData,
   });
-
   const { data: activities, isLoading: activitiesLoading } = useQuery({
     queryKey: [
       'address-activities',
@@ -98,7 +88,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address,
     placeholderData: keepPreviousData,
   });
-
   const tokenMap = useMemo(() => {
     const map = new Map<string, AddressToken>();
     if (tokens?.data) {
@@ -108,10 +97,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     }
     return map;
   }, [tokens?.data]);
-
   const cellsTypeFilter = selectedDao ? null : selectedToken?.typeScriptHash;
   const cellsCodeHashFilter = selectedDao ? DAO_CODE_HASH : undefined;
-
   const { data: cells, isLoading: cellsLoading } = useQuery({
     queryKey: [
       'address-cells',
@@ -131,7 +118,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address,
     placeholderData: keepPreviousData,
   });
-
   const filteredCells = useMemo(() => {
     if (!cells?.data || cellFilter === 'all') return cells?.data;
     return cells.data.filter((cell) => {
@@ -147,7 +133,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       }
     });
   }, [cells?.data, cellFilter]);
-
   const { data: transactions, isLoading: txLoading } = useQuery({
     queryKey: ['address-transactions', address?.lockScriptHash, txPagination.cursor],
     queryFn: () =>
@@ -158,7 +143,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address,
     placeholderData: keepPreviousData,
   });
-
   const handleTokenSelect = (token: AddressToken | null) => {
     setSelectedToken(token);
     setSelectedDao(false);
@@ -167,7 +151,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       setActiveTab('cells');
     }
   };
-
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -186,7 +169,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       </div>
     );
   }
-
   if (!address) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -201,12 +183,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       </div>
     );
   }
-
   const shortHash = (value: string) => {
     if (value.length <= 20) return value;
     return `${value.slice(0, 10)}...${value.slice(-8)}`;
   };
-
   const tokenDisplayName = (token: {
     symbol?: string | null;
     name?: string | null;
@@ -218,7 +198,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     if (name) return name;
     return token.typeScriptHash ? shortHash(token.typeScriptHash) : 'Token';
   };
-
   const parseDaoCellData = (dataHex: string | undefined): number | null => {
     if (!dataHex || dataHex === '0x' || dataHex.length < 18) return null;
     const hex = dataHex.startsWith('0x') ? dataHex.slice(2) : dataHex;
@@ -233,12 +212,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     }
     return blockNumber;
   };
-
   const isDaoCell = (cell: { typeCodeHash?: string }): boolean => {
     if (!cell.typeCodeHash) return false;
     return cell.typeCodeHash.toLowerCase() === DAO_CODE_HASH.toLowerCase();
   };
-
   const getDaoStatusBadge = (status: string) => {
     switch (status) {
       case 'deposited':
@@ -251,7 +228,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         return <Badge variant="gray">{status}</Badge>;
     }
   };
-
   const formatDaoDuration = (depositTimestamp: string, endTimestamp?: string | null): string => {
     const start = new Date(depositTimestamp).getTime();
     const end = endTimestamp ? new Date(endTimestamp).getTime() : Date.now();
@@ -260,7 +236,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     if (days === 1) return '1 day';
     return `${days} days`;
   };
-
   const AssetChangeBadge = ({ change }: { change: ActivityAssetChange }) => {
     const formatAssetStandardLabel = (standard: string): string => {
       const normalized = standard.toLowerCase();
@@ -270,7 +245,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       if (normalized === 'did_ckb' || normalized === 'did:ckb') return 'did:ckb';
       return standard.toUpperCase();
     };
-
     switch (change.type) {
       case 'token': {
         const isPositive = !change.delta.startsWith('-');
@@ -321,7 +295,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         );
     }
   };
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -344,7 +317,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             </div>
           }
         />
-
         <TerminalPanel className="mb-8">
           <TerminalPanelContent>
             <div className="grid grid-cols-2 gap-6 md:grid-cols-4">
@@ -400,7 +372,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             })()}
           </TerminalPanelContent>
         </TerminalPanel>
-
         {daoSummary?.hasDaoActivity && (
           <TerminalPanel className="mb-8" variant="elevated">
             <TerminalPanelHeader>
@@ -474,7 +445,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 truncate
                                 startChars={6}
                                 endChars={6}
-                                color="accent"
                               />
                             </Link>
                             <Link
@@ -531,7 +501,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             )}
           </TerminalPanel>
         )}
-
         {tokens?.data && tokens.data.length > 0 && (
           <TerminalPanel className="mb-8" variant="elevated">
             <TerminalPanelHeader>Holdings ({tokens?.data?.length || 0})</TerminalPanelHeader>
@@ -542,7 +511,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="w-32">Standard</div>
                   <div className="w-48 text-right">Balance</div>
                 </div>
-
                 {[...(tokens?.data ?? [])]
                   .sort((a, b) => {
                     const nameA = (a.name || a.symbol || '').toLowerCase();
@@ -603,7 +571,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
-
         <TerminalPanel>
           <TerminalPanelHeader
             actions={
@@ -668,7 +635,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               'Transactions'
             )}
           </TerminalPanelHeader>
-
           {selectedToken && activeTab === 'cells' && (
             <div className="border-base-border bg-base-surface/50 flex items-center justify-between border-b px-4 py-2">
               <span className="text-text-secondary text-sm">
@@ -683,7 +649,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               </button>
             </div>
           )}
-
           {selectedDao && activeTab === 'cells' && (
             <div className="border-base-border bg-base-surface/50 flex items-center justify-between border-b px-4 py-2">
               <span className="text-text-secondary text-sm">
@@ -697,7 +662,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               </button>
             </div>
           )}
-
           <TerminalPanelContent padding="none">
             {activeTab === 'activities' && (
               <>
@@ -763,7 +727,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                       truncate
                                       startChars={6}
                                       endChars={6}
-                                      color="accent"
                                     />
                                   </Link>
                                   <Link
@@ -828,7 +791,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 )}
               </>
             )}
-
             {activeTab === 'cells' && (
               <>
                 <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
@@ -882,21 +844,18 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                       startChars={6}
                                       endChars={6}
                                       size="sm"
-                                      color="accent"
                                     />
                                   </Link>
                                   <span className="text-text-muted font-mono text-xs">
                                     #{cell.createdAtBlock.toLocaleString()}
                                   </span>
                                 </div>
-
                                 <div className="border-base-border bg-base-surface/50 mb-2 rounded border p-2">
                                   <Capacity
                                     value={cell.capacity}
                                     className="text-text-primary text-lg"
                                   />
                                 </div>
-
                                 {cellIsDao && (
                                   <div className="border-base-border bg-base-surface/50 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
@@ -934,7 +893,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                     )}
                                   </div>
                                 )}
-
                                 {cellToken && cell.udtAmount && (
                                   <div className="bg-warning-900/10 border-warning-900/30 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
@@ -947,7 +905,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                     </div>
                                   </div>
                                 )}
-
                                 {!cellToken && !cellIsDao && cell.udtAmount && (
                                   <div className="border-base-border bg-base-elevated/50 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
@@ -967,7 +924,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                     </div>
                                   </div>
                                 )}
-
                                 {!cellToken &&
                                   !cellIsDao &&
                                   !cell.udtAmount &&
@@ -1012,7 +968,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 </div>
               </>
             )}
-
             {activeTab === 'transactions' && (
               <>
                 {txLoading ? (
@@ -1045,7 +1000,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                         truncate
                                         startChars={6}
                                         endChars={6}
-                                        color="accent"
                                       />
                                     </Link>
                                     {tx.isCellbase && <Badge variant="neutral">Cellbase</Badge>}

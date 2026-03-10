@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -24,7 +23,6 @@ import {
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
-
 type RelationshipView = 'lifecycle' | 'graph';
 const DATA_PREVIEW_LIMIT_BYTES = 1024;
 const DATA_BYTES_PER_ROW = 24;
@@ -75,13 +73,11 @@ const DATA_SEGMENT_TONES = [
       'rounded-sm bg-[#9a5090]/30 text-[#6a3060] shadow-[inset_0_0_0_1px_rgba(154,80,144,0.5)]',
   },
 ] as const;
-
 type CapacitySegmentTone = {
   dot: string;
   legendActivePill: string;
   legendValueText: string;
 };
-
 const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
   capacityFieldBytes: {
     dot: 'bg-base-border',
@@ -109,7 +105,6 @@ const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
     legendValueText: 'text-[#7a4070]',
   },
 };
-
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => (
     <div className="border-base-border/70 bg-base-surface/70 flex h-[240px] items-center justify-center rounded border">
@@ -117,25 +112,20 @@ const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
     </div>
   ),
 });
-
 function getDataSegmentTone(segmentIndex: number) {
   return DATA_SEGMENT_TONES[Math.abs(segmentIndex) % DATA_SEGMENT_TONES.length];
 }
-
 function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
 }
-
 function normalizeHash(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
-
 function getScriptRefHref(referenceHash: string, hashType: ScriptRefHashType): string {
   return `/script/${referenceHash}?hashType=${hashType}&kind=both`;
 }
-
 function getDeploymentReferenceHashes(script: {
   codeHash: string;
   hashType: string;
@@ -145,17 +135,13 @@ function getDeploymentReferenceHashes(script: {
   const typeHash =
     normalizeHash(script.deploymentTypeHash) ??
     (script.hashType === 'type' ? normalizeHash(script.codeHash) : null);
-
   const dataHash =
     normalizeHash(script.deploymentDataHash) ??
     (script.hashType !== 'type' ? normalizeHash(script.codeHash) : null);
-
   const dataHashType: ScriptRefHashType =
     script.hashType !== 'type' ? getScriptRefQueryHashType(script.hashType, 'data') : 'data';
-
   return { typeHash, dataHash, dataHashType };
 }
-
 function getCodeCellScriptHref(script: {
   name: string;
   codeHash: string;
@@ -166,7 +152,6 @@ function getCodeCellScriptHref(script: {
   if (hasKnownScriptName(script.name)) {
     return `/scripts/${encodeURIComponent(script.name.trim())}`;
   }
-
   const refs = getDeploymentReferenceHashes(script);
   if (refs.typeHash) {
     return getScriptRefHref(refs.typeHash, 'type');
@@ -174,29 +159,23 @@ function getCodeCellScriptHref(script: {
   if (refs.dataHash) {
     return getScriptRefHref(refs.dataHash, refs.dataHashType);
   }
-
   return getScriptRefHref(script.codeHash, normalizeScriptRefHashType(script.hashType) ?? 'data');
 }
-
 function shortenHash(hash: string, leading: number = 10, trailing: number = 8): string {
   if (hash.length <= leading + trailing + 3) {
     return hash;
   }
   return `${hash.slice(0, leading)}...${hash.slice(-trailing)}`;
 }
-
 function scriptFallbackLabel(codeHash: string): string {
   return `script: ${shortenHash(codeHash, 10, 8)}`;
 }
-
 export default function CellDetailPage() {
   const params = useParams();
   const router = useRouter();
   const outpoint = params.outpoint as string;
-
   const [txHash, indexStr] = outpoint.split('-');
   const outputIndex = parseInt(indexStr || '0', 10);
-
   const {
     data: cell,
     isLoading,
@@ -206,13 +185,11 @@ export default function CellDetailPage() {
     queryFn: () => api.getCell(txHash, outputIndex),
     enabled: !!txHash,
   });
-
   const { data: graphData } = useQuery({
     queryKey: ['cellGraph', txHash, outputIndex],
     queryFn: () => api.getCellGraph(txHash, outputIndex, 2),
     enabled: !!txHash,
   });
-
   const codeHashes = useMemo(() => {
     if (!cell) return [];
     const hashes = new Set<string>();
@@ -220,7 +197,6 @@ export default function CellDetailPage() {
     if (cell.type?.codeHash) hashes.add(cell.type.codeHash);
     return Array.from(hashes);
   }, [cell]);
-
   const { data: scriptLookup } = useQuery({
     queryKey: ['scriptLookup', codeHashes],
     queryFn: () => api.lookupScripts(codeHashes),
@@ -233,12 +209,10 @@ export default function CellDetailPage() {
   const [pinnedDataSegmentIndex, setPinnedDataSegmentIndex] = useState<number | null>(null);
   const [expandedHeuristicIndex, setExpandedHeuristicIndex] = useState<number | null>(null);
   const [relationshipView, setRelationshipView] = useState<RelationshipView>('lifecycle');
-
   const capacityView = useMemo(() => {
     if (!cell) {
       return null;
     }
-
     const SHANNONS_PER_CKB = BigInt(100000000);
     const totalCapacity = BigInt(cell.capacity);
     const occupied = cell.occupiedCapacity !== undefined ? BigInt(cell.occupiedCapacity) : null;
@@ -250,7 +224,6 @@ export default function CellDetailPage() {
       occupied !== null && totalCapacity > ZERO
         ? Number((occupied * BASIS_POINTS) / totalCapacity) / 100
         : null;
-
     const breakdown = cell.occupiedCapacityBreakdown;
     const segments = breakdown && [
       {
@@ -286,7 +259,6 @@ export default function CellDetailPage() {
         legendValueText: CAPACITY_SEGMENT_TONES.dataBytes.legendValueText,
       },
     ];
-
     const knownBytes = segments?.reduce((acc, seg) => acc + seg.bytes, 0) ?? 0;
     const breakdownTotalBytes = Math.max(0, breakdown?.totalBytes ?? 0);
     const canonicalTotalBytes =
@@ -294,7 +266,6 @@ export default function CellDetailPage() {
         ? Math.max(occupiedBytes, knownBytes)
         : Math.max(knownBytes, breakdownTotalBytes);
     const inferredBytes = Math.max(0, canonicalTotalBytes - knownBytes);
-
     const segmentsWithInference =
       inferredBytes > 0
         ? [
@@ -309,7 +280,6 @@ export default function CellDetailPage() {
             },
           ]
         : (segments ?? []);
-
     return {
       occupied,
       totalCapacity,
@@ -325,7 +295,6 @@ export default function CellDetailPage() {
       hasBreakdown: Boolean(breakdown),
     };
   }, [cell]);
-
   const relationshipStats = useMemo(() => {
     if (!graphData || !cell) {
       return {
@@ -340,7 +309,6 @@ export default function CellDetailPage() {
         graphHeight: 240,
       };
     }
-
     const upstreamInputs = graphData.nodes
       .filter((node) => {
         if (node.nodeType !== 'cell') return false;
@@ -356,12 +324,10 @@ export default function CellDetailPage() {
         status: node.data?.status ?? null,
       }))
       .slice(0, 6);
-
     const graphHeight = Math.min(
       320,
       Math.max(220, 200 + graphData.nodes.length * 12 + graphData.links.length * 6)
     );
-
     return {
       nodeCount: graphData.nodes.length,
       linkCount: graphData.links.length,
@@ -369,7 +335,6 @@ export default function CellDetailPage() {
       graphHeight,
     };
   }, [graphData, cell]);
-
   const dataPreview = useMemo(() => {
     const rawData = cell?.data ? cell.data.replace(/^0x/, '') : '';
     const receivedDataBytes = Math.max(0, rawData.length / 2);
@@ -377,7 +342,6 @@ export default function CellDetailPage() {
     const isDataPreviewTruncated = (cell?.dataSize ?? 0) > dataPreviewBytes;
     const displayHex = rawData.slice(0, dataPreviewBytes * 2);
     const remainingBytes = Math.max(0, (cell?.dataSize ?? 0) - dataPreviewBytes);
-
     return {
       rawData,
       receivedDataBytes,
@@ -387,7 +351,6 @@ export default function CellDetailPage() {
       remainingBytes,
     };
   }, [cell]);
-
   const deterministicAnalysis = cell?.dataAnalysis?.deterministic ?? null;
   const heuristicGuesses = cell?.dataAnalysis?.heuristicGuesses ?? [];
   const dataSegments = useMemo(
@@ -405,10 +368,8 @@ export default function CellDetailPage() {
     });
     return map;
   }, [dataPreview.dataPreviewBytes, dataSegments]);
-
   const focusedDataSegmentIndex =
     pinnedDataSegmentIndex !== null ? pinnedDataSegmentIndex : hoveredDataSegmentIndex;
-
   const activeDataSegment =
     focusedDataSegmentIndex !== null &&
     focusedDataSegmentIndex >= 0 &&
@@ -417,18 +378,14 @@ export default function CellDetailPage() {
       : null;
   const activeDataSegmentTone =
     focusedDataSegmentIndex !== null ? getDataSegmentTone(focusedDataSegmentIndex) : null;
-
   const activeDataSegmentHex = useMemo(() => {
     if (!activeDataSegment) return null;
     if (!dataPreview.rawData) return null;
-
     const totalBytes = Math.floor(dataPreview.rawData.length / 2);
     const start = Math.max(0, Math.min(activeDataSegment.start, totalBytes));
     const end = Math.max(start, Math.min(activeDataSegment.end, totalBytes));
     const hexSlice = dataPreview.rawData.slice(start * 2, end * 2);
-
     if (!hexSlice) return null;
-
     const maxChars = 256; // 128 bytes preview
     if (hexSlice.length <= maxChars) {
       return {
@@ -443,14 +400,12 @@ export default function CellDetailPage() {
       byteLength: end - start,
     };
   }, [activeDataSegment, dataPreview.rawData]);
-
   useEffect(() => {
     setHoveredDataSegmentIndex(null);
     setHoveredDataByteOffset(null);
     setPinnedDataSegmentIndex(null);
     setExpandedHeuristicIndex(null);
   }, [txHash, outputIndex]);
-
   const handleGraphNodeClick = (node: GraphNode) => {
     if (node.nodeType === 'transaction' && node.data?.hash) {
       router.push(`/tx/${node.data.hash}`);
@@ -462,7 +417,6 @@ export default function CellDetailPage() {
       router.push(`/cell/${node.data.txHash}-${node.data.outputIndex}`);
     }
   };
-
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -482,7 +436,6 @@ export default function CellDetailPage() {
       </div>
     );
   }
-
   if (error || !cell) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -497,13 +450,11 @@ export default function CellDetailPage() {
       </div>
     );
   }
-
   const isLive = cell.status === 'live';
   const lockScriptInfo = cell.lock?.codeHash ? scriptLookup?.[cell.lock.codeHash] : undefined;
   const typeScriptInfo = cell.type?.codeHash ? scriptLookup?.[cell.type.codeHash] : undefined;
   const dataPreviewBytes = dataPreview.dataPreviewBytes;
   const isDataPreviewTruncated = dataPreview.isDataPreviewTruncated;
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -519,7 +470,6 @@ export default function CellDetailPage() {
             </div>
           }
         />
-
         {capacityView && (
           <TerminalPanel className="mb-6">
             <TerminalPanelHeader indicator="active">Capacity</TerminalPanelHeader>
@@ -560,7 +510,6 @@ export default function CellDetailPage() {
                   </div>
                 </div>
               </div>
-
               {capacityView.hasBreakdown ? (
                 <>
                   <div className="mt-3">
@@ -597,7 +546,6 @@ export default function CellDetailPage() {
                       </div>
                     </div>
                   </div>
-
                   <div data-testid="byte-composition-legend" className="relative z-0 mt-2">
                     <div
                       className="grid gap-1.5"
@@ -647,7 +595,6 @@ export default function CellDetailPage() {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
-
         <div className="grid gap-6 lg:grid-cols-2 lg:items-stretch">
           <TerminalPanel className="h-full">
             <TerminalPanelHeader indicator="active">
@@ -686,7 +633,6 @@ export default function CellDetailPage() {
                     Graph
                   </button>
                 </div>
-
                 {relationshipView === 'lifecycle' ? (
                   <div data-testid="cell-relationship-lifecycle" className="space-y-2.5">
                     <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
@@ -709,7 +655,6 @@ export default function CellDetailPage() {
                         </Link>
                       </div>
                     </div>
-
                     <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
                       <div className="text-text-muted text-xs uppercase tracking-wide">
                         Current Status
@@ -727,7 +672,6 @@ export default function CellDetailPage() {
                         )}
                       </div>
                     </div>
-
                     <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
                       <div className="text-text-muted text-xs uppercase tracking-wide">
                         Upstream Inputs ({relationshipStats.upstreamInputs.length})
@@ -777,7 +721,6 @@ export default function CellDetailPage() {
                         </div>
                       )}
                     </div>
-
                     {!isLive && (
                       <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
                         <div className="text-text-muted text-xs uppercase tracking-wide">
@@ -835,7 +778,6 @@ export default function CellDetailPage() {
                   </div>
                 )}
               </div>
-
               {cell.cellType === 'genesis_special_burn' && (
                 <div className="border-warning/30 bg-warning/10 mt-4 rounded-lg border p-4">
                   <div className="text-warning text-sm font-medium">Genesis Special Burn Cell</div>
@@ -855,7 +797,6 @@ export default function CellDetailPage() {
               )}
             </TerminalPanelContent>
           </TerminalPanel>
-
           <div data-testid="cell-side-panels" className="space-y-6">
             <div data-testid="cell-address-panel">
               <TerminalPanel>
@@ -869,7 +810,7 @@ export default function CellDetailPage() {
                         href={`/address/${cell.lockScriptHash}`}
                         className="text-emphasis hover:underline"
                       >
-                        <HexDisplay value={cell.lockScriptHash} color="accent" />
+                        <HexDisplay value={cell.lockScriptHash} />
                       </Link>
                     )}
                     {lockScriptInfo && (
@@ -884,7 +825,6 @@ export default function CellDetailPage() {
                 </TerminalPanelContent>
               </TerminalPanel>
             </div>
-
             <TerminalPanel>
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
@@ -900,7 +840,6 @@ export default function CellDetailPage() {
                 <ScriptView script={cell.lock ?? null} collapsible={false} />
               </TerminalPanelContent>
             </TerminalPanel>
-
             <TerminalPanel>
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
@@ -918,7 +857,6 @@ export default function CellDetailPage() {
             </TerminalPanel>
           </div>
         </div>
-
         {cell.daoInfo && (
           <TerminalPanel className="mt-6">
             <TerminalPanelHeader indicator="active">
@@ -1010,7 +948,6 @@ export default function CellDetailPage() {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
-
         {cell.codeCellOf && cell.codeCellOf.length > 0 && (
           <TerminalPanel className="mt-6">
             <TerminalPanelHeader indicator="active">
@@ -1026,7 +963,6 @@ export default function CellDetailPage() {
               <div className="space-y-2">
                 {cell.codeCellOf.map((script, idx) => {
                   const refs = getDeploymentReferenceHashes(script);
-
                   return (
                     <TerminalRow key={`${script.codeHash}-${script.hashType}-${idx}`}>
                       <div className="min-w-0 space-y-1.5">
@@ -1049,7 +985,6 @@ export default function CellDetailPage() {
                               <HexDisplay
                                 value={refs.typeHash}
                                 size="sm"
-                                color="accent"
                                 startChars={10}
                                 endChars={8}
                               />
@@ -1066,7 +1001,6 @@ export default function CellDetailPage() {
                               <HexDisplay
                                 value={refs.dataHash}
                                 size="sm"
-                                color="accent"
                                 startChars={10}
                                 endChars={8}
                               />
@@ -1083,7 +1017,6 @@ export default function CellDetailPage() {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
-
         {cell.isDepGroup && (
           <TerminalPanel className="mt-6">
             <TerminalPanelHeader indicator="warning">
@@ -1108,7 +1041,7 @@ export default function CellDetailPage() {
                         href={`/cell/${item.txHash}-${item.outputIndex}`}
                         className="text-emphasis hover:underline"
                       >
-                        <HexDisplay value={`${item.txHash}:${item.outputIndex}`} color="accent" />
+                        <HexDisplay value={`${item.txHash}:${item.outputIndex}`} />
                       </Link>
                     </TerminalRow>
                   ))}
@@ -1122,7 +1055,6 @@ export default function CellDetailPage() {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
-
         {cell.dataSize > 0 && (
           <TerminalPanel className="mt-6" variant="inset">
             <TerminalPanelHeader indicator="none">
@@ -1153,7 +1085,6 @@ export default function CellDetailPage() {
                   )}
                 </div>
               </div>
-
               {deterministicAnalysis && (
                 <div
                   data-testid="data-deterministic-section"
@@ -1222,7 +1153,6 @@ export default function CellDetailPage() {
                         })}
                       </div>
                     </div>
-
                     <div
                       data-testid="data-active-segment"
                       className="border-base-border bg-base-bg/70 h-[132px] overflow-y-auto rounded border p-2 sm:h-[144px]"
@@ -1275,7 +1205,6 @@ export default function CellDetailPage() {
                   </div>
                 </div>
               )}
-
               {heuristicGuesses.length > 0 && (
                 <div
                   data-testid="data-heuristics-list"
@@ -1357,7 +1286,6 @@ export default function CellDetailPage() {
                   </div>
                 </div>
               )}
-
               <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
                 {(() => {
                   const rawData = dataPreview.rawData;
@@ -1369,16 +1297,12 @@ export default function CellDetailPage() {
                       </div>
                     );
                   }
-
                   const displayHex = dataPreview.displayHex;
-
                   const rows = [];
                   for (let i = 0; i < displayHex.length; i += DATA_BYTES_PER_ROW * 2) {
                     rows.push(displayHex.slice(i, i + DATA_BYTES_PER_ROW * 2));
                   }
-
                   const remainingBytes = dataPreview.remainingBytes;
-
                   return (
                     <div
                       data-testid="data-bytes-grid"
@@ -1391,12 +1315,10 @@ export default function CellDetailPage() {
                       {rows.map((rowHex, idx) => {
                         const offset = (idx * DATA_BYTES_PER_ROW).toString(16).padStart(4, '0');
                         const bytes = [];
-
                         for (let i = 0; i < rowHex.length; i += 2) {
                           const hex = rowHex.slice(i, i + 2);
                           bytes.push(hex);
                         }
-
                         const byteEntries = bytes.map((b, i) => {
                           const absoluteOffset = idx * DATA_BYTES_PER_ROW + i;
                           const segmentIndex =
@@ -1451,7 +1373,6 @@ export default function CellDetailPage() {
                           const code = parseInt(b, 16);
                           const asciiChar =
                             code >= 32 && code <= 126 ? String.fromCharCode(code) : '.';
-
                           return {
                             byteHex: b,
                             asciiChar,
@@ -1464,9 +1385,7 @@ export default function CellDetailPage() {
                             hoverBreatheClass,
                           };
                         });
-
                         const padCount = DATA_BYTES_PER_ROW - bytes.length;
-
                         return (
                           <div
                             key={idx}

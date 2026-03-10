@@ -64,7 +64,7 @@ export function TabsTrigger({ value, children, className }: TabsTriggerProps) {
       className={cn(
         'px-4 py-2 font-mono text-sm font-medium transition',
         isActive
-          ? 'border-interactive text-interactive border-b-2'
+          ? 'border-amber text-amber border-b-2'
           : 'text-text-muted hover:text-text-secondary',
         className
       )}

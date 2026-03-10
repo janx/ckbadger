@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
@@ -29,13 +28,11 @@ import {
 } from '@/lib/script-ref';
 import { formatCkbCompact } from '@/lib/utils';
 import type { KnownScript, ScriptLookupInfo } from '@/lib/api';
-
 interface SelectedDeployment {
   codeHash: string;
   hashType: ScriptRefHashType;
   scriptKind?: 'lock' | 'type';
 }
-
 function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number {
   const aTs = a.deployedAt ?? null;
   const bTs = b.deployedAt ?? null;
@@ -46,17 +43,14 @@ function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number 
   if (bTs != null) return 1;
   return a.codeHash.localeCompare(b.codeHash);
 }
-
 function normalizeHash(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
-
 function isHexScriptHash(value: string): boolean {
   return /^0x[0-9a-fA-F]{64}$/.test(value);
 }
-
 function deploymentReferenceHashes(
   deployment: KnownScript,
   lookupInfo?: ScriptLookupInfo
@@ -82,14 +76,11 @@ function deploymentReferenceHashes(
     lookupInfo?.hashType && lookupInfo.hashType !== 'type'
       ? getScriptRefQueryHashType(lookupInfo.hashType, baseDataRefType)
       : baseDataRefType;
-
   return { typeRef, dataRef, dataRefType };
 }
-
 export interface ScriptDetailPageProps {
   name: string;
 }
-
 export default function ScriptDetailPage({ name: routeName }: ScriptDetailPageProps) {
   const searchParams = useSearchParams();
   const name = decodeURIComponent(routeName);
@@ -103,7 +94,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
   const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
   const cellsPagination = useCursorPagination();
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
-
   const {
     data: deployments,
     isLoading: isDeploymentsLoading,
@@ -112,7 +102,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
     queryKey: ['script', name],
     queryFn: () => api.getScript(name),
   });
-
   const { data: usage, isLoading: isUsageLoading } = useQuery({
     queryKey: ['script-usage', name],
     queryFn: () => api.getScriptUsage(name),
@@ -130,7 +119,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
     enabled: lookupCodeHashes.length > 0,
     staleTime: Infinity,
   });
-
   const selectedScriptKindForChart =
     selectedDeployment?.scriptKind === 'lock' || selectedDeployment?.scriptKind === 'type'
       ? selectedDeployment.scriptKind
@@ -156,7 +144,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
           ),
     enabled: !!selectedDeployment,
   });
-
   useEffect(() => {
     if (deployments && deployments.length > 0 && usage && !selectedDeployment) {
       const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
@@ -212,7 +199,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
       }
     }
   }, [deploymentLookup, deployments, selectedDeployment, selectedRef, selectedRefHashType, usage]);
-
   const { data: cellsData, isLoading: isCellsLoading } = useQuery({
     queryKey: [
       'script-cells',
@@ -232,9 +218,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
     enabled: !!selectedDeployment,
     placeholderData: keepPreviousData,
   });
-
   const isLoading = isDeploymentsLoading || isUsageLoading;
-
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -249,7 +233,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
       </div>
     );
   }
-
   if (deploymentsError || !deployments || deployments.length === 0) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -264,13 +247,10 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
       </div>
     );
   }
-
   const scriptInfo = deployments[0];
-
   const formatNumber = (num: number) => {
     return new Intl.NumberFormat().format(num);
   };
-
   const usageByCodeHash = new Map(usage?.byDeployment.map((d) => [d.codeHash, d]) ?? []);
   const inferredScriptKind = usage?.byDeployment.find((d) => d.scriptKind)?.scriptKind;
   const sortedDeployments = [...deployments].sort(compareDeploymentsByDeployedAt);
@@ -296,7 +276,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
             ? selectedDeployment.hashType
             : 'data',
       };
-
   const handleDeploymentClick = (deployment: KnownScript) => {
     const hashType = normalizeScriptRefHashType(deployment.hashType);
     if (!hashType) return;
@@ -314,11 +293,9 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
       cellsPagination.reset();
     }
   };
-
   const isSelected = (deployment: KnownScript) =>
     selectedDeployment?.codeHash === deployment.codeHash &&
     selectedDeployment?.hashType === normalizeScriptRefHashType(deployment.hashType);
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -371,7 +348,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
             </div>
           }
         />
-
         <TerminalPanel className="border-base-border/80 mb-6">
           <TerminalPanelHeader indicator="active">Deployments</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
@@ -449,7 +425,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                             >
                               <HexDisplay
                                 value={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                                color="accent"
                                 startChars={8}
                                 endChars={8}
                               />
@@ -466,7 +441,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                             {refs.typeRef ? (
                               <HexDisplay
                                 value={refs.typeRef}
-                                color="accent"
                                 size="sm"
                                 startChars={10}
                                 endChars={8}
@@ -482,7 +456,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                             {refs.dataRef ? (
                               <HexDisplay
                                 value={refs.dataRef}
-                                color="accent"
                                 size="sm"
                                 startChars={10}
                                 endChars={8}
@@ -558,7 +531,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
             </div>
           </TerminalPanelContent>
         </TerminalPanel>
-
         {selectedDeployment && (
           <>
             <TerminalPanel className="mb-6">
@@ -574,7 +546,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     {selectedDeploymentRefs.typeRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.typeRef}
-                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -588,7 +559,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     {selectedDeploymentRefs.dataRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.dataRef}
-                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -632,7 +602,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                 </div>
               </TerminalPanelContent>
             </TerminalPanel>
-
             <TerminalPanel>
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
@@ -646,7 +615,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     {selectedDeploymentRefs.typeRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.typeRef}
-                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -660,7 +628,6 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     {selectedDeploymentRefs.dataRef ? (
                       <HexDisplay
                         value={selectedDeploymentRefs.dataRef}
-                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -690,10 +657,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                               className="text-emphasis hover:underline"
                             >
-                              <HexDisplay
-                                value={`${cell.txHash}:${cell.outputIndex}`}
-                                color="accent"
-                              />
+                              <HexDisplay value={`${cell.txHash}:${cell.outputIndex}`} />
                             </Link>
                           </div>
                           <div className="text-text-primary w-52 shrink-0 text-right">

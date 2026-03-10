@@ -72,7 +72,7 @@ export default function TransactionsPage() {
                     <div className="flex items-center">
                       <div className="flex-1">
                         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                          <HexDisplay value={tx.hash} color="accent" startChars={12} endChars={8} />
+                          <HexDisplay value={tx.hash} startChars={12} endChars={8} />
                         </Link>
                         <Link
                           href={`/blocks/${tx.blockNumber}`}

@@ -1,5 +1,4 @@
 'use client';
-
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { notFound, useParams } from '@/src/navigation';
@@ -16,21 +15,17 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-
 export default function ForkDetailPage() {
   const params = useParams();
   const id = params.id as string;
   const forkId = parseInt(id, 10);
-
   const { data, isLoading, error } = useQuery({
     queryKey: ['fork', forkId],
     queryFn: () => api.getForkDetail(forkId),
   });
-
   if (isNaN(forkId)) {
     notFound();
   }
-
   const getBadgeVariant = (type: string): 'red' | 'blue' | 'green' | 'gray' => {
     switch (type.toLowerCase()) {
       case 'deep_fork':
@@ -44,7 +39,6 @@ export default function ForkDetailPage() {
         return 'gray';
     }
   };
-
   if (error) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -56,7 +50,6 @@ export default function ForkDetailPage() {
       </div>
     );
   }
-
   if (isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -71,13 +64,10 @@ export default function ForkDetailPage() {
       </div>
     );
   }
-
   if (!data) {
     notFound();
   }
-
   const { event, orphanedBlocks, orphanedTransactions } = data;
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -90,7 +80,6 @@ export default function ForkDetailPage() {
             </Badge>
           }
         />
-
         <div className="mb-8 grid gap-6 md:grid-cols-2">
           <TerminalPanel>
             <TerminalPanelHeader indicator="warning">Event Details</TerminalPanelHeader>
@@ -113,7 +102,7 @@ export default function ForkDetailPage() {
                     >
                       #{event.forkPointNumber.toLocaleString()}
                     </Link>
-                    <HexDisplay value={event.forkPointHash} color="accent" size="sm" />
+                    <HexDisplay value={event.forkPointHash} size="sm" />
                   </div>
                 </DataField>
                 {event.resolvedAt && (
@@ -129,7 +118,6 @@ export default function ForkDetailPage() {
               </DataGrid>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="warning">Chain Split</TerminalPanelHeader>
             <TerminalPanelContent>
@@ -144,14 +132,12 @@ export default function ForkDetailPage() {
                     </span>
                   </div>
                   <div className="mt-2">
-                    <HexDisplay value={event.oldTipHash} color="accent" size="sm" />
+                    <HexDisplay value={event.oldTipHash} size="sm" />
                   </div>
                 </div>
-
                 <div className="flex justify-center">
                   <div className="text-warning text-2xl">↓</div>
                 </div>
-
                 <div className="border-positive/30 bg-positive/10 rounded border p-4">
                   <div className="text-positive mb-2 text-xs font-medium uppercase tracking-wider">
                     New Tip (Canonical)
@@ -162,14 +148,13 @@ export default function ForkDetailPage() {
                     </span>
                   </div>
                   <div className="mt-2">
-                    <HexDisplay value={event.newTipHash} color="accent" size="sm" />
+                    <HexDisplay value={event.newTipHash} size="sm" />
                   </div>
                 </div>
               </div>
             </TerminalPanelContent>
           </TerminalPanel>
         </div>
-
         <Tabs defaultValue="blocks">
           <TabsList>
             <TabsTrigger value="blocks">Orphaned Blocks ({orphanedBlocks.length})</TabsTrigger>
@@ -177,7 +162,6 @@ export default function ForkDetailPage() {
               Orphaned Transactions ({orphanedTransactions.length})
             </TabsTrigger>
           </TabsList>
-
           <TerminalPanel className="mt-4">
             <TabsContent value="blocks" className="m-0">
               <TerminalPanelContent padding="none">
@@ -187,7 +171,6 @@ export default function ForkDetailPage() {
                   <div className="w-24 text-center">Tx Count</div>
                   <div className="w-28 text-right">Time</div>
                 </div>
-
                 {orphanedBlocks.length === 0 ? (
                   <div className="text-text-muted px-4 py-8 text-center">
                     No orphaned blocks data available
@@ -205,7 +188,7 @@ export default function ForkDetailPage() {
                           </Link>
                         </div>
                         <div className="flex-1">
-                          <HexDisplay value={block.hash} color="accent" size="sm" />
+                          <HexDisplay value={block.hash} size="sm" />
                         </div>
                         <div className="text-text-secondary w-24 text-center font-mono">
                           {block.transactionsCount}
@@ -219,7 +202,6 @@ export default function ForkDetailPage() {
                 )}
               </TerminalPanelContent>
             </TabsContent>
-
             <TabsContent value="transactions" className="m-0">
               <TerminalPanelContent padding="none">
                 <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
@@ -227,7 +209,6 @@ export default function ForkDetailPage() {
                   <div className="w-36">Fee</div>
                   <div className="w-24 text-right">I/O</div>
                 </div>
-
                 {orphanedTransactions.length === 0 ? (
                   <div className="text-text-muted px-4 py-8 text-center">
                     No orphaned transactions data available
@@ -238,7 +219,7 @@ export default function ForkDetailPage() {
                       <div className="flex items-center">
                         <div className="flex-1">
                           <Link href={`/tx/${tx.hash}`} className="hover:underline">
-                            <HexDisplay value={tx.hash} color="accent" size="sm" />
+                            <HexDisplay value={tx.hash} size="sm" />
                           </Link>
                           <Link
                             href={`/blocks/${tx.blockNumber}`}

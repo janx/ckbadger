@@ -1,5 +1,4 @@
 'use client';
-
 import { useState, useEffect } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from '@/src/navigation';
@@ -26,39 +25,31 @@ import {
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
-
 type ScriptKind = 'lock' | 'type' | 'both';
 type HashType = ScriptRefHashType;
 const UNKNOWN_SCRIPT_NAME = 'unknown';
-
 function isValidScriptKind(value: string | null): value is ScriptKind {
   return value === 'lock' || value === 'type' || value === 'both';
 }
-
 function normalizeHash(value: string | null | undefined): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
-
 function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== UNKNOWN_SCRIPT_NAME);
 }
-
 function isHexScriptHash(value: string): boolean {
   return /^0x[0-9a-fA-F]{64}$/.test(value);
 }
-
 function normalizeScriptKind(value: string | null | undefined): ScriptKind | null {
   if (value === 'lock' || value === 'type' || value === 'both') return value;
   if (value === 'lock+type') return 'both';
   return null;
 }
-
 export interface ScriptByCodeHashPageProps {
   codeHash: string;
 }
-
 export default function ScriptByCodeHashPage({
   codeHash: routeCodeHash,
 }: ScriptByCodeHashPageProps) {
@@ -70,42 +61,35 @@ export default function ScriptByCodeHashPage({
   const codeHash = isCodeHashIdentifier
     ? `0x${scriptIdentifier.slice(2).toLowerCase()}`
     : scriptIdentifier;
-
   const initialHashType = searchParams.get('hashType');
   const initialKind = searchParams.get('kind');
   const explicitHashType = normalizeScriptRefHashType(initialHashType);
   const hasExplicitHashType = explicitHashType !== null;
-
   const [hashType, setHashType] = useState<HashType>(explicitHashType ?? 'type');
   const [scriptKind, setScriptKind] = useState<ScriptKind>(
     isValidScriptKind(initialKind) ? initialKind : 'both'
   );
   const cellsPagination = useCursorPagination();
-
   useEffect(() => {
     if (explicitHashType) {
       setHashType(explicitHashType);
     }
   }, [explicitHashType]);
-
   useEffect(() => {
     if (isValidScriptKind(initialKind)) {
       setScriptKind(initialKind);
     }
   }, [initialKind]);
-
   useEffect(() => {
     if (!scriptIdentifier || isCodeHashIdentifier) return;
     router.replace(`/scripts/${encodeURIComponent(scriptIdentifier)}`);
   }, [isCodeHashIdentifier, router, scriptIdentifier]);
-
   const { data: lookupResult } = useQuery({
     queryKey: ['script-lookup', codeHash],
     queryFn: () => api.lookupScripts([codeHash]),
     enabled: isCodeHashIdentifier,
     staleTime: Infinity,
   });
-
   const knownScript = lookupResult?.[codeHash];
   const deploymentKind: ScriptKind =
     knownScript?.scriptKind === 'lock'
@@ -127,13 +111,11 @@ export default function ScriptByCodeHashPage({
       : 'data';
   const supportsTypeRef = Boolean(deploymentTypeHash);
   const defaultHashType: HashType = supportsTypeRef ? 'type' : dataRefHashType;
-
   useEffect(() => {
     if (!hasExplicitHashType) {
       setHashType(defaultHashType);
     }
   }, [defaultHashType, hasExplicitHashType]);
-
   useEffect(() => {
     if (!isCodeHashIdentifier || !knownScript || !hasKnownScriptName(knownScript.name)) return;
     const targetName = knownScript.name.trim();
@@ -147,17 +129,14 @@ export default function ScriptByCodeHashPage({
     const suffix = query.toString();
     router.replace(`/scripts/${encodeURIComponent(targetName)}${suffix ? `?${suffix}` : ''}`);
   }, [codeHash, explicitHashType, initialKind, isCodeHashIdentifier, knownScript, router]);
-
   const { data: codeCellData } = useQuery({
     queryKey: ['code-cell', codeHash, hashType],
     queryFn: () => api.getCodeCell(codeHash, hashType),
     enabled: isCodeHashIdentifier && !knownScript?.codeCellTxHash,
     staleTime: Infinity,
   });
-
   const codeCellTxHash = knownScript?.codeCellTxHash || codeCellData?.txHash;
   const codeCellOutputIndex = knownScript?.codeCellOutputIndex ?? codeCellData?.outputIndex ?? null;
-
   const { data: cellsData, isLoading: isCellsLoading } = useQuery({
     queryKey: ['script-cells-by-hash', codeHash, hashType, scriptKind, cellsPagination.cursor],
     queryFn: () =>
@@ -176,7 +155,6 @@ export default function ScriptByCodeHashPage({
     queryFn: () => api.getScriptOccupationChartByCodeHash(codeHash, scriptKind),
     enabled: isCodeHashIdentifier,
   });
-
   if (!isCodeHashIdentifier || (knownScript && hasKnownScriptName(knownScript.name))) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -187,7 +165,6 @@ export default function ScriptByCodeHashPage({
       </div>
     );
   }
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -205,7 +182,6 @@ export default function ScriptByCodeHashPage({
             ) : undefined
           }
         />
-
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Deployment</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
@@ -217,7 +193,6 @@ export default function ScriptByCodeHashPage({
               <div className="w-24 text-right">Cells</div>
               <div className="w-32 text-right">Capacity</div>
             </div>
-
             <TerminalRow hoverable={false}>
               <div className="flex items-center">
                 <div className="w-40">
@@ -228,7 +203,6 @@ export default function ScriptByCodeHashPage({
                     >
                       <HexDisplay
                         value={`${codeCellTxHash}:${codeCellOutputIndex}`}
-                        color="accent"
                         size="sm"
                         startChars={8}
                         endChars={8}
@@ -239,7 +213,7 @@ export default function ScriptByCodeHashPage({
                   )}
                 </div>
                 <div className="flex-1">
-                  <HexDisplay value={codeHash} truncate={false} color="accent" size="sm" />
+                  <HexDisplay value={codeHash} truncate={false} size="sm" />
                 </div>
                 <div className="w-20 text-center">
                   <Badge variant="gray">
@@ -275,7 +249,6 @@ export default function ScriptByCodeHashPage({
                     >
                       <HexDisplay
                         value={deploymentTypeHash}
-                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -294,7 +267,6 @@ export default function ScriptByCodeHashPage({
                     >
                       <HexDisplay
                         value={deploymentDataHash}
-                        color="accent"
                         size="sm"
                         startChars={10}
                         endChars={8}
@@ -355,7 +327,6 @@ export default function ScriptByCodeHashPage({
             )}
           </TerminalPanelContent>
         </TerminalPanel>
-
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
           <TerminalPanelContent>
@@ -375,7 +346,6 @@ export default function ScriptByCodeHashPage({
             )}
           </TerminalPanelContent>
         </TerminalPanel>
-
         <TerminalPanel>
           <TerminalPanelHeader
             indicator="active"
@@ -442,7 +412,6 @@ export default function ScriptByCodeHashPage({
                   <div className="w-28 text-right">Data Size</div>
                   <div className="w-28 text-right">Created At</div>
                 </div>
-
                 {cellsData.data.map((cell) => (
                   <TerminalRow key={`${cell.txHash}-${cell.outputIndex}`}>
                     <div className="flex items-center">
@@ -453,7 +422,6 @@ export default function ScriptByCodeHashPage({
                         >
                           <HexDisplay
                             value={`${cell.txHash}:${cell.outputIndex}`}
-                            color="accent"
                             size="sm"
                             startChars={8}
                             endChars={8}
@@ -484,7 +452,6 @@ export default function ScriptByCodeHashPage({
               </div>
             )}
           </TerminalPanelContent>
-
           {cellsData && cellsData.data.length > 0 && (
             <TerminalPanelFooter>
               <CursorPagination

@@ -1,5 +1,4 @@
 'use client';
-
 import Link from '@/components/ui/link';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -16,18 +15,15 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { formatTimeAgo } from '@/lib/utils';
-
 export default function ForksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = 25;
-
   const { data, isLoading } = useQuery({
     queryKey: ['forks', cursor, limit],
     queryFn: () => api.getForks({ cursor, limit }),
     staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
-
   const getBadgeVariant = (type: string): 'red' | 'blue' | 'green' | 'gray' => {
     switch (type.toLowerCase()) {
       case 'deep_fork':
@@ -41,7 +37,6 @@ export default function ForksPage() {
         return 'gray';
     }
   };
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -50,7 +45,6 @@ export default function ForksPage() {
           title="Fork Events"
           subtitle="Monitor blockchain reorganizations and fork events"
         />
-
         <TerminalPanel>
           <TerminalPanelHeader indicator="warning">Fork Event Log</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
@@ -63,7 +57,6 @@ export default function ForksPage() {
               <div className="w-24 text-center">Orphaned</div>
               <div className="w-28 text-right">Time</div>
             </div>
-
             {isLoading
               ? Array.from({ length: 10 }).map((_, i) => (
                   <TerminalRow key={i} hoverable={false}>
@@ -117,7 +110,6 @@ export default function ForksPage() {
                         </div>
                         <HexDisplay
                           value={event.oldTipHash}
-                          color="accent"
                           size="sm"
                           startChars={8}
                           endChars={6}
@@ -129,7 +121,6 @@ export default function ForksPage() {
                         </div>
                         <HexDisplay
                           value={event.newTipHash}
-                          color="accent"
                           size="sm"
                           startChars={8}
                           endChars={6}
@@ -150,7 +141,6 @@ export default function ForksPage() {
                   </TerminalRow>
                 ))}
           </TerminalPanelContent>
-
           {data && (
             <TerminalPanelFooter>
               <CursorPagination

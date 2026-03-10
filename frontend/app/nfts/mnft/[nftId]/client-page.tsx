@@ -1,10 +1,8 @@
 'use client';
-
 import { useCallback, useEffect, useState } from 'react';
 import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-
 import { Header } from '@/components/layout/header';
 import { NftActivityCard } from '@/components/nft/nft-activity-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
@@ -21,7 +19,6 @@ import { Address } from '@/components/ui/address';
 import { api } from '@/lib/api';
 import { normalizeNftId, parseActivityCursor } from '@/lib/nft-utils';
 import { formatNumber } from '@/lib/utils';
-
 function decodeTokenState(state: number): string {
   switch (state) {
     case 0:
@@ -34,7 +31,6 @@ function decodeTokenState(state: number): string {
       return `unknown(${state})`;
   }
 }
-
 function decodeTokenConfigure(configure: number): string {
   const flags: string[] = [];
   if ((configure & 0b00000001) !== 0) flags.push('transferable');
@@ -43,11 +39,9 @@ function decodeTokenConfigure(configure: number): string {
   if ((configure & 0b00001000) !== 0) flags.push('reserved_3');
   return flags.length > 0 ? flags.join(', ') : 'none';
 }
-
 export interface MnftItemDetailPageProps {
   nftId: string;
 }
-
 export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetailPageProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -57,22 +51,18 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
     parseActivityCursor(searchParams.get('activity_cursor'))
   );
   const [activityCursorHistory, setActivityCursorHistory] = useState<string[]>([]);
-
   const detailQuery = useQuery({
     queryKey: ['mnft-item-detail', nftId],
     queryFn: () => api.getMnftItemDetail(nftId),
     retry: false,
   });
-
   const detail = detailQuery.data;
-
   const { data: ownerAddressRecord } = useQuery({
     queryKey: ['address-by-lock-hash', detail?.ownerLockHash],
     queryFn: () => api.getAddress(detail!.ownerLockHash!),
     enabled: !!detail?.ownerLockHash,
     retry: false,
   });
-
   const { data: itemActivities, isLoading: isActivitiesLoading } = useQuery({
     queryKey: ['mnft-item-activities', detail?.nftId, activityCursor],
     queryFn: () => {
@@ -86,7 +76,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
     retry: false,
     placeholderData: keepPreviousData,
   });
-
   const goToNextActivityPage = useCallback(
     (nextCursor: string | null | undefined) => {
       if (!nextCursor) return;
@@ -95,14 +84,12 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
     },
     [activityCursor]
   );
-
   const goToPreviousActivityPage = useCallback(() => {
     if (activityCursorHistory.length === 0) return;
     const prev = activityCursorHistory[activityCursorHistory.length - 1];
     setActivityCursorHistory((history) => history.slice(0, -1));
     setActivityCursor(prev || undefined);
   }, [activityCursorHistory]);
-
   useEffect(() => {
     const nextParams = new URLSearchParams(searchParams.toString());
     if (activityCursor) {
@@ -115,7 +102,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
     if (next === current) return;
     router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
   }, [activityCursor, pathname, router, searchParams]);
-
   if (detailQuery.isLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -130,7 +116,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
       </div>
     );
   }
-
   if (!detail) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -145,9 +130,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
       </div>
     );
   }
-
   const ownerAddress = ownerAddressRecord?.address || null;
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -166,7 +149,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
             Back to NFTs
           </Link>
         </div>
-
         <PageHeader
           title={
             detail.class.name
@@ -181,7 +163,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
             )
           }
         />
-
         <div className="space-y-6">
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Asset Snapshot</TerminalPanelHeader>
@@ -215,26 +196,24 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
               </DataGrid>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Identity Graph</TerminalPanelHeader>
             <TerminalPanelContent>
               <DataGrid columns={1}>
                 <DataField label="Issuer ID" layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.issuer.issuerId} truncate={false} color="accent" />
+                  <HexDisplay value={detail.issuer.issuerId} truncate={false} />
                 </DataField>
                 <DataField label="Class ID" layout="vertical" valueClassName="w-full">
                   <Link href={`/nfts/${detail.class.classId}`} className="hover:underline">
-                    <HexDisplay value={detail.class.classId} truncate={false} color="accent" />
+                    <HexDisplay value={detail.class.classId} truncate={false} />
                   </Link>
                 </DataField>
                 <DataField label="Token ID" layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.nftId} truncate={false} color="accent" />
+                  <HexDisplay value={detail.nftId} truncate={false} />
                 </DataField>
               </DataGrid>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">On-chain State</TerminalPanelHeader>
             <TerminalPanelContent>
@@ -250,12 +229,11 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                   </span>
                 </DataField>
                 <DataField label="Characteristic" layout="vertical" valueClassName="w-full">
-                  <HexDisplay value={detail.characteristicHex} truncate={false} color="accent" />
+                  <HexDisplay value={detail.characteristicHex} truncate={false} />
                 </DataField>
               </DataGrid>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Ownership & Live Cell</TerminalPanelHeader>
             <TerminalPanelContent>
@@ -265,7 +243,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                     <Address address={ownerAddress} truncate={false} />
                   ) : detail.ownerLockHash ? (
                     <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={detail.ownerLockHash} truncate={false} color="accent" />
+                      <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
                     <span className="text-text-muted font-mono">Unavailable</span>
@@ -274,7 +252,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                 <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
                   {detail.ownerLockHash ? (
                     <Link href={`/address/${detail.ownerLockHash}`} className="hover:underline">
-                      <HexDisplay value={detail.ownerLockHash} truncate={false} color="accent" />
+                      <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
                     <span className="text-text-muted font-mono">Unavailable</span>
@@ -286,8 +264,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                       href={`/cell/${detail.txHash}-${detail.outputIndex}`}
                       className="text-emphasis font-mono hover:underline"
                     >
-                      <HexDisplay value={detail.txHash} color="accent" size="sm" />-
-                      {detail.outputIndex}
+                      <HexDisplay value={detail.txHash} size="sm" />-{detail.outputIndex}
                     </Link>
                   ) : (
                     <span className="text-text-muted font-mono">No live outpoint</span>
@@ -296,7 +273,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
               </DataGrid>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Class Context</TerminalPanelHeader>
             <TerminalPanelContent>
@@ -333,7 +309,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
               </DataGrid>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Lifecycle</TerminalPanelHeader>
             <TerminalPanelContent>
@@ -361,8 +336,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                         href={`/cell/${event.txHash}-${event.outputIndex}`}
                         className="text-emphasis font-mono text-xs hover:underline"
                       >
-                        <HexDisplay value={event.txHash} color="accent" size="sm" />-
-                        {event.outputIndex}
+                        <HexDisplay value={event.txHash} size="sm" />-{event.outputIndex}
                       </Link>
                     )}
                     {event.note && <div className="text-text-muted mt-1 text-xs">{event.note}</div>}
@@ -371,7 +345,6 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
               </div>
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
             <TerminalPanelContent>

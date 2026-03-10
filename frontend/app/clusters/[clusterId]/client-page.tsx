@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -27,50 +26,40 @@ import { ClusterDescription } from '@/components/spore/cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp } from '@/lib/nft-utils';
-
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
 type CollectionSectionTab = 'activities' | 'nfts' | 'holders';
-
 const LIST_FILTER_VALUES: ListContentFilter[] = ['all', 'image', 'video', 'audio', 'text', 'other'];
 const LIST_SORT_VALUES: ListSort[] = ['createdDesc', 'createdAsc', 'sizeDesc', 'sizeAsc'];
-
 function isListContentFilter(value: string | null): value is ListContentFilter {
   return !!value && LIST_FILTER_VALUES.includes(value as ListContentFilter);
 }
-
 function isListSort(value: string | null): value is ListSort {
   return !!value && LIST_SORT_VALUES.includes(value as ListSort);
 }
-
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
   return value === 'activities' || value === 'nfts' || value === 'holders';
 }
-
 function safeString(value: unknown, fallback = ''): string {
   if (typeof value !== 'string') {
     return fallback;
   }
   return value;
 }
-
 function safeNumber(value: unknown, fallback = 0): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     return fallback;
   }
   return value;
 }
-
 function getSortIndicator(direction: 'asc' | 'desc' | null): string {
   if (direction === 'asc') return '↑';
   if (direction === 'desc') return '↓';
   return '↕';
 }
-
 export interface ClusterDetailPageProps {
   clusterId: string;
 }
-
 export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -90,13 +79,11 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
   });
   const [listQuery, setListQuery] = useState(() => searchParams.get('q') ?? '');
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
-
   const sporesPagination = useCursorPagination();
   const clusterHoldersPagination = useCursorPagination();
   const clusterActivitiesPagination = useCursorPagination();
   const { reset: resetClusterHoldersPagination } = clusterHoldersPagination;
   const { reset: resetClusterActivitiesPagination } = clusterActivitiesPagination;
-
   const {
     data: cluster,
     isLoading: clusterLoading,
@@ -105,7 +92,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     queryKey: ['cluster', clusterId],
     queryFn: () => api.getSporeCluster(clusterId),
   });
-
   const { data: sporesData, isLoading: sporesLoading } = useQuery({
     queryKey: ['cluster-spores', clusterId, sporesPagination.cursor],
     queryFn: () =>
@@ -113,7 +99,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!clusterId,
     placeholderData: keepPreviousData,
   });
-
   const {
     data: clusterHolders,
     isLoading: isClusterHoldersLoading,
@@ -128,7 +113,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!clusterId && activeCollectionTab === 'holders',
     placeholderData: keepPreviousData,
   });
-
   const {
     data: clusterActivities,
     isLoading: isClusterActivitiesLoading,
@@ -143,7 +127,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!clusterId && activeCollectionTab === 'activities',
     placeholderData: keepPreviousData,
   });
-
   const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
     queryKey: ['cluster-occupation-chart', clusterId, occupationRange],
     queryFn: () =>
@@ -152,14 +135,12 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
         : api.getSporeClusterOccupationChart(clusterId),
     enabled: !!clusterId,
   });
-
   const { data: creatorAddressRecord } = useQuery({
     queryKey: ['cluster-creator-address', cluster?.ownerLockHash],
     queryFn: () => api.getAddress(cluster!.ownerLockHash),
     enabled: !!cluster?.ownerLockHash && !cluster?.ownerAddress,
     retry: false,
   });
-
   const getContentTypeIcon = (contentType: string | null | undefined) => {
     const normalized = safeString(contentType);
     if (!normalized) return '📦';
@@ -169,7 +150,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     if (normalized.startsWith('text/')) return '📄';
     return '📦';
   };
-
   const summarizeContentType = (contentType: string | null | undefined): string => {
     const normalized = safeString(contentType);
     if (!normalized) {
@@ -181,45 +161,37 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     }
     return primary;
   };
-
   const isKnownPrimaryType = (primary: string): boolean => {
     return primary === 'image' || primary === 'video' || primary === 'audio' || primary === 'text';
   };
-
   const normalizedQuery = listQuery.trim().toLowerCase();
   const sizeSortDirection =
     listSort === 'sizeAsc' ? 'asc' : listSort === 'sizeDesc' ? 'desc' : null;
   const blockSortDirection =
     listSort === 'createdAsc' ? 'asc' : listSort === 'createdDesc' ? 'desc' : null;
-
   useEffect(() => {
     const currentQuery = searchParams.toString();
     const nextParams = new URLSearchParams(currentQuery);
-
     if (listContentFilter === 'all') {
       nextParams.delete('content');
     } else {
       nextParams.set('content', listContentFilter);
     }
-
     if (listSort === 'createdDesc') {
       nextParams.delete('sort');
     } else {
       nextParams.set('sort', listSort);
     }
-
     if (!normalizedQuery) {
       nextParams.delete('q');
     } else {
       nextParams.set('q', normalizedQuery);
     }
-
     if (activeCollectionTab === 'activities') {
       nextParams.delete('tab');
     } else {
       nextParams.set('tab', activeCollectionTab);
     }
-
     const nextQuery = nextParams.toString();
     if (nextQuery === currentQuery) {
       return;
@@ -234,17 +206,14 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     router,
     searchParams,
   ]);
-
   useEffect(() => {
     resetClusterHoldersPagination();
     resetClusterActivitiesPagination();
   }, [clusterId, resetClusterActivitiesPagination, resetClusterHoldersPagination]);
-
   const filteredAndSortedSpores = useMemo(() => {
     if (!sporesData?.data?.length) {
       return [];
     }
-
     const filtered = sporesData.data.filter((spore) => {
       if (listContentFilter === 'all') {
         return true;
@@ -258,7 +227,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       }
       return true;
     });
-
     const queryFiltered = normalizedQuery
       ? filtered.filter((spore) => {
           const sporeId = safeString(spore.sporeId);
@@ -273,7 +241,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           );
         })
       : filtered;
-
     const sorted = [...queryFiltered];
     sorted.sort((a, b) => {
       const createdAtA = safeNumber(a.createdAtBlock);
@@ -296,12 +263,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     });
     return sorted;
   }, [sporesData?.data, listContentFilter, listSort, normalizedQuery]);
-
   const missingSporeOwnerLockHashes = useMemo(() => {
     if (!filteredAndSortedSpores.length) {
       return [];
     }
-
     const unique = new Map<string, string>();
     for (const spore of filteredAndSortedSpores) {
       const ownerAddress = safeString(spore.ownerAddress);
@@ -316,7 +281,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     }
     return Array.from(unique.values());
   }, [filteredAndSortedSpores]);
-
   const sporeOwnerAddressQueries = useQueries({
     queries: missingSporeOwnerLockHashes.map((ownerLockHash) => ({
       queryKey: ['spore-owner-address', ownerLockHash],
@@ -324,7 +288,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       retry: false,
     })),
   });
-
   const sporeOwnerAddressByLockHash = useMemo(() => {
     const map = new Map<string, string>();
     missingSporeOwnerLockHashes.forEach((ownerLockHash, index) => {
@@ -335,7 +298,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     });
     return map;
   }, [missingSporeOwnerLockHashes, sporeOwnerAddressQueries]);
-
   const resolveSporeOwnerAddress = (
     ownerLockHash: string | null | undefined,
     ownerAddress?: string | null
@@ -350,18 +312,15 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     }
     return sporeOwnerAddressByLockHash.get(normalizedOwnerLockHash.toLowerCase()) ?? null;
   };
-
   const pageContentBreakdown = useMemo(() => {
     if (!filteredAndSortedSpores.length) {
       return [];
     }
-
     const map = new Map<string, number>();
     for (const spore of filteredAndSortedSpores) {
       const key = summarizeContentType(spore.contentType);
       map.set(key, (map.get(key) ?? 0) + 1);
     }
-
     return Array.from(map.entries())
       .map(([type, count]) => ({
         type,
@@ -370,7 +329,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       }))
       .sort((a, b) => b.count - a.count);
   }, [filteredAndSortedSpores]);
-
   const avgPayloadBytes = useMemo(() => {
     if (!filteredAndSortedSpores.length) {
       return null;
@@ -381,9 +339,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     );
     return Math.round(sum / filteredAndSortedSpores.length);
   }, [filteredAndSortedSpores]);
-
   const creatorAddress = cluster?.ownerAddress || creatorAddressRecord?.address || null;
-
   if (clusterLoading) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -398,7 +354,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       </div>
     );
   }
-
   if (clusterError || !cluster) {
     return (
       <div className="bg-base-bg min-h-screen">
@@ -413,7 +368,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       </div>
     );
   }
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -426,7 +380,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             ← Back to NFTs
           </Link>
         </div>
-
         <PageHeader
           title={cluster.name || 'Unnamed Collection'}
           badge={
@@ -444,7 +397,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           }
           subtitle="On-chain cluster metadata, capacity footprint, and spore composition."
         />
-
         <NftCollectionStatCards
           totalCount={cluster.sporesCount}
           totalLabel="Total Spores"
@@ -454,7 +406,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           storageTier={cluster.storageProfile?.tier}
           storageOnchainRatio={cluster.storageProfile?.fullyOnchainRatio}
         />
-
         <div className="grid gap-6 xl:grid-cols-5">
           <div className="space-y-6 xl:col-span-2">
             <TerminalPanel>
@@ -462,12 +413,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               <TerminalPanelContent>
                 <DataGrid columns={1}>
                   <DataField label="Cluster ID" layout="vertical" valueClassName="w-full">
-                    <HexDisplay
-                      value={cluster.clusterId}
-                      truncate={false}
-                      color="accent"
-                      size="sm"
-                    />
+                    <HexDisplay value={cluster.clusterId} truncate={false} size="sm" />
                   </DataField>
                   {cluster.description && (
                     <DataField label="Description" layout="vertical" valueClassName="w-full">
@@ -489,7 +435,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                 </DataGrid>
               </TerminalPanelContent>
             </TerminalPanel>
-
             <TerminalPanel>
               <TerminalPanelHeader indicator="active">
                 Content Snapshot (Filtered View)
@@ -537,7 +482,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               </TerminalPanelContent>
             </TerminalPanel>
           </div>
-
           <div className="space-y-6 xl:col-span-3">
             <CapacityOccupationSection
               description="Daily cumulative live CKB occupation for this Spore collection."
@@ -548,7 +492,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               totalCapacity={cluster.liveCapacity}
               occupiedCapacity={cluster.liveOccupiedCapacity}
             />
-
             <TerminalPanel>
               <Tabs
                 value={activeCollectionTab}
@@ -579,7 +522,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                             placeholder="Search hash / owner / type"
                             className="border-base-border bg-base-surface text-text-primary placeholder:text-text-muted w-full rounded border px-2 py-1 font-mono text-xs sm:w-48"
                           />
-
                           <label className="sr-only" htmlFor="spore-content-filter">
                             Filter spores by content type
                           </label>
@@ -607,7 +549,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                             <option value="text">Text</option>
                             <option value="other">Other</option>
                           </select>
-
                           <div className="text-text-muted font-mono text-xs">
                             {filteredAndSortedSpores.length} shown /{' '}
                             {formatNumber(cluster.sporesCount)} total
@@ -634,7 +575,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                       ? 'Holders'
                       : 'NFTs'}
                 </TerminalPanelHeader>
-
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
                     {isClusterActivitiesLoading && !clusterActivities ? (
@@ -678,7 +618,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     />
                   </TerminalPanelFooter>
                 </TabsContent>
-
                 <TabsContent value="nfts" className="py-0">
                   <TerminalPanelContent padding="none">
                     {sporesLoading ? (
@@ -723,7 +662,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                             </div>
                           </div>
                         </div>
-
                         {filteredAndSortedSpores.map((spore) => {
                           const sporeId = safeString(spore.sporeId);
                           const contentType = safeString(spore.contentType, 'unknown');
@@ -748,7 +686,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   </span>
                                   {sporeId ? (
                                     <Link href={`/nfts/${sporeId}`} className="hover:underline">
-                                      <HexDisplay value={sporeId} color="accent" size="sm" />
+                                      <HexDisplay value={sporeId} size="sm" />
                                     </Link>
                                   ) : (
                                     <span className="text-text-muted font-mono text-xs">
@@ -787,7 +725,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   </Link>
                                 </div>
                               </div>
-
                               <div className="space-y-2 md:hidden">
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="flex items-center gap-2">
@@ -796,7 +733,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                     </span>
                                     {sporeId ? (
                                       <Link href={`/nfts/${sporeId}`} className="hover:underline">
-                                        <HexDisplay value={sporeId} color="accent" size="sm" />
+                                        <HexDisplay value={sporeId} size="sm" />
                                       </Link>
                                     ) : (
                                       <span className="text-text-muted font-mono text-xs">
@@ -843,7 +780,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                       </div>
                     )}
                   </TerminalPanelContent>
-
                   {sporesData && filteredAndSortedSpores.length > 0 && (
                     <TerminalPanelFooter>
                       <CursorPagination
@@ -860,7 +796,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     </TerminalPanelFooter>
                   )}
                 </TabsContent>
-
                 <TabsContent value="holders" className="py-0">
                   <TerminalPanelContent>
                     {isClusterHoldersLoading && !clusterHolders ? (
@@ -890,7 +825,6 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                 ) : (
                                   <HexDisplay
                                     value={holder.lockScriptHash}
-                                    color="accent"
                                     size="sm"
                                     startChars={12}
                                     endChars={10}

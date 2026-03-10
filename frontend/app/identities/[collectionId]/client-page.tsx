@@ -1,5 +1,4 @@
 'use client';
-
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -27,37 +26,30 @@ import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-car
 import { isDotbitAlias } from '@/lib/nft-collections';
 import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp } from '@/lib/nft-utils';
-
 type IdentityTab = 'activities' | 'identities' | 'holders';
-
 function isIdentityTab(value: string | null): value is IdentityTab {
   return value === 'activities' || value === 'identities' || value === 'holders';
 }
-
 export interface IdentityCollectionPageProps {
   collectionId: string;
 }
-
 export default function IdentityCollectionPage({ collectionId }: IdentityCollectionPageProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tabFromQuery = searchParams.get('tab');
-
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState<NftItemStatusFilter>('all');
   const [activeTab, setActiveTab] = useState<IdentityTab>(() =>
     isIdentityTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
-
   const itemsPagination = useCursorPagination();
   const holdersPagination = useCursorPagination();
   const activitiesPagination = useCursorPagination();
   const { reset: resetItemsPagination } = itemsPagination;
   const { reset: resetHoldersPagination } = holdersPagination;
   const { reset: resetActivitiesPagination } = activitiesPagination;
-
   // Debounced search (250ms)
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -65,7 +57,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [searchInput]);
-
   // Fetch identity collection detail
   const collectionQuery = useQuery({
     queryKey: ['identity-collection', collectionId],
@@ -73,14 +64,11 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     retry: false,
   });
   const collection = collectionQuery.data;
-
   const isDotbit = collection
     ? isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'
     : isDotbitAlias(collectionId);
-
   const searchLabel = isDotbit ? 'Search .bit' : 'Search did:ckb';
   const itemDetailPrefix = isDotbit ? '/nfts/dotbit' : '/nfts/did';
-
   // Fetch collection items
   const {
     data: collectionItems,
@@ -105,7 +93,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     enabled: !!collection,
     placeholderData: keepPreviousData,
   });
-
   // Fetch collection holders
   const {
     data: collectionHolders,
@@ -121,7 +108,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     enabled: !!collection && activeTab === 'holders',
     placeholderData: keepPreviousData,
   });
-
   // Fetch collection activities
   const {
     data: collectionActivities,
@@ -137,25 +123,21 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     enabled: !!collection && activeTab === 'activities',
     placeholderData: keepPreviousData,
   });
-
   // Reset items pagination when search/filter changes
   useEffect(() => {
     resetItemsPagination();
   }, [collectionId, searchKeyword, statusFilter, resetItemsPagination]);
-
   // Reset holders/activities pagination when collection changes
   useEffect(() => {
     resetHoldersPagination();
     resetActivitiesPagination();
   }, [collectionId, resetActivitiesPagination, resetHoldersPagination]);
-
   const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
     const nextParams = new URLSearchParams(searchParams.toString());
     mutator(nextParams);
     const nextQuery = nextParams.toString();
     router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
   };
-
   const handleTabChange = (nextValue: string) => {
     if (!isIdentityTab(nextValue)) return;
     setActiveTab(nextValue);
@@ -167,7 +149,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
       }
     });
   };
-
   // Loading state
   if (collectionQuery.isLoading) {
     return (
@@ -187,7 +168,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
       </div>
     );
   }
-
   // Error state
   if (collectionQuery.isError || !collection) {
     return (
@@ -203,7 +183,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
       </div>
     );
   }
-
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -216,12 +195,10 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
             &larr; Back to Assets
           </Link>
         </div>
-
         <PageHeader
           title={collection.name || 'Identity Collection'}
           badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
         />
-
         <NftCollectionStatCards
           totalCount={collection.totalCount}
           totalLabel="Total Identities"
@@ -229,15 +206,13 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
           liveCapacity={undefined}
           liveOccupiedCapacity={undefined}
         />
-
         <div className="space-y-6">
           <TerminalPanel>
             <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
             <TerminalPanelContent>
-              <HexDisplay value={collection.collectionId} truncate={false} color="accent" />
+              <HexDisplay value={collection.collectionId} truncate={false} />
             </TerminalPanelContent>
           </TerminalPanel>
-
           <TerminalPanel>
             <Tabs value={activeTab} onValueChange={handleTabChange}>
               <TerminalPanelHeader
@@ -291,7 +266,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                     ? 'Holders'
                     : 'Identities'}
               </TerminalPanelHeader>
-
               {/* Activities tab */}
               <TabsContent value="activities" className="py-0">
                 <TerminalPanelContent>
@@ -335,7 +309,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                   />
                 </TerminalPanelFooter>
               </TabsContent>
-
               {/* Identities tab */}
               <TabsContent value="identities" className="py-0">
                 <TerminalPanelContent>
@@ -375,7 +348,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                               <span className="text-text-secondary">
                                 <HexDisplay
                                   value={item.nftId}
-                                  color="accent"
                                   size="sm"
                                   startChars={10}
                                   endChars={8}
@@ -395,7 +367,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                                   >
                                     <HexDisplay
                                       value={item.txHash}
-                                      color="accent"
                                       size="sm"
                                       startChars={10}
                                       endChars={8}
@@ -416,7 +387,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                                 >
                                   <HexDisplay
                                     value={item.ownerLockHash}
-                                    color="accent"
                                     size="sm"
                                     startChars={10}
                                     endChars={8}
@@ -444,7 +414,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                   />
                 </TerminalPanelFooter>
               </TabsContent>
-
               {/* Holders tab */}
               <TabsContent value="holders" className="py-0">
                 <TerminalPanelContent>
@@ -475,7 +444,6 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                               ) : (
                                 <HexDisplay
                                   value={holder.lockScriptHash}
-                                  color="accent"
                                   size="sm"
                                   startChars={12}
                                   endChars={10}

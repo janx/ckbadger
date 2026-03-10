@@ -1,23 +1,23 @@
 import { render } from '@testing-library/react';
 import { ByteGroupDisplay, HexDisplay } from '@/components/ui/hex-display';
 
-describe('HexDisplay accent color', () => {
-  it('renders accent classes for prefix and byte chars', () => {
+describe('HexDisplay city pop colors', () => {
+  it('renders sky classes for prefix and byte chars', () => {
     const { container } = render(
-      <HexDisplay value="0xabcdef12" truncate={false} copyable={false} color="accent" />
+      <HexDisplay value="0xabcdef12" truncate={false} copyable={false} color="sky" />
     );
 
-    expect(container.querySelector('.text-emphasis-dim')).toBeTruthy();
-    expect(container.querySelector('.text-emphasis')).toBeTruthy();
+    expect(container.querySelector('.text-sky-dim')).toBeTruthy();
+    expect(container.querySelector('.text-sky')).toBeTruthy();
   });
 
-  it('renders accent classes in byte group mode', () => {
+  it('renders sky classes in byte group mode', () => {
     const { container } = render(
-      <ByteGroupDisplay value="0xabcdef12" bytesPerGroup={1} color="accent" />
+      <ByteGroupDisplay value="0xabcdef12" bytesPerGroup={1} color="sky" />
     );
 
-    expect(container.querySelector('.text-emphasis')).toBeTruthy();
-    expect(container.querySelector('.text-emphasis-dim')).toBeTruthy();
+    expect(container.querySelector('.text-sky')).toBeTruthy();
+    expect(container.querySelector('.text-sky-dim')).toBeTruthy();
   });
 
   it('allows wrapping when full hex is shown', () => {
