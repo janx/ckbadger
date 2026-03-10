@@ -3815,7 +3815,7 @@ async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["name"], "Recovered Cluster Name");
-    assert_eq!(json["data"][0]["assetType"], "nft");
+    assert_eq!(json["data"][0]["assetType"], "object");
     assert_eq!(json["data"][0]["standard"], "spore");
 }
 
@@ -3950,7 +3950,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
     let nft_json: serde_json::Value = serde_json::from_slice(&nft_body).unwrap();
     assert_eq!(nft_json["data"].as_array().unwrap().len(), 1);
     assert_eq!(nft_json["data"][0]["standard"], "spore");
-    assert_eq!(nft_json["data"][0]["assetType"], "nft");
+    assert_eq!(nft_json["data"][0]["assetType"], "object");
 }
 
 #[tokio::test]
@@ -4066,7 +4066,7 @@ async fn test_assets_list_includes_did_ckb_collection_under_nft_type() {
 
     let rows = json["data"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["assetType"], "nft");
+    assert_eq!(rows[0]["assetType"], "identity");
     assert_eq!(rows[0]["standard"], "did_ckb");
     assert_eq!(rows[0]["name"], "did:ckb");
 }

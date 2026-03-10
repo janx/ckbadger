@@ -1939,7 +1939,7 @@ mod tests {
         let cached = vec![
             CachedAssetEntry {
                 id: format!("0x{}", hex::encode(&first_cluster)),
-                asset_type: "nft".to_string(),
+                asset_type: "object".to_string(),
                 standard: "spore".to_string(),
                 name: Some("First".to_string()),
                 symbol: None,
@@ -1966,7 +1966,7 @@ mod tests {
             },
             CachedAssetEntry {
                 id: format!("0x{}", hex::encode(&second_cluster)),
-                asset_type: "nft".to_string(),
+                asset_type: "object".to_string(),
                 standard: "spore".to_string(),
                 name: Some("Second".to_string()),
                 symbol: None,

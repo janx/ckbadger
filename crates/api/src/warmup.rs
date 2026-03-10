@@ -492,7 +492,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
         nft_assets.push(CachedAssetEntry {
             id: cluster_hex.clone(),
-            asset_type: "nft".to_string(),
+            asset_type: "object".to_string(),
             standard: "spore".to_string(),
             name: display_name.clone(),
             symbol: None,
@@ -535,6 +535,11 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .unwrap_or(0);
         let raw_standard = agg.standard.asset_standard().to_string();
         let standard = resolve_collection_standard(collection_id_bytes, &raw_standard);
+        let asset_type = if standard == "dotbit" || standard == "did_ckb" {
+            "identity"
+        } else {
+            "object"
+        };
         let display_name = resolve_nft_collection_name(&standard, agg.name.as_deref());
         let storage_tier = resolve_nft_collection_storage_tier_override(&standard)
             .unwrap_or("unknown")
@@ -563,7 +568,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
-            asset_type: "nft".to_string(),
+            asset_type: asset_type.to_string(),
             standard,
             name: display_name.clone(),
             symbol: None,
@@ -633,7 +638,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
-            asset_type: "nft".to_string(),
+            asset_type: "identity".to_string(),
             standard,
             name: display_name.clone(),
             symbol: None,

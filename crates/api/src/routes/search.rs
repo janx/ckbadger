@@ -778,7 +778,7 @@ mod tests {
     fn test_cached_cluster_and_nft_collection_match() {
         let cluster_entry = CachedAssetEntry {
             id: "0xcluster".to_string(),
-            asset_type: "nft".to_string(),
+            asset_type: "object".to_string(),
             standard: "spore".to_string(),
             name: Some("Genesis Cluster".to_string()),
             symbol: None,
@@ -805,7 +805,7 @@ mod tests {
         };
         let nft_entry = CachedAssetEntry {
             id: "0xnft".to_string(),
-            asset_type: "nft".to_string(),
+            asset_type: "identity".to_string(),
             standard: "dotbit".to_string(),
             name: Some("Dotbit Collection".to_string()),
             symbol: None,

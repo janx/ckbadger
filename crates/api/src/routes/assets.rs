@@ -172,6 +172,8 @@ fn default_limit() -> i64 {
 enum AssetFilterType {
     Token,
     Nft,
+    Object,
+    Identity,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -421,7 +423,8 @@ fn fetch_assets_cached(
 ) -> Result<(i64, Vec<AssetResponse>), (axum::http::StatusCode, Json<ApiError>)> {
     let mut all_cached: Vec<CachedAssetEntry> = Vec::new();
 
-    // Collect from cache based on type filter
+    // Collect from cache based on type filter.
+    // Frontend uses "object" and "identity"; legacy "nft" returns all non-token assets.
     match filter_type {
         Some(AssetFilterType::Token) => {
             if let Some(tokens) = state
@@ -436,11 +439,36 @@ fn fetch_assets_cached(
             }
         }
         Some(AssetFilterType::Nft) => {
+            // Legacy: return all non-token assets (objects + identities)
             if let Some(nfts) = state
                 .mem_cache
                 .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
             {
                 all_cached.extend(nfts);
+            } else {
+                return Err(ApiError::internal(
+                    "nft asset cache unavailable; warmup in progress",
+                ));
+            }
+        }
+        Some(AssetFilterType::Object) => {
+            if let Some(nfts) = state
+                .mem_cache
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+            {
+                all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "object"));
+            } else {
+                return Err(ApiError::internal(
+                    "nft asset cache unavailable; warmup in progress",
+                ));
+            }
+        }
+        Some(AssetFilterType::Identity) => {
+            if let Some(nfts) = state
+                .mem_cache
+                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+            {
+                all_cached.extend(nfts.into_iter().filter(|e| e.asset_type == "identity"));
             } else {
                 return Err(ApiError::internal(
                     "nft asset cache unavailable; warmup in progress",
@@ -477,7 +505,7 @@ fn fetch_assets_cached(
     }
     if let Some(storage_tier_filter) = request.storage_tier {
         all_cached.retain(|entry| {
-            if entry.asset_type != "nft" {
+            if entry.asset_type == "token" {
                 return false;
             }
             let Some(tier) = entry.storage_tier.as_deref() else {
@@ -579,6 +607,8 @@ fn parse_asset_cursor(cursor: &str) -> Option<(String, String)> {
     let normalize_type = |asset_type: &str| match asset_type {
         "token" => Some("token"),
         "nft" => Some("nft"),
+        "object" => Some("object"),
+        "identity" => Some("identity"),
         _ => None,
     };
 
@@ -2739,6 +2769,14 @@ mod tests {
         assert_eq!(
             parse_asset_cursor("nft:0xdef"),
             Some(("nft".to_string(), "0xdef".to_string()))
+        );
+        assert_eq!(
+            parse_asset_cursor("object:0xabc"),
+            Some(("object".to_string(), "0xabc".to_string()))
+        );
+        assert_eq!(
+            parse_asset_cursor("identity:0xabc"),
+            Some(("identity".to_string(), "0xabc".to_string()))
         );
         assert_eq!(parse_asset_cursor("dob:0xdef"), None);
         assert_eq!(parse_asset_cursor("1:2:3:nft"), None);
