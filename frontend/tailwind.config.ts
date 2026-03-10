@@ -6,49 +6,49 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Role-based Argonaut palette
+        // Citypop Midnight palette
         base: {
-          bg: '#0d0f18',
-          surface: '#12151e',
-          elevated: '#181c27',
-          border: '#1f2430',
+          bg: '#0c0a12',
+          surface: '#110e1a',
+          elevated: '#181424',
+          border: '#1e1a2a',
         },
         text: {
-          primary: '#fffaf3',
-          secondary: '#c8c2b8',
-          muted: '#6b6860',
-          dim: '#4a4740',
+          primary: '#f0e6ea',
+          secondary: '#c0b0b8',
+          muted: '#706068',
+          dim: '#453d42',
         },
         interactive: {
-          DEFAULT: '#00d7eb',
-          hover: '#67ffef',
-          muted: '#00d7eb40',
-          dim: '#009aa8',
+          DEFAULT: '#4dd0c8',
+          hover: '#78edd8',
+          muted: '#4dd0c840',
+          dim: '#38a89e',
         },
         emphasis: {
-          DEFAULT: '#8ce00a',
-          dim: '#6ba808',
-          glow: '#8ce00a30',
-          bright: '#abe05a',
+          DEFAULT: '#ff6b9d',
+          dim: '#d4547e',
+          glow: '#ff6b9d30',
+          bright: '#ff8fb8',
         },
         positive: {
-          DEFAULT: '#8ce00a',
-          dim: '#6ba808',
+          DEFAULT: '#4dd0c8',
+          dim: '#38a89e',
         },
         negative: {
-          DEFAULT: '#ff000f',
-          dim: '#cc000c',
-          bright: '#ff273f',
+          DEFAULT: '#ff4060',
+          dim: '#cc3350',
+          bright: '#ff6080',
         },
         warning: {
-          DEFAULT: '#ffb900',
-          dim: '#cc8c00',
-          bright: '#ffd141',
+          DEFAULT: '#ff8c42',
+          dim: '#cc7035',
+          bright: '#ffb070',
         },
         info: {
-          DEFAULT: '#008df8',
-          dim: '#006bc0',
-          bright: '#0092ff',
+          DEFAULT: '#64b5f6',
+          dim: '#4a90c8',
+          bright: '#90ccff',
         },
       },
       fontFamily: {
@@ -59,14 +59,14 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 4px #8ce00a25, 0 0 10px #8ce00a15',
-        'glow-strong': '0 0 3px #8ce00a50, 0 0 8px #8ce00a25',
-        'glow-inset': 'inset 0 1px 4px #8ce00a10',
-        'interactive-glow': '0 0 4px #00d7eb30, 0 0 10px #00d7eb18',
+        glow: '0 0 6px #ff6b9d20, 0 0 14px #ff6b9d10',
+        'glow-strong': '0 0 5px #ff6b9d35, 0 0 12px #ff6b9d18',
+        'glow-inset': 'inset 0 1px 6px #ff6b9d08',
+        'interactive-glow': '0 0 6px #4dd0c820, 0 0 14px #4dd0c810',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',
-        'terminal-glow-pulse': 'terminal-glow-pulse 2s ease-in-out infinite',
+        'terminal-glow-pulse': 'terminal-glow-pulse 4s ease-in-out infinite',
         'digit-tick': 'digit-tick 0.2s ease-out',
         'scan-line': 'scan-line 8s linear infinite',
         'text-reveal': 'text-reveal 0.5s ease-out forwards',
@@ -78,12 +78,12 @@ export default {
       keyframes: {
         'terminal-flicker': {
           '0%, 100%': { opacity: '1' },
-          '50%': { opacity: '0.98' },
-          '25%, 75%': { opacity: '0.96' },
+          '50%': { opacity: '0.99' },
+          '25%, 75%': { opacity: '0.98' },
         },
         'terminal-glow-pulse': {
           '0%, 100%': { filter: 'brightness(1)' },
-          '50%': { filter: 'brightness(1.1)' },
+          '50%': { filter: 'brightness(1.05)' },
         },
         'digit-tick': {
           '0%': { transform: 'translateY(-100%)', opacity: '0' },
@@ -110,10 +110,10 @@ export default {
         },
         glitch: {
           '0%': { transform: 'translate(0)', opacity: '1' },
-          '20%': { transform: 'translate(-2px, 2px)', opacity: '0.8' },
-          '40%': { transform: 'translate(2px, -2px)', opacity: '0.9' },
-          '60%': { transform: 'translate(-1px, 1px)', opacity: '0.8' },
-          '80%': { transform: 'translate(1px, -1px)', opacity: '0.9' },
+          '20%': { transform: 'translate(-1px, 1px)', opacity: '0.9' },
+          '40%': { transform: 'translate(1px, -1px)', opacity: '0.95' },
+          '60%': { transform: 'translate(-0.5px, 0.5px)', opacity: '0.9' },
+          '80%': { transform: 'translate(0.5px, -0.5px)', opacity: '0.95' },
           '100%': { transform: 'translate(0)', opacity: '1' },
         },
       },
