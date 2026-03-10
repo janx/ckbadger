@@ -3245,7 +3245,17 @@ async fn get_daily_activity_stats(
         })
         .collect();
 
-    state.cache.set(&cache_key, &result, CacheTtl::CHART).await;
+    // Don't cache empty results — the indexer may not have written data yet
+    // and we don't want to serve stale empty responses for hours.
+    if !result.is_empty() {
+        // Small day counts (homepage widget) use a short TTL; full chart data uses CHART TTL.
+        let ttl = if days > 0 && days <= 7 {
+            CacheTtl::NETWORK_STATS
+        } else {
+            CacheTtl::CHART
+        };
+        state.cache.set(&cache_key, &result, ttl).await;
+    }
     ok(result)
 }
 
