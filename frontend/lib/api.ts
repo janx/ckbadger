@@ -469,6 +469,8 @@ interface DailyActivityStats {
   tokenCount: number;
   objectCount: number;
   identityCount: number;
+  scriptCallCount: number;
+  unknownCount: number;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
@@ -483,6 +485,8 @@ interface ActivitySummary24h {
   tokenCount: number;
   objectCount: number;
   identityCount: number;
+  scriptCallCount: number;
+  unknownCount: number;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
@@ -2105,7 +2109,8 @@ export const api = {
             s.daoWithdrawCompleteCount +
             s.tokenCount +
             s.objectCount +
-            s.identityCount
+            s.identityCount +
+            s.scriptCallCount
         ),
       })),
       title: 'Daily Activity Volume',
@@ -2124,6 +2129,7 @@ export const api = {
           token: String(s.tokenCount),
           object: String(s.objectCount),
           identity: String(s.identityCount),
+          scriptCall: String(s.scriptCallCount),
         },
       })),
       series: [
@@ -2132,6 +2138,7 @@ export const api = {
         { key: 'token', label: 'Token', color: '#a78bfa' },
         { key: 'object', label: 'Object', color: '#f472b6' },
         { key: 'identity', label: 'Identity', color: '#2dd4bf' },
+        { key: 'scriptCall', label: 'Script Call', color: '#f97316' },
       ],
       title: 'Activity Type Breakdown',
     };

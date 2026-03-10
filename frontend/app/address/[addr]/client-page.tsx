@@ -40,7 +40,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [selectedDao, setSelectedDao] = useState(false);
   const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');
   const [activityFilter, setActivityFilter] = useState<
-    'all' | 'ckb' | 'token' | 'object' | 'identity' | 'dao'
+    'all' | 'ckb' | 'token' | 'object' | 'identity' | 'dao' | 'script_call'
   >('all');
   const [cellFilter, setCellFilter] = useState<'all' | 'ckb' | 'token' | 'dao'>('all');
 
@@ -702,7 +702,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {activeTab === 'activities' && (
               <>
                 <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
-                  {(['all', 'ckb', 'token', 'object', 'identity', 'dao'] as const).map((f) => (
+                  {(
+                    ['all', 'ckb', 'token', 'object', 'identity', 'dao', 'script_call'] as const
+                  ).map((f) => (
                     <button
                       key={f}
                       onClick={() => {
@@ -723,6 +725,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           object: 'Object',
                           identity: 'Identity',
                           dao: 'DAO',
+                          script_call: 'Script Call',
                         }[f]
                       }
                     </button>
@@ -820,7 +823,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-muted py-12 text-center">
                     {activityFilter === 'all'
                       ? 'No activities'
-                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
+                      : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'script_call' ? 'Script Call' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
                   </div>
                 )}
               </>

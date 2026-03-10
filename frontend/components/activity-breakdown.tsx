@@ -21,6 +21,7 @@ const ACTIVITY_COLORS: Record<string, string> = {
   Token: '#a78bfa',
   Object: '#f472b6',
   Identity: '#2dd4bf',
+  'Script Call': '#f97316',
 };
 
 function buildChartData(stats: ActivitySummary24h) {
@@ -35,6 +36,7 @@ function buildChartData(stats: ActivitySummary24h) {
     { label: 'Token', value: stats.tokenCount, color: ACTIVITY_COLORS.Token },
     { label: 'Object', value: stats.objectCount, color: ACTIVITY_COLORS.Object },
     { label: 'Identity', value: stats.identityCount, color: ACTIVITY_COLORS.Identity },
+    { label: 'Script Call', value: stats.scriptCallCount, color: ACTIVITY_COLORS['Script Call'] },
   ].filter((s) => s.value > 0);
 }
 
@@ -78,7 +80,8 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
       summary.daoWithdrawCompleteCount +
       summary.tokenCount +
       summary.objectCount +
-      summary.identityCount
+      summary.identityCount +
+      summary.scriptCallCount
     : 0;
 
   return (
