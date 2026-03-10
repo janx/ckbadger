@@ -6,49 +6,49 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Citypop Midnight palette
+        // 青绿暖白 palette (Qinglv Light)
         base: {
-          bg: '#0c0a12',
-          surface: '#110e1a',
-          elevated: '#181424',
-          border: '#1e1a2a',
+          bg: '#faf6f0', // 宣纸白
+          surface: '#f3ede5', // 素纸
+          elevated: '#efe8de', // 绢白
+          border: '#e0d8cc', // 麻色
         },
         text: {
-          primary: '#f0e6ea',
-          secondary: '#c0b0b8',
-          muted: '#706068',
-          dim: '#453d42',
+          primary: '#2a2520',
+          secondary: '#7a7068',
+          muted: '#b0a898',
+          dim: '#d0c8bc',
         },
         interactive: {
-          DEFAULT: '#4dd0c8',
-          hover: '#78edd8',
-          muted: '#4dd0c840',
-          dim: '#38a89e',
+          DEFAULT: '#3aaa80',
+          hover: '#2cc878',
+          muted: '#3aaa8020',
+          dim: '#2d8a68',
         },
         emphasis: {
-          DEFAULT: '#ff6b9d',
-          dim: '#d4547e',
-          glow: '#ff6b9d30',
-          bright: '#ff8fb8',
+          DEFAULT: '#1e7a6a',
+          dim: '#166858',
+          glow: '#1e7a6a30',
+          bright: '#28a088',
         },
         positive: {
-          DEFAULT: '#4dd0c8',
-          dim: '#38a89e',
+          DEFAULT: '#4a8c5c', // 竹青
+          dim: '#3a7048',
         },
         negative: {
-          DEFAULT: '#ff4060',
-          dim: '#cc3350',
-          bright: '#ff6080',
+          DEFAULT: '#c04040', // 朱红
+          dim: '#a03535',
+          bright: '#d45050',
         },
         warning: {
-          DEFAULT: '#ff8c42',
-          dim: '#cc7035',
-          bright: '#ffb070',
+          DEFAULT: '#b88420', // 琥珀
+          dim: '#9a6e1a',
+          bright: '#d4a030',
         },
         info: {
-          DEFAULT: '#64b5f6',
-          dim: '#4a90c8',
-          bright: '#90ccff',
+          DEFAULT: '#3a6ea0', // 靛青
+          dim: '#2e5a84',
+          bright: '#4a88c0',
         },
       },
       fontFamily: {
@@ -59,10 +59,10 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 6px #ff6b9d20, 0 0 14px #ff6b9d10',
-        'glow-strong': '0 0 5px #ff6b9d35, 0 0 12px #ff6b9d18',
-        'glow-inset': 'inset 0 1px 6px #ff6b9d08',
-        'interactive-glow': '0 0 6px #4dd0c820, 0 0 14px #4dd0c810',
+        glow: '0 0 6px #1e7a6a18, 0 0 14px #1e7a6a10',
+        'glow-strong': '0 0 5px #1e7a6a28, 0 0 12px #1e7a6a18',
+        'glow-inset': 'inset 0 1px 6px #1e7a6a08',
+        'interactive-glow': '0 0 6px #3aaa8020, 0 0 14px #3aaa8010',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',
