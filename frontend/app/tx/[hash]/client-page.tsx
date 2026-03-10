@@ -1242,7 +1242,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                     }}
                     className={`rounded border px-2 py-1.5 ${
                       isFocused
-                        ? 'border-cyan-400/70 bg-cyan-500/10'
+                        ? 'border-info/70 bg-info/10'
                         : group.witnessIndex === activeWitnessIndex
                           ? 'border-emphasis/70 bg-emphasis/10'
                           : 'border-base-border/70 bg-base-surface/70'

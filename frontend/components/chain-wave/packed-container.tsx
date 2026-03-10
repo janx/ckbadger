@@ -54,9 +54,9 @@ const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip'
     tip: 'bg-emphasis/80 hover:bg-emphasis-dim',
   },
   cellbase: {
-    mempool: 'bg-emerald-600/80 hover:bg-emerald-500',
-    proposals: 'bg-emerald-600/80 hover:bg-emerald-500',
-    tip: 'bg-emerald-600/80 hover:bg-emerald-500',
+    mempool: 'bg-positive/80 hover:bg-positive',
+    proposals: 'bg-positive/80 hover:bg-positive',
+    tip: 'bg-positive/80 hover:bg-positive',
   },
   dao: {
     mempool: 'bg-warning/80 hover:bg-warning-400',

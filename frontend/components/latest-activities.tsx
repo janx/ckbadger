@@ -25,7 +25,7 @@ function getTypeBadge(activity: GlobalActivity): { label: string; className: str
   if (delta > BigInt(0)) {
     return {
       label: 'Received',
-      className: 'bg-emerald-900/50 text-positive border border-emerald-700/50',
+      className: 'bg-positive/10 text-positive border border-positive/30',
     };
   }
   if (delta < BigInt(0)) {
@@ -85,7 +85,7 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
       );
     case 'daoWithdrawComplete':
       return (
-        <span className="text-positive rounded border border-emerald-700/50 bg-emerald-900/30 px-1.5 py-0.5 text-[10px]">
+        <span className="text-positive border-positive/30 bg-positive/10 rounded border px-1.5 py-0.5 text-[10px]">
           DAO Withdraw Complete
         </span>
       );
@@ -182,7 +182,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                   className={cn(
                     'transition-all duration-500',
                     newActivityKey === activityKey &&
-                      'bg-cyan-500/10 shadow-[0_0_8px_rgba(6,182,212,0.15)]'
+                      'bg-emphasis/10 shadow-[0_0_8px_rgba(30,122,106,0.15)]'
                   )}
                 >
                   {/* Row 1: Address | Type badge | Time */}
