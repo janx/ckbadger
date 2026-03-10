@@ -149,6 +149,12 @@ const DidCkbItemDetailRoute = lazyParamPage(
     nftId: params.nftId ?? '',
   })
 );
+const IdentityCollectionRoute = lazyParamPage(
+  () => import('@/app/identities/[collectionId]/client-page'),
+  (params) => ({
+    collectionId: params.collectionId ?? '',
+  })
+);
 
 export function createAppRouter(): RouteObject[] {
   return [
@@ -347,6 +353,10 @@ export function createAppRouter(): RouteObject[] {
         {
           path: 'clusters/:clusterId',
           element: <ClusterDetailRoute />,
+        },
+        {
+          path: 'identities/:collectionId',
+          element: <IdentityCollectionRoute />,
         },
         {
           path: 'nfts/:sporeId',

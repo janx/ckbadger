@@ -270,10 +270,13 @@ async fn serve_frontend_file(path: &Path, request_path: &str) -> Response {
 }
 
 fn path_looks_like_file(path: &str) -> bool {
-    match path.rsplit_once('/') {
-        Some((_, segment)) => segment.contains('.'),
-        None => path.contains('.'),
-    }
+    let segment = match path.rsplit_once('/') {
+        Some((_, s)) => s,
+        None => path,
+    };
+    // A file has a dot-extension like "app.js" or "favicon.ico".
+    // Dot-prefixed segments like ".bit" are SPA route params, not files.
+    segment.contains('.') && !segment.starts_with('.')
 }
 
 #[cfg(test)]
@@ -355,6 +358,10 @@ mod tests {
         assert!(path_looks_like_file("assets/app.js"));
         assert!(!path_looks_like_file("script/0x1234"));
         assert!(!path_looks_like_file("blocks"));
+        // Dot-prefixed segments are SPA route params, not files
+        assert!(!path_looks_like_file("identities/.bit"));
+        assert!(!path_looks_like_file("identities/did:ckb"));
+        assert!(!path_looks_like_file("identities/dotbit"));
     }
 
     #[tokio::test]
