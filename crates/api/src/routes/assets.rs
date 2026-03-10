@@ -2305,9 +2305,12 @@ fn collect_nft_collection_holder_counts(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
 ) -> Result<HashMap<Vec<u8>, i64>, ApiRouteError> {
-    let rows = store
-        .list_object_collection_owner_counts(collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows = if is_identity_sentinel(collection_id_bytes) {
+        store.list_identity_owner_counts(collection_id_bytes)
+    } else {
+        store.list_object_collection_owner_counts(collection_id_bytes)
+    }
+    .map_err(|e| ApiError::internal(e.to_string()))?;
     let mut holder_counts: HashMap<Vec<u8>, i64> = HashMap::with_capacity(rows.len());
     for (lock_hash, count) in rows {
         if count <= 0 {
