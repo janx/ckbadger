@@ -631,6 +631,48 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// Write accumulated hourly activity stats for an hour key.
+    /// Reads existing stats for the hour, merges with accumulated, writes back.
+    pub fn update_hourly_activity_stats(
+        &self,
+        hour_key: &str,
+        accumulated: &DailyActivityStats,
+        unique_addresses: u32,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        let existing = self.store.get_hourly_activity_stats(hour_key)?;
+        let merged = match existing {
+            Some(mut e) => {
+                e.transfer_count += accumulated.transfer_count;
+                e.dao_deposit_count += accumulated.dao_deposit_count;
+                e.dao_withdraw_request_count += accumulated.dao_withdraw_request_count;
+                e.dao_withdraw_complete_count += accumulated.dao_withdraw_complete_count;
+                e.token_count += accumulated.token_count;
+                e.object_count += accumulated.object_count;
+                e.identity_count += accumulated.identity_count;
+                e.coinbase_count += accumulated.coinbase_count;
+                e.unique_address_count = unique_addresses;
+                e.total_ckb_moved = e
+                    .total_ckb_moved
+                    .saturating_add(accumulated.total_ckb_moved);
+                // Merge script counts
+                for (code_hash, count) in &accumulated.script_counts {
+                    *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
+                }
+                e
+            }
+            None => {
+                let mut s = accumulated.clone();
+                s.unique_address_count = unique_addresses;
+                s
+            }
+        };
+        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
+        let value = bincode::serialize(&merged)?;
+        batch.put_stats(&key, &value);
+        Ok(())
+    }
+
     pub fn refresh_token_24h_transfers(&self) -> Result<u64> {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let cutoff_hour = now_ms / 3_600_000 - 48; // Keep 48h, discard older
@@ -1472,7 +1514,10 @@ mod tests {
 #[cfg(test)]
 mod activity_stats_tests {
     use super::*;
+    use std::sync::Arc;
+
     use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange, DailyActivityStats};
+    use ckbadger_store::CkbadgerStore;
 
     fn make_entry(ckb_delta: i128, is_cellbase: bool, changes: Vec<AssetChange>) -> ActivityEntry {
         ActivityEntry {
@@ -1676,6 +1721,71 @@ mod activity_stats_tests {
         let entry = make_entry(-999_00000000, false, vec![]);
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.total_ckb_moved, 999_00000000);
+    }
+
+    #[test]
+    fn test_update_hourly_activity_stats_creates_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let mut batch = StoreBatch::new(&store);
+        let stats = DailyActivityStats {
+            transfer_count: 5,
+            total_ckb_moved: 50_00000000,
+            ..Default::default()
+        };
+        writer
+            .update_hourly_activity_stats("2026030912", &stats, 3, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        let got = store
+            .get_hourly_activity_stats("2026030912")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.transfer_count, 5);
+        assert_eq!(got.unique_address_count, 3);
+    }
+
+    #[test]
+    fn test_update_hourly_activity_stats_merges_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        // First write
+        let mut batch = StoreBatch::new(&store);
+        let s1 = DailyActivityStats {
+            transfer_count: 5,
+            total_ckb_moved: 50_00000000,
+            ..Default::default()
+        };
+        writer
+            .update_hourly_activity_stats("2026030912", &s1, 3, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        // Merge write
+        let mut batch2 = StoreBatch::new(&store);
+        let s2 = DailyActivityStats {
+            transfer_count: 10,
+            dao_deposit_count: 2,
+            total_ckb_moved: 100_00000000,
+            ..Default::default()
+        };
+        writer
+            .update_hourly_activity_stats("2026030912", &s2, 7, &mut batch2)
+            .unwrap();
+        batch2.commit().unwrap();
+
+        let got = store
+            .get_hourly_activity_stats("2026030912")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.transfer_count, 15);
+        assert_eq!(got.dao_deposit_count, 2);
+        assert_eq!(got.total_ckb_moved, 150_00000000);
+        assert_eq!(got.unique_address_count, 7); // replaced, not summed
     }
 
     #[test]
