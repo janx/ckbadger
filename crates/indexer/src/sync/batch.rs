@@ -2951,39 +2951,26 @@ impl Indexer {
             identity_activity_count_deltas,
             &pending_identity_aggs,
         )?;
-        let commit_started = Instant::now();
-        consume_batch.commit()?;
-        commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
-        if !object_activity_batch.is_empty() {
-            let commit_started = Instant::now();
-            object_activity_batch.commit()?;
-            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
-        }
-        if !identity_activity_batch.is_empty() {
-            let commit_started = Instant::now();
-            identity_activity_batch.commit()?;
-            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
-        }
+        // Merge all domain-store batches for atomic commit
+        consume_batch.merge_from(object_activity_batch);
+        consume_batch.merge_from(identity_activity_batch);
 
-        // Finalization: persist block headers last as the durable sync marker,
-        // together with stats derived from this batch.
+        // Finalization: merge block headers + stats, then single atomic commit
         {
             let mut core_batch = StoreBatch::new(self.writer.store());
             self.writer
                 .insert_blocks_batch(&block_refs, &mut core_batch)?;
             let mut stats_batch = StoreBatch::new(self.writer.store());
             self.write_batch_stats_to_batch(&batch_stats, &mut stats_batch)?;
+            consume_batch.merge_from(core_batch);
+            consume_batch.merge_from(stats_batch);
+            let commit_started = Instant::now();
             if bulk_sync_mode {
-                let commit_started = Instant::now();
-                core_batch.commit_no_wal()?;
-                stats_batch.commit_no_wal()?;
-                commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+                consume_batch.commit_no_wal()?;
             } else {
-                let commit_started = Instant::now();
-                core_batch.commit()?;
-                stats_batch.commit()?;
-                commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
+                consume_batch.commit()?;
             }
+            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
 
         // HODL wave tracker update
