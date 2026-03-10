@@ -62,6 +62,6 @@ describe('DeepForkAlert', () => {
   it('renders with red background', () => {
     const { container } = render(<DeepForkAlert status={activeDeepFork} />);
     const alertDiv = container.firstChild as HTMLElement;
-    expect(alertDiv).toHaveClass('bg-red-900/90');
+    expect(alertDiv).toHaveClass('bg-negative');
   });
 });

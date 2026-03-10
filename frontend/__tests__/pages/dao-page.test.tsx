@@ -78,7 +78,7 @@ describe('DaoPage', () => {
       'href',
       '/scripts/Default%20Lock'
     );
-    expect(screen.getByText('Default Lock')).toHaveClass('text-blue-400');
+    expect(screen.getByText('Default Lock')).toHaveClass('text-info');
     expect(screen.getAllByText('CKB')[0]).toHaveClass('text-text-muted');
     expect(screen.getAllByText('Active Deposits').length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument();

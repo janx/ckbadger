@@ -1034,14 +1034,14 @@ function MinedBlock({
               <div className="text-text-secondary">
                 {formatBytes(stats.totalSize)} · {block.transactionsCount} txs
               </div>
-              <div className="text-text-dim">{formatTimeAgo(block.timestamp)} ago</div>
+              <div className="text-text-muted">{formatTimeAgo(block.timestamp)} ago</div>
             </>
           ) : (
             <>
               <div className="text-text-primary font-mono tabular-nums">
                 {block.transactionsCount} txs
               </div>
-              <div className="text-text-dim">{formatTimeAgo(block.timestamp)} ago</div>
+              <div className="text-text-muted">{formatTimeAgo(block.timestamp)} ago</div>
             </>
           )}
         </div>
