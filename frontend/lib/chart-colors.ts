@@ -1,19 +1,19 @@
-export const CHART_PRIMARY_COLOR = '#ffcc44'; // amber
+export const CHART_PRIMARY_COLOR = '#44ee77'; // phosphor green
 export const CHART_SECONDARY_COLOR = '#ff66aa'; // rose
 export const CHART_TERTIARY_COLOR = '#44bbff'; // sky
 
 export const CHART_PALETTE = [
-  '#ffcc44', // amber
+  '#44ee77', // phosphor green
   '#ff66aa', // rose
   '#44bbff', // sky
   '#00ffaa', // mint
   '#bb88ff', // violet
-  '#ffe066', // amber-bright
+  '#66ff99', // green-bright
   '#ff6699', // rose-bright
   '#66ddff', // sky-bright
   '#44ffcc', // mint-bright
   '#ccaaff', // violet-bright
-  '#d4a020', // amber-dim
+  '#2daa55', // green-dim
   '#dd4488', // rose-dim
 ] as const;
 

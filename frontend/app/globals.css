@@ -8,10 +8,10 @@
   --color-surface: #0e1119;
   --color-elevated: #141820;
   --color-border: #1c2236;
-  --color-emphasis: #ffcc44;
-  --color-emphasis-dim: #d4a020;
-  --color-interactive: #ffcc44;
-  --color-interactive-hover: #ffe066;
+  --color-emphasis: #44ee77;
+  --color-emphasis-dim: #2daa55;
+  --color-interactive: #44ee77;
+  --color-interactive-hover: #66ff99;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
 }
@@ -33,13 +33,13 @@ body {
   }
 
   .terminal-text {
-    color: #ffcc44;
-    text-shadow: 0 0 6px #ffcc4440;
+    color: #44ee77;
+    text-shadow: 0 0 6px #44ee7740;
   }
 
   .terminal-text-dim {
-    color: #d4a020;
-    text-shadow: 0 0 4px #d4a02030;
+    color: #2daa55;
+    text-shadow: 0 0 4px #2daa5530;
   }
 
   .crt-screen {
@@ -77,7 +77,7 @@ body {
     left: 0;
     width: 100%;
     height: 4px;
-    background: linear-gradient(to bottom, transparent, rgba(255, 204, 68, 0.01), transparent);
+    background: linear-gradient(to bottom, transparent, rgba(68, 238, 119, 0.01), transparent);
     animation: scan-line 8s linear infinite;
     pointer-events: none;
     z-index: 9999;
@@ -129,7 +129,7 @@ body {
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(255, 204, 68, 0.06) 50%,
+      rgba(68, 238, 119, 0.06) 50%,
       transparent 100%
     );
     transform: translateX(-100%);
@@ -154,8 +154,8 @@ body {
   }
 
   .indicator-light-amber {
-    background: #ffcc44;
-    box-shadow: 0 0 6px #ffcc44;
+    background: #44ee77;
+    box-shadow: 0 0 6px #44ee77;
   }
 
   .indicator-light-static {
@@ -163,8 +163,8 @@ body {
   }
 
   .logo-glow {
-    filter: drop-shadow(0 0 6px rgba(255, 204, 68, 0.15))
-      drop-shadow(0 0 12px rgba(255, 204, 68, 0.08));
+    filter: drop-shadow(0 0 6px rgba(68, 238, 119, 0.15))
+      drop-shadow(0 0 12px rgba(68, 238, 119, 0.08));
   }
 
   .logo-glow-flicker {
@@ -227,32 +227,32 @@ body {
 /* CRT glow pulse on new block */
 @keyframes logo-glow-pulse {
   0% {
-    filter: drop-shadow(0 0 8px rgba(255, 204, 68, 0.3))
-      drop-shadow(0 0 16px rgba(255, 204, 68, 0.15));
+    filter: drop-shadow(0 0 8px rgba(68, 238, 119, 0.3))
+      drop-shadow(0 0 16px rgba(68, 238, 119, 0.15));
   }
   10% {
-    filter: drop-shadow(0 0 14px rgba(255, 204, 68, 0.5))
-      drop-shadow(0 0 28px rgba(255, 204, 68, 0.25));
+    filter: drop-shadow(0 0 14px rgba(68, 238, 119, 0.5))
+      drop-shadow(0 0 28px rgba(68, 238, 119, 0.25));
   }
   20% {
-    filter: drop-shadow(0 0 4px rgba(255, 204, 68, 0.15))
-      drop-shadow(0 0 8px rgba(255, 204, 68, 0.06));
+    filter: drop-shadow(0 0 4px rgba(68, 238, 119, 0.15))
+      drop-shadow(0 0 8px rgba(68, 238, 119, 0.06));
   }
   35% {
-    filter: drop-shadow(0 0 12px rgba(255, 204, 68, 0.45))
-      drop-shadow(0 0 22px rgba(255, 204, 68, 0.2));
+    filter: drop-shadow(0 0 12px rgba(68, 238, 119, 0.45))
+      drop-shadow(0 0 22px rgba(68, 238, 119, 0.2));
   }
   50% {
-    filter: drop-shadow(0 0 5px rgba(255, 204, 68, 0.18))
-      drop-shadow(0 0 10px rgba(255, 204, 68, 0.08));
+    filter: drop-shadow(0 0 5px rgba(68, 238, 119, 0.18))
+      drop-shadow(0 0 10px rgba(68, 238, 119, 0.08));
   }
   70% {
-    filter: drop-shadow(0 0 8px rgba(255, 204, 68, 0.22))
-      drop-shadow(0 0 14px rgba(255, 204, 68, 0.1));
+    filter: drop-shadow(0 0 8px rgba(68, 238, 119, 0.22))
+      drop-shadow(0 0 14px rgba(68, 238, 119, 0.1));
   }
   100% {
-    filter: drop-shadow(0 0 6px rgba(255, 204, 68, 0.15))
-      drop-shadow(0 0 12px rgba(255, 204, 68, 0.08));
+    filter: drop-shadow(0 0 6px rgba(68, 238, 119, 0.15))
+      drop-shadow(0 0 12px rgba(68, 238, 119, 0.08));
   }
 }
 
@@ -392,8 +392,8 @@ body {
     border-color: #1c2236;
     background: #0a0c14;
     box-shadow:
-      inset 0 0 30px rgba(255, 204, 68, 0.02),
-      0 0 10px rgba(255, 204, 68, 0.04);
+      inset 0 0 30px rgba(68, 238, 119, 0.02),
+      0 0 10px rgba(68, 238, 119, 0.04);
   }
 
   .terminal-card::before {
@@ -414,7 +414,7 @@ body {
   .terminal-card-header {
     @apply relative z-10 border-b px-4 py-3;
     border-color: #1c2236;
-    background: linear-gradient(to bottom, rgba(255, 204, 68, 0.03), transparent);
+    background: linear-gradient(to bottom, rgba(68, 238, 119, 0.03), transparent);
   }
 
   .terminal-card-content {
@@ -433,9 +433,9 @@ body {
     padding: 1px;
     background: linear-gradient(
       135deg,
-      rgba(255, 204, 68, 0.15),
+      rgba(68, 238, 119, 0.15),
       transparent 50%,
-      rgba(255, 204, 68, 0.06)
+      rgba(68, 238, 119, 0.06)
     );
     mask:
       linear-gradient(#fff 0 0) content-box,

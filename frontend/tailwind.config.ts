@@ -20,16 +20,16 @@ export default {
           dim: '#3a4260',
         },
         interactive: {
-          DEFAULT: '#ffcc44',
-          hover: '#ffe066',
-          muted: '#ffcc4420',
-          dim: '#d4a020',
+          DEFAULT: '#44ee77',
+          hover: '#66ff99',
+          muted: '#44ee7720',
+          dim: '#2daa55',
         },
         emphasis: {
-          DEFAULT: '#ffcc44',
-          dim: '#d4a020',
-          glow: '#ffcc4440',
-          bright: '#ffe066',
+          DEFAULT: '#44ee77',
+          dim: '#2daa55',
+          glow: '#44ee7740',
+          bright: '#66ff99',
         },
         positive: {
           DEFAULT: '#00ffaa',
@@ -41,9 +41,9 @@ export default {
           bright: '#ff6699',
         },
         warning: {
-          DEFAULT: '#ffcc44',
-          dim: '#d4a020',
-          bright: '#ffe066',
+          DEFAULT: '#44ee77',
+          dim: '#2daa55',
+          bright: '#66ff99',
         },
         info: {
           DEFAULT: '#44bbff',
@@ -52,8 +52,8 @@ export default {
         },
         // Neon accent colors
         amber: {
-          DEFAULT: '#ffcc44',
-          dim: '#d4a020',
+          DEFAULT: '#44ee77',
+          dim: '#2daa55',
         },
         rose: {
           DEFAULT: '#ff66aa',
@@ -80,10 +80,10 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 8px #ffcc4420, 0 0 20px #ffcc4412',
-        'glow-strong': '0 0 8px #ffcc4430, 0 0 20px #ffcc4420',
-        'glow-inset': 'inset 0 1px 10px #ffcc4410',
-        'interactive-glow': '0 0 10px #ffcc4428, 0 0 20px #ffcc4414',
+        glow: '0 0 8px #44ee7720, 0 0 20px #44ee7712',
+        'glow-strong': '0 0 8px #44ee7730, 0 0 20px #44ee7720',
+        'glow-inset': 'inset 0 1px 10px #44ee7710',
+        'interactive-glow': '0 0 10px #44ee7728, 0 0 20px #44ee7714',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',

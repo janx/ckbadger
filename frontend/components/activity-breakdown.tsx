@@ -16,8 +16,8 @@ interface ActivityBreakdownProps {
 
 const ACTIVITY_COLORS: Record<string, string> = {
   Transfer: '#00ffaa',
-  'DAO Deposit': '#ffcc44',
-  'DAO Withdraw': '#d4a020',
+  'DAO Deposit': '#44ee77',
+  'DAO Withdraw': '#2daa55',
   Token: '#ff66aa',
   Object: '#bb88ff',
   Identity: '#44bbff',
@@ -41,12 +41,12 @@ function buildChartData(stats: ActivitySummary24h) {
 }
 
 const SCRIPT_COLORS = [
-  '#ffcc44',
+  '#44ee77',
   '#ff66aa',
   '#44bbff',
   '#00ffaa',
   '#bb88ff',
-  '#ffe066',
+  '#66ff99',
   '#ff6699',
   '#66ddff',
   '#44ffcc',
