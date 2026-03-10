@@ -15,9 +15,9 @@ export default {
         },
         text: {
           primary: '#2a2520',
-          secondary: '#7a7068',
-          muted: '#b0a898',
-          dim: '#d0c8bc',
+          secondary: '#6a6058',
+          muted: '#8a8078',
+          dim: '#a8a090',
         },
         interactive: {
           DEFAULT: '#3aaa80',

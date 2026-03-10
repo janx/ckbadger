@@ -244,7 +244,7 @@ describe('CellDetailPage', () => {
     expect(legend.querySelector('.grid')).toBeTruthy();
     expect(legend.querySelector('.bg-base-border')).toBeTruthy();
     expect(legend.querySelector('.bg-emphasis')).toBeTruthy();
-    expect(legend.querySelector('.bg-cyan-400')).toBeTruthy();
+    expect(legend.querySelector('.bg-info')).toBeTruthy();
     expect(legend.querySelector('.bg-warning-400')).toBeTruthy();
 
     const lockScriptLegendItem = screen.getByRole('button', { name: /Lock Script/i });
@@ -319,7 +319,7 @@ describe('CellDetailPage', () => {
     });
 
     const legend = screen.getByTestId('byte-composition-legend');
-    expect(legend.querySelector('.bg-fuchsia-400')).toBeTruthy();
+    expect(legend.querySelector('.bg-\\[\\#9a5090\\]')).toBeTruthy();
   });
 
   it('renders withdrawn DAO cell with compensation info', async () => {

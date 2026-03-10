@@ -45,7 +45,7 @@ const HexChar = memo(function HexChar({
     },
   };
 
-  const groupColors = ['opacity-100', 'opacity-70', 'opacity-85', 'opacity-55'];
+  const groupColors = ['opacity-100', 'opacity-80', 'opacity-90', 'opacity-75'];
   const groupOpacity = showGroupHighlight ? groupColors[groupIndex % 4] : 'opacity-100';
 
   return (

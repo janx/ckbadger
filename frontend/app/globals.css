@@ -165,12 +165,21 @@ body {
     animation: none;
   }
 
-  .logo-cursor {
-    animation: cursor-blink 1s step-end infinite;
+  .logo-glow {
+    filter: drop-shadow(0 0 6px rgba(30, 122, 106, 0.15))
+      drop-shadow(0 0 12px rgba(30, 122, 106, 0.08));
+  }
+
+  .logo-glow-flicker {
+    animation: logo-glow-pulse 0.8s steps(1) forwards;
   }
 
   .logo-flicker {
     animation: logo-flicker-anim 0.8s steps(1) forwards;
+  }
+
+  .logo-cursor-flash {
+    animation: cursor-flash 0.8s steps(1) forwards;
   }
 
   .byte-hover-breathe {
@@ -190,14 +199,63 @@ body {
   }
 }
 
-/* Terminal cursor blink */
-@keyframes cursor-blink {
-  0%,
-  100% {
+/* Cursor flash on new block (visible → blink → fade out) */
+@keyframes cursor-flash {
+  0% {
     opacity: 1;
   }
-  50% {
+  15% {
     opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 0.6;
+  }
+  90% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* CRT glow pulse on new block */
+@keyframes logo-glow-pulse {
+  0% {
+    filter: drop-shadow(0 0 8px rgba(30, 122, 106, 0.3))
+      drop-shadow(0 0 16px rgba(30, 122, 106, 0.15));
+  }
+  10% {
+    filter: drop-shadow(0 0 14px rgba(30, 122, 106, 0.5))
+      drop-shadow(0 0 28px rgba(30, 122, 106, 0.25));
+  }
+  20% {
+    filter: drop-shadow(0 0 4px rgba(30, 122, 106, 0.15))
+      drop-shadow(0 0 8px rgba(30, 122, 106, 0.06));
+  }
+  35% {
+    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.45))
+      drop-shadow(0 0 22px rgba(30, 122, 106, 0.2));
+  }
+  50% {
+    filter: drop-shadow(0 0 5px rgba(30, 122, 106, 0.18))
+      drop-shadow(0 0 10px rgba(30, 122, 106, 0.08));
+  }
+  70% {
+    filter: drop-shadow(0 0 8px rgba(30, 122, 106, 0.22))
+      drop-shadow(0 0 14px rgba(30, 122, 106, 0.1));
+  }
+  100% {
+    filter: drop-shadow(0 0 6px rgba(30, 122, 106, 0.15))
+      drop-shadow(0 0 12px rgba(30, 122, 106, 0.08));
   }
 }
 

@@ -42,15 +42,14 @@ const DATA_SEGMENT_TONES = [
       'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]',
   },
   {
-    dot: 'bg-cyan-400',
-    activePill: 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300',
-    valueText: 'text-cyan-300',
-    byte: 'rounded bg-cyan-500/15 text-cyan-300',
-    byteActive: 'rounded bg-cyan-500/25 text-cyan-200 ring-1 ring-cyan-400/70',
-    byteHover: 'byte-hover-breathe ring-1 ring-cyan-400/80 shadow-[0_0_10px_rgba(34,211,238,0.35)]',
-    asciiActive: 'rounded-sm bg-cyan-500/20 text-cyan-200',
-    asciiHover:
-      'rounded-sm bg-cyan-500/30 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.5)]',
+    dot: 'bg-info',
+    activePill: 'border-info/70 bg-info/15 text-info',
+    valueText: 'text-info',
+    byte: 'rounded bg-info/15 text-info-dim',
+    byteActive: 'rounded bg-info/25 text-info ring-1 ring-info/70',
+    byteHover: 'byte-hover-breathe ring-1 ring-info/80 shadow-[0_0_10px_rgba(58,110,160,0.35)]',
+    asciiActive: 'rounded-sm bg-info/20 text-info',
+    asciiHover: 'rounded-sm bg-info/30 text-info shadow-[inset_0_0_0_1px_rgba(58,110,160,0.5)]',
   },
   {
     dot: 'bg-warning-400',
@@ -64,16 +63,16 @@ const DATA_SEGMENT_TONES = [
       'rounded-sm bg-warning/30 text-warning-50 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.5)]',
   },
   {
-    dot: 'bg-fuchsia-400',
-    activePill: 'border-fuchsia-400/70 bg-fuchsia-500/15 text-fuchsia-200',
-    valueText: 'text-fuchsia-200',
-    byte: 'rounded bg-fuchsia-500/15 text-fuchsia-200',
-    byteActive: 'rounded bg-fuchsia-500/25 text-fuchsia-100 ring-1 ring-fuchsia-400/70',
+    dot: 'bg-[#9a5090]',
+    activePill: 'border-[#9a5090]/70 bg-[#9a5090]/15 text-[#7a4070]',
+    valueText: 'text-[#7a4070]',
+    byte: 'rounded bg-[#9a5090]/15 text-[#7a4070]',
+    byteActive: 'rounded bg-[#9a5090]/25 text-[#6a3060] ring-1 ring-[#9a5090]/70',
     byteHover:
-      'byte-hover-breathe ring-1 ring-fuchsia-400/80 shadow-[0_0_10px_rgba(232,121,249,0.35)]',
-    asciiActive: 'rounded-sm bg-fuchsia-500/20 text-fuchsia-100',
+      'byte-hover-breathe ring-1 ring-[#9a5090]/80 shadow-[0_0_10px_rgba(154,80,144,0.35)]',
+    asciiActive: 'rounded-sm bg-[#9a5090]/20 text-[#6a3060]',
     asciiHover:
-      'rounded-sm bg-fuchsia-500/30 text-fuchsia-50 shadow-[inset_0_0_0_1px_rgba(232,121,249,0.5)]',
+      'rounded-sm bg-[#9a5090]/30 text-[#6a3060] shadow-[inset_0_0_0_1px_rgba(154,80,144,0.5)]',
   },
 ] as const;
 
@@ -95,9 +94,9 @@ const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
     legendValueText: 'text-emphasis',
   },
   typeScriptBytes: {
-    dot: 'bg-cyan-400',
-    legendActivePill: 'border-cyan-400/70 bg-cyan-500/15 text-cyan-300',
-    legendValueText: 'text-cyan-300',
+    dot: 'bg-info',
+    legendActivePill: 'border-info/70 bg-info/15 text-info',
+    legendValueText: 'text-info',
   },
   dataBytes: {
     dot: 'bg-warning-400',
@@ -105,9 +104,9 @@ const CAPACITY_SEGMENT_TONES: Record<string, CapacitySegmentTone> = {
     legendValueText: 'text-warning',
   },
   inferredBytes: {
-    dot: 'bg-fuchsia-400',
-    legendActivePill: 'border-fuchsia-400/70 bg-fuchsia-500/15 text-fuchsia-200',
-    legendValueText: 'text-fuchsia-200',
+    dot: 'bg-[#9a5090]',
+    legendActivePill: 'border-[#9a5090]/70 bg-[#9a5090]/15 text-[#7a4070]',
+    legendValueText: 'text-[#7a4070]',
   },
 };
 

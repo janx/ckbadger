@@ -17,7 +17,11 @@ export function Logo() {
   }, [latestBlock]);
 
   return (
-    <Link href="/" className="group flex items-center gap-0 font-mono" aria-label="CKBadger Home">
+    <Link
+      href="/"
+      className={`group flex items-center gap-0 font-mono ${isGlitching ? 'logo-glow-flicker' : 'logo-glow'}`}
+      aria-label="CKBadger Home"
+    >
       <span className="text-interactive group-hover:text-interactive-hover mr-1.5 text-sm font-normal transition-colors md:text-base">
         $
       </span>
@@ -26,7 +30,9 @@ export function Logo() {
       >
         ckbadger
       </span>
-      <span className="logo-cursor bg-interactive group-hover:bg-interactive-hover ml-0.5 inline-block h-[1.1em] w-[2px]" />
+      <span
+        className={`bg-interactive group-hover:bg-interactive-hover ml-0.5 inline-block h-[1.1em] w-[2px] ${isGlitching ? 'logo-cursor-flash' : 'opacity-0'}`}
+      />
     </Link>
   );
 }
