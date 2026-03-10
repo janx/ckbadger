@@ -389,7 +389,7 @@ export default function ScriptByCodeHashPage({
                       setHashType(e.target.value as HashType);
                       cellsPagination.reset();
                     }}
-                    className="border-base-border bg-base-elevated rounded border px-2 py-1 font-mono text-xs text-white"
+                    className="border-base-border bg-base-elevated text-text-primary rounded border px-2 py-1 font-mono text-xs"
                   >
                     <option value="type">
                       {supportsTypeRef ? 'type (upgradeable ref)' : 'type (unavailable)'}
@@ -413,7 +413,7 @@ export default function ScriptByCodeHashPage({
                       setScriptKind(e.target.value as ScriptKind);
                       cellsPagination.reset();
                     }}
-                    className="border-base-border bg-base-elevated rounded border px-2 py-1 font-mono text-xs text-white"
+                    className="border-base-border bg-base-elevated text-text-primary rounded border px-2 py-1 font-mono text-xs"
                   >
                     <option value="both">Both</option>
                     <option value="lock">Lock</option>

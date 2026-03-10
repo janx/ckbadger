@@ -608,7 +608,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               <div className="mb-1 flex items-center justify-between gap-3">
                                 <Link
                                   href={`/nfts/dotbit/${encodeURIComponent(item.nftId)}`}
-                                  className="hover:text-emphasis font-mono text-sm text-white hover:underline"
+                                  className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
                                 </Link>
@@ -699,7 +699,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               {item.standard.toLowerCase() === 'm-nft' ? (
                                 <Link
                                   href={`/nfts/mnft/${item.nftId}`}
-                                  className="hover:text-emphasis font-mono text-sm text-white hover:underline"
+                                  className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
                                 </Link>
@@ -707,12 +707,12 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                                 item.standard.toLowerCase() === 'did:ckb' ? (
                                 <Link
                                   href={`/nfts/did/${encodeURIComponent(item.nftId)}`}
-                                  className="hover:text-emphasis font-mono text-sm text-white hover:underline"
+                                  className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
                                 </Link>
                               ) : (
-                                <div className="font-mono text-sm text-white">
+                                <div className="text-text-primary font-mono text-sm">
                                   {item.name || item.nftId}
                                 </div>
                               )}
@@ -818,7 +818,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                                 )}
                               </Link>
                             </div>
-                            <div className="shrink-0 font-mono text-sm text-white">
+                            <div className="text-text-primary shrink-0 font-mono text-sm">
                               {formatNumber(holder.itemCount)}
                             </div>
                           </div>
@@ -1082,11 +1082,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     </div>
                   )}
                   {dobContent?.dnaHex && (
-                    <div className="rounded border border-cyan-900/70 bg-cyan-950/20 px-3 py-2 sm:col-span-2">
-                      <div className="font-mono text-[10px] uppercase tracking-wider text-cyan-400/80">
+                    <div className="border-info/30 bg-info/10 rounded border px-3 py-2 sm:col-span-2">
+                      <div className="text-info font-mono text-[10px] uppercase tracking-wider">
                         DOB DNA
                       </div>
-                      <div className="mt-1 font-mono text-xs text-cyan-200">
+                      <div className="text-info-dim mt-1 font-mono text-xs">
                         {shortenHex(dobContent.dnaHex, 18, 14)}
                       </div>
                     </div>

@@ -68,7 +68,7 @@ export default function HardforksPage() {
 
             {error && !isLoading && (
               <TerminalRow hoverable={false}>
-                <div className="font-mono text-red-400">Failed to load hardfork timeline</div>
+                <div className="text-negative font-mono">Failed to load hardfork timeline</div>
               </TerminalRow>
             )}
 
@@ -78,7 +78,7 @@ export default function HardforksPage() {
                 <TerminalRow key={`${event.id}-${event.activationEpoch}`}>
                   <div className="flex items-center gap-4">
                     <div className="w-44">
-                      <div className="font-mono text-sm text-white">{event.name}</div>
+                      <div className="text-text-primary font-mono text-sm">{event.name}</div>
                       <div className="text-text-muted font-mono text-xs">
                         {event.editionYear} · {event.shortName}
                       </div>

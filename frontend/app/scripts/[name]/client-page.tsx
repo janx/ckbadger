@@ -696,7 +696,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                               />
                             </Link>
                           </div>
-                          <div className="w-52 shrink-0 text-right text-white">
+                          <div className="text-text-primary w-52 shrink-0 text-right">
                             <Capacity value={cell.capacity} />
                           </div>
                           <div className="text-text-muted w-24 shrink-0 text-right font-mono">

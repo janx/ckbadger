@@ -136,7 +136,7 @@ export default function ForksPage() {
                         />
                       </div>
                       <div className="w-24 text-center">
-                        <div className="font-mono text-sm text-red-400">
+                        <div className="text-negative font-mono text-sm">
                           {event.orphanedBlocksCount} blocks
                         </div>
                         <div className="text-text-muted font-mono text-xs">

@@ -528,7 +528,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                       <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
                         Average Payload Size
                       </div>
-                      <div className="mt-1 font-mono text-sm text-white">
+                      <div className="text-text-primary mt-1 font-mono text-sm">
                         {avgPayloadBytes !== null ? `${formatNumber(avgPayloadBytes)} B` : '--'}
                       </div>
                     </div>
@@ -898,7 +898,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                 )}
                               </Link>
                             </div>
-                            <div className="shrink-0 font-mono text-sm text-white">
+                            <div className="text-text-primary shrink-0 font-mono text-sm">
                               {formatNumber(holder.itemCount)}
                             </div>
                           </div>

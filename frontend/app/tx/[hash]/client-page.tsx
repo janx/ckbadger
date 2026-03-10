@@ -513,7 +513,7 @@ export default function TransactionDetailPage() {
                       <span className="cycles-calculating-marquee">Calculating ...</span>
                     </span>
                   ) : hasFailed ? (
-                    <span className="italic text-red-400">Calculation failed</span>
+                    <span className="text-negative italic">Calculation failed</span>
                   ) : (
                     <span className="text-text-muted italic">Not available</span>
                   )}
@@ -540,16 +540,16 @@ export default function TransactionDetailPage() {
                   return (
                     <div className="flex items-center justify-end gap-2">
                       {isIncrease && (
-                        <span className="inline-flex items-center rounded border border-green-900/50 bg-green-900/50 px-2 py-1 font-mono text-sm tabular-nums text-green-400">
+                        <span className="border-positive/30 bg-positive/10 text-positive inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
                           +{f.integer}
-                          <span className="text-[0.85em] text-green-400/60">.{f.decimal}</span>
+                          <span className="text-positive/60 text-[0.85em]">.{f.decimal}</span>
                           <span className="ml-1 text-[0.85em]">CKB</span>
                         </span>
                       )}
                       {isDecrease && (
-                        <span className="inline-flex items-center rounded border border-red-900/50 bg-red-900/50 px-2 py-1 font-mono text-sm tabular-nums text-red-400">
+                        <span className="border-negative/30 bg-negative/10 text-negative inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
                           -{f.integer}
-                          <span className="text-[0.85em] text-red-400/60">.{f.decimal}</span>
+                          <span className="text-negative/60 text-[0.85em]">.{f.decimal}</span>
                           <span className="ml-1 text-[0.85em]">CKB</span>
                         </span>
                       )}
@@ -673,7 +673,7 @@ export default function TransactionDetailPage() {
                           <div className="text-text-secondary text-xs uppercase tracking-wide">
                             Dead Outputs
                           </div>
-                          <div className="mt-1 font-mono text-lg text-red-400">
+                          <div className="text-negative mt-1 font-mono text-lg">
                             {
                               graphInsights.outputNodes.filter((node) => node.status === 'dead')
                                 .length
@@ -865,7 +865,7 @@ function InputsOutputsTab({
                       {input.address ? (
                         <Address address={input.address} />
                       ) : (
-                        <span className="text-sm text-red-400">Address error</span>
+                        <span className="text-negative text-sm">Address error</span>
                       )}
                       {input.capacity && (
                         <Capacity value={input.capacity} className="text-text-secondary text-sm" />
@@ -924,7 +924,7 @@ function InputsOutputsTab({
                     {output.address ? (
                       <Address address={output.address} />
                     ) : (
-                      <span className="text-sm text-red-400">Address error</span>
+                      <span className="text-negative text-sm">Address error</span>
                     )}
                     <Capacity value={output.capacity} className="text-text-secondary" />
                   </div>
@@ -1183,7 +1183,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               <span className="border-emphasis/30 bg-emphasis/10 text-emphasis rounded border px-1.5 py-0.5 font-mono text-[11px]">
                 input {inputWitnessCount}
               </span>
-              <span className="rounded border border-cyan-400/30 bg-cyan-500/10 px-1.5 py-0.5 font-mono text-[11px] text-cyan-300">
+              <span className="border-info/30 bg-info/10 text-info rounded border px-1.5 py-0.5 font-mono text-[11px]">
                 extra {extraWitnessCount}
               </span>
             </div>
@@ -1301,9 +1301,9 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       {activeScriptGroup && (
         <div
           data-testid="tx-witness-focused-group"
-          className="flex flex-wrap items-center justify-between gap-2 rounded border border-cyan-400/50 bg-cyan-500/10 px-3 py-2"
+          className="border-info/30 bg-info/10 flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2"
         >
-          <div className="text-xs text-cyan-100">
+          <div className="text-info text-xs">
             Focused script group: <span className="font-mono">{activeScriptGroup.kind}</span> {'->'}
             witness #{activeScriptGroup.witnessIndex}
           </div>
@@ -1315,7 +1315,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               onSelectionChange?.(nextWitnessIndex, null);
               syncWitnessQuery(nextWitnessIndex, null);
             }}
-            className="rounded border border-cyan-400/50 px-2 py-1 font-mono text-xs text-cyan-200 hover:bg-cyan-500/20"
+            className="border-info/30 text-info hover:bg-info/20 rounded border px-2 py-1 font-mono text-xs"
           >
             Clear focus
           </button>

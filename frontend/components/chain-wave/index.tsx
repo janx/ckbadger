@@ -139,7 +139,7 @@ function StageFlowPill({
     <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
       <div className="text-text-secondary/70 text-[11px] uppercase tracking-widest">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
-        <div className="text-lg font-semibold text-white">{value.toLocaleString()}</div>
+        <div className="text-text-primary text-lg font-semibold">{value.toLocaleString()}</div>
         <div className="text-text-secondary/70 text-[11px]">{subtitle}</div>
       </div>
     </div>
@@ -272,11 +272,11 @@ function StageScatterCard({
     <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-white sm:text-base">{title}</h3>
+          <h3 className="text-text-primary text-sm font-semibold sm:text-base">{title}</h3>
           <div className="text-text-muted text-xs">{subtitle}</div>
         </div>
         <div className="text-right">
-          <div className="text-lg font-bold text-white">{totalCount.toLocaleString()}</div>
+          <div className="text-text-primary text-lg font-bold">{totalCount.toLocaleString()}</div>
           <div className="text-text-muted text-[11px] uppercase tracking-widest">txns</div>
         </div>
       </div>
@@ -310,7 +310,9 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
     <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold text-white sm:text-base">Recent Committed Blocks</h3>
+          <h3 className="text-text-primary text-sm font-semibold sm:text-base">
+            Recent Committed Blocks
+          </h3>
           <div className="text-text-muted text-xs">New blocks stream in as txns get packed</div>
         </div>
         <div className="border-emphasis/40 bg-emphasis/10 text-emphasis rounded-lg border px-2 py-1 text-xs">
@@ -452,7 +454,7 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
     <div className={containerClassName}>
       {showHeader && (
         <div className="mb-4">
-          <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">
+          <h2 className="text-text-primary text-lg font-bold tracking-tight sm:text-xl">
             Transaction Flow Pipeline
           </h2>
           <p className="text-text-muted mt-1 text-sm">

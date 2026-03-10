@@ -32,7 +32,7 @@ function ScriptLabel({
   return (
     <Link
       href={`/scripts/${encodeURIComponent(info.name)}`}
-      className="inline-flex items-center rounded bg-blue-900/50 px-2 py-0.5 text-xs text-blue-400 hover:opacity-80"
+      className="bg-info/10 text-info inline-flex items-center rounded px-2 py-0.5 text-xs hover:opacity-80"
     >
       {info.name}
     </Link>

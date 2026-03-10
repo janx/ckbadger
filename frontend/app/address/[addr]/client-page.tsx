@@ -278,7 +278,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         const absDelta = change.delta.startsWith('-') ? change.delta.slice(1) : change.delta;
         const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
         const sign = isZero ? '' : isPositive ? '+' : '-';
-        const color = isZero ? 'text-text-muted' : isPositive ? 'text-green-400' : 'text-red-400';
+        const color = isZero ? 'text-text-muted' : isPositive ? 'text-positive' : 'text-negative';
         const tokenLabel = change.symbol?.trim()
           ? change.symbol.trim()
           : shortHash(change.typeScriptHash);
@@ -314,7 +314,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         return (
           <span className="flex items-center gap-1">
             <Badge variant="green">DAO Withdraw</Badge>
-            <span className="font-mono text-xs text-green-400">
+            <span className="text-positive font-mono text-xs">
               +{formatCkbAmount(change.compensation).full} CKB
             </span>
           </span>
@@ -412,7 +412,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   Nervos DAO
                 </Link>
                 {daoSummary.estimatedApc && (
-                  <span className="text-xs font-normal text-green-400">
+                  <span className="text-positive text-xs font-normal">
                     {daoSummary.estimatedApc}% APC
                   </span>
                 )}
@@ -490,7 +490,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           </div>
                           <div className="self-center text-right">
                             {deposit.compensation ? (
-                              <span className="font-mono text-sm text-green-400">
+                              <span className="text-positive font-mono text-sm">
                                 +{formatCkbAmount(deposit.compensation).full} CKB
                               </span>
                             ) : deposit.status === 'deposited' ? (
@@ -677,7 +677,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               </span>
               <button
                 onClick={() => handleTokenSelect(null)}
-                className="text-xs text-red-400 hover:underline"
+                className="text-negative text-xs hover:underline"
               >
                 Clear Filter
               </button>
@@ -691,7 +691,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               </span>
               <button
                 onClick={() => setSelectedDao(false)}
-                className="text-xs text-red-400 hover:underline"
+                className="text-negative text-xs hover:underline"
               >
                 Clear Filter
               </button>
@@ -746,9 +746,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           const isPositive = delta > BigInt(0);
                           const isNegative = delta < BigInt(0);
                           const deltaColor = isPositive
-                            ? 'text-green-400'
+                            ? 'text-positive'
                             : isNegative
-                              ? 'text-red-400'
+                              ? 'text-negative'
                               : 'text-text-muted';
                           return (
                             <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
@@ -924,7 +924,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                       </div>
                                     )}
                                     {daoDepositInfo?.compensation && (
-                                      <div className="mt-1 text-xs text-green-400">
+                                      <div className="text-positive mt-1 text-xs">
                                         +{formatCkbAmount(daoDepositInfo.compensation).full} CKB
                                         compensation
                                       </div>
@@ -1102,7 +1102,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 <div className="w-44 whitespace-nowrap text-right">
                                   <Capacity
                                     value={tx.capacityChange}
-                                    className={isPositive ? 'text-green-400' : 'text-red-400'}
+                                    className={isPositive ? 'text-positive' : 'text-negative'}
                                     showSign
                                   />
                                 </div>

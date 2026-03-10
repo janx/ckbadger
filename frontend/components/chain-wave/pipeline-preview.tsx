@@ -60,7 +60,9 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
   return (
     <section className="from-base-surface via-base-surface to-base-elevated ring-base-border/70 overflow-visible rounded-2xl bg-gradient-to-br p-4 ring-1 ring-inset">
       <div className="mb-2">
-        <h2 className="text-base font-semibold text-white sm:text-lg">Transaction Pipeline</h2>
+        <h2 className="text-text-primary text-base font-semibold sm:text-lg">
+          Transaction Pipeline
+        </h2>
         <div
           data-testid="pipeline-preview-summary-row"
           className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"

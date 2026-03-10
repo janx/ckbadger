@@ -42,7 +42,7 @@ function MinerRow({
           <div className="h-3 w-3 flex-shrink-0 rounded" style={{ backgroundColor: color }} />
           <Link href={`/address/${addressPath}`} className="group flex flex-col gap-0.5">
             {miner.minerName && (
-              <span className="group-hover:text-emphasis text-sm font-medium text-white transition-colors">
+              <span className="group-hover:text-emphasis text-text-primary text-sm font-medium transition-colors">
                 {miner.minerName}
               </span>
             )}
@@ -51,7 +51,7 @@ function MinerRow({
             </span>
           </Link>
         </div>
-        <div className="w-28 text-right font-mono text-white">
+        <div className="text-text-primary w-28 text-right font-mono">
           {formatNumber(miner.blocksMined)}
         </div>
         <div className="flex w-40 items-center justify-end gap-2">

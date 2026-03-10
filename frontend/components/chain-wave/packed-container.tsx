@@ -214,21 +214,22 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
             <div className="text-text-muted mb-1 text-[10px]">{CATEGORY_LABELS[item.category]}</div>
             <div className="text-text-muted space-y-0.5">
               <div>
-                TX: <span className="font-mono text-white">{truncateHash(item.id)}</span>
+                TX: <span className="text-text-primary font-mono">{truncateHash(item.id)}</span>
               </div>
               {item.size > 0 && (
                 <div>
-                  Size: <span className="text-white">{formatBytes(item.size)}</span>
+                  Size: <span className="text-text-primary">{formatBytes(item.size)}</span>
                 </div>
               )}
               {item.fee !== undefined && item.fee > 0 && (
                 <div>
-                  Fee: <span className="text-white">{formatFee(item.fee)}</span>
+                  Fee: <span className="text-text-primary">{formatFee(item.fee)}</span>
                 </div>
               )}
               {item.feeRate !== undefined && item.feeRate > 0 && (
                 <div>
-                  Fee Rate: <span className="text-white">{item.feeRate.toFixed(2)} sh/B</span>
+                  Fee Rate:{' '}
+                  <span className="text-text-primary">{item.feeRate.toFixed(2)} sh/B</span>
                 </div>
               )}
             </div>
@@ -291,7 +292,7 @@ export function PackedContainer({
           {subtitle && <div className="text-text-muted text-[10px] sm:text-xs">{subtitle}</div>}
         </div>
         <div className={cn('text-right text-xs sm:text-sm', config.countColor)}>
-          <span className="font-bold text-white">{totalCount.toLocaleString()}</span>
+          <span className="text-text-primary font-bold">{totalCount.toLocaleString()}</span>
           <span className="ml-1">txs</span>
         </div>
       </div>

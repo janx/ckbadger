@@ -130,7 +130,7 @@ export default function ScriptsPage() {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   placeholder="Search by name or code hash..."
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim w-64 rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-primary w-64 rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                 />
                 {search && (
                   <button
@@ -181,8 +181,8 @@ export default function ScriptsPage() {
               </div>
             ) : isError ? (
               <div className="py-8 text-center">
-                <p className="font-mono text-sm text-red-300">Failed to load scripts</p>
-                <p className="mt-2 font-mono text-xs text-red-400">{errorMessage}</p>
+                <p className="text-negative font-mono text-sm">Failed to load scripts</p>
+                <p className="text-negative mt-2 font-mono text-xs">{errorMessage}</p>
               </div>
             ) : data?.data?.length ? (
               <>

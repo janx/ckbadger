@@ -359,7 +359,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                           <div className="mb-1 flex items-center justify-between gap-3">
                             <Link
                               href={`${itemDetailPrefix}/${encodeURIComponent(item.nftId)}`}
-                              className="hover:text-emphasis font-mono text-sm text-white hover:underline"
+                              className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
                             >
                               {item.name || item.nftId}
                             </Link>
@@ -483,7 +483,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                               )}
                             </Link>
                           </div>
-                          <div className="shrink-0 font-mono text-sm text-white">
+                          <div className="text-text-primary shrink-0 font-mono text-sm">
                             {formatNumber(holder.itemCount)}
                           </div>
                         </div>

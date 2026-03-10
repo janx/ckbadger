@@ -398,7 +398,9 @@ function AssetTable({
                   </div>
                 </div>
                 {assetType !== 'token' && (
-                  <div className={`${smallNumberColumnClass} font-mono tabular-nums text-white`}>
+                  <div
+                    className={`${smallNumberColumnClass} text-text-primary font-mono tabular-nums`}
+                  >
                     {formatNumber(asset.totalSupply || 0)}
                   </div>
                 )}
@@ -551,7 +553,7 @@ export function AssetsPageClient() {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   placeholder="Search by name..."
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim w-full rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1 sm:w-64"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-primary w-full rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1 sm:w-64"
                 />
                 {search && (
                   <button
@@ -583,7 +585,7 @@ export function AssetsPageClient() {
                     value={standard ?? ''}
                     onChange={(event) => handleStandardChange(event.target.value)}
                     aria-label="Filter by standard"
-                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-primary min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                   >
                     <option value="">All standards</option>
                     {standardOptions.map((item) => (
@@ -597,7 +599,7 @@ export function AssetsPageClient() {
                       value={storageTier}
                       onChange={(event) => handleStorageTierChange(event.target.value)}
                       aria-label="Filter by storage tier"
-                      className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm text-white transition-colors focus:outline-none focus:ring-1"
+                      className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-primary min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                     >
                       {STORAGE_TIER_OPTIONS.map((item) => (
                         <option key={item} value={item}>

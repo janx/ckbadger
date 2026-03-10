@@ -95,7 +95,7 @@ export function NftCollectionStatCards({
           <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
             Live Capacity
           </div>
-          <div className="font-mono text-lg text-white">{compactCapacity}</div>
+          <div className="text-text-primary font-mono text-lg">{compactCapacity}</div>
           <div className="text-text-muted font-mono text-xs">Total live CKB in this collection</div>
         </TerminalPanelContent>
       </TerminalPanel>
@@ -105,7 +105,7 @@ export function NftCollectionStatCards({
           <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
             Occupied Capacity
           </div>
-          <div className="font-mono text-lg text-white">{compactOccupied}</div>
+          <div className="text-text-primary font-mono text-lg">{compactOccupied}</div>
           <div className="text-text-muted font-mono text-xs">
             Occupied Ratio: {occupationPercent ? `${occupationPercent}%` : '--'}
           </div>

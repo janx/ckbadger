@@ -25,13 +25,13 @@ function getTypeBadge(activity: GlobalActivity): { label: string; className: str
   if (delta > BigInt(0)) {
     return {
       label: 'Received',
-      className: 'bg-emerald-900/50 text-emerald-300 border border-emerald-700/50',
+      className: 'bg-emerald-900/50 text-positive border border-emerald-700/50',
     };
   }
   if (delta < BigInt(0)) {
     return {
       label: 'Sent',
-      className: 'bg-red-900/50 text-red-300 border border-red-700/50',
+      className: 'bg-negative/10 text-negative border border-negative/30',
     };
   }
   return {
@@ -45,7 +45,7 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
     case 'token': {
       const delta = BigInt(change.delta);
       const sign = delta > BigInt(0) ? '+' : '';
-      const color = delta > BigInt(0) ? 'text-emerald-300' : 'text-red-300';
+      const color = delta > BigInt(0) ? 'text-positive' : 'text-negative';
       const label = change.symbol ?? `${change.typeScriptHash.slice(0, 10)}...`;
       return (
         <span
@@ -85,7 +85,7 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
       );
     case 'daoWithdrawComplete':
       return (
-        <span className="rounded border border-emerald-700/50 bg-emerald-900/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
+        <span className="text-positive rounded border border-emerald-700/50 bg-emerald-900/30 px-1.5 py-0.5 text-[10px]">
           DAO Withdraw Complete
         </span>
       );
@@ -139,7 +139,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   const headerActions = (
     <Link
       href="/activities"
-      className="text-text-muted font-mono text-xs transition-colors hover:text-cyan-400"
+      className="text-text-muted hover:text-emphasis font-mono text-xs transition-colors"
     >
       VIEW ALL →
     </Link>
@@ -252,7 +252,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                       <span
                         className={cn(
                           'font-mono text-xs',
-                          delta > BigInt(0) ? 'text-emerald-400' : 'text-red-400'
+                          delta > BigInt(0) ? 'text-positive' : 'text-negative'
                         )}
                       >
                         {delta > BigInt(0) ? '+' : ''}

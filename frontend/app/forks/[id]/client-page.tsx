@@ -50,7 +50,7 @@ export default function ForkDetailPage() {
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8 text-center">
-          <h1 className="text-2xl font-bold text-red-400">Error loading fork event</h1>
+          <h1 className="text-negative text-2xl font-bold">Error loading fork event</h1>
           <p className="text-text-muted mt-2">{(error as Error).message}</p>
         </main>
       </div>
@@ -120,7 +120,7 @@ export default function ForkDetailPage() {
                   <DataField label="Resolved">
                     <div>
                       {new Date(event.resolvedAt).toLocaleString()}
-                      <div className="mt-1 text-xs text-green-400">
+                      <div className="text-positive mt-1 text-xs">
                         Action: {event.resolutionAction}
                       </div>
                     </div>
@@ -134,8 +134,8 @@ export default function ForkDetailPage() {
             <TerminalPanelHeader indicator="warning">Chain Split</TerminalPanelHeader>
             <TerminalPanelContent>
               <div className="space-y-4">
-                <div className="rounded border border-red-900/50 bg-red-950/20 p-4">
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-red-400">
+                <div className="border-negative/30 bg-negative/10 rounded border p-4">
+                  <div className="text-negative mb-2 text-xs font-medium uppercase tracking-wider">
                     Old Tip (Orphaned)
                   </div>
                   <div className="flex items-center justify-between">
@@ -152,8 +152,8 @@ export default function ForkDetailPage() {
                   <div className="text-warning text-2xl">↓</div>
                 </div>
 
-                <div className="rounded border border-green-900/50 bg-green-950/20 p-4">
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wider text-green-400">
+                <div className="border-positive/30 bg-positive/10 rounded border p-4">
+                  <div className="text-positive mb-2 text-xs font-medium uppercase tracking-wider">
                     New Tip (Canonical)
                   </div>
                   <div className="flex items-center justify-between">

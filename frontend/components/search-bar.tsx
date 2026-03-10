@@ -170,7 +170,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                   : 'Block, tx hash, address...'
             }
             className={cn(
-              'focus:border-emphasis focus:ring-interactive border-base-border bg-base-surface placeholder-text-muted w-full rounded-lg border font-mono text-white transition-colors focus:outline-none focus:ring-1',
+              'focus:border-emphasis focus:ring-interactive border-base-border bg-base-surface placeholder-text-muted text-text-primary w-full rounded-lg border font-mono transition-colors focus:outline-none focus:ring-1',
               isHome
                 ? 'border-emphasis/50 focus:ring-interactive/25 bg-base-surface/95 placeholder:text-text-muted h-10 rounded-xl pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(74,222,128,0.18),0_6px_20px_rgba(16,185,129,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
@@ -258,12 +258,12 @@ function SearchResultIcon({ type }: { type: string }) {
     block: 'text-emphasis',
     transaction: 'text-warning',
     address: 'text-text-secondary',
-    cell: 'text-cyan-300',
-    script: 'text-indigo-300',
-    token: 'text-emerald-300',
-    spore: 'text-fuchsia-300',
-    cluster: 'text-orange-300',
-    nft: 'text-orange-300',
+    cell: 'text-info',
+    script: 'text-info-dim',
+    token: 'text-positive',
+    spore: 'text-warning',
+    cluster: 'text-warning-dim',
+    nft: 'text-warning-dim',
     default: 'text-text-muted',
   };
 

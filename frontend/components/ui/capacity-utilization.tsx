@@ -43,7 +43,7 @@ export function CapacityUtilization({
           {totalLabel}
         </span>
         <span
-          className="font-mono text-xs tabular-nums text-white"
+          className="text-text-primary font-mono text-xs tabular-nums"
           title={formatCkbAmount(total.toString()).full + ' CKB'}
         >
           {formatCkbCompact(total.toString()).value} CKB

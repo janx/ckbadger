@@ -266,7 +266,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                   )}
                   {token.udtType && (
                     <DataField label="UDT Type">
-                      <span className="text-white">{token.udtType}</span>
+                      <span className="text-text-primary">{token.udtType}</span>
                     </DataField>
                   )}
                 </div>
@@ -362,7 +362,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                   className="flex flex-wrap items-center gap-1.5 font-mono text-xs"
                                 >
                                   {transfer.isMint ? (
-                                    <span className="text-green-400">Mint</span>
+                                    <span className="text-positive">Mint</span>
                                   ) : transfer.fromAddress ? (
                                     <Address
                                       address={transfer.fromAddress}
@@ -395,7 +395,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                     />
                                   </svg>
                                   {transfer.isBurn ? (
-                                    <span className="text-red-400">Burn</span>
+                                    <span className="text-negative">Burn</span>
                                   ) : transfer.toAddress ? (
                                     <Address
                                       address={transfer.toAddress}
@@ -412,7 +412,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                       />
                                     </Link>
                                   )}
-                                  <span className="ml-auto text-white">
+                                  <span className="text-text-primary ml-auto">
                                     <TokenAmount
                                       amount={transfer.amount}
                                       decimals={token.decimals}
@@ -471,7 +471,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                               </Link>
                             )}
                           </div>
-                          <div className="w-48 text-right text-white">
+                          <div className="text-text-primary w-48 text-right">
                             <TokenAmount amount={holder.balance} decimals={token.decimals} />
                           </div>
                         </div>

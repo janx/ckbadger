@@ -554,7 +554,7 @@ export default function CellDetailPage() {
                   <div className="text-text-muted mb-1 text-xs uppercase tracking-wide">
                     Utilization Ratio
                   </div>
-                  <div className="font-mono text-xl text-white">
+                  <div className="text-text-primary font-mono text-xl">
                     {capacityView.occupiedRatioPercent !== null
                       ? `${Math.max(0, capacityView.occupiedRatioPercent).toFixed(2)}%`
                       : 'N/A'}
@@ -955,7 +955,7 @@ export default function CellDetailPage() {
                 </div>
                 <div>
                   <div className="text-text-muted text-xs">Deposit Time</div>
-                  <span className="text-white">
+                  <span className="text-text-primary">
                     {new Date(cell.daoInfo.depositTimestamp).toLocaleString()}
                   </span>
                 </div>
@@ -973,7 +973,7 @@ export default function CellDetailPage() {
                 {cell.daoInfo.withdrawRequestTimestamp && (
                   <div>
                     <div className="text-text-muted text-xs">Request Time</div>
-                    <span className="text-white">
+                    <span className="text-text-primary">
                       {new Date(cell.daoInfo.withdrawRequestTimestamp).toLocaleString()}
                     </span>
                   </div>
@@ -992,7 +992,7 @@ export default function CellDetailPage() {
                 {cell.daoInfo.withdrawTimestamp && (
                   <div>
                     <div className="text-text-muted text-xs">Withdrawn Time</div>
-                    <span className="text-white">
+                    <span className="text-text-primary">
                       {new Date(cell.daoInfo.withdrawTimestamp).toLocaleString()}
                     </span>
                   </div>
@@ -1133,7 +1133,7 @@ export default function CellDetailPage() {
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
                 <div className="border-base-border/70 bg-base-surface/70 inline-flex items-center gap-2 rounded border px-2.5 py-1.5">
                   <span className="text-text-muted uppercase tracking-wide">Total</span>
-                  <span className="font-mono text-white">
+                  <span className="text-text-primary font-mono">
                     {cell.dataSize.toLocaleString()} bytes
                   </span>
                 </div>

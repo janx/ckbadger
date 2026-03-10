@@ -17,10 +17,10 @@ import { api, ChartResponse } from '@/lib/api';
 function ChartDataWarning({ show }: { show: boolean }) {
   if (!show) return null;
   return (
-    <div className="mb-6 rounded border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
+    <div className="border-warning/30 bg-warning/10 mb-6 rounded border px-4 py-3">
       <div className="flex items-center gap-2">
-        <span className="text-yellow-500">⚠</span>
-        <span className="font-mono text-sm text-yellow-500">
+        <span className="text-warning">⚠</span>
+        <span className="text-warning font-mono text-sm">
           Chart data may be incomplete. The indexer is still syncing historical statistics.
         </span>
       </div>

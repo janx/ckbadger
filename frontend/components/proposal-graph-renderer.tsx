@@ -193,15 +193,15 @@ export function ProposalGraphRenderer({
 
       <div className="flex items-center gap-6 text-sm">
         <div className="text-text-muted">
-          Total Proposals: <span className="text-white">{metadata.totalProposals}</span>
+          Total Proposals: <span className="text-text-primary">{metadata.totalProposals}</span>
         </div>
         <div className="text-text-muted">
-          Committed: <span className="text-green-400">{metadata.committedCount}</span>
+          Committed: <span className="text-positive">{metadata.committedCount}</span>
         </div>
         {metadata.totalProposals > metadata.committedCount && (
           <div className="text-text-muted">
             Pending:{' '}
-            <span className="text-yellow-400">
+            <span className="text-warning">
               {metadata.totalProposals - metadata.committedCount}
             </span>
           </div>

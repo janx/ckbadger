@@ -807,14 +807,17 @@ function PendingBlock({
       {large && (
         <div className="mt-1.5 text-center text-[10px] sm:text-[11px]">
           <div
-            className={cn('font-mono tabular-nums', isEmpty ? 'text-text-muted' : 'text-white/90')}
+            className={cn(
+              'font-mono tabular-nums',
+              isEmpty ? 'text-text-muted' : 'text-text-primary'
+            )}
           >
             ~{formatFeeRate(block.medianFeeRate)} sh/B
           </div>
-          <div className="font-mono tabular-nums text-white/55">
+          <div className="text-text-muted font-mono tabular-nums">
             {formatFeeRate(block.feeRateRange.min)}-{formatFeeRate(block.feeRateRange.max)}
           </div>
-          <div className="text-white/65">
+          <div className="text-text-secondary">
             {formatCapacity(block.totalFee)} CKB · {block.transactionCount} txs
           </div>
         </div>
@@ -884,7 +887,7 @@ function MinedBlock({
   const minedBlockTooltip = isHovered && anchorRect && typeof document !== 'undefined' && (
     <div
       data-testid={`mined-block-tooltip-${block.number}`}
-      className="border-base-border/50 bg-base-surface/95 pointer-events-none fixed z-[10000] w-[296px] rounded-xl border px-4 py-3 text-xs text-white shadow-2xl backdrop-blur-sm"
+      className="border-base-border/50 bg-base-surface/95 text-text-primary pointer-events-none fixed z-[10000] w-[296px] rounded-xl border px-4 py-3 text-xs shadow-2xl backdrop-blur-sm"
       style={{
         left: tooltipLeft,
         top: tooltipTop,
@@ -965,11 +968,11 @@ function MinedBlock({
           ) : isLoading ? (
             <div className="flex h-full w-full flex-col justify-between">
               <div className="flex flex-col items-center gap-1">
-                <div className="h-3 w-14 animate-pulse rounded-md bg-white/20" />
-                <div className="h-2 w-12 animate-pulse rounded-md bg-white/20" />
+                <div className="h-3 w-14 animate-pulse rounded-md bg-black/15" />
+                <div className="h-2 w-12 animate-pulse rounded-md bg-black/15" />
               </div>
               <div className="flex flex-col items-center gap-1">
-                <div className="h-2 w-10 animate-pulse rounded-md bg-white/20" />
+                <div className="h-2 w-10 animate-pulse rounded-md bg-black/15" />
                 <div className="text-[9px] font-medium text-white/60">
                   {block.transactionsCount} txs
                 </div>
@@ -1017,28 +1020,28 @@ function MinedBlock({
         <div className="mt-1.5 text-center text-[10px] sm:text-[11px]">
           {isLoading ? (
             <>
-              <div className="mx-auto h-3 w-20 animate-pulse rounded bg-white/20" />
-              <div className="mx-auto mt-1 h-2 w-24 animate-pulse rounded bg-white/20" />
+              <div className="bg-base-border/40 mx-auto h-3 w-20 animate-pulse rounded" />
+              <div className="bg-base-border/40 mx-auto mt-1 h-2 w-24 animate-pulse rounded" />
             </>
           ) : stats ? (
             <>
-              <div className="font-mono tabular-nums text-white/90">
+              <div className="text-text-primary font-mono tabular-nums">
                 ~{formatFeeRate(stats.avgFeeRate)} sh/B
               </div>
-              <div className="font-mono tabular-nums text-white/55">
+              <div className="text-text-muted font-mono tabular-nums">
                 {formatFeeRate(stats.minFeeRate)}-{formatFeeRate(stats.maxFeeRate)}
               </div>
-              <div className="text-white/65">
+              <div className="text-text-secondary">
                 {formatBytes(stats.totalSize)} · {block.transactionsCount} txs
               </div>
-              <div className="text-white/45">{formatTimeAgo(block.timestamp)} ago</div>
+              <div className="text-text-dim">{formatTimeAgo(block.timestamp)} ago</div>
             </>
           ) : (
             <>
-              <div className="font-mono tabular-nums text-white/90">
+              <div className="text-text-primary font-mono tabular-nums">
                 {block.transactionsCount} txs
               </div>
-              <div className="text-white/45">{formatTimeAgo(block.timestamp)} ago</div>
+              <div className="text-text-dim">{formatTimeAgo(block.timestamp)} ago</div>
             </>
           )}
         </div>
@@ -1568,7 +1571,7 @@ export function MempoolBlocks({
     return (
       <div className={containerClassName}>
         {showHeader && (
-          <h2 className="mb-5 text-lg font-bold tracking-tight text-white sm:text-xl">
+          <h2 className="text-text-primary mb-5 text-lg font-bold tracking-tight sm:text-xl">
             Chain Tip Intelligence
           </h2>
         )}
@@ -1593,7 +1596,7 @@ export function MempoolBlocks({
     <div className={containerClassName}>
       {showHeader && (
         <div className="mb-5">
-          <h2 className="text-lg font-bold tracking-tight text-white sm:text-xl">
+          <h2 className="text-text-primary text-lg font-bold tracking-tight sm:text-xl">
             Chain Tip Intelligence
           </h2>
           <div
