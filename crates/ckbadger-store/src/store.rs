@@ -1379,12 +1379,26 @@ impl CkbadgerStore {
     }
 
     /// Iterate over a CF with a prefix.
+    ///
+    /// Uses `total_order_seek` instead of RocksDB's built-in `prefix_iterator_cf`
+    /// which requires a configured prefix extractor to work correctly.  Without
+    /// one, `set_prefix_same_as_start(true)` can silently skip SST files and
+    /// return incomplete results.
     pub fn prefix_iterator_cf(
         &self,
         cf: &ColumnFamily,
         prefix: &[u8],
     ) -> impl Iterator<Item = KvResult> + '_ {
-        self.db.prefix_iterator_cf(cf, prefix)
+        let mut opts = rocksdb::ReadOptions::default();
+        opts.set_total_order_seek(true);
+        let mode = IteratorMode::From(prefix, rocksdb::Direction::Forward);
+        let prefix_vec = prefix.to_vec();
+        self.db
+            .iterator_cf_opt(cf, opts, mode)
+            .take_while(move |item| match item {
+                Ok((key, _)) => key.starts_with(&prefix_vec),
+                Err(_) => true,
+            })
     }
 
     // ---- Bulk sync mode ----
