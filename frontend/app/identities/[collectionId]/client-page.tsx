@@ -1,0 +1,514 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import Link from '@/components/ui/link';
+import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
+import { Header } from '@/components/layout/header';
+import {
+  api,
+  type NftCollectionActivity,
+  type NftCollectionHolder,
+  type NftItemStatusFilter,
+} from '@/lib/api';
+import {
+  TerminalPanel,
+  TerminalPanelHeader,
+  TerminalPanelContent,
+  TerminalPanelFooter,
+} from '@/components/ui/terminal-panel';
+import { PageHeader, Badge } from '@/components/ui/page-header';
+import { HexDisplay } from '@/components/ui/hex-display';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
+import { isDotbitAlias } from '@/lib/nft-collections';
+import { formatNumber } from '@/lib/utils';
+import { formatActivityTimestamp } from '@/lib/nft-utils';
+
+type IdentityTab = 'activities' | 'identities' | 'holders';
+
+function isIdentityTab(value: string | null): value is IdentityTab {
+  return value === 'activities' || value === 'identities' || value === 'holders';
+}
+
+export interface IdentityCollectionPageProps {
+  collectionId: string;
+}
+
+export default function IdentityCollectionPage({ collectionId }: IdentityCollectionPageProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tabFromQuery = searchParams.get('tab');
+
+  const [searchInput, setSearchInput] = useState('');
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState<NftItemStatusFilter>('all');
+  const [activeTab, setActiveTab] = useState<IdentityTab>(() =>
+    isIdentityTab(tabFromQuery) ? tabFromQuery : 'activities'
+  );
+
+  const itemsPagination = useCursorPagination();
+  const holdersPagination = useCursorPagination();
+  const activitiesPagination = useCursorPagination();
+  const { reset: resetItemsPagination } = itemsPagination;
+  const { reset: resetHoldersPagination } = holdersPagination;
+  const { reset: resetActivitiesPagination } = activitiesPagination;
+
+  // Debounced search (250ms)
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setSearchKeyword(searchInput.trim());
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchInput]);
+
+  // Fetch identity collection detail
+  const collectionQuery = useQuery({
+    queryKey: ['identity-collection', collectionId],
+    queryFn: () => api.getIdentityCollection(collectionId),
+    retry: false,
+  });
+  const collection = collectionQuery.data;
+
+  const isDotbit = collection
+    ? isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'
+    : isDotbitAlias(collectionId);
+
+  const searchLabel = isDotbit ? 'Search .bit' : 'Search did:ckb';
+  const itemDetailPrefix = isDotbit ? '/nfts/dotbit' : '/nfts/did';
+
+  // Fetch collection items
+  const {
+    data: collectionItems,
+    isLoading: isItemsLoading,
+    isFetching: isItemsFetching,
+    isError: isItemsError,
+  } = useQuery({
+    queryKey: [
+      'identity-collection-items',
+      collectionId,
+      itemsPagination.cursor,
+      searchKeyword,
+      statusFilter,
+    ],
+    queryFn: () =>
+      api.getIdentityCollectionItems(collectionId, {
+        limit: 20,
+        cursor: itemsPagination.cursor,
+        search: searchKeyword || undefined,
+        status: statusFilter,
+      }),
+    enabled: !!collection,
+    placeholderData: keepPreviousData,
+  });
+
+  // Fetch collection holders
+  const {
+    data: collectionHolders,
+    isLoading: isHoldersLoading,
+    isError: isHoldersError,
+  } = useQuery({
+    queryKey: ['identity-collection-holders', collectionId, holdersPagination.cursor],
+    queryFn: () =>
+      api.getIdentityCollectionHolders(collectionId, {
+        limit: 20,
+        cursor: holdersPagination.cursor,
+      }),
+    enabled: !!collection && activeTab === 'holders',
+    placeholderData: keepPreviousData,
+  });
+
+  // Fetch collection activities
+  const {
+    data: collectionActivities,
+    isLoading: isActivitiesLoading,
+    isError: isActivitiesError,
+  } = useQuery({
+    queryKey: ['identity-collection-activities', collectionId, activitiesPagination.cursor],
+    queryFn: () =>
+      api.getIdentityCollectionActivities(collectionId, {
+        limit: 20,
+        cursor: activitiesPagination.cursor,
+      }),
+    enabled: !!collection && activeTab === 'activities',
+    placeholderData: keepPreviousData,
+  });
+
+  // Reset items pagination when search/filter changes
+  useEffect(() => {
+    resetItemsPagination();
+  }, [collectionId, searchKeyword, statusFilter, resetItemsPagination]);
+
+  // Reset holders/activities pagination when collection changes
+  useEffect(() => {
+    resetHoldersPagination();
+    resetActivitiesPagination();
+  }, [collectionId, resetActivitiesPagination, resetHoldersPagination]);
+
+  const updateSearchParams = (mutator: (nextParams: URLSearchParams) => void) => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    mutator(nextParams);
+    const nextQuery = nextParams.toString();
+    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
+  };
+
+  const handleTabChange = (nextValue: string) => {
+    if (!isIdentityTab(nextValue)) return;
+    setActiveTab(nextValue);
+    updateSearchParams((nextParams) => {
+      if (nextValue === 'activities') {
+        nextParams.delete('tab');
+      } else {
+        nextParams.set('tab', nextValue);
+      }
+    });
+  };
+
+  // Loading state
+  if (collectionQuery.isLoading) {
+    return (
+      <div className="bg-base-bg min-h-screen">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <div className="bg-base-elevated mb-6 h-10 w-48 animate-pulse rounded" />
+          <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {[1, 2].map((i) => (
+              <div
+                key={i}
+                className="border-base-border bg-base-surface/50 h-24 animate-pulse rounded border"
+              />
+            ))}
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // Error state
+  if (collectionQuery.isError || !collection) {
+    return (
+      <div className="bg-base-bg min-h-screen">
+        <Header />
+        <main className="container mx-auto px-4 py-8">
+          <TerminalPanel>
+            <TerminalPanelContent className="py-12 text-center">
+              <h2 className="text-text-muted text-xl">Identity collection not found</h2>
+            </TerminalPanelContent>
+          </TerminalPanel>
+        </main>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-base-bg min-h-screen">
+      <Header />
+      <main className="container mx-auto px-4 py-8">
+        <div className="mb-6">
+          <Link
+            href="/assets?type=nft"
+            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+          >
+            &larr; Back to Assets
+          </Link>
+        </div>
+
+        <PageHeader
+          title={collection.name || 'Identity Collection'}
+          badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
+        />
+
+        <NftCollectionStatCards
+          totalCount={collection.totalCount}
+          totalLabel="Total Identities"
+          liveCount={collection.liveCount}
+          liveCapacity={undefined}
+          liveOccupiedCapacity={undefined}
+        />
+
+        <div className="space-y-6">
+          <TerminalPanel>
+            <TerminalPanelHeader indicator="active">Collection ID</TerminalPanelHeader>
+            <TerminalPanelContent>
+              <HexDisplay value={collection.collectionId} truncate={false} color="accent" />
+            </TerminalPanelContent>
+          </TerminalPanel>
+
+          <TerminalPanel>
+            <Tabs value={activeTab} onValueChange={handleTabChange}>
+              <TerminalPanelHeader
+                indicator="active"
+                actions={
+                  <div className="flex flex-wrap items-center gap-3">
+                    <TabsList className="border-b-0">
+                      <TabsTrigger value="activities">
+                        Activities ({formatNumber(collection.activitiesCount)})
+                      </TabsTrigger>
+                      <TabsTrigger value="identities">
+                        Identities ({formatNumber(collection.totalCount)})
+                      </TabsTrigger>
+                      <TabsTrigger value="holders">
+                        Holders ({formatNumber(collection.holdersCount)})
+                      </TabsTrigger>
+                    </TabsList>
+                    {activeTab === 'identities' && (
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={statusFilter}
+                          onChange={(event) =>
+                            setStatusFilter(event.target.value as NftItemStatusFilter)
+                          }
+                          aria-label="Status Filter"
+                          className="focus:border-emphasis border-base-border bg-base-surface text-text-primary rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                        >
+                          <option value="all">All</option>
+                          <option value="live">Live</option>
+                          <option value="recycled">Recycled</option>
+                        </select>
+                        <input
+                          type="text"
+                          value={searchInput}
+                          onChange={(event) => setSearchInput(event.target.value)}
+                          placeholder={searchLabel}
+                          aria-label={searchLabel}
+                          className="focus:border-emphasis border-base-border bg-base-surface text-text-primary placeholder:text-text-muted w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                        />
+                        {isItemsFetching && (
+                          <span className="text-text-muted font-mono text-xs">Searching...</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                }
+              >
+                {activeTab === 'activities'
+                  ? 'Activities'
+                  : activeTab === 'holders'
+                    ? 'Holders'
+                    : 'Identities'}
+              </TerminalPanelHeader>
+
+              {/* Activities tab */}
+              <TabsContent value="activities" className="py-0">
+                <TerminalPanelContent>
+                  {isActivitiesLoading ? (
+                    <div className="text-text-muted py-8 text-center">Loading activities...</div>
+                  ) : isActivitiesError ? (
+                    <div className="py-8 text-center text-rose-400">
+                      Failed to load activities. Please refresh and try again.
+                    </div>
+                  ) : !collectionActivities?.data?.length ? (
+                    <div className="text-text-muted py-8 text-center">
+                      No activities in this collection
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {collectionActivities.data.map((activity: NftCollectionActivity) => (
+                        <NftActivityCard
+                          key={`${activity.txHash}-${activity.txIndex}`}
+                          txHash={activity.txHash}
+                          blockNumber={activity.blockNumber}
+                          txIndex={activity.txIndex}
+                          timestamp={formatActivityTimestamp(activity.timestamp)}
+                          actions={activity.actions}
+                          badgeActions
+                        />
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={collectionActivities?.total ?? undefined}
+                    totalLabel="Activities"
+                    pageSize={20}
+                    page={activitiesPagination.page}
+                    currentCount={collectionActivities?.data?.length ?? 0}
+                    hasMore={collectionActivities?.hasMore ?? false}
+                    hasPrevious={activitiesPagination.hasPrevious}
+                    onNext={() => activitiesPagination.goToNext(collectionActivities?.nextCursor)}
+                    onPrevious={activitiesPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              </TabsContent>
+
+              {/* Identities tab */}
+              <TabsContent value="identities" className="py-0">
+                <TerminalPanelContent>
+                  {isItemsLoading ? (
+                    <div className="text-text-muted py-8 text-center">Loading identities...</div>
+                  ) : isItemsError ? (
+                    <div className="py-8 text-center text-rose-400">
+                      Failed to load identities. Please refresh and try again.
+                    </div>
+                  ) : !collectionItems?.data?.length ? (
+                    <div className="text-text-muted py-8 text-center">
+                      No identities in this collection
+                    </div>
+                  ) : (
+                    <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
+                      {collectionItems.data.map((item) => (
+                        <div
+                          key={item.nftId}
+                          className="row-scan hover:bg-base-elevated/40 border-base-border border-b px-3 py-2.5 transition-colors last:border-b-0"
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-3">
+                            <Link
+                              href={`${itemDetailPrefix}/${encodeURIComponent(item.nftId)}`}
+                              className="hover:text-emphasis font-mono text-sm text-white hover:underline"
+                            >
+                              {item.name || item.nftId}
+                            </Link>
+                            {item.isLive ? (
+                              <Badge variant="green">Live</Badge>
+                            ) : (
+                              <Badge variant="red">Recycled</Badge>
+                            )}
+                          </div>
+                          <div className="text-text-muted flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
+                            <span>
+                              ID:{' '}
+                              <span className="text-text-secondary">
+                                <HexDisplay
+                                  value={item.nftId}
+                                  color="accent"
+                                  size="sm"
+                                  startChars={10}
+                                  endChars={8}
+                                />
+                              </span>
+                            </span>
+                            <span>Block #{formatNumber(item.createdAtBlock)}</span>
+                            {item.isLive && (
+                              <span>
+                                Cell:{' '}
+                                {item.txHash &&
+                                item.outputIndex !== null &&
+                                item.outputIndex !== undefined ? (
+                                  <Link
+                                    href={`/cell/${item.txHash}-${item.outputIndex}`}
+                                    className="text-emphasis hover:underline"
+                                  >
+                                    <HexDisplay
+                                      value={item.txHash}
+                                      color="accent"
+                                      size="sm"
+                                      startChars={10}
+                                      endChars={8}
+                                    />
+                                    -{item.outputIndex}
+                                  </Link>
+                                ) : (
+                                  <span className="text-text-muted">Unavailable</span>
+                                )}
+                              </span>
+                            )}
+                            {item.ownerLockHash && (
+                              <span>
+                                Owner:{' '}
+                                <Link
+                                  href={`/address/${item.ownerLockHash}`}
+                                  className="hover:underline"
+                                >
+                                  <HexDisplay
+                                    value={item.ownerLockHash}
+                                    color="accent"
+                                    size="sm"
+                                    startChars={10}
+                                    endChars={8}
+                                  />
+                                </Link>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={collectionItems?.total ?? undefined}
+                    totalLabel="Identities"
+                    pageSize={20}
+                    page={itemsPagination.page}
+                    currentCount={collectionItems?.data?.length ?? 0}
+                    hasMore={collectionItems?.hasMore ?? false}
+                    hasPrevious={itemsPagination.hasPrevious}
+                    onNext={() => itemsPagination.goToNext(collectionItems?.nextCursor)}
+                    onPrevious={itemsPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              </TabsContent>
+
+              {/* Holders tab */}
+              <TabsContent value="holders" className="py-0">
+                <TerminalPanelContent>
+                  {isHoldersLoading ? (
+                    <div className="text-text-muted py-8 text-center">Loading holders...</div>
+                  ) : isHoldersError ? (
+                    <div className="py-8 text-center text-rose-400">
+                      Failed to load holders. Please refresh and try again.
+                    </div>
+                  ) : !collectionHolders?.data?.length ? (
+                    <div className="text-text-muted py-8 text-center">
+                      No holders in this collection
+                    </div>
+                  ) : (
+                    <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
+                      {collectionHolders.data.map((holder: NftCollectionHolder) => (
+                        <div
+                          key={holder.lockScriptHash}
+                          className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"
+                        >
+                          <div className="min-w-0">
+                            <Link
+                              href={`/address/${holder.address ?? holder.lockScriptHash}`}
+                              className="text-text-secondary font-mono text-xs hover:underline"
+                            >
+                              {holder.address ? (
+                                holder.address
+                              ) : (
+                                <HexDisplay
+                                  value={holder.lockScriptHash}
+                                  color="accent"
+                                  size="sm"
+                                  startChars={12}
+                                  endChars={10}
+                                />
+                              )}
+                            </Link>
+                          </div>
+                          <div className="shrink-0 font-mono text-sm text-white">
+                            {formatNumber(holder.itemCount)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </TerminalPanelContent>
+                <TerminalPanelFooter>
+                  <CursorPagination
+                    total={collectionHolders?.total}
+                    totalLabel="Holders"
+                    pageSize={20}
+                    page={holdersPagination.page}
+                    currentCount={collectionHolders?.data?.length ?? 0}
+                    hasMore={collectionHolders?.hasMore ?? false}
+                    hasPrevious={holdersPagination.hasPrevious}
+                    onNext={() => holdersPagination.goToNext(collectionHolders?.nextCursor)}
+                    onPrevious={holdersPagination.goToPrevious}
+                  />
+                </TerminalPanelFooter>
+              </TabsContent>
+            </Tabs>
+          </TerminalPanel>
+        </div>
+      </main>
+    </div>
+  );
+}
