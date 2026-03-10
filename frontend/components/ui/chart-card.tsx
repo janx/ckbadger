@@ -35,7 +35,7 @@ export function ChartCard({
       <div className="from-base-elevated/50 border-base-border flex items-center justify-between border-b bg-gradient-to-r to-transparent px-3 py-2">
         <h3 className="text-text-secondary font-mono text-sm uppercase tracking-wide">{title}</h3>
         {href && (
-          <span className="text-interactive font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="text-amber font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
             VIEW →
           </span>
         )}

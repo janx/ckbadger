@@ -516,7 +516,7 @@ export function LineChart({
                 x2={markerX}
                 y1={padding.top}
                 y2={padding.top + chartHeight}
-                stroke={marker.color || '#f59e0b'}
+                stroke={marker.color || CHART_PRIMARY_COLOR}
                 strokeDasharray="4,3"
                 strokeWidth={1.5}
                 data-testid="line-chart-marker-line"
