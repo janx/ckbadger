@@ -18,7 +18,7 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
         type="button"
         onClick={() => onPageChange(page - 1)}
         disabled={page <= 1}
-        className="hover:text-interactive text-text-muted hover:bg-base-elevated rounded px-3 py-1.5 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        className="hover:text-amber text-text-muted hover:bg-base-elevated rounded px-3 py-1.5 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         Prev
       </button>
@@ -37,7 +37,7 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
               'rounded px-3 py-1.5 font-mono text-sm transition-colors',
               page === p
                 ? 'bg-emphasis text-base-bg'
-                : 'hover:text-interactive text-text-muted hover:bg-base-elevated'
+                : 'hover:text-amber text-text-muted hover:bg-base-elevated'
             )}
           >
             {p}
@@ -49,7 +49,7 @@ export function Pagination({ page, totalPages, onPageChange, className }: Pagina
         type="button"
         onClick={() => onPageChange(page + 1)}
         disabled={page >= totalPages}
-        className="hover:text-interactive text-text-muted hover:bg-base-elevated rounded px-3 py-1.5 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        className="hover:text-amber text-text-muted hover:bg-base-elevated rounded px-3 py-1.5 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         Next
       </button>

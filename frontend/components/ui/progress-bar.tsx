@@ -33,9 +33,9 @@ export function ProgressBar({
   const colorClass = getColor();
 
   const barColors = {
-    green: 'bg-gradient-to-r from-emphasis-dim via-emphasis to-emphasis-bright',
-    amber: 'bg-gradient-to-r from-warning-dim via-warning to-warning-bright',
-    blue: 'bg-gradient-to-r from-info-dim via-info to-info-bright',
+    green: 'bg-gradient-to-r from-mint-dim via-mint to-mint',
+    amber: 'bg-gradient-to-r from-amber-dim via-amber to-amber',
+    blue: 'bg-gradient-to-r from-sky via-sky to-sky',
     red: 'bg-gradient-to-r from-negative-dim via-negative to-negative-bright',
   };
 

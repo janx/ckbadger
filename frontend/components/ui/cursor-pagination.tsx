@@ -55,7 +55,7 @@ export function CursorPagination({
           type="button"
           onClick={onPrevious}
           disabled={!hasPrevious}
-          className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-amber hover:text-amber border-base-border bg-base-elevated text-text-secondary rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Previous
         </button>
@@ -69,7 +69,7 @@ export function CursorPagination({
           type="button"
           onClick={onNext}
           disabled={!hasMore}
-          className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-amber hover:text-amber border-base-border bg-base-elevated text-text-secondary rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Next
         </button>

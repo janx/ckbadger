@@ -42,7 +42,7 @@ export function PageHeader({
           {navigation?.prev && (
             <Link
               href={navigation.prev.href}
-              className="hover:text-interactive hover:border-interactive-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
+              className="hover:text-amber hover:border-amber-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
               title={navigation.prev.label || 'Previous'}
             >
               <ChevronLeftIcon className="h-4 w-4" />
@@ -62,7 +62,7 @@ export function PageHeader({
           {navigation?.next && (
             <Link
               href={navigation.next.href}
-              className="hover:text-interactive hover:border-interactive-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
+              className="hover:text-amber hover:border-amber-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
               title={navigation.next.label || 'Next'}
             >
               <ChevronRightIcon className="h-4 w-4" />

@@ -21,7 +21,7 @@ export function OccupationRangeSelector({ value, onChange }: OccupationRangeSele
               onClick={() => onChange(option.key)}
               className={`rounded px-2 py-1 font-mono text-xs transition-colors ${
                 active
-                  ? 'bg-emphasis-dim/30 text-emphasis border-emphasis-dim border'
+                  ? 'bg-amber/15 text-amber border-amber-dim border'
                   : 'text-text-muted hover:bg-base-elevated hover:text-text-primary'
               }`}
             >

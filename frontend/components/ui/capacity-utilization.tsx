@@ -51,10 +51,10 @@ export function CapacityUtilization({
       </div>
       <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
         <div
-          className="bg-warning transition-all duration-300"
+          className="bg-amber transition-all duration-300"
           style={{ width: `${Math.max(ratio, 0.5)}%` }}
         />
-        <div className="bg-emphasis/30 flex-1" />
+        <div className="bg-amber/30 flex-1" />
       </div>
       <div className="mt-1.5 flex items-center justify-between">
         <span
@@ -65,7 +65,7 @@ export function CapacityUtilization({
           <span className="text-text-muted ml-1.5">({ratio.toFixed(1)}% occupied)</span>
         </span>
         <span
-          className="text-emphasis font-mono text-xs"
+          className="text-amber font-mono text-xs"
           title={formatCkbAmount(unoccupied.toString()).full + ' CKB'}
         >
           Unoccupied: {formatCkbCompact(unoccupied.toString()).value} CKB
