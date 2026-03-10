@@ -9,7 +9,7 @@ use ckbadger_common::PipelineProgressData;
 use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
-use ckbadger_store::types::{AddressBalance, HodlTrackerState};
+use ckbadger_store::types::{AddressBalance, HodlTrackerState, ScriptInfo};
 use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
@@ -215,6 +215,9 @@ pub struct Indexer {
     /// In-memory cache of address balances used during bulk sync to avoid
     /// ~3M DB reads per full sync.  Cleared on bulk -> live transition.
     pub(crate) addr_balance_cache: std::sync::Mutex<HashMap<Vec<u8>, Option<AddressBalance>>>,
+    /// In-memory cache of script info used during bulk sync to avoid DB reads.
+    /// Only ~1K unique code_hashes, negligible memory.  Cleared on bulk -> live transition.
+    pub(crate) script_info_cache: std::sync::Mutex<HashMap<Vec<u8>, Option<ScriptInfo>>>,
 }
 
 impl Indexer {
@@ -309,6 +312,7 @@ impl Indexer {
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             latest_activities: Arc::new(LatestActivitiesBuffer::new()),
             addr_balance_cache: std::sync::Mutex::new(HashMap::new()),
+            script_info_cache: std::sync::Mutex::new(HashMap::new()),
         })
     }
 

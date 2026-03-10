@@ -17,7 +17,7 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     AddressBalance, DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate,
-    LiveCellInfo, ObjectTypeIndex, SporeTypeIndex,
+    LiveCellInfo, ObjectTypeIndex, ScriptInfo, SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -1254,6 +1254,12 @@ impl Indexer {
             // Release addr_balance cache memory (~300MB for ~3M addresses)
             {
                 let mut cache = self.addr_balance_cache.lock().unwrap();
+                cache.clear();
+                cache.shrink_to_fit();
+            }
+            // Release script_info cache memory (~1K entries, negligible)
+            {
+                let mut cache = self.script_info_cache.lock().unwrap();
                 cache.clear();
                 cache.shrink_to_fit();
             }
@@ -3477,6 +3483,7 @@ impl Indexer {
             let writer = &self.writer;
             let udt_cache = &self.udt_cell_cache;
             let addr_balance_cache = &self.addr_balance_cache;
+            let script_info_cache = &self.script_info_cache;
             let prefetch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 rayon::join(
                     || {
@@ -3773,15 +3780,14 @@ impl Indexer {
                             },
                             || {
                                 if !code_hash_refs.is_empty() {
-                                    writer
-                                        .read_script_info(&code_hash_refs)
-                                        .unwrap_or_else(|e| {
-                                            panic!(
-                                        "failed to prefetch script info: code_hashes={}, error={}",
-                                        code_hash_refs.len(),
-                                        e
-                                    )
-                                        })
+                                    // Use in-memory cache instead of DB read
+                                    let cache_guard = script_info_cache.lock().unwrap();
+                                    let mut result = HashMap::with_capacity(code_hash_refs.len());
+                                    for key in &code_hash_refs {
+                                        let value = cache_guard.get(*key).cloned().unwrap_or(None);
+                                        result.insert((*key).clone(), value);
+                                    }
+                                    result
                                 } else {
                                     HashMap::new()
                                 }
@@ -6629,6 +6635,55 @@ impl Indexer {
                         });
                     }
                 }
+            }
+        }
+
+        // Update script_info cache after successful commit (bulk sync only)
+        if bulk_sync_mode && !script_usage_changes.is_empty() {
+            let mut cache_guard = self.script_info_cache.lock().unwrap();
+            for (
+                (code_hash, is_type),
+                (
+                    cells_delta,
+                    live_delta,
+                    cap_delta,
+                    live_cap_delta,
+                    occupied_delta,
+                    live_occupied_delta,
+                ),
+            ) in &script_usage_changes
+            {
+                let entry = cache_guard.entry(code_hash.clone()).or_insert(None);
+                let info = match entry {
+                    Some(info) => info,
+                    None => {
+                        *entry = Some(ScriptInfo {
+                            code_hash: code_hash.clone(),
+                            ..Default::default()
+                        });
+                        entry.as_mut().unwrap()
+                    }
+                };
+
+                if *is_type {
+                    info.type_cells_count += cells_delta;
+                    info.type_live_cells_count += live_delta;
+                    info.type_capacity_sum += cap_delta;
+                    info.type_live_capacity_sum += live_cap_delta;
+                    info.type_occupied_capacity_sum += occupied_delta;
+                    info.type_live_occupied_capacity_sum += live_occupied_delta;
+                } else {
+                    info.lock_cells_count += cells_delta;
+                    info.lock_live_cells_count += live_delta;
+                    info.lock_capacity_sum += cap_delta;
+                    info.lock_live_capacity_sum += live_cap_delta;
+                    info.lock_occupied_capacity_sum += occupied_delta;
+                    info.lock_live_occupied_capacity_sum += live_occupied_delta;
+                }
+
+                // Update summary fields
+                info.cells_count = info.lock_cells_count + info.type_cells_count;
+                info.capacity_used = info.lock_capacity_sum + info.type_capacity_sum;
             }
         }
 
