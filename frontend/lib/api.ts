@@ -849,6 +849,16 @@ interface NftCollection {
   };
 }
 
+export interface IdentityCollection {
+  collectionId: string;
+  standard: string;
+  name: string | null;
+  totalCount: number;
+  liveCount: number;
+  holdersCount: number;
+  activitiesCount: number;
+}
+
 interface NftCollectionItem {
   nftId: string;
   name: string | null;
@@ -1734,6 +1744,53 @@ export const api = {
     const suffix = query.toString();
     return fetchApi(
       `/assets/nfts/${normalizeNftAssetId(collectionId)}/activities${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  // Identity collection endpoints
+  getIdentityCollection: (collectionId: string): Promise<IdentityCollection> => {
+    return fetchApi(`/assets/identities/${normalizeNftAssetId(collectionId)}`);
+  },
+
+  getIdentityCollectionItems: (
+    collectionId: string,
+    params: NftCollectionItemsParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionItem>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.search) query.set('search', params.search);
+    if (params.status) query.set('status', params.status);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getIdentityCollectionHolders: (
+    collectionId: string,
+    params: NftCollectionHoldersParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionHolder>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/${normalizeNftAssetId(collectionId)}/holders${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getIdentityCollectionActivities: (
+    collectionId: string,
+    params: NftCollectionActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<NftCollectionActivity>> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    if (params.action) query.set('action', params.action);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/identities/${normalizeNftAssetId(collectionId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 
