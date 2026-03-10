@@ -87,9 +87,9 @@ function LiveIndicator({ isConnected }: { isConnected: boolean }) {
 
   return (
     <div className="fixed bottom-4 right-4 z-50">
-      <div className="border-emphasis-dim/50 bg-base-surface/90 flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-sm">
+      <div className="border-mint/50 bg-base-surface/90 flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-sm">
         <div className="indicator-light" />
-        <span className="text-emphasis font-mono text-xs uppercase tracking-wider">Live</span>
+        <span className="text-mint font-mono text-xs uppercase tracking-wider">Live</span>
       </div>
     </div>
   );

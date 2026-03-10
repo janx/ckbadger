@@ -94,7 +94,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                 key={block.number}
                 className={cn(
                   'transition-all duration-500',
-                  newBlockNumber === block.number && 'bg-emphasis/10 shadow-glow'
+                  newBlockNumber === block.number && 'bg-amber/10 shadow-glow'
                 )}
               >
                 <div className="flex items-center justify-between gap-4">
@@ -110,7 +110,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                     </Link>
                     <div className="mt-1.5 flex items-center gap-3 text-xs">
                       <span className="text-text-muted">
-                        <span className="text-emphasis-dim">{block.transactionsCount}</span> txs
+                        <span className="text-amber-dim">{block.transactionsCount}</span> txs
                       </span>
                       {block.hardforkActivation && (
                         <span
@@ -133,7 +133,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                         truncate
                         startChars={8}
                         endChars={6}
-                        color="green"
+                        color="sky"
                         size="sm"
                         showGroupHighlight={false}
                         copyable={false}

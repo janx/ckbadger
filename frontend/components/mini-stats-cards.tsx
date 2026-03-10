@@ -33,8 +33,8 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
   }
 
   const maxValue = Math.max(...data.map((d) => d.value), 1);
-  const barColor = color === 'green' ? 'bg-emphasis-dim' : 'bg-warning-dim';
-  const barColorHover = color === 'green' ? 'bg-emphasis' : 'bg-warning';
+  const barColor = color === 'green' ? 'bg-amber-dim' : 'bg-warning-dim';
+  const barColorHover = color === 'green' ? 'bg-amber' : 'bg-warning';
 
   return (
     <div className="relative" style={{ height }}>

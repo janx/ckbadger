@@ -18,7 +18,7 @@ function getTypeBadge(activity: GlobalActivity): { label: string; className: str
   if (activity.isCellbase) {
     return {
       label: 'Coinbase',
-      className: 'bg-purple-900/50 text-purple-300 border border-purple-700/50',
+      className: 'bg-violet/10 text-violet border border-violet-dim/50',
     };
   }
   const delta = BigInt(activity.ckbDelta);
@@ -182,7 +182,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                   className={cn(
                     'transition-all duration-500',
                     newActivityKey === activityKey &&
-                      'bg-emphasis/10 shadow-[0_0_8px_rgba(30,122,106,0.15)]'
+                      'bg-amber/10 shadow-[0_0_8px_rgba(240,184,102,0.15)]'
                   )}
                 >
                   {/* Row 1: Address | Type badge | Time */}
@@ -200,7 +200,6 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                             truncate
                             startChars={8}
                             endChars={6}
-                            color="white"
                             size="sm"
                             showGroupHighlight={false}
                           />

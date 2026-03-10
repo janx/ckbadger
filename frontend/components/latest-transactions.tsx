@@ -129,7 +129,7 @@ export function LatestTransactions({
 
                   <div className="shrink-0 text-right">
                     <div className="flex items-center gap-1.5 font-mono text-sm">
-                      <span className="text-emphasis-dim">{tx.inputsCount}</span>
+                      <span className="text-amber-dim">{tx.inputsCount}</span>
                       <span className="text-text-muted">→</span>
                       <span className="text-warning-dim">{tx.outputsCount}</span>
                     </div>
