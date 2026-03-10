@@ -178,6 +178,15 @@ fn resolve_generic_dotbit_actions(
     actions
 }
 
+/// Diagnostic context for dotbit identity owner transitions.
+struct OwnerTransitionContext<'a> {
+    operation: &'a str,
+    account_id: &'a [u8],
+    block_number: i64,
+    tx_hash: &'a [u8],
+    existing_entry: Option<&'a IdentityEntry>,
+}
+
 #[derive(Default)]
 pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<IdentityEntry>>,
@@ -260,19 +269,20 @@ impl DotbitBatchState {
         self.identity_aggs.insert(collection_id.to_vec(), agg);
     }
 
+    /// Returns `(count, from_cache)`.
     fn get_identity_owner_count(
         &mut self,
         store: &CkbadgerStore,
         collection_id: &[u8],
         lock_hash: &[u8],
-    ) -> Result<i64> {
+    ) -> Result<(i64, bool)> {
         let key = (collection_id.to_vec(), lock_hash.to_vec());
         if let Some(cached) = self.identity_owner_counts.get(&key) {
-            return Ok(*cached);
+            return Ok((*cached, true));
         }
         let loaded = store.get_identity_owner_count(collection_id, lock_hash)?;
         self.identity_owner_counts.insert(key, loaded);
-        Ok(loaded)
+        Ok((loaded, false))
     }
 
     fn put_identity_owner_count(
@@ -316,25 +326,60 @@ impl BatchWriter {
         agg: &mut IdentityCollectionAggregate,
         batch: &mut StoreBatch,
         state: &mut DotbitBatchState,
+        ctx: &OwnerTransitionContext<'_>,
     ) -> Result<()> {
         if old_owner == new_owner {
             return Ok(());
         }
 
         if let Some(old_lock) = old_owner {
-            let old_count =
+            let (old_count, from_cache) =
                 state.get_identity_owner_count(self.store.as_ref(), collection_id, old_lock)?;
             if old_count <= 0 {
+                // Cross-check: read the raw DB value directly (bypassing cache)
+                // to confirm whether the inconsistency is in the cache or DB.
+                let raw_db_count = self
+                    .store
+                    .get_identity_owner_count(collection_id, old_lock)
+                    .unwrap_or(-999);
                 bail!(
-                    "dotbit identity owner count underflow: collection_id=0x{}, lock_hash=0x{}, owner_count={}",
-                    hex::encode(collection_id),
+                    "dotbit identity owner count underflow: \
+                     operation={}, account_id=0x{}, block={}, tx=0x{}, \
+                     lock_hash=0x{}, owner_count={}, count_from_cache={}, raw_db_count={}, \
+                     existing_entry={{ is_live={}, owner=0x{}, created_at_block={} }}, \
+                     new_owner={}",
+                    ctx.operation,
+                    hex::encode(ctx.account_id),
+                    ctx.block_number,
+                    hex::encode(ctx.tx_hash),
                     hex::encode(old_lock),
-                    old_count
+                    old_count,
+                    from_cache,
+                    raw_db_count,
+                    ctx.existing_entry
+                        .map(|e| e.is_live.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                    ctx.existing_entry
+                        .and_then(|e| e.owner_lock_hash.as_ref())
+                        .map(hex::encode)
+                        .unwrap_or_else(|| "none".to_string()),
+                    ctx.existing_entry
+                        .map(|e| e.created_at_block.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                    new_owner
+                        .map(|h| format!("0x{}", hex::encode(h)))
+                        .unwrap_or_else(|| "None".to_string()),
                 );
             } else if old_count == 1 {
                 if agg.holders_count <= 0 {
                     bail!(
-                        "dotbit identity aggregate holders_count underflow: collection_id=0x{}, holders_count={}",
+                        "dotbit identity aggregate holders_count underflow: \
+                         operation={}, account_id=0x{}, block={}, tx=0x{}, \
+                         collection_id=0x{}, holders_count={}",
+                        ctx.operation,
+                        hex::encode(ctx.account_id),
+                        ctx.block_number,
+                        hex::encode(ctx.tx_hash),
                         hex::encode(collection_id),
                         agg.holders_count
                     );
@@ -347,7 +392,7 @@ impl BatchWriter {
         }
 
         if let Some(new_lock) = new_owner {
-            let cur_count =
+            let (cur_count, _) =
                 state.get_identity_owner_count(self.store.as_ref(), collection_id, new_lock)?;
             if cur_count == 0 {
                 agg.holders_count = agg
@@ -461,6 +506,20 @@ impl BatchWriter {
             })?;
         }
         let owner_from = if was_live { old_owner.as_deref() } else { None };
+        let op = if existing.is_none() {
+            "insert_new"
+        } else if was_live {
+            "insert_transfer"
+        } else {
+            "insert_reactivate"
+        };
+        let ctx = OwnerTransitionContext {
+            operation: op,
+            account_id: &account.account_id,
+            block_number,
+            tx_hash,
+            existing_entry: existing.as_ref(),
+        };
         self.apply_dotbit_identity_owner_transition(
             cid,
             owner_from,
@@ -468,6 +527,7 @@ impl BatchWriter {
             &mut agg,
             batch,
             state,
+            &ctx,
         )?;
         state.put_identity_agg(cid, agg, batch);
 
@@ -520,25 +580,34 @@ impl BatchWriter {
     pub(crate) fn consume_dotbit_account_with_state(
         &self,
         account_id: &[u8],
-        _block_number: i64,
-        _tx_hash: &[u8],
+        block_number: i64,
+        tx_hash: &[u8],
         batch: &mut StoreBatch,
         state: &mut DotbitBatchState,
     ) -> Result<Option<Vec<u8>>> {
         if let Some(mut entry) = state.get_account(self.store.as_ref(), account_id)? {
             if !entry.is_live {
                 bail!(
-                    "dotbit account already consumed: account_id=0x{}",
-                    hex::encode(account_id)
+                    "dotbit account already consumed: account_id=0x{}, block={}, tx=0x{}, \
+                     created_at_block={}",
+                    hex::encode(account_id),
+                    block_number,
+                    hex::encode(tx_hash),
+                    entry.created_at_block
                 );
             }
             let old_owner = entry.owner_lock_hash.clone();
             if old_owner.is_none() {
                 bail!(
-                    "dotbit live account missing owner_lock_hash during consume: account_id=0x{}",
-                    hex::encode(account_id)
+                    "dotbit live account missing owner_lock_hash during consume: account_id=0x{}, \
+                     block={}, tx=0x{}",
+                    hex::encode(account_id),
+                    block_number,
+                    hex::encode(tx_hash)
                 );
             }
+            // Snapshot entry state before mutation for diagnostic context
+            let entry_snapshot = entry.clone();
             entry.is_live = false;
             entry.owner_lock_hash = None;
             batch.put_identity(account_id, &entry);
@@ -549,12 +618,23 @@ impl BatchWriter {
             let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
                 bail!(
-                    "dotbit identity live_count underflow on consume: account_id=0x{}, live_count={}",
+                    "dotbit identity live_count underflow on consume: account_id=0x{}, \
+                     block={}, tx=0x{}, live_count={}, created_at_block={}",
                     hex::encode(account_id),
-                    agg.live_count
+                    block_number,
+                    hex::encode(tx_hash),
+                    agg.live_count,
+                    entry_snapshot.created_at_block
                 );
             }
             agg.live_count -= 1;
+            let ctx = OwnerTransitionContext {
+                operation: "consume",
+                account_id,
+                block_number,
+                tx_hash,
+                existing_entry: Some(&entry_snapshot),
+            };
             self.apply_dotbit_identity_owner_transition(
                 cid,
                 old_owner.as_deref(),
@@ -562,6 +642,7 @@ impl BatchWriter {
                 &mut agg,
                 batch,
                 state,
+                &ctx,
             )?;
             state.put_identity_agg(cid, agg, batch);
 
