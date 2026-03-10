@@ -402,7 +402,20 @@ impl IdentityStandard {
             IdentityStandard::DidCkb => "did_ckb",
         }
     }
+
+    /// Sentinel collection key for this identity standard.
+    pub fn sentinel_collection_id(&self) -> &'static [u8; 32] {
+        match self {
+            IdentityStandard::DotBit => &DOTBIT_SENTINEL_COLLECTION,
+            IdentityStandard::DidCkb => &DID_CKB_SENTINEL_COLLECTION,
+        }
+    }
 }
+
+/// Sentinel collection key for the .bit identity collection (32 bytes).
+pub const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+/// Sentinel collection key for the did:ckb identity collection (32 bytes).
+pub const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 
 /// Standard-specific data for Identity entries, stored inline via bincode.
 #[derive(Debug, Clone, Serialize, Deserialize)]

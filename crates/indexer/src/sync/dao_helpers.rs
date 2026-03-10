@@ -13,17 +13,12 @@ use chrono::NaiveDate;
 
 use ckbadger_store::types::AddressBalance;
 
-use crate::db::writer::dotbit::DOTBIT_SENTINEL_COLLECTION;
+pub(crate) use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
+
 use crate::parser::{DaoParser, DotbitParser, MnftParser, SporeParser};
 
 use super::helpers::{checked_usize_to_i16, parsed_input_outpoint_index_i16};
 use super::types::TxData;
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-pub(crate) const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 
 // ---------------------------------------------------------------------------
 // BatchStats (DAO accumulator)

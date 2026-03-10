@@ -22,7 +22,7 @@ use ckbadger_store::types::{
 use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::BatchSample;
-use crate::db::writer::dotbit::{resolve_dotbit_tx_activity, DOTBIT_SENTINEL_COLLECTION};
+use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
 use crate::db::writer::nft_activity_acc::ObjectCollectionActivityAccumulator;
 use crate::db::{BatchWriter, DaoWithdrawalContext};
 use crate::parser::{
@@ -4852,9 +4852,10 @@ impl Indexer {
                                     }
 
                                     // Accumulate hourly activity stats
-                                    let hour = ckbadger_common::block_date_from_ms(entry.timestamp)
-                                        .format("%Y%m%d%H")
-                                        .to_string();
+                                    let hour =
+                                        ckbadger_common::block_datetime_from_ms(entry.timestamp)
+                                            .format("%Y%m%d%H")
+                                            .to_string();
                                     let hour_stats = hourly_accum.entry(hour.clone()).or_default();
                                     BatchWriter::accumulate_activity_stats(
                                         &entry, &scripts, hour_stats,
@@ -6067,7 +6068,7 @@ impl Indexer {
                         }
 
                         // Accumulate hourly activity stats
-                        let hour = ckbadger_common::block_date_from_ms(entry.timestamp)
+                        let hour = ckbadger_common::block_datetime_from_ms(entry.timestamp)
                             .format("%Y%m%d%H")
                             .to_string();
                         let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();

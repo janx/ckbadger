@@ -4,7 +4,10 @@ use axum::{
     Json, Router,
 };
 use ckbadger_store::{
-    types::{ObjectCollectionActivityEntry, ObjectCollectionAggregate},
+    types::{
+        ObjectCollectionActivityEntry, ObjectCollectionAggregate, DID_CKB_SENTINEL_COLLECTION,
+        DOTBIT_SENTINEL_COLLECTION,
+    },
     CkbadgerStore,
 };
 use serde::{Deserialize, Serialize};
@@ -22,9 +25,6 @@ use crate::utils::{
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
-
-const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
-const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 
 fn is_identity_sentinel(collection_id: &[u8]) -> bool {
     collection_id == DOTBIT_SENTINEL_COLLECTION || collection_id == DID_CKB_SENTINEL_COLLECTION
@@ -1904,7 +1904,7 @@ pub(crate) fn list_identity_items_inner(
 
         loop {
             let nft_ids = store
-                .list_object_ids_by_collection(
+                .list_identity_ids_by_collection(
                     collection_id_bytes,
                     scan_cursor.as_deref(),
                     scan_batch_size,
@@ -1959,7 +1959,7 @@ pub(crate) fn list_identity_items_inner(
         }
     } else {
         let nft_ids = store
-            .list_object_ids_by_collection(
+            .list_identity_ids_by_collection(
                 collection_id_bytes,
                 cursor_bytes.as_deref(),
                 (limit + 1) as usize,

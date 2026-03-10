@@ -85,6 +85,108 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// List identity IDs in a collection. Used for items listing pagination.
+    pub fn list_identity_ids_by_collection(
+        &self,
+        collection_id: &[u8],
+        cursor: Option<&[u8]>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Vec<u8>>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let prefix = keys::encode_identity_by_collection_prefix(collection_id);
+        let start_identity_id = cursor.unwrap_or(&[]);
+        let start_key = keys::encode_identity_by_collection_key(collection_id, start_identity_id);
+
+        let iter = self.iterator_cf(
+            self.cf_identity_by_collection(),
+            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate identity_by_collection in list_identity_ids_by_collection: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let identity_id = key[32..].to_vec();
+            if cursor.is_some() && identity_id == start_identity_id {
+                continue;
+            }
+            results.push(identity_id);
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Get the live identity count for a specific owner in a collection.
+    pub fn get_identity_owner_count(
+        &self,
+        collection_id: &[u8],
+        lock_hash: &[u8],
+    ) -> anyhow::Result<i64> {
+        let key = keys::encode_identity_owner_key(collection_id, lock_hash);
+        match self.get_cf(self.cf_stats_identity(), &key)? {
+            Some(value) if value.len() == 8 => {
+                Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
+            }
+            _ => Ok(0),
+        }
+    }
+
+    /// List all owners and live identity counts for a collection.
+    pub fn list_identity_owner_counts(
+        &self,
+        collection_id: &[u8],
+    ) -> anyhow::Result<Vec<(Vec<u8>, i64)>> {
+        let prefix = keys::encode_identity_owner_prefix(collection_id);
+        let iter = self.prefix_iterator_cf(self.cf_stats_identity(), &prefix);
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_identity in list_identity_owner_counts: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() != keys::IDENTITY_OWNER_KEY_SIZE {
+                anyhow::bail!(
+                    "invalid identity owner key length: expected {}, got {}",
+                    keys::IDENTITY_OWNER_KEY_SIZE,
+                    key.len()
+                );
+            }
+            if value.len() != 8 {
+                anyhow::bail!(
+                    "invalid identity owner value length: expected 8, got {}",
+                    value.len()
+                );
+            }
+
+            let count = i64::from_le_bytes(value[..8].try_into().unwrap());
+            if count <= 0 {
+                continue;
+            }
+            results.push((key[32..64].to_vec(), count));
+        }
+
+        Ok(results)
+    }
+
     /// List pre-computed activities for an identity collection, newest first.
     ///
     /// Returns `(block_number, tx_index, entry)` tuples. Simple prefix scan

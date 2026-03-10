@@ -572,6 +572,41 @@ pub fn decode_nft_by_collection_key(key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((key[..32].to_vec(), key[32..].to_vec()))
 }
 
+// ---- Identity-by-collection secondary index ----
+
+/// Identity-by-collection secondary index key: collection_id(32B padded) + identity_id(variable).
+pub fn encode_identity_by_collection_key(collection_id: &[u8], identity_id: &[u8]) -> Vec<u8> {
+    let mut key = Vec::with_capacity(32 + identity_id.len());
+    key.extend_from_slice(&pad_id_32(collection_id));
+    key.extend_from_slice(identity_id);
+    key
+}
+
+/// Prefix for scanning all identities in a collection.
+pub fn encode_identity_by_collection_prefix(collection_id: &[u8]) -> [u8; 32] {
+    pad_id_32(collection_id)
+}
+
+// ---- Identity owner counts (CF_STATS_IDENTITY) ----
+
+/// Identity owner key: collection_id(32B) + lock_hash(32B) = 64 bytes.
+/// Stored in CF_STATS_IDENTITY. Value is i64 LE (live identity count for this owner).
+pub const IDENTITY_OWNER_KEY_SIZE: usize = 64;
+
+pub fn encode_identity_owner_key(
+    collection_id: &[u8],
+    lock_hash: &[u8],
+) -> [u8; IDENTITY_OWNER_KEY_SIZE] {
+    let mut key = [0u8; IDENTITY_OWNER_KEY_SIZE];
+    key[..32].copy_from_slice(&pad_id_32(collection_id));
+    key[32..64].copy_from_slice(&lock_hash[..32]);
+    key
+}
+
+pub fn encode_identity_owner_prefix(collection_id: &[u8]) -> [u8; 32] {
+    pad_id_32(collection_id)
+}
+
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
 /// are right-padded with zeros; IDs already 32+ bytes are truncated to 32.
 fn pad_id_32(id: &[u8]) -> [u8; 32] {

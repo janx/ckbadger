@@ -1499,6 +1499,48 @@ impl CkbadgerStore {
             );
         }
 
+        // Identity-owner counters (CF_STATS_IDENTITY) — clear all.
+        let iter = self.iterator_cf(self.cf_stats_identity(), IteratorMode::Start);
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_identity while clearing identity owner counters in rollback cleanup: {}",
+                    e
+                )
+            })?;
+            batch.delete_cf(self.cf_stats_identity(), &key);
+            secondary_keys_deleted += 1;
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
+        // Identity-by-collection index (CF_IDENTITY_BY_COLLECTION) — clear all.
+        let iter = self.iterator_cf(self.cf_identity_by_collection(), IteratorMode::Start);
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate identity_by_collection while clearing index in rollback cleanup: {}",
+                    e
+                )
+            })?;
+            batch.delete_cf(self.cf_identity_by_collection(), &key);
+            secondary_keys_deleted += 1;
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
         // NFT collection-owner counters are stored in stats_nft CF under a dedicated prefix.
         let iter = self.iterator_cf(self.cf_stats_object(), IteratorMode::Start);
         for item in iter {
@@ -1739,6 +1781,95 @@ impl CkbadgerStore {
             );
         }
 
+        // Repair identity data: scan CF_IDENTITY_DATA to rebuild identity aggregates,
+        // identity_by_collection index, and identity owner counts.
+        let mut identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> = HashMap::new();
+        let mut identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
+
+        let iter = self.iterator_cf(self.cf_identity_data(), IteratorMode::Start);
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate identity_data while repairing rollback state: {}",
+                    e
+                )
+            })?;
+            let identity_id = key.to_vec();
+            let entry: IdentityEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize identity_data entry during rollback repair: identity_id=0x{}, error={}",
+                    bytes_to_hex(&identity_id),
+                    e
+                )
+            })?;
+
+            if entry.created_at_block > rollback_to {
+                batch.delete_cf(self.cf_identity_data(), &key);
+                secondary_keys_deleted += 1;
+                stage.tick(
+                    spore_deleted
+                        + nft_deleted
+                        + secondary_keys_deleted
+                        + secondary_keys_written
+                        + aggregate_rows_written
+                        + cluster_owner_rows_written,
+                );
+                continue;
+            }
+
+            let collection_id = match entry.standard {
+                IdentityStandard::DotBit => DOTBIT_SENTINEL_COLLECTION.to_vec(),
+                IdentityStandard::DidCkb => DID_CKB_SENTINEL_COLLECTION.to_vec(),
+            };
+
+            // Rebuild identity_by_collection index
+            let idx_key = keys::encode_identity_by_collection_key(&collection_id, &identity_id);
+            batch.put_cf(self.cf_identity_by_collection(), idx_key, []);
+            secondary_keys_written += 1;
+
+            let agg = identity_aggs
+                .entry(collection_id.clone())
+                .or_insert_with(|| IdentityCollectionAggregate {
+                    standard: entry.standard,
+                    name: match entry.standard {
+                        IdentityStandard::DotBit => Some(".bit".to_string()),
+                        IdentityStandard::DidCkb => Some("did:ckb".to_string()),
+                    },
+                    ..Default::default()
+                });
+            agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "identity total_count overflow while repairing rollback state: collection_id=0x{}",
+                    bytes_to_hex(&collection_id)
+                )
+            })?;
+            if entry.is_live {
+                agg.live_count = agg.live_count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "identity live_count overflow while repairing rollback state: collection_id=0x{}",
+                        bytes_to_hex(&collection_id)
+                    )
+                })?;
+                if let Some(owner_lock_hash) = entry.owner_lock_hash.as_ref() {
+                    let owner_key = (collection_id, owner_lock_hash.clone());
+                    let owner_count = identity_owner_counts.entry(owner_key).or_insert(0);
+                    *owner_count = owner_count.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "identity owner count overflow while repairing rollback state"
+                        )
+                    })?;
+                }
+            }
+            stage.tick(
+                spore_deleted
+                    + nft_deleted
+                    + secondary_keys_deleted
+                    + secondary_keys_written
+                    + aggregate_rows_written
+                    + cluster_owner_rows_written,
+            );
+        }
+
         let mut cluster_owner_totals: HashMap<Vec<u8>, i64> = HashMap::new();
         for ((cluster_id, lock_hash), count) in &cluster_owner_counts {
             let owner_key = keys::encode_cluster_owner_key(cluster_id, lock_hash);
@@ -1854,7 +1985,53 @@ impl CkbadgerStore {
             aggregate_rows_written += 1;
         }
 
+        // Write rebuilt identity owner counts to CF_STATS_IDENTITY.
+        let mut identity_holder_totals: HashMap<Vec<u8>, i64> = HashMap::new();
+        for ((collection_id, lock_hash), count) in &identity_owner_counts {
+            let owner_key = keys::encode_identity_owner_key(collection_id, lock_hash);
+            batch.put_cf(
+                self.cf_stats_identity(),
+                owner_key,
+                count.to_le_bytes().as_slice(),
+            );
+            secondary_keys_written += 1;
+            let holder_total = identity_holder_totals
+                .entry(collection_id.clone())
+                .or_insert(0);
+            *holder_total = holder_total.checked_add(1).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "identity holders_count overflow while repairing rollback state: collection_id=0x{}",
+                    bytes_to_hex(collection_id)
+                )
+            })?;
+        }
+
+        // Merge identity aggregates with activity counts and holder totals, then write.
+        for (collection_id, agg) in &mut identity_aggs {
+            agg.holders_count = identity_holder_totals
+                .get(collection_id)
+                .copied()
+                .unwrap_or(0);
+            agg.activities_count = identity_activity_totals
+                .get(collection_id)
+                .copied()
+                .unwrap_or(0);
+            let encoded = bincode::serialize(agg).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to serialize identity collection aggregate during rollback repair: collection_id=0x{}, error={}",
+                    bytes_to_hex(collection_id),
+                    e
+                )
+            })?;
+            batch.put_cf(self.cf_identity_agg(), collection_id, &encoded);
+            aggregate_rows_written += 1;
+        }
+        // For identity collections that have activities but no identity_data entries,
+        // repair their activity count only.
         for (collection_id, total) in &identity_activity_totals {
+            if identity_aggs.contains_key(collection_id) {
+                continue; // Already handled above.
+            }
             let mut agg = self
                 .get_identity_collection_aggregate(collection_id)?
                 .unwrap_or_default();

@@ -11,7 +11,6 @@ use tracing::{debug, error, info, warn};
 
 use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, SporeTypeIndex};
 
-use crate::db::writer::dotbit::DOTBIT_SENTINEL_COLLECTION;
 use crate::parser::{
     analyze_spore_media_profile,
     dotbit::{parse_dotbit_witness_bundle, DotbitWitnessBundle},
@@ -20,6 +19,7 @@ use crate::parser::{
 };
 use crate::rpc::BlockResponseWithCycles;
 use crate::runtime_diag::read_cgroup_memory_snapshot;
+use ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
 
 use ckb_store_reader::CkbChainReader;
 use rayon::prelude::*;

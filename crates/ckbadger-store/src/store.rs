@@ -288,6 +288,8 @@ pub const CF_SPORE_DATA: &str = "spore_data";
 pub const CF_OBJECT_DATA: &str = "object_data";
 pub const CF_OBJECT_BY_COLLECTION: &str = "object_by_collection";
 pub const CF_IDENTITY_DATA: &str = "identity_data";
+pub const CF_IDENTITY_BY_COLLECTION: &str = "identity_by_collection";
+pub const CF_STATS_IDENTITY: &str = "stats_identity";
 pub const CF_STATS_CHAIN: &str = "stats_chain";
 pub const CF_STATS_DAO: &str = "stats_dao";
 pub const CF_STATS_HODL: &str = "stats_hodl";
@@ -352,6 +354,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_OBJECT_DATA,
     CF_OBJECT_BY_COLLECTION,
     CF_IDENTITY_DATA,
+    CF_IDENTITY_BY_COLLECTION,
     CF_STATS_CHAIN,
     CF_STATS_DAO,
     CF_STATS_HODL,
@@ -359,6 +362,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_STATS_TOKEN,
     CF_STATS_SPORE,
     CF_STATS_OBJECT,
+    CF_STATS_IDENTITY,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
@@ -398,6 +402,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_OBJECT_DATA,
     CF_OBJECT_BY_COLLECTION,
     CF_IDENTITY_DATA,
+    CF_IDENTITY_BY_COLLECTION,
     CF_STATS_CHAIN,
     CF_STATS_DAO,
     CF_STATS_HODL,
@@ -405,6 +410,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_STATS_TOKEN,
     CF_STATS_SPORE,
     CF_STATS_OBJECT,
+    CF_STATS_IDENTITY,
     CF_SCRIPT_INFO,
     CF_SYNC_META,
     CF_SPORE_BY_CLUSTER,
@@ -1116,6 +1122,12 @@ impl CkbadgerStore {
     }
     pub fn cf_identity_data(&self) -> &ColumnFamily {
         self.cf(CF_IDENTITY_DATA)
+    }
+    pub fn cf_identity_by_collection(&self) -> &ColumnFamily {
+        self.cf(CF_IDENTITY_BY_COLLECTION)
+    }
+    pub fn cf_stats_identity(&self) -> &ColumnFamily {
+        self.cf(CF_STATS_IDENTITY)
     }
     pub fn cf_stats_chain(&self) -> &ColumnFamily {
         self.cf(CF_STATS_CHAIN)

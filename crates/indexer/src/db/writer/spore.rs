@@ -2,9 +2,9 @@ use anyhow::{bail, Result};
 use std::collections::HashMap;
 
 use crate::parser::{analyze_spore_media_profile, ParsedClusterCell, ParsedSporeCell};
-use crate::sync::dao_helpers::DID_CKB_SENTINEL_COLLECTION;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
+use ckbadger_store::types::DID_CKB_SENTINEL_COLLECTION;
 use ckbadger_store::types::{
     ClusterAggregate, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
     ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex, StorageDependencyTier,
@@ -157,7 +157,7 @@ impl SporeBatchState {
         if let Some(cached) = self.identity_owner_counts.get(&key) {
             return Ok(*cached);
         }
-        let loaded = store.get_cluster_owner_count(collection_id, lock_hash)?;
+        let loaded = store.get_identity_owner_count(collection_id, lock_hash)?;
         self.identity_owner_counts.insert(key, loaded);
         Ok(loaded)
     }
@@ -169,7 +169,7 @@ impl SporeBatchState {
         count: i64,
         batch: &mut StoreBatch,
     ) {
-        batch.put_cluster_owner_count(collection_id, lock_hash, count);
+        batch.put_identity_owner_count(collection_id, lock_hash, count);
         self.identity_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
     }
@@ -180,7 +180,7 @@ impl SporeBatchState {
         lock_hash: &[u8],
         batch: &mut StoreBatch,
     ) {
-        batch.delete_cluster_owner(collection_id, lock_hash);
+        batch.delete_identity_owner(collection_id, lock_hash);
         self.identity_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
     }
@@ -500,7 +500,8 @@ impl BatchWriter {
                 agg.name = Some("did:ckb".to_string());
             }
             if existing.is_none() {
-                // New identity
+                // New identity — add to identity collection index
+                batch.put_identity_by_collection(cid, &spore.spore_id);
                 agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
                     anyhow::anyhow!(
                         "did:ckb identity total_count overflow: spore_id=0x{}",

@@ -1,5 +1,7 @@
 use anyhow::{anyhow, bail, Result};
-use ckbadger_store::types::ObjectStandard;
+use ckbadger_store::types::{
+    ObjectStandard, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+};
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -173,9 +175,6 @@ pub fn resolve_dob_collection_name(
         _ => None,
     }
 }
-
-const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
-const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 
 /// Resolve the display-level standard for a collection, overriding for
 /// sentinel identity collections whose `ObjectCollectionAggregate.standard`

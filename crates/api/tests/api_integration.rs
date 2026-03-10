@@ -4101,7 +4101,7 @@ async fn test_nft_collection_items_supports_did_ckb_collection_from_spore_data()
             activities_count: 0,
         },
     );
-    batch.put_object_by_collection(&did_collection_id, &did_id);
+    batch.put_identity_by_collection(&did_collection_id, &did_id);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -4544,7 +4544,7 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
             activities_count: 0,
         },
     );
-    batch.put_object_by_collection(&collection_id, &did_id);
+    batch.put_identity_by_collection(&collection_id, &did_id);
     batch.commit().unwrap();
 
     store
@@ -4818,8 +4818,8 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
             },
         },
     );
-    batch.put_object_by_collection(&collection_id, &nft_a);
-    batch.put_object_by_collection(&collection_id, &nft_b);
+    batch.put_identity_by_collection(&collection_id, &nft_a);
+    batch.put_identity_by_collection(&collection_id, &nft_b);
     batch.put_cell(
         &nft_a_tx_hash,
         nft_a_output_index,
@@ -4981,7 +4981,7 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
             },
         },
     );
-    batch.put_object_by_collection(&collection_id, &nft_id);
+    batch.put_identity_by_collection(&collection_id, &nft_id);
     batch.put_cell(
         &tx_hash,
         output_index,
@@ -5057,7 +5057,7 @@ async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fas
             },
         },
     );
-    batch.put_object_by_collection(&collection_id, &nft_id);
+    batch.put_identity_by_collection(&collection_id, &nft_id);
     // Intentionally no outpoint index and no fallback-resolvable live cell.
     batch.commit().unwrap();
 
@@ -5276,12 +5276,12 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
             },
         },
     );
-    batch.put_object_by_collection(&collection_id, &nft_a);
-    batch.put_object_by_collection(&collection_id, &nft_b);
-    batch.put_object_by_collection(&collection_id, &nft_c);
-    batch.put_object_by_collection(&collection_id, &nft_d);
-    batch.put_object_collection_owner_count(&collection_id, &owner_a, 2);
-    batch.put_object_collection_owner_count(&collection_id, &owner_b, 1);
+    batch.put_identity_by_collection(&collection_id, &nft_a);
+    batch.put_identity_by_collection(&collection_id, &nft_b);
+    batch.put_identity_by_collection(&collection_id, &nft_c);
+    batch.put_identity_by_collection(&collection_id, &nft_d);
+    batch.put_identity_owner_count(&collection_id, &owner_a, 2);
+    batch.put_identity_owner_count(&collection_id, &owner_b, 1);
     batch.commit().unwrap();
 
     let config = test_config(store);
@@ -5359,7 +5359,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             },
         },
     );
-    core_batch.put_object_by_collection(&collection_id, &account_id);
+    core_batch.put_identity_by_collection(&collection_id, &account_id);
     core_batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
     core_batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
     core_batch.put_consumed_cell_with_consumer(

@@ -3,6 +3,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use ckbadger_store::types::{DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION};
 use ckbadger_store::CkbadgerStore;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -20,9 +21,6 @@ use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
-
-const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
-const DID_CKB_SENTINEL_COLLECTION: [u8; 32] = *b"did_ckb_collection______________";
 
 /// Decode an identity collection ID from a URL path segment.
 ///
@@ -122,17 +120,9 @@ fn collect_identity_holder_counts(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
-    let rows = store
-        .list_cluster_owner_counts(collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut holders: Vec<(Vec<u8>, i64)> = Vec::with_capacity(rows.len());
-    for (lock_hash, count) in rows {
-        if count <= 0 {
-            continue;
-        }
-        holders.push((lock_hash, count));
-    }
-    Ok(holders)
+    store
+        .list_identity_owner_counts(collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))
 }
 
 fn list_identity_holders_ranked(

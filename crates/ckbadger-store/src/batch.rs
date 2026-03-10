@@ -792,6 +792,21 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_identity_data(), id, &value);
     }
 
+    pub fn put_identity_by_collection(&mut self, collection_id: &[u8], identity_id: &[u8]) {
+        let key = keys::encode_identity_by_collection_key(collection_id, identity_id);
+        self.put_cf(self.store.cf_identity_by_collection(), key, []);
+    }
+
+    pub fn put_identity_owner_count(&mut self, collection_id: &[u8], lock_hash: &[u8], count: i64) {
+        let key = keys::encode_identity_owner_key(collection_id, lock_hash);
+        self.put_cf(self.store.cf_stats_identity(), key, count.to_le_bytes());
+    }
+
+    pub fn delete_identity_owner(&mut self, collection_id: &[u8], lock_hash: &[u8]) {
+        let key = keys::encode_identity_owner_key(collection_id, lock_hash);
+        self.delete_cf(self.store.cf_stats_identity(), key);
+    }
+
     // ---- Cluster aggregates ----
 
     pub fn put_cluster_aggregate(&mut self, cluster_id: &[u8], agg: &ClusterAggregate) {

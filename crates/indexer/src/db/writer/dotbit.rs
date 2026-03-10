@@ -13,9 +13,7 @@ use crate::parser::dotbit::ParsedDotbitAccountOutput;
 
 use super::BatchWriter;
 
-/// Sentinel collection key for DotBit collection activities.
-/// 32-byte key: "dotbit_collection_______________" (padded to 32 bytes).
-pub(crate) const DOTBIT_SENTINEL_COLLECTION: [u8; 32] = *b"dotbit_collection_______________";
+use ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
 
 /// Map a DAS action string to AssetAction.
 ///
@@ -272,7 +270,7 @@ impl DotbitBatchState {
         if let Some(cached) = self.identity_owner_counts.get(&key) {
             return Ok(*cached);
         }
-        let loaded = store.get_cluster_owner_count(collection_id, lock_hash)?;
+        let loaded = store.get_identity_owner_count(collection_id, lock_hash)?;
         self.identity_owner_counts.insert(key, loaded);
         Ok(loaded)
     }
@@ -284,7 +282,7 @@ impl DotbitBatchState {
         count: i64,
         batch: &mut StoreBatch,
     ) {
-        batch.put_cluster_owner_count(collection_id, lock_hash, count);
+        batch.put_identity_owner_count(collection_id, lock_hash, count);
         self.identity_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), count);
     }
@@ -295,7 +293,7 @@ impl DotbitBatchState {
         lock_hash: &[u8],
         batch: &mut StoreBatch,
     ) {
-        batch.delete_cluster_owner(collection_id, lock_hash);
+        batch.delete_identity_owner(collection_id, lock_hash);
         self.identity_owner_counts
             .insert((collection_id.to_vec(), lock_hash.to_vec()), 0);
     }
@@ -439,7 +437,8 @@ impl BatchWriter {
             agg.name = Some(".bit".to_string());
         }
         if existing.is_none() {
-            // New identity
+            // New identity — add to identity collection index
+            batch.put_identity_by_collection(cid, &account.account_id);
             agg.total_count = agg.total_count.checked_add(1).ok_or_else(|| {
                 anyhow!(
                     "dotbit identity total_count overflow: account_id=0x{}",
