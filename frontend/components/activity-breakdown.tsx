@@ -15,13 +15,13 @@ interface ActivityBreakdownProps {
 }
 
 const ACTIVITY_COLORS: Record<string, string> = {
-  Transfer: '#5ce0b8',
-  'DAO Deposit': '#f0b866',
-  'DAO Withdraw': '#c89440',
-  Token: '#e87ea0',
-  Object: '#b08af0',
-  Identity: '#6ab0e8',
-  'Script Call': '#f97316',
+  Transfer: '#00ffaa',
+  'DAO Deposit': '#ffcc44',
+  'DAO Withdraw': '#d4a020',
+  Token: '#ff66aa',
+  Object: '#bb88ff',
+  Identity: '#44bbff',
+  'Script Call': '#ff8800',
 };
 
 function buildChartData(stats: ActivitySummary24h) {
@@ -41,16 +41,16 @@ function buildChartData(stats: ActivitySummary24h) {
 }
 
 const SCRIPT_COLORS = [
-  '#f0b866',
-  '#e87ea0',
-  '#6ab0e8',
-  '#5ce0b8',
-  '#b08af0',
-  '#f8ca80',
-  '#f07898',
-  '#82c0f0',
-  '#78f0d0',
-  '#c8a0f8',
+  '#ffcc44',
+  '#ff66aa',
+  '#44bbff',
+  '#00ffaa',
+  '#bb88ff',
+  '#ffe066',
+  '#ff6699',
+  '#66ddff',
+  '#44ffcc',
+  '#ccaaff',
 ];
 
 function buildScriptChartData(stats: ActivitySummary24h) {

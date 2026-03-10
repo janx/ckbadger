@@ -6,70 +6,70 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Midnight City Pop palette
+        // Midnight Neon palette — happy hacking in midnight
         base: {
-          bg: '#0c0e15',
-          surface: '#10131c',
-          elevated: '#161a25',
-          border: '#1a1f30',
+          bg: '#0a0c14',
+          surface: '#0e1119',
+          elevated: '#141820',
+          border: '#1c2236',
         },
         text: {
-          primary: '#dee2ec',
-          secondary: '#a0a8be',
-          muted: '#606880',
-          dim: '#343c50',
+          primary: '#e4e8f4',
+          secondary: '#b0b8d0',
+          muted: '#6a7290',
+          dim: '#3a4260',
         },
         interactive: {
-          DEFAULT: '#f0b866',
-          hover: '#f8ca80',
-          muted: '#f0b86620',
-          dim: '#c89440',
+          DEFAULT: '#ffcc44',
+          hover: '#ffe066',
+          muted: '#ffcc4420',
+          dim: '#d4a020',
         },
         emphasis: {
-          DEFAULT: '#f0b866',
-          dim: '#c89440',
-          glow: '#f0b86630',
-          bright: '#f8ca80',
+          DEFAULT: '#ffcc44',
+          dim: '#d4a020',
+          glow: '#ffcc4440',
+          bright: '#ffe066',
         },
         positive: {
-          DEFAULT: '#5ce0b8',
-          dim: '#3cb898',
+          DEFAULT: '#00ffaa',
+          dim: '#00cc88',
         },
         negative: {
-          DEFAULT: '#e86080',
-          dim: '#c04860',
-          bright: '#f07898',
+          DEFAULT: '#ff4477',
+          dim: '#cc3060',
+          bright: '#ff6699',
         },
         warning: {
-          DEFAULT: '#f0b866',
-          dim: '#c89440',
-          bright: '#f8ca80',
+          DEFAULT: '#ffcc44',
+          dim: '#d4a020',
+          bright: '#ffe066',
         },
         info: {
-          DEFAULT: '#6ab0e8',
-          dim: '#4a88c0',
-          bright: '#82c0f0',
+          DEFAULT: '#44bbff',
+          dim: '#2299dd',
+          bright: '#66ddff',
         },
-        // City pop accent colors (new)
+        // Neon accent colors
         amber: {
-          DEFAULT: '#f0b866',
-          dim: '#c89440',
+          DEFAULT: '#ffcc44',
+          dim: '#d4a020',
         },
         rose: {
-          DEFAULT: '#e87ea0',
-          dim: '#c0608a',
+          DEFAULT: '#ff66aa',
+          dim: '#dd4488',
         },
         sky: {
-          DEFAULT: '#6ab0e8',
-          dim: '#4a88c0',
+          DEFAULT: '#44bbff',
+          dim: '#2299dd',
         },
         mint: {
-          DEFAULT: '#5ce0b8',
-          dim: '#3cb898',
+          DEFAULT: '#00ffaa',
+          dim: '#00cc88',
         },
         violet: {
-          DEFAULT: '#b08af0',
-          dim: '#8a68c8',
+          DEFAULT: '#bb88ff',
+          dim: '#9966dd',
         },
       },
       fontFamily: {
@@ -80,10 +80,10 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 8px #f0b86618, 0 0 16px #f0b86610',
-        'glow-strong': '0 0 6px #f0b86628, 0 0 14px #f0b86618',
-        'glow-inset': 'inset 0 1px 8px #f0b86608',
-        'interactive-glow': '0 0 8px #f0b86620, 0 0 16px #f0b86610',
+        glow: '0 0 8px #ffcc4420, 0 0 20px #ffcc4412',
+        'glow-strong': '0 0 8px #ffcc4430, 0 0 20px #ffcc4420',
+        'glow-inset': 'inset 0 1px 10px #ffcc4410',
+        'interactive-glow': '0 0 10px #ffcc4428, 0 0 20px #ffcc4414',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',

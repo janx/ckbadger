@@ -1,28 +1,28 @@
-export const CHART_PRIMARY_COLOR = '#f0b866'; // amber
-export const CHART_SECONDARY_COLOR = '#e87ea0'; // rose
-export const CHART_TERTIARY_COLOR = '#6ab0e8'; // sky
+export const CHART_PRIMARY_COLOR = '#ffcc44'; // amber
+export const CHART_SECONDARY_COLOR = '#ff66aa'; // rose
+export const CHART_TERTIARY_COLOR = '#44bbff'; // sky
 
 export const CHART_PALETTE = [
-  '#f0b866', // amber
-  '#e87ea0', // rose
-  '#6ab0e8', // sky
-  '#5ce0b8', // mint
-  '#b08af0', // violet
-  '#f8ca80', // amber-bright
-  '#f07898', // rose-bright
-  '#82c0f0', // sky-bright
-  '#78f0d0', // mint-bright
-  '#c8a0f8', // violet-bright
-  '#c89440', // amber-dim
-  '#c0608a', // rose-dim
+  '#ffcc44', // amber
+  '#ff66aa', // rose
+  '#44bbff', // sky
+  '#00ffaa', // mint
+  '#bb88ff', // violet
+  '#ffe066', // amber-bright
+  '#ff6699', // rose-bright
+  '#66ddff', // sky-bright
+  '#44ffcc', // mint-bright
+  '#ccaaff', // violet-bright
+  '#d4a020', // amber-dim
+  '#dd4488', // rose-dim
 ] as const;
 
 // Centralized chart UI colors (dark theme)
-export const CHART_GRID_COLOR = '#1a1f30';
-export const CHART_AXIS_COLOR = '#343c50';
-export const CHART_TOOLTIP_BG = '#10131c';
+export const CHART_GRID_COLOR = '#1c2236';
+export const CHART_AXIS_COLOR = '#3a4260';
+export const CHART_TOOLTIP_BG = '#0e1119';
 export const CHART_TOOLTIP_BORDER = '#222840';
-export const CHART_HOVER_COLOR = '#161a25';
+export const CHART_HOVER_COLOR = '#141820';
 
 export function getChartPaletteColor(index: number): string {
   const paletteLength = CHART_PALETTE.length;

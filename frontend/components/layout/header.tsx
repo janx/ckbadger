@@ -39,7 +39,7 @@ export function Header() {
               className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                 isLinkActive(link.href)
                   ? 'border-amber/40 bg-amber/8 text-amber'
-                  : 'text-text-muted hover:text-text-secondary border-transparent'
+                  : 'text-text-secondary hover:text-amber hover:border-amber/20 border-transparent'
               }`}
             >
               {link.label}
@@ -91,7 +91,7 @@ export function Header() {
                 className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                   isLinkActive(link.href)
                     ? 'border-amber/40 bg-amber/8 text-amber'
-                    : 'text-text-muted hover:text-text-secondary border-transparent'
+                    : 'text-text-secondary hover:text-amber hover:border-amber/20 border-transparent'
                 }`}
               >
                 {link.label}

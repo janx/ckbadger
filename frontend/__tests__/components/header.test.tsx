@@ -73,7 +73,7 @@ describe('Header', () => {
 
     expect(chartsLink?.className).toContain('text-amber');
     expect(chartsLink?.className).toContain('bg-amber/8');
-    expect(daoLink?.className).toContain('text-text-muted');
+    expect(daoLink?.className).toContain('text-text-secondary');
     expect(daoLink?.className).toContain('border-transparent');
   });
 });
