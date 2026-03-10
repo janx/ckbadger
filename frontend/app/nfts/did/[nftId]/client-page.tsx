@@ -15,7 +15,7 @@ const didCkbConfig: IdentityNftItemDetailConfig = {
     nameLabel: 'did:ckb Name',
     idLabel: 'DID ID',
     backLabel: 'Back to did:ckb Collection',
-    backHref: '/nfts/did:ckb',
+    backHref: '/identities/did:ckb',
     defaultTitle: 'did:ckb identity',
     notFoundMsg: 'did:ckb item not found',
     recycledMsg: 'Recycled did:ckb identity has no live cell.',

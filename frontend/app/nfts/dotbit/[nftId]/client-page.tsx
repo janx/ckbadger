@@ -15,7 +15,7 @@ const dotbitConfig: IdentityNftItemDetailConfig = {
     nameLabel: '.bit Name',
     idLabel: 'Account ID',
     backLabel: 'Back to .bit Collection',
-    backHref: '/nfts/dotbit',
+    backHref: '/identities/dotbit',
     defaultTitle: '.bit account',
     notFoundMsg: '.bit item not found',
     recycledMsg: 'Recycled .bit account has no live cell.',

@@ -178,10 +178,10 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
             ← {labels.backLabel}
           </Link>
           <Link
-            href="/assets?type=nft"
+            href="/identities"
             className="hover:text-emphasis text-text-muted text-sm transition-colors"
           >
-            Back to NFTs
+            Back to Identities
           </Link>
         </div>
 
