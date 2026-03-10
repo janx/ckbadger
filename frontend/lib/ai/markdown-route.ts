@@ -44,6 +44,7 @@ export type ParsedMarkdownPage =
   | { kind: 'forks_list'; pathname: '/forks' }
   | { kind: 'fork_detail'; pathname: string; id: string }
   | { kind: 'hardforks'; pathname: '/hardforks' }
+  | { kind: 'identity_collection'; pathname: string; collectionId: string }
   | { kind: 'nfts_list'; pathname: '/nfts' }
   | { kind: 'nft_detail'; pathname: string; sporeId: string }
   | { kind: 'dotbit_item_detail'; pathname: string; nftId: string }
@@ -73,6 +74,7 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/forks',
   '/forks/{id}',
   '/hardforks',
+  '/identities/{collectionId}',
   '/nfts',
   '/nfts/{sporeId}',
   '/nfts/dotbit/{nftId}',
@@ -174,6 +176,15 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
       kind: 'fork_detail',
       pathname: normalized,
       id: decodeParam(forkMatch[1]),
+    };
+  }
+
+  const identityCollectionMatch = normalized.match(/^\/identities\/([^/]+)$/);
+  if (identityCollectionMatch) {
+    return {
+      kind: 'identity_collection',
+      pathname: normalized,
+      collectionId: decodeParam(identityCollectionMatch[1]),
     };
   }
 

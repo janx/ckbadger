@@ -3,7 +3,6 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import SporeDetailPage from '@/app/nfts/[sporeId]/client-page';
 import { api } from '@/lib/api';
-import { DID_CKB_COLLECTION_ID, DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -506,180 +505,28 @@ describe('SporeDetailPage', () => {
     });
   });
 
-  it('searches nft collection items by keyword', async () => {
+  it('redirects dotbit alias to /identities/dotbit', async () => {
     mockParams = { sporeId: 'dotbit' };
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
-
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
-
-    await waitFor(() => {
-      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
-        mockCollection.collectionId,
-        expect.objectContaining({ limit: 20, search: undefined, status: 'all' })
-      );
-    });
-
-    fireEvent.change(screen.getByLabelText('Status Filter'), {
-      target: { value: 'live' },
-    });
-
-    await waitFor(() => {
-      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
-        mockCollection.collectionId,
-        expect.objectContaining({ limit: 20, search: undefined, status: 'live' })
-      );
-    });
-
-    fireEvent.change(screen.getByLabelText('Search .bit'), {
-      target: { value: 'alice' },
-    });
-
-    await waitFor(() => {
-      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
-        mockCollection.collectionId,
-        expect.objectContaining({ limit: 20, search: 'alice', status: 'live' })
-      );
+      expect(mockReplace).toHaveBeenCalledWith('/identities/dotbit');
     });
   });
 
-  it('searches did:ckb collection items by keyword and status', async () => {
-    mockParams = { sporeId: 'did:ckb' };
-    vi.mocked(api.getNftCollection).mockResolvedValue({
-      ...mockCollection,
-      collectionId: DID_CKB_COLLECTION_ID,
-      standard: 'did_ckb',
-      name: 'did:ckb',
-    } as any);
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
-
-    await waitFor(() => {
-      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
-        DID_CKB_COLLECTION_ID,
-        expect.objectContaining({ limit: 20, search: undefined, status: 'all' })
-      );
-    });
-
-    fireEvent.change(screen.getByLabelText('Status Filter'), {
-      target: { value: 'recycled' },
-    });
-
-    await waitFor(() => {
-      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
-        DID_CKB_COLLECTION_ID,
-        expect.objectContaining({ limit: 20, search: undefined, status: 'recycled' })
-      );
-    });
-
-    fireEvent.change(screen.getByLabelText('Search did:ckb'), {
-      target: { value: 'alice' },
-    });
-
-    await waitFor(() => {
-      expect(api.getNftCollectionItems).toHaveBeenCalledWith(
-        DID_CKB_COLLECTION_ID,
-        expect.objectContaining({ limit: 20, search: 'alice', status: 'recycled' })
-      );
-    });
-  });
-
-  it('shows recycled status without cell text and links to dotbit detail page', async () => {
-    mockParams = { sporeId: 'dotbit' };
-    vi.mocked(api.getNftCollection).mockResolvedValue({
-      ...mockCollection,
-      standard: 'dotbit',
-      name: '.bit',
-    } as any);
-    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
-      data: [
-        {
-          nftId: '0x1111',
-          name: 'bob.bit',
-          standard: 'dotbit',
-          ownerLockHash: '0x2222',
-          isLive: false,
-          createdAtBlock: 100,
-          expiredAt: 1800000000,
-          txHash: null,
-          outputIndex: null,
-        },
-      ],
-      total: 1,
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
-
-    await waitFor(() => {
-      expect(screen.getByText('bob.bit')).toBeInTheDocument();
-    });
-
-    expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/Cell:/)).not.toBeInTheDocument();
-
-    const detailLink = screen.getByRole('link', { name: 'bob.bit' });
-    expect(detailLink).toHaveAttribute('href', '/nfts/dotbit/0x1111');
-  });
-
-  it('normalizes dotbit slug before querying collection API', async () => {
-    mockParams = { sporeId: 'dotbit' };
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      expect(api.getNftCollection).toHaveBeenCalledWith(DOTBIT_COLLECTION_ID);
-    });
-    expect(api.getSporeNft).not.toHaveBeenCalled();
-  });
-
-  it('normalizes .bit slug before querying collection API', async () => {
+  it('redirects .bit alias to /identities/dotbit', async () => {
     mockParams = { sporeId: '.bit' };
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
-
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
     await waitFor(() => {
-      expect(api.getNftCollection).toHaveBeenCalledWith(DOTBIT_COLLECTION_ID);
+      expect(mockReplace).toHaveBeenCalledWith('/identities/dotbit');
     });
-    expect(api.getSporeNft).not.toHaveBeenCalled();
   });
 
-  it('normalizes did:ckb slug before querying collection API', async () => {
+  it('redirects did:ckb alias to /identities/did:ckb', async () => {
     mockParams = { sporeId: 'did:ckb' };
-    vi.mocked(api.getNftCollection).mockResolvedValue({
-      ...mockCollection,
-      collectionId: DID_CKB_COLLECTION_ID,
-      standard: 'did_ckb',
-      name: 'did:ckb',
-    } as any);
-
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
     await waitFor(() => {
-      expect(api.getNftCollection).toHaveBeenCalledWith(DID_CKB_COLLECTION_ID);
+      expect(mockReplace).toHaveBeenCalledWith('/identities/did:ckb');
     });
-    expect(api.getSporeNft).not.toHaveBeenCalled();
   });
 
   it('links mnft collection item to mnft asset detail page', async () => {
@@ -714,47 +561,6 @@ describe('SporeDetailPage', () => {
       const link = screen.getByRole('link', { name: '0x1111' });
       expect(link).toBeInTheDocument();
       expect(link).toHaveAttribute('href', '/nfts/mnft/0x1111');
-    });
-  });
-
-  it('links did:ckb collection item to did detail page', async () => {
-    mockParams = { sporeId: 'did:ckb' };
-    vi.mocked(api.getNftCollection).mockResolvedValue({
-      ...mockCollection,
-      collectionId: DID_CKB_COLLECTION_ID,
-      standard: 'did_ckb',
-      name: 'did:ckb',
-    } as any);
-    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
-      data: [
-        {
-          nftId: '0x1111',
-          name: 'did:alice.ckb',
-          standard: 'did_ckb',
-          ownerLockHash: '0x2222',
-          isLive: false,
-          createdAtBlock: 100,
-        },
-      ],
-      total: 1,
-      limit: 20,
-      hasMore: false,
-      nextCursor: null,
-    });
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
-
-    await waitFor(() => {
-      const link = screen.getByRole('link', { name: 'did:alice.ckb' });
-      expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', '/nfts/did/0x1111');
-      expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
     });
   });
 });

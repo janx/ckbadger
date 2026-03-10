@@ -996,6 +996,26 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+    case 'identity_collection': {
+      const collection = await api.getIdentityCollection(page.collectionId);
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# Identity Collection: ${collection.name ?? page.collectionId}`,
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['collectionId', collection.collectionId],
+            ['standard', collection.standard],
+            ['name', collection.name ?? '-'],
+            ['totalCount', collection.totalCount],
+            ['liveCount', collection.liveCount],
+            ['holdersCount', collection.holdersCount],
+            ['activitiesCount', collection.activitiesCount],
+          ]
+        ),
+      ]);
+      return { status: 200, body };
+    }
     case 'mnft_item_detail': {
       const limit = parseLimit(searchParams);
       const cursor = searchParams.get('cursor') ?? undefined;
