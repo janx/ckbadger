@@ -154,6 +154,10 @@ struct OwnerAccum {
     did_ckb_outputs: Vec<Vec<u8>>,
     /// Distinct script code_hashes involved (lock + type)
     involved_scripts: HashSet<Vec<u8>>,
+    /// Whether any cell for this owner has a type script
+    has_type_script: bool,
+    /// Unrecognized type script code_hashes
+    unrecognized_scripts: HashSet<Vec<u8>>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
@@ -311,6 +315,13 @@ fn build_tx_activities(
             &mut asset_changes,
         );
 
+        // Unrecognized type script calls → ScriptCall
+        for code_hash in &accum.unrecognized_scripts {
+            asset_changes.push(AssetChange::ScriptCall {
+                type_code_hash: code_hash.clone(),
+            });
+        }
+
         let entry = ActivityEntry {
             tx_hash: tx.tx_hash.to_vec(),
             block_hash: tx.block_hash.to_vec(),
@@ -320,7 +331,7 @@ fn build_tx_activities(
             ckb_delta,
             occupied_delta,
             is_cellbase: tx.is_cellbase,
-            has_type_script: false, // TODO: set correctly in Task 3
+            has_type_script: accum.has_type_script,
             asset_changes,
             peers,
         };
@@ -343,6 +354,7 @@ fn classify_input(
     hashes: &CodeHashes,
     capacity: i64,
 ) {
+    accum.has_type_script = true;
     match hashes.classify(type_code_hash) {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
@@ -383,7 +395,9 @@ fn classify_input(
                 accum.dotbit_inputs.push(account_id);
             }
         }
-        None => {}
+        None => {
+            accum.unrecognized_scripts.insert(type_code_hash.to_vec());
+        }
     }
 }
 
@@ -396,6 +410,7 @@ fn classify_output(
     hashes: &CodeHashes,
     capacity: i64,
 ) {
+    accum.has_type_script = true;
     match hashes.classify(type_code_hash) {
         Some(AssetKind::Udt) => {
             if let Some(tsh) = type_script_hash {
@@ -449,7 +464,9 @@ fn classify_output(
                 accum.dotbit_outputs.push(account_id);
             }
         }
-        None => {}
+        None => {
+            accum.unrecognized_scripts.insert(type_code_hash.to_vec());
+        }
     }
 }
 
@@ -625,6 +642,7 @@ mod tests {
         assert_eq!(alice_act.peers.len(), 1);
         assert_eq!(alice_act.peers[0], vec![bob; 32]);
         assert!(!alice_act.is_cellbase);
+        assert!(!alice_act.has_type_script);
 
         let bob_act = activities
             .iter()
@@ -659,6 +677,7 @@ mod tests {
         assert_eq!(entry.ckb_delta, 5000_00000000);
         assert!(entry.is_cellbase);
         assert!(entry.peers.is_empty());
+        assert!(!entry.has_type_script);
     }
 
     #[test]
@@ -821,6 +840,7 @@ mod tests {
             .find(|(lh, _, _)| lh == &vec![alice; 32])
             .map(|(_, _, e)| e)
             .unwrap();
+        assert!(alice_act.has_type_script);
         let token_change = alice_act
             .asset_changes
             .iter()
@@ -1059,6 +1079,7 @@ mod tests {
         let activities = build_activities_for_block(&[tx], &HashMap::new());
         assert_eq!(activities.len(), 1);
         let (_, _, entry) = &activities[0];
+        assert!(entry.has_type_script);
         assert!(entry
             .asset_changes
             .iter()
@@ -1098,5 +1119,150 @@ mod tests {
             .find(|(lh, _, _)| lh == &vec![bob; 32])
             .unwrap();
         assert!(bob_scripts.contains(&vec![0x11; 32]));
+    }
+
+    #[test]
+    fn test_unrecognized_type_script_produces_script_call() {
+        let alice = 0xAA;
+        let bob = 0xBB;
+        let unknown_code_hash = vec![0xFF; 32];
+
+        let mut alice_input = make_input(alice, 200_00000000, 61_00000000);
+        alice_input.type_code_hash = Some(unknown_code_hash.clone());
+        alice_input.type_script_hash = Some(vec![0xDD; 32]);
+
+        let outputs = vec![make_output(
+            bob,
+            200_00000000,
+            Some(unknown_code_hash.clone()),
+            Some(vec![0xDD; 32]),
+            Some(vec![0xEE; 20]),
+            vec![],
+        )];
+
+        let tx = TxView {
+            tx_hash: &[0x0A; 32],
+            block_hash: &[0xAA; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![alice_input],
+            outputs: &outputs,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+
+        let alice_act = activities
+            .iter()
+            .find(|(lh, _, _)| lh == &vec![alice; 32])
+            .map(|(_, _, e)| e)
+            .unwrap();
+        assert!(alice_act.has_type_script);
+        let script_call = alice_act
+            .asset_changes
+            .iter()
+            .find(|c| matches!(c, AssetChange::ScriptCall { .. }))
+            .expect("should have ScriptCall for unrecognized type script");
+        match script_call {
+            AssetChange::ScriptCall { type_code_hash } => {
+                assert_eq!(type_code_hash, &vec![0xFF; 32]);
+            }
+            _ => unreachable!(),
+        }
+
+        let bob_act = activities
+            .iter()
+            .find(|(lh, _, _)| lh == &vec![bob; 32])
+            .map(|(_, _, e)| e)
+            .unwrap();
+        assert!(bob_act.has_type_script);
+        assert!(bob_act
+            .asset_changes
+            .iter()
+            .any(|c| matches!(c, AssetChange::ScriptCall { .. })));
+    }
+
+    #[test]
+    fn test_pure_ckb_transfer_has_no_type_script() {
+        let alice = 0xAA;
+        let bob = 0xBB;
+
+        let outputs = vec![
+            make_output(bob, 100_00000000, None, None, None, vec![]),
+            make_output(alice, 200_00000000, None, None, None, vec![]),
+        ];
+
+        let tx = TxView {
+            tx_hash: &[0x0B; 32],
+            block_hash: &[0xAB; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![make_input(alice, 300_00000000, 61_00000000)],
+            outputs: &outputs,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        for (_, _, entry) in &activities {
+            assert!(!entry.has_type_script);
+            assert!(entry.asset_changes.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_mixed_known_and_unknown_scripts_in_same_tx() {
+        let alice = 0xAA;
+        let sudt_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::udt::SUDT_CODE_HASH);
+        let unknown_code_hash = vec![0xFF; 32];
+        let type_script_hash = vec![0xDD; 32];
+
+        let mut udt_input = make_input(alice, 200_00000000, 61_00000000);
+        udt_input.type_code_hash = Some(sudt_code_hash.clone());
+        udt_input.type_script_hash = Some(type_script_hash.clone());
+        udt_input.data = 5000u128.to_le_bytes().to_vec();
+
+        let outputs = vec![
+            make_output(
+                alice,
+                100_00000000,
+                Some(sudt_code_hash),
+                Some(type_script_hash),
+                Some(vec![0xEE; 20]),
+                3000u128.to_le_bytes().to_vec(),
+            ),
+            make_output(
+                alice,
+                100_00000000,
+                Some(unknown_code_hash.clone()),
+                Some(vec![0xCC; 32]),
+                Some(vec![0xEE; 20]),
+                vec![],
+            ),
+        ];
+
+        let tx = TxView {
+            tx_hash: &[0x0C; 32],
+            block_hash: &[0xAC; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![udt_input],
+            outputs: &outputs,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+        let (_, _, entry) = &activities[0];
+        assert!(entry.has_type_script);
+        assert!(entry
+            .asset_changes
+            .iter()
+            .any(|c| matches!(c, AssetChange::Token { .. })));
+        assert!(entry
+            .asset_changes
+            .iter()
+            .any(|c| matches!(c, AssetChange::ScriptCall { .. })));
     }
 }
