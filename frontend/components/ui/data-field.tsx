@@ -52,12 +52,12 @@ export function DataField({
         <div
           className={cn(
             'text-text-primary min-w-0 break-words font-mono text-sm',
-            copyValue && 'hover:text-interactive cursor-pointer transition-colors',
+            copyValue && 'hover:text-amber cursor-pointer transition-colors',
             valueClassName
           )}
           onClick={copyValue ? handleCopy : undefined}
         >
-          {copied ? <span className="text-emphasis">Copied!</span> : children}
+          {copied ? <span className="text-amber">Copied!</span> : children}
         </div>
       </div>
     );
@@ -81,18 +81,18 @@ export function DataField({
       <div
         className={cn(
           'text-text-primary flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm sm:w-auto sm:justify-end sm:text-right',
-          copyValue && 'hover:text-interactive group cursor-pointer transition-colors',
+          copyValue && 'hover:text-amber group cursor-pointer transition-colors',
           valueClassName
         )}
         onClick={copyValue ? handleCopy : undefined}
       >
         {copied ? (
-          <span className="text-emphasis">Copied!</span>
+          <span className="text-amber">Copied!</span>
         ) : (
           <>
             {children}
             {copyValue && (
-              <CopyIcon className="group-hover:text-interactive text-text-muted h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+              <CopyIcon className="group-hover:text-amber text-text-muted h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
             )}
           </>
         )}

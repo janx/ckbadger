@@ -30,7 +30,7 @@ const sizeClasses = {
 };
 
 const colorClasses = {
-  green: 'text-emphasis',
+  green: 'text-amber',
   amber: 'text-warning',
   white: 'text-text-primary',
 };
@@ -161,7 +161,7 @@ interface MiniStatProps {
 
 export function MiniStat({ label, value, color = 'dim', className }: MiniStatProps) {
   const miniColorClasses = {
-    green: 'text-emphasis',
+    green: 'text-amber',
     amber: 'text-warning',
     white: 'text-text-primary',
     dim: 'text-text-secondary',
