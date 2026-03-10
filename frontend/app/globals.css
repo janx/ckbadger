@@ -165,17 +165,12 @@ body {
     animation: none;
   }
 
-  .logo-image {
-    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.3));
-    transform-origin: top left;
+  .logo-cursor {
+    animation: cursor-blink 1s step-end infinite;
   }
 
-  .logo-image:hover {
-    filter: drop-shadow(0 0 20px rgba(30, 122, 106, 0.5));
-  }
-
-  .neon-flicker {
-    animation: neon-flicker-anim 0.8s steps(1) forwards;
+  .logo-flicker {
+    animation: logo-flicker-anim 0.8s steps(1) forwards;
   }
 
   .byte-hover-breathe {
@@ -195,77 +190,54 @@ body {
   }
 }
 
-/* Broken neon light flicker effect */
-@keyframes neon-flicker-anim {
+/* Terminal cursor blink */
+@keyframes cursor-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Text logo flicker on new block */
+@keyframes logo-flicker-anim {
   0% {
     opacity: 1;
-    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.4));
   }
   5% {
     opacity: 0.4;
-    filter: drop-shadow(0 0 2px rgba(30, 122, 106, 0.2));
   }
   10% {
     opacity: 1;
-    filter: drop-shadow(0 0 18px rgba(30, 122, 106, 0.7));
   }
   15% {
     opacity: 0.7;
-    filter: drop-shadow(0 0 8px rgba(30, 122, 106, 0.3));
   }
   20% {
     opacity: 1;
-    filter: drop-shadow(0 0 25px rgba(30, 122, 106, 0.9))
-      drop-shadow(0 0 40px rgba(30, 122, 106, 0.5));
   }
   25% {
     opacity: 0.3;
-    filter: drop-shadow(0 0 3px rgba(30, 122, 106, 0.1));
   }
   30% {
     opacity: 0.9;
-    filter: drop-shadow(0 0 15px rgba(30, 122, 106, 0.6));
-  }
-  35% {
-    opacity: 0.5;
-    filter: drop-shadow(0 0 5px rgba(30, 122, 106, 0.2));
   }
   40% {
     opacity: 1;
-    filter: drop-shadow(0 0 20px rgba(30, 122, 106, 0.8))
-      drop-shadow(0 0 35px rgba(30, 122, 106, 0.4));
-  }
-  45% {
-    opacity: 0.6;
-    filter: drop-shadow(0 0 6px rgba(30, 122, 106, 0.25));
   }
   50% {
-    opacity: 1;
-    filter: drop-shadow(0 0 22px rgba(30, 122, 106, 0.85));
-  }
-  55% {
-    opacity: 0.8;
-    filter: drop-shadow(0 0 10px rgba(30, 122, 106, 0.4));
+    opacity: 0.6;
   }
   60% {
     opacity: 1;
-    filter: drop-shadow(0 0 18px rgba(30, 122, 106, 0.7));
-  }
-  70% {
-    opacity: 0.95;
-    filter: drop-shadow(0 0 14px rgba(30, 122, 106, 0.55));
   }
   80% {
-    opacity: 1;
-    filter: drop-shadow(0 0 15px rgba(30, 122, 106, 0.5));
-  }
-  90% {
-    opacity: 1;
-    filter: drop-shadow(0 0 13px rgba(30, 122, 106, 0.45));
+    opacity: 0.95;
   }
   100% {
     opacity: 1;
-    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.4));
   }
 }
 

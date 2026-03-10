@@ -22,7 +22,7 @@ export function Header() {
 
   return (
     <header className="border-base-border/80 bg-base-bg/85 sticky top-0 z-40 overflow-visible border-b backdrop-blur-md">
-      <div className="container relative mx-auto flex h-16 items-center justify-between gap-4 px-4 pl-[140px] md:pl-[220px] lg:pl-[260px]">
+      <div className="container relative mx-auto flex h-16 items-center justify-between gap-4 px-4">
         <Logo />
 
         <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">

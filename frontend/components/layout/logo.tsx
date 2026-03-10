@@ -1,6 +1,5 @@
 'use client';
 
-import Image from '@/components/ui/image';
 import Link from '@/components/ui/link';
 import { useEffect, useState } from 'react';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
@@ -18,20 +17,16 @@ export function Logo() {
   }, [latestBlock]);
 
   return (
-    <Link
-      href="/"
-      className="logo-container group absolute -left-[5px] -top-[15px] z-[9999] md:-left-[10px] md:-top-[27px]"
-      aria-label="CKBadger Home"
-    >
-      <Image
-        src="/ckbadger-transparent.png"
-        alt="CKBadger"
-        width={143}
-        height={97}
-        unoptimized
-        priority
-        className={`logo-image h-auto w-[66px] rotate-[8deg] transform-gpu object-contain transition-all duration-300 group-hover:rotate-[9deg] group-hover:scale-100 md:w-[100px] lg:w-[116px] ${isGlitching ? 'neon-flicker' : ''}`}
-      />
+    <Link href="/" className="group flex items-center gap-0 font-mono" aria-label="CKBadger Home">
+      <span className="text-interactive group-hover:text-interactive-hover mr-1.5 text-sm font-normal transition-colors md:text-base">
+        $
+      </span>
+      <span
+        className={`text-emphasis text-sm font-bold tracking-tight transition-all md:text-base ${isGlitching ? 'logo-flicker' : ''}`}
+      >
+        ckbadger
+      </span>
+      <span className="logo-cursor bg-interactive group-hover:bg-interactive-hover ml-0.5 inline-block h-[1.1em] w-[2px]" />
     </Link>
   );
 }
