@@ -8,7 +8,13 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::assets::{count_nft_collection_activities_cached, NftCollectionHolderResponse};
+use super::assets::{
+    count_nft_collection_activities_cached, decode_activity_cursor, decode_nft_item_cursor,
+    list_canonical_nft_collection_activities_page, list_identity_items_inner,
+    normalize_nft_activity_action_filter, normalize_nft_items_search, normalize_nft_items_status,
+    NftCollectionActivitiesParams, NftCollectionActivityResponse, NftCollectionHolderResponse,
+    NftCollectionItemResponse, NftItemsParams,
+};
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::AppState;
@@ -252,6 +258,133 @@ async fn list_identity_collection_holders(
     ))
 }
 
+// -- Activities endpoint --
+
+async fn list_identity_collection_activities(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+    Query(params): Query<NftCollectionActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<NftCollectionActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+
+    // Validate collection exists
+    let _agg = state
+        .store
+        .get_identity_collection_aggregate(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
+
+    // Fetch canonical rows only; skip orphaned history entries.
+    let results = list_canonical_nft_collection_activities_page(
+        state.store.as_ref(),
+        state.store.as_ref(),
+        &collection_id_bytes,
+        (limit as usize) + 1,
+        cursor,
+        action_filter.as_deref(),
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let has_more = results.len() as i64 > limit;
+    let page: Vec<NftCollectionActivityResponse> = results
+        .into_iter()
+        .take(limit as usize)
+        .map(|(block_number, tx_index, entry)| {
+            let actions: Vec<String> = entry
+                .actions
+                .iter()
+                .map(|a| match a {
+                    ckbadger_store::AssetAction::Mint => "mint".to_string(),
+                    ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
+                    ckbadger_store::AssetAction::Burn => "burn".to_string(),
+                    ckbadger_store::AssetAction::Recycle => "recycle".to_string(),
+                    ckbadger_store::AssetAction::Renew => "renew".to_string(),
+                    ckbadger_store::AssetAction::Update => "update".to_string(),
+                })
+                .collect();
+            NftCollectionActivityResponse {
+                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+                block_number,
+                tx_index,
+                timestamp: entry.timestamp_ms.to_string(),
+                actions,
+            }
+        })
+        .collect();
+
+    let next_cursor = if has_more {
+        page.last()
+            .map(|row| format!("{}:{}", row.block_number, row.tx_index))
+    } else {
+        None
+    };
+
+    ok(CursorPaginatedResponse::without_total(
+        page,
+        limit,
+        next_cursor,
+    ))
+}
+
+// -- Items endpoint --
+
+async fn list_identity_collection_items(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+    Query(params): Query<NftItemsParams>,
+) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
+    let search_lower = normalize_nft_items_search(params.search.as_deref());
+    let status_filter = normalize_nft_items_status(params.status.as_deref())?;
+    let cursor_bytes = params
+        .cursor
+        .as_deref()
+        .map(decode_nft_item_cursor)
+        .transpose()?;
+
+    let agg = state
+        .store
+        .get_identity_collection_aggregate(&collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Identity collection not found"))?;
+
+    // Convert to ObjectCollectionAggregate for the shared inner function
+    let obj_agg = ckbadger_store::types::ObjectCollectionAggregate {
+        name: agg.name,
+        standard: match agg.standard {
+            ckbadger_store::types::IdentityStandard::DotBit => {
+                ckbadger_store::types::ObjectStandard::Spore
+            }
+            ckbadger_store::types::IdentityStandard::DidCkb => {
+                ckbadger_store::types::ObjectStandard::Spore
+            }
+        },
+        total_count: agg.total_count,
+        live_count: agg.live_count,
+        holders_count: agg.holders_count,
+        activities_count: agg.activities_count,
+    };
+
+    list_identity_items_inner(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        &collection_id_bytes,
+        limit,
+        cursor_bytes,
+        search_lower.as_deref(),
+        status_filter,
+        &obj_agg,
+    )
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
@@ -261,6 +394,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route(
             "/assets/identities/{collection_id}/holders",
             get(list_identity_collection_holders),
+        )
+        .route(
+            "/assets/identities/{collection_id}/activities",
+            get(list_identity_collection_activities),
+        )
+        .route(
+            "/assets/identities/{collection_id}/items",
+            get(list_identity_collection_items),
         )
 }
 

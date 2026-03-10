@@ -134,10 +134,10 @@ pub struct ChartRangeParams {
 #[derive(Debug, Deserialize)]
 pub struct NftItemsParams {
     #[serde(default = "default_limit")]
-    limit: i64,
-    cursor: Option<String>,
-    search: Option<String>,
-    status: Option<String>,
+    pub(crate) limit: i64,
+    pub(crate) cursor: Option<String>,
+    pub(crate) search: Option<String>,
+    pub(crate) status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -158,9 +158,9 @@ pub struct NftCollectionHoldersParams {
 #[derive(Debug, Deserialize)]
 pub struct NftCollectionActivitiesParams {
     #[serde(default = "default_limit")]
-    limit: i64,
-    cursor: Option<String>,
-    action: Option<String>,
+    pub(crate) limit: i64,
+    pub(crate) cursor: Option<String>,
+    pub(crate) action: Option<String>,
 }
 
 fn default_limit() -> i64 {
@@ -206,7 +206,7 @@ fn default_sort_direction() -> SortDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NftItemStatusFilter {
+pub(crate) enum NftItemStatusFilter {
     All,
     Live,
     Recycled,
@@ -784,7 +784,9 @@ fn decode_nft_collection_id(
         .map_err(|_| ApiError::bad_request("Invalid NFT collection ID"))
 }
 
-fn decode_nft_item_cursor(raw: &str) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
+pub(crate) fn decode_nft_item_cursor(
+    raw: &str,
+) -> Result<Vec<u8>, (axum::http::StatusCode, Json<ApiError>)> {
     hex::decode(raw.strip_prefix("0x").unwrap_or(raw))
         .map_err(|_| ApiError::bad_request("Invalid NFT items cursor"))
 }
@@ -1020,7 +1022,7 @@ pub(crate) fn count_nft_collection_activities_cached(
     Ok(total)
 }
 
-fn normalize_nft_items_search(search: Option<&str>) -> Option<String> {
+pub(crate) fn normalize_nft_items_search(search: Option<&str>) -> Option<String> {
     search.and_then(|value| {
         let trimmed = value.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
@@ -1031,7 +1033,7 @@ fn normalize_nft_items_search(search: Option<&str>) -> Option<String> {
     })
 }
 
-fn normalize_nft_items_status(
+pub(crate) fn normalize_nft_items_status(
     status: Option<&str>,
 ) -> Result<NftItemStatusFilter, (axum::http::StatusCode, Json<ApiError>)> {
     let Some(raw_status) = status else {
@@ -1775,7 +1777,7 @@ async fn get_nft_collection(
     })
 }
 
-fn fetch_did_collection_entries_by_ids(
+pub(crate) fn fetch_did_collection_entries_by_ids(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
     nft_ids: &[Vec<u8>],
@@ -1807,7 +1809,7 @@ fn fetch_did_collection_entries_by_ids(
     Ok(out)
 }
 
-fn fetch_dotbit_collection_entries_by_ids(
+pub(crate) fn fetch_dotbit_collection_entries_by_ids(
     store: &CkbadgerStore,
     collection_id_bytes: &[u8],
     nft_ids: &[Vec<u8>],
@@ -1876,120 +1878,119 @@ fn fetch_nft_collection_entries_by_ids(
     Ok(out)
 }
 
-async fn list_nft_collection_items(
-    State(state): State<Arc<AppState>>,
-    Path(collection_id): Path<String>,
-    Query(params): Query<NftItemsParams>,
+/// Shared identity item listing logic for dotbit and did:ckb collections.
+///
+/// Called by both the legacy `/assets/nfts/{collection_id}/items` handler and
+/// the new `/assets/identities/{collection_id}/items` handler.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn list_identity_items_inner(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    collection_id_bytes: &[u8],
+    limit: i64,
+    cursor_bytes: Option<Vec<u8>>,
+    search_lower: Option<&str>,
+    status_filter: NftItemStatusFilter,
+    agg: &ObjectCollectionAggregate,
 ) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
-    let limit = params.limit.clamp(1, 100);
-    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
-    let search_lower = normalize_nft_items_search(params.search.as_deref());
-    let status_filter = normalize_nft_items_status(params.status.as_deref())?;
-    let cursor_bytes = params
-        .cursor
-        .as_deref()
-        .map(decode_nft_item_cursor)
-        .transpose()?;
+    let is_dotbit = collection_id_bytes == DOTBIT_SENTINEL_COLLECTION;
 
-    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+    let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
+        Vec::with_capacity((limit + 1) as usize);
 
-    if collection_id_bytes == DOTBIT_SENTINEL_COLLECTION {
-        let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
-            Vec::with_capacity((limit + 1) as usize);
+    if search_lower.is_some() || !matches!(status_filter, NftItemStatusFilter::All) {
+        let scan_batch_size = (limit * 4).clamp(64, 400) as usize;
+        let mut scan_cursor = cursor_bytes.clone();
 
-        if search_lower.is_some() || !matches!(status_filter, NftItemStatusFilter::All) {
-            let scan_batch_size = (limit * 4).clamp(64, 400) as usize;
-            let mut scan_cursor = cursor_bytes.clone();
-
-            loop {
-                let nft_ids = state
-                    .store
-                    .list_object_ids_by_collection(
-                        &collection_id_bytes,
-                        scan_cursor.as_deref(),
-                        scan_batch_size,
-                    )
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-                if nft_ids.is_empty() {
-                    break;
-                }
-
-                for (nft_id, entry) in fetch_dotbit_collection_entries_by_ids(
-                    state.store.as_ref(),
-                    &collection_id_bytes,
-                    &nft_ids,
-                )? {
-                    let status_match = match status_filter {
-                        NftItemStatusFilter::All => true,
-                        NftItemStatusFilter::Live => entry.is_live,
-                        NftItemStatusFilter::Recycled => !entry.is_live,
-                    };
-                    if !status_match {
-                        continue;
-                    }
-
-                    if let Some(search) = search_lower.as_deref() {
-                        let name_match = entry
-                            .name
-                            .as_deref()
-                            .map(|name| name.to_ascii_lowercase().contains(search))
-                            .unwrap_or(false);
-                        let nft_id_hex = hex::encode(&nft_id);
-                        let id_match = nft_id_hex.contains(search)
-                            || format!("0x{nft_id_hex}").contains(search);
-                        if !name_match && !id_match {
-                            continue;
-                        }
-                    }
-
-                    matched_items.push((nft_id, entry));
-                    if matched_items.len() > limit as usize {
-                        break;
-                    }
-                }
-
-                if matched_items.len() > limit as usize || nft_ids.len() < scan_batch_size {
-                    break;
-                }
-
-                scan_cursor = nft_ids.last().cloned();
-            }
-        } else {
-            let nft_ids = state
-                .store
+        loop {
+            let nft_ids = store
                 .list_object_ids_by_collection(
-                    &collection_id_bytes,
-                    cursor_bytes.as_deref(),
-                    (limit + 1) as usize,
+                    collection_id_bytes,
+                    scan_cursor.as_deref(),
+                    scan_batch_size,
                 )
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
-            matched_items.extend(fetch_dotbit_collection_entries_by_ids(
-                state.store.as_ref(),
-                &collection_id_bytes,
-                &nft_ids,
-            )?);
+            if nft_ids.is_empty() {
+                break;
+            }
+
+            let entries = if is_dotbit {
+                fetch_dotbit_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
+            } else {
+                fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
+            };
+
+            for (nft_id, entry) in entries {
+                let status_match = match status_filter {
+                    NftItemStatusFilter::All => true,
+                    NftItemStatusFilter::Live => entry.is_live,
+                    NftItemStatusFilter::Recycled => !entry.is_live,
+                };
+                if !status_match {
+                    continue;
+                }
+
+                if let Some(search) = search_lower {
+                    let name_match = entry
+                        .name
+                        .as_deref()
+                        .map(|name| name.to_ascii_lowercase().contains(search))
+                        .unwrap_or(false);
+                    let nft_id_hex = hex::encode(&nft_id);
+                    let id_match =
+                        nft_id_hex.contains(search) || format!("0x{nft_id_hex}").contains(search);
+                    if !name_match && !id_match {
+                        continue;
+                    }
+                }
+
+                matched_items.push((nft_id, entry));
+                if matched_items.len() > limit as usize {
+                    break;
+                }
+            }
+
+            if matched_items.len() > limit as usize || nft_ids.len() < scan_batch_size {
+                break;
+            }
+
+            scan_cursor = nft_ids.last().cloned();
         }
+    } else {
+        let nft_ids = store
+            .list_object_ids_by_collection(
+                collection_id_bytes,
+                cursor_bytes.as_deref(),
+                (limit + 1) as usize,
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        let has_more = matched_items.len() as i64 > limit;
-        let page_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
-            matched_items.into_iter().take(limit as usize).collect();
+        let entries = if is_dotbit {
+            fetch_dotbit_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
+        } else {
+            fetch_did_collection_entries_by_ids(store, collection_id_bytes, &nft_ids)?
+        };
+        matched_items.extend(entries);
+    }
 
+    let has_more = matched_items.len() as i64 > limit;
+    let page_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
+        matched_items.into_iter().take(limit as usize).collect();
+
+    let mut rows = Vec::with_capacity(page_items.len());
+
+    if is_dotbit {
         // Resolve live outpoints for dotbit accounts
         let live_account_ids: Vec<Vec<u8>> = page_items
             .iter()
             .filter(|(_, entry)| entry.is_live)
             .map(|(nft_id, _)| nft_id.clone())
             .collect();
-        let live_outpoints = state
-            .store
-            .get_live_dotbit_outpoints_by_account_ids(&live_account_ids, &state.append_only_store)
+        let live_outpoints = store
+            .get_live_dotbit_outpoints_by_account_ids(&live_account_ids, append_only_store)
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
-        let mut rows = Vec::with_capacity(page_items.len());
         for (nft_id, entry) in &page_items {
             let (expired_at, registered_at, status) = match &entry.extra {
                 ckbadger_store::types::IdentityExtra::DotBit {
@@ -2009,7 +2010,7 @@ async fn list_nft_collection_items(
                     None => {
                         return Err(ApiError::internal(format!(
                             "live dotbit account missing outpoint index: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
+                            hex::encode(collection_id_bytes),
                             hex::encode(nft_id)
                         )));
                     }
@@ -2035,133 +2036,10 @@ async fn list_nft_collection_items(
                 output_index,
             });
         }
-
-        let next_cursor = if has_more {
-            page_items
-                .last()
-                .map(|(id, _)| format!("0x{}", hex::encode(id)))
-        } else {
-            None
-        };
-
-        let total = match status_filter {
-            NftItemStatusFilter::All => agg.total_count,
-            NftItemStatusFilter::Live => agg.live_count,
-            NftItemStatusFilter::Recycled => {
-                agg.total_count
-                    .checked_sub(agg.live_count)
-                    .ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "invalid dotbit collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
-                            hex::encode(&collection_id_bytes),
-                            agg.total_count,
-                            agg.live_count
-                        ))
-                    })?
-            }
-        };
-        if search_lower.is_some() {
-            return ok(CursorPaginatedResponse::without_total(
-                rows,
-                limit,
-                next_cursor,
-            ));
-        } else {
-            return ok(CursorPaginatedResponse::new(
-                rows,
-                total,
-                limit,
-                next_cursor,
-            ));
-        }
-    }
-
-    if collection_id_bytes == DID_CKB_SENTINEL_COLLECTION {
-        let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
-            Vec::with_capacity((limit + 1) as usize);
-
-        if search_lower.is_some() || !matches!(status_filter, NftItemStatusFilter::All) {
-            let scan_batch_size = (limit * 4).clamp(64, 400) as usize;
-            let mut scan_cursor = cursor_bytes;
-
-            loop {
-                let nft_ids = state
-                    .store
-                    .list_object_ids_by_collection(
-                        &collection_id_bytes,
-                        scan_cursor.as_deref(),
-                        scan_batch_size,
-                    )
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-
-                if nft_ids.is_empty() {
-                    break;
-                }
-
-                for (nft_id, entry) in fetch_did_collection_entries_by_ids(
-                    state.store.as_ref(),
-                    &collection_id_bytes,
-                    &nft_ids,
-                )? {
-                    let status_match = match status_filter {
-                        NftItemStatusFilter::All => true,
-                        NftItemStatusFilter::Live => entry.is_live,
-                        NftItemStatusFilter::Recycled => !entry.is_live,
-                    };
-                    if !status_match {
-                        continue;
-                    }
-
-                    if let Some(search) = search_lower.as_deref() {
-                        let name_match = entry
-                            .name
-                            .as_deref()
-                            .map(|name| name.to_ascii_lowercase().contains(search))
-                            .unwrap_or(false);
-                        let nft_id_hex = hex::encode(&nft_id);
-                        let id_match = nft_id_hex.contains(search)
-                            || format!("0x{nft_id_hex}").contains(search);
-                        if !name_match && !id_match {
-                            continue;
-                        }
-                    }
-
-                    matched_items.push((nft_id, entry));
-                    if matched_items.len() > limit as usize {
-                        break;
-                    }
-                }
-
-                if matched_items.len() > limit as usize || nft_ids.len() < scan_batch_size {
-                    break;
-                }
-
-                scan_cursor = nft_ids.last().cloned();
-            }
-        } else {
-            let nft_ids = state
-                .store
-                .list_object_ids_by_collection(
-                    &collection_id_bytes,
-                    cursor_bytes.as_deref(),
-                    (limit + 1) as usize,
-                )
-                .map_err(|e| ApiError::internal(e.to_string()))?;
-
-            matched_items.extend(fetch_did_collection_entries_by_ids(
-                state.store.as_ref(),
-                &collection_id_bytes,
-                &nft_ids,
-            )?);
-        }
-
-        let has_more = matched_items.len() as i64 > limit;
-        let page_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
-            matched_items.into_iter().take(limit as usize).collect();
-
-        let rows = page_items
-            .iter()
-            .map(|(nft_id, entry)| NftCollectionItemResponse {
+    } else {
+        // did:ckb — no outpoint resolution needed
+        for (nft_id, entry) in &page_items {
+            rows.push(NftCollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
                 standard: "did_ckb".to_string(),
@@ -2176,23 +2054,88 @@ async fn list_nft_collection_items(
                 status: None,
                 tx_hash: None,
                 output_index: None,
-            })
-            .collect();
+            });
+        }
+    }
 
-        let next_cursor = if has_more {
-            page_items
-                .last()
-                .map(|(id, _)| format!("0x{}", hex::encode(id)))
-        } else {
-            None
+    let next_cursor = if has_more {
+        page_items
+            .last()
+            .map(|(id, _)| format!("0x{}", hex::encode(id)))
+    } else {
+        None
+    };
+
+    // For dotbit, compute status-aware total; for did:ckb use total_count directly.
+    if search_lower.is_some() {
+        ok(CursorPaginatedResponse::without_total(
+            rows,
+            limit,
+            next_cursor,
+        ))
+    } else if is_dotbit {
+        let total = match status_filter {
+            NftItemStatusFilter::All => agg.total_count,
+            NftItemStatusFilter::Live => agg.live_count,
+            NftItemStatusFilter::Recycled => {
+                agg.total_count
+                    .checked_sub(agg.live_count)
+                    .ok_or_else(|| {
+                        ApiError::internal(format!(
+                            "invalid dotbit collection aggregate counts: collection_id=0x{}, total_count={}, live_count={}",
+                            hex::encode(collection_id_bytes),
+                            agg.total_count,
+                            agg.live_count
+                        ))
+                    })?
+            }
         };
-
-        return ok(CursorPaginatedResponse::new(
+        ok(CursorPaginatedResponse::new(
+            rows,
+            total,
+            limit,
+            next_cursor,
+        ))
+    } else {
+        ok(CursorPaginatedResponse::new(
             rows,
             agg.total_count,
             limit,
             next_cursor,
-        ));
+        ))
+    }
+}
+
+async fn list_nft_collection_items(
+    State(state): State<Arc<AppState>>,
+    Path(collection_id): Path<String>,
+    Query(params): Query<NftItemsParams>,
+) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
+    let search_lower = normalize_nft_items_search(params.search.as_deref());
+    let status_filter = normalize_nft_items_status(params.status.as_deref())?;
+    let cursor_bytes = params
+        .cursor
+        .as_deref()
+        .map(decode_nft_item_cursor)
+        .transpose()?;
+
+    let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let agg = agg.ok_or_else(|| ApiError::not_found("NFT collection not found"))?;
+
+    if is_identity_sentinel(&collection_id_bytes) {
+        return list_identity_items_inner(
+            state.store.as_ref(),
+            state.append_only_store.as_ref(),
+            &collection_id_bytes,
+            limit,
+            cursor_bytes,
+            search_lower.as_deref(),
+            status_filter,
+            &agg,
+        );
     }
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::ObjectEntry)> =
