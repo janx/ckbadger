@@ -120,7 +120,7 @@ describe('Tabs', () => {
     const tab1 = screen.getByText('Tab 1');
     const tab2 = screen.getByText('Tab 2');
 
-    expect(tab1).toHaveClass('text-interactive');
+    expect(tab1).toHaveClass('text-amber');
     expect(tab2).toHaveClass('text-text-muted');
   });
 });

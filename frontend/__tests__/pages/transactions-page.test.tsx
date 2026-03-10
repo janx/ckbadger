@@ -56,7 +56,7 @@ describe('TransactionsPage', () => {
     expect(screen.getByText('→')).toHaveClass('text-text-muted');
     expect(
       document.querySelector(
-        '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-emphasis'
+        '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-sky-dim'
       )
     ).toBeTruthy();
   });

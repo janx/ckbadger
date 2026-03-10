@@ -99,7 +99,7 @@ describe('ScriptByCodeHashPage', () => {
       document.querySelector(`a[href="/script/${mockDataHash}?hashType=data&kind=type"]`)
     ).toBeTruthy();
     expect(
-      document.querySelector(`[title="Click to copy: ${mockCodeHash}"] .text-emphasis`)
+      document.querySelector(`[title="Click to copy: ${mockCodeHash}"] .text-sky-dim`)
     ).toBeTruthy();
   });
 
