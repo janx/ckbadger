@@ -16,8 +16,8 @@ use tracing::{debug, error, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellInfo,
-    ObjectTypeIndex, SporeTypeIndex,
+    AddressBalance, DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate,
+    LiveCellInfo, ObjectTypeIndex, SporeTypeIndex,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -1250,6 +1250,13 @@ impl Indexer {
             self.finalize_bulk_sync_perf_completed();
 
             self.cache_invalidator.invalidate_chart_caches().await;
+
+            // Release addr_balance cache memory (~300MB for ~3M addresses)
+            {
+                let mut cache = self.addr_balance_cache.lock().unwrap();
+                cache.clear();
+                cache.shrink_to_fit();
+            }
 
             // Compaction mode transition is now handled by ensure_compaction_mode()
             // which runs after every batch and includes a drain guard.
@@ -3469,6 +3476,7 @@ impl Indexer {
         ) = if bulk_sync_mode {
             let writer = &self.writer;
             let udt_cache = &self.udt_cell_cache;
+            let addr_balance_cache = &self.addr_balance_cache;
             let prefetch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 rayon::join(
                     || {
@@ -3750,15 +3758,15 @@ impl Indexer {
                         rayon::join(
                             || {
                                 if !lock_hash_keys.is_empty() {
-                                    writer
-                                    .read_address_balances(&lock_hash_keys)
-                                    .unwrap_or_else(|e| {
-                                        panic!(
-                                            "failed to prefetch address balances: lock_hashes={}, error={}",
-                                            lock_hash_keys.len(),
-                                            e
-                                        )
-                                    })
+                                    // Use in-memory cache instead of DB read
+                                    let cache_guard = addr_balance_cache.lock().unwrap();
+                                    let mut result = HashMap::with_capacity(lock_hash_keys.len());
+                                    for key in &lock_hash_keys {
+                                        // None in cache → never seen → treat as None (new address)
+                                        let value = cache_guard.get(*key).cloned().unwrap_or(None);
+                                        result.insert((*key).clone(), value);
+                                    }
+                                    result
                                 } else {
                                     HashMap::new()
                                 }
@@ -6577,6 +6585,50 @@ impl Indexer {
                     bulk_sync_mode,
                     "Finalize commit done"
                 );
+            }
+        }
+
+        // Update addr_balance cache after successful commit (bulk sync only)
+        if bulk_sync_mode && !skip_address_balances {
+            let mut cache_guard = self.addr_balance_cache.lock().unwrap();
+            for (
+                lock_hash,
+                (
+                    balance_delta,
+                    live_delta,
+                    total_delta,
+                    tx_delta,
+                    block_num,
+                    tx_hash,
+                    occupied_delta,
+                ),
+            ) in &address_balance_changes
+            {
+                let entry = cache_guard.entry(lock_hash.clone()).or_insert(None);
+                match entry {
+                    Some(bal) => {
+                        bal.balance += balance_delta;
+                        bal.occupied_capacity += occupied_delta;
+                        bal.live_cells_count += live_delta;
+                        bal.total_cells_count += *total_delta as i64;
+                        bal.txs_count += tx_delta;
+                        bal.last_activity_block = *block_num;
+                        bal.last_activity_tx = tx_hash.to_vec();
+                    }
+                    None => {
+                        *entry = Some(AddressBalance {
+                            balance: *balance_delta,
+                            occupied_capacity: *occupied_delta,
+                            live_cells_count: *live_delta,
+                            total_cells_count: *total_delta as i64,
+                            txs_count: *tx_delta,
+                            first_seen_block: *block_num,
+                            first_seen_tx: tx_hash.to_vec(),
+                            last_activity_block: *block_num,
+                            last_activity_tx: tx_hash.to_vec(),
+                        });
+                    }
+                }
             }
         }
 

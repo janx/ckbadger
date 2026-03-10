@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use ckbadger_common::PipelineProgressData;
 use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
-use ckbadger_store::types::HodlTrackerState;
+use ckbadger_store::types::{AddressBalance, HodlTrackerState};
 use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
@@ -211,6 +212,9 @@ pub struct Indexer {
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
     pub(crate) latest_activities: Arc<LatestActivitiesBuffer>,
+    /// In-memory cache of address balances used during bulk sync to avoid
+    /// ~3M DB reads per full sync.  Cleared on bulk -> live transition.
+    pub(crate) addr_balance_cache: std::sync::Mutex<HashMap<Vec<u8>, Option<AddressBalance>>>,
 }
 
 impl Indexer {
@@ -304,6 +308,7 @@ impl Indexer {
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
             latest_activities: Arc::new(LatestActivitiesBuffer::new()),
+            addr_balance_cache: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
