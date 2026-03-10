@@ -1381,32 +1381,27 @@ impl Indexer {
         // the per-batch progress marker.
         let is_bulk = self.is_bulk_sync_active();
         let t_headers = Instant::now();
-        {
-            let mut batch = StoreBatch::new(self.writer.store());
-            let mut tx_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
-            if !is_bulk && !all_tx_data.is_empty() {
-                put_tx_context_undo_entries(&mut batch, &mut tx_undo_seq_by_block, &all_tx_data)?;
+        let mut batch = StoreBatch::new(self.writer.store());
+        let mut tx_undo_seq_by_block: HashMap<i64, u64> = HashMap::new();
+        if !is_bulk && !all_tx_data.is_empty() {
+            put_tx_context_undo_entries(&mut batch, &mut tx_undo_seq_by_block, &all_tx_data)?;
+        }
+        if !txs_for_batch.is_empty() {
+            self.writer
+                .insert_transactions_batch(&txs_for_batch, &mut batch)?;
+        }
+        if !all_cells.is_empty() {
+            let mut cells_batch = StoreBatch::new(&self.append_only_store);
+            self.writer.insert_cells_batch(
+                &all_cells,
+                &batch_cell_infos,
+                &mut batch,
+                &mut cells_batch,
+                false,
+            )?;
+            if !cells_batch.is_empty() {
+                cells_batch.commit()?;
             }
-            if !txs_for_batch.is_empty() {
-                self.writer
-                    .insert_transactions_batch(&txs_for_batch, &mut batch)?;
-            }
-            if !all_cells.is_empty() {
-                let mut cells_batch = StoreBatch::new(&self.append_only_store);
-                self.writer.insert_cells_batch(
-                    &all_cells,
-                    &batch_cell_infos,
-                    &mut batch,
-                    &mut cells_batch,
-                    false,
-                )?;
-                if !cells_batch.is_empty() {
-                    cells_batch.commit()?;
-                }
-            }
-            let commit_started = Instant::now();
-            batch.commit()?;
-            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
         let headers_ms = t_headers.elapsed().as_secs_f64() * 1000.0;
 
@@ -1959,19 +1954,13 @@ impl Indexer {
                 &mut domain_analytics_batch,
             )?;
         }
+        // Merge all domain-store batches for atomic commit
+        batch.merge_from(consume_addr_batch);
+        batch.merge_from(domain_analytics_batch);
+        batch.merge_from(append_history_batch);
         {
             let commit_started = Instant::now();
-            consume_addr_batch.commit()?;
-            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
-        }
-        if !domain_analytics_batch.is_empty() {
-            let commit_started = Instant::now();
-            domain_analytics_batch.commit()?;
-            commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
-        }
-        if !append_history_batch.is_empty() {
-            let commit_started = Instant::now();
-            append_history_batch.commit()?;
+            batch.commit()?;
             commit_ms += commit_started.elapsed().as_secs_f64() * 1000.0;
         }
 
