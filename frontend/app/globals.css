@@ -3,15 +3,15 @@
 @tailwind utilities;
 
 :root {
-  --foreground: #f0e6ea;
-  --background: #0c0a12;
-  --color-surface: #110e1a;
-  --color-elevated: #181424;
-  --color-border: #1e1a2a;
-  --color-emphasis: #ff6b9d;
-  --color-emphasis-dim: #d4547e;
-  --color-interactive: #4dd0c8;
-  --color-interactive-hover: #78edd8;
+  --foreground: #2a2520;
+  --background: #faf6f0;
+  --color-surface: #f3ede5;
+  --color-elevated: #efe8de;
+  --color-border: #e0d8cc;
+  --color-emphasis: #1e7a6a;
+  --color-emphasis-dim: #166858;
+  --color-interactive: #3aaa80;
+  --color-interactive-hover: #2cc878;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
 }
@@ -21,7 +21,7 @@ body {
   background: var(--background);
   min-height: 100vh;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  background-blend-mode: overlay;
+  background-blend-mode: soft-light;
   background-size: 128px 128px;
 }
 
@@ -36,13 +36,13 @@ body {
   }
 
   .terminal-text {
-    color: #ff6b9d;
-    text-shadow: 0 0 4px #ff6b9d40;
+    color: #1e7a6a;
+    text-shadow: 0 0 4px #1e7a6a30;
   }
 
   .terminal-text-dim {
-    color: #d4547e;
-    text-shadow: 0 0 3px #d4547e30;
+    color: #166858;
+    text-shadow: 0 0 3px #16685820;
   }
 
   .crt-screen {
@@ -56,8 +56,8 @@ body {
     inset: 0;
     background: repeating-linear-gradient(
       0deg,
-      rgba(0, 0, 0, 0.06) 0px,
-      rgba(0, 0, 0, 0.06) 1px,
+      rgba(42, 37, 32, 0.04) 0px,
+      rgba(42, 37, 32, 0.04) 1px,
       transparent 1px,
       transparent 2px
     );
@@ -69,7 +69,7 @@ body {
     content: '';
     position: absolute;
     inset: 0;
-    background: radial-gradient(ellipse at center, transparent 0%, rgba(0, 0, 0, 0.3) 100%);
+    background: radial-gradient(ellipse at center, transparent 0%, rgba(42, 37, 32, 0.06) 100%);
     pointer-events: none;
     z-index: 10;
   }
@@ -80,7 +80,7 @@ body {
     left: 0;
     width: 100%;
     height: 4px;
-    background: linear-gradient(to bottom, transparent, rgba(255, 107, 157, 0.008), transparent);
+    background: linear-gradient(to bottom, transparent, rgba(30, 122, 106, 0.008), transparent);
     animation: scan-line 8s linear infinite;
     pointer-events: none;
     z-index: 9999;
@@ -132,7 +132,7 @@ body {
     background: linear-gradient(
       90deg,
       transparent 0%,
-      rgba(255, 107, 157, 0.03) 50%,
+      rgba(58, 170, 128, 0.04) 50%,
       transparent 100%
     );
     transform: translateX(-100%);
@@ -149,16 +149,16 @@ body {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #ff6b9d;
+    background: #3aaa80;
     box-shadow:
-      0 0 4px #ff6b9d80,
-      0 0 8px #ff6b9d40;
+      0 0 4px #3aaa8080,
+      0 0 8px #3aaa8040;
     animation: glow-pulse 1.5s ease-in-out infinite;
   }
 
   .indicator-light-amber {
-    background: #ff8c42;
-    box-shadow: 0 0 6px #ff8c42;
+    background: #b88420;
+    box-shadow: 0 0 6px #b88420;
   }
 
   .indicator-light-static {
@@ -166,12 +166,12 @@ body {
   }
 
   .logo-image {
-    filter: drop-shadow(0 0 12px rgba(255, 107, 157, 0.4));
+    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.3));
     transform-origin: top left;
   }
 
   .logo-image:hover {
-    filter: drop-shadow(0 0 20px rgba(255, 107, 157, 0.6));
+    filter: drop-shadow(0 0 20px rgba(30, 122, 106, 0.5));
   }
 
   .neon-flicker {
@@ -184,7 +184,7 @@ body {
 
   .cycles-calculating-marquee {
     display: inline-block;
-    background-image: linear-gradient(90deg, #94a3b8 0%, #f8fafc 45%, #94a3b8 100%);
+    background-image: linear-gradient(90deg, #7a7068 0%, #2a2520 45%, #7a7068 100%);
     background-size: 220% 100%;
     background-position: 220% 0;
     background-clip: text;
@@ -199,73 +199,73 @@ body {
 @keyframes neon-flicker-anim {
   0% {
     opacity: 1;
-    filter: drop-shadow(0 0 12px rgba(255, 107, 157, 0.4));
+    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.4));
   }
   5% {
     opacity: 0.4;
-    filter: drop-shadow(0 0 2px rgba(255, 107, 157, 0.2));
+    filter: drop-shadow(0 0 2px rgba(30, 122, 106, 0.2));
   }
   10% {
     opacity: 1;
-    filter: drop-shadow(0 0 18px rgba(255, 107, 157, 0.7));
+    filter: drop-shadow(0 0 18px rgba(30, 122, 106, 0.7));
   }
   15% {
     opacity: 0.7;
-    filter: drop-shadow(0 0 8px rgba(255, 107, 157, 0.3));
+    filter: drop-shadow(0 0 8px rgba(30, 122, 106, 0.3));
   }
   20% {
     opacity: 1;
-    filter: drop-shadow(0 0 25px rgba(255, 107, 157, 0.9))
-      drop-shadow(0 0 40px rgba(255, 107, 157, 0.5));
+    filter: drop-shadow(0 0 25px rgba(30, 122, 106, 0.9))
+      drop-shadow(0 0 40px rgba(30, 122, 106, 0.5));
   }
   25% {
     opacity: 0.3;
-    filter: drop-shadow(0 0 3px rgba(255, 107, 157, 0.1));
+    filter: drop-shadow(0 0 3px rgba(30, 122, 106, 0.1));
   }
   30% {
     opacity: 0.9;
-    filter: drop-shadow(0 0 15px rgba(255, 107, 157, 0.6));
+    filter: drop-shadow(0 0 15px rgba(30, 122, 106, 0.6));
   }
   35% {
     opacity: 0.5;
-    filter: drop-shadow(0 0 5px rgba(255, 107, 157, 0.2));
+    filter: drop-shadow(0 0 5px rgba(30, 122, 106, 0.2));
   }
   40% {
     opacity: 1;
-    filter: drop-shadow(0 0 20px rgba(255, 107, 157, 0.8))
-      drop-shadow(0 0 35px rgba(255, 107, 157, 0.4));
+    filter: drop-shadow(0 0 20px rgba(30, 122, 106, 0.8))
+      drop-shadow(0 0 35px rgba(30, 122, 106, 0.4));
   }
   45% {
     opacity: 0.6;
-    filter: drop-shadow(0 0 6px rgba(255, 107, 157, 0.25));
+    filter: drop-shadow(0 0 6px rgba(30, 122, 106, 0.25));
   }
   50% {
     opacity: 1;
-    filter: drop-shadow(0 0 22px rgba(255, 107, 157, 0.85));
+    filter: drop-shadow(0 0 22px rgba(30, 122, 106, 0.85));
   }
   55% {
     opacity: 0.8;
-    filter: drop-shadow(0 0 10px rgba(255, 107, 157, 0.4));
+    filter: drop-shadow(0 0 10px rgba(30, 122, 106, 0.4));
   }
   60% {
     opacity: 1;
-    filter: drop-shadow(0 0 18px rgba(255, 107, 157, 0.7));
+    filter: drop-shadow(0 0 18px rgba(30, 122, 106, 0.7));
   }
   70% {
     opacity: 0.95;
-    filter: drop-shadow(0 0 14px rgba(255, 107, 157, 0.55));
+    filter: drop-shadow(0 0 14px rgba(30, 122, 106, 0.55));
   }
   80% {
     opacity: 1;
-    filter: drop-shadow(0 0 15px rgba(255, 107, 157, 0.5));
+    filter: drop-shadow(0 0 15px rgba(30, 122, 106, 0.5));
   }
   90% {
     opacity: 1;
-    filter: drop-shadow(0 0 13px rgba(255, 107, 157, 0.45));
+    filter: drop-shadow(0 0 13px rgba(30, 122, 106, 0.45));
   }
   100% {
     opacity: 1;
-    filter: drop-shadow(0 0 12px rgba(255, 107, 157, 0.4));
+    filter: drop-shadow(0 0 12px rgba(30, 122, 106, 0.4));
   }
 }
 
@@ -355,18 +355,18 @@ body {
 
 @layer base {
   * {
-    @apply border-gray-800;
+    @apply border-base-border;
   }
 }
 
 @layer components {
   .terminal-card {
     @apply relative overflow-hidden rounded-lg border;
-    border-color: #1e1a2a;
-    background: #110e1a;
+    border-color: #e0d8cc;
+    background: #f3ede5;
     box-shadow:
-      inset 0 0 30px rgba(255, 107, 157, 0.02),
-      0 0 10px rgba(255, 107, 157, 0.04);
+      inset 0 0 30px rgba(30, 122, 106, 0.02),
+      0 0 10px rgba(30, 122, 106, 0.04);
   }
 
   .terminal-card::before {
@@ -375,8 +375,8 @@ body {
     inset: 0;
     background: repeating-linear-gradient(
       0deg,
-      rgba(0, 0, 0, 0.04) 0px,
-      rgba(0, 0, 0, 0.04) 1px,
+      rgba(42, 37, 32, 0.03) 0px,
+      rgba(42, 37, 32, 0.03) 1px,
       transparent 1px,
       transparent 2px
     );
@@ -386,8 +386,8 @@ body {
 
   .terminal-card-header {
     @apply relative z-10 border-b px-4 py-3;
-    border-color: #1e1a2a;
-    background: linear-gradient(to bottom, rgba(255, 107, 157, 0.02), transparent);
+    border-color: #e0d8cc;
+    background: linear-gradient(to bottom, rgba(30, 122, 106, 0.03), transparent);
   }
 
   .terminal-card-content {
@@ -406,9 +406,9 @@ body {
     padding: 1px;
     background: linear-gradient(
       135deg,
-      rgba(255, 107, 157, 0.2),
+      rgba(30, 122, 106, 0.15),
       transparent 50%,
-      rgba(255, 107, 157, 0.08)
+      rgba(30, 122, 106, 0.06)
     );
     mask:
       linear-gradient(#fff 0 0) content-box,
