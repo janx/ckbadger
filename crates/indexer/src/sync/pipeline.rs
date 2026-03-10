@@ -321,6 +321,7 @@ impl Indexer {
             PreParsedSporeData,                    // pre-parsed spore/cluster data
             PreParsedNftData,                      // pre-parsed mNFT/DotBit data
             ParserBatchPerfSample,                 // parser hotpath timings
+            PrecomputedBatchData, // batch precompute (cells, consumptions, indexes)
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -1689,6 +1690,29 @@ impl Indexer {
                 precompute_phase_metrics.nft_precompute_ms =
                     nft_precompute_started.elapsed().as_secs_f64() * 1000.0;
 
+                // Precompute batch data (cells, consumptions, cell indexes, addr_txs)
+                // that was previously done in writer stage — now overlaps with previous
+                // batch's write phase.
+                let precomputed = match precompute_batch_data(
+                    &all_tx_data,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                    &address_balance_changes,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        record_worker_exit_reason(
+                            &parser_exit_reason_for_parser,
+                            format!(
+                                "precompute_batch_data failed: range={}-{}, error={:?}",
+                                start_block, end_block, e
+                            ),
+                        );
+                        return;
+                    }
+                };
+                // writer_precompute time is included in precompute_parser_ms
+                // via the t_precompute_parser span that covers all precompute phases
                 let precompute_parser_ms = t_precompute_parser.elapsed().as_secs_f64() * 1000.0;
                 let total_parser_ms = t_parser.elapsed().as_secs_f64() * 1000.0;
                 let tx_count: usize = all_tx_data.len();
@@ -1784,6 +1808,7 @@ impl Indexer {
                         pre_parsed_spore_data,
                         pre_parsed_nft_data,
                         parser_perf_sample,
+                        precomputed,
                     ))
                     .await
                     .is_err()
@@ -1855,6 +1880,7 @@ impl Indexer {
                     pre_parsed_spore_data,
                     pre_parsed_nft_data,
                     parser_perf_sample,
+                    precomputed,
                 ))) => {
                     consecutive_idle_timeouts = 0;
                     atomic_saturating_sub_u64(
@@ -2028,6 +2054,7 @@ impl Indexer {
                             pre_parsed_spore_data,
                             pre_parsed_nft_data,
                             chain_tip,
+                            precomputed,
                         )
                         .await
                     {

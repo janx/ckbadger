@@ -639,7 +639,7 @@ pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i
 /// Pre-computed cell index keys for T1b (parallel cell index writes).
 /// Each op holds the 74-byte encoded keys so T1b can write them without
 /// re-encoding or needing access to ParsedCell / LiveCellInfo.
-pub(super) struct CellIndexOp {
+pub(crate) struct CellIndexOp {
     pub lock_hash_key: Vec<u8>,
     pub lock_code_hash_key: Vec<u8>,
     pub type_hash_key: Option<Vec<u8>>,
@@ -649,7 +649,7 @@ pub(super) struct CellIndexOp {
 /// Owned precomputed batch data that can be produced by either the writer or
 /// parser stage. All references are replaced with indices or owned `Vec<u8>`
 /// so the struct is `'static` and can cross thread/task boundaries.
-pub(super) struct PrecomputedBatchData {
+pub(crate) struct PrecomputedBatchData {
     /// Indices into all_tx_data: (tx_data_index, output_index_in_cells, block_number)
     pub all_cells_indices: Vec<(usize, usize, i64)>,
     /// Owned consumption data: (prev_tx_hash, prev_output_index, created_at_block, consuming_tx_hash, consumed_at_block, input_index)
@@ -3285,6 +3285,7 @@ impl Indexer {
         pre_parsed_spore_data: Vec<(Vec<ParsedSporeCell>, Vec<ParsedClusterCell>)>,
         pre_parsed_nft_data: PreParsedNftData,
         chain_tip: u64,
+        precomputed: PrecomputedBatchData,
     ) -> Result<BatchWriteMetrics> {
         if all_parsed_blocks.is_empty() {
             return Ok(BatchWriteMetrics::default());
@@ -3331,12 +3332,7 @@ impl Indexer {
         }
 
         let t_precompute = Instant::now();
-        let precomputed = precompute_batch_data(
-            &all_tx_data,
-            &input_cell_info,
-            &batch_cell_infos,
-            &address_balance_changes,
-        )?;
+        // precomputed was computed in parser stage; reconstruct references here
 
         // Reconstruct reference vectors that write threads need
         let all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = precomputed
