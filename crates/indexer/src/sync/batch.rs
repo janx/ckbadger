@@ -646,6 +646,229 @@ pub(super) struct CellIndexOp {
     pub type_code_hash_key: Option<Vec<u8>>,
 }
 
+/// Owned precomputed batch data that can be produced by either the writer or
+/// parser stage. All references are replaced with indices or owned `Vec<u8>`
+/// so the struct is `'static` and can cross thread/task boundaries.
+pub(super) struct PrecomputedBatchData {
+    /// Indices into all_tx_data: (tx_data_index, output_index_in_cells, block_number)
+    pub all_cells_indices: Vec<(usize, usize, i64)>,
+    /// Owned consumption data: (prev_tx_hash, prev_output_index, created_at_block, consuming_tx_hash, consumed_at_block, input_index)
+    pub all_consumptions: Vec<(Vec<u8>, i16, i64, Vec<u8>, i64, i16)>,
+    /// Pre-computed cell index keys for puts
+    pub cell_index_puts: Vec<CellIndexOp>,
+    /// Pre-computed cell index keys for deletes
+    pub cell_index_deletes: Vec<CellIndexOp>,
+    /// Per-tx address entries: (lock_hash, block_number, tx_index, tx_hash)
+    pub addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)>,
+    /// Owned copy of address_balance_changes with Vec<u8> instead of &[u8]
+    pub changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
+}
+
+/// Precompute batch data from parsed transactions and cell info maps.
+///
+/// This is a free function (no `&self`) so it can be called from either the
+/// writer stage (current) or the parser stage (future optimisation).
+pub(super) fn precompute_batch_data(
+    all_tx_data: &[TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
+) -> Result<PrecomputedBatchData> {
+    // Build all_cells_indices: (tx_data_index, output_index, block_number)
+    let mut all_cells_indices: Vec<(usize, usize, i64)> = Vec::new();
+    let mut all_consumptions: Vec<(Vec<u8>, i16, i64, Vec<u8>, i64, i16)> = Vec::new();
+
+    for (tx_idx, tx_data) in all_tx_data.iter().enumerate() {
+        for (output_index, _cell) in tx_data.cells.iter().enumerate() {
+            // Validate the output index fits in i16
+            checked_usize_to_i16(
+                output_index,
+                "precompute output index for all_cells_indices",
+            )
+            .map_err(|e| {
+                anyhow!(
+                    "{}: tx_hash=0x{}, block={}",
+                    e,
+                    hex::encode(tx_data.hash),
+                    tx_data.block_number
+                )
+            })?;
+            all_cells_indices.push((tx_idx, output_index, tx_data.block_number));
+        }
+
+        if !tx_data.is_cellbase {
+            for (input_index, input) in tx_data.inputs.iter().enumerate() {
+                let input_index_i16 =
+                    checked_usize_to_i16(input_index, "precompute input index for consumptions")
+                        .map_err(|e| {
+                            anyhow!(
+                                "{}: tx_hash=0x{}, block={}",
+                                e,
+                                hex::encode(tx_data.hash),
+                                tx_data.block_number
+                            )
+                        })?;
+                let key = (
+                    input.previous_tx_hash.to_vec(),
+                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+                );
+                let info = input_cell_info
+                    .get(&key)
+                    .or_else(|| batch_cell_infos.get(&key));
+                if let Some(info) = info {
+                    all_consumptions.push((
+                        input.previous_tx_hash.to_vec(),
+                        parsed_input_outpoint_index_i16(
+                            input.previous_output_index,
+                            "sync_indexer",
+                        ),
+                        info.created_at_block,
+                        tx_data.hash.to_vec(),
+                        tx_data.block_number,
+                        input_index_i16,
+                    ));
+                }
+            }
+        }
+    }
+
+    // Build cell index puts from all_cells_indices
+    let cell_index_puts: Vec<CellIndexOp> = all_cells_indices
+        .iter()
+        .map(|(tx_idx, output_idx, block_number)| {
+            let tx_data = &all_tx_data[*tx_idx];
+            let cell = &tx_data.cells[*output_idx];
+            let output_index = checked_usize_to_i16(*output_idx, "precompute cell index puts")
+                .map_err(|e| {
+                    anyhow!(
+                        "{}: tx_hash=0x{}, block={}",
+                        e,
+                        hex::encode(tx_data.hash),
+                        tx_data.block_number
+                    )
+                })
+                .expect("output_index already validated in all_cells_indices construction");
+            CellIndexOp {
+                lock_hash_key: keys::encode_cell_index_key(
+                    &cell.lock_script_hash,
+                    *block_number,
+                    &tx_data.hash,
+                    output_index,
+                ),
+                lock_code_hash_key: keys::encode_cell_index_key(
+                    &cell.lock_code_hash,
+                    *block_number,
+                    &tx_data.hash,
+                    output_index,
+                ),
+                type_hash_key: cell.type_script_hash.as_ref().map(|h| {
+                    keys::encode_cell_index_key(h, *block_number, &tx_data.hash, output_index)
+                }),
+                type_code_hash_key: cell.type_code_hash.as_ref().map(|h| {
+                    keys::encode_cell_index_key(h, *block_number, &tx_data.hash, output_index)
+                }),
+            }
+        })
+        .collect();
+
+    // Build cell index deletes from consumptions
+    let cell_index_deletes: Vec<CellIndexOp> = all_consumptions
+        .iter()
+        .filter_map(
+            |(
+                prev_tx_hash,
+                output_index,
+                _created_at_block,
+                _consumed_by_tx,
+                _consumed_at_block,
+                _input_index,
+            )| {
+                let key = (prev_tx_hash.clone(), *output_index);
+                let info = input_cell_info
+                    .get(&key)
+                    .or_else(|| batch_cell_infos.get(&key));
+                info.map(|info| CellIndexOp {
+                    lock_hash_key: keys::encode_cell_index_key(
+                        &info.lock_script_hash,
+                        info.created_at_block,
+                        prev_tx_hash,
+                        *output_index,
+                    ),
+                    lock_code_hash_key: keys::encode_cell_index_key(
+                        &info.lock_code_hash,
+                        info.created_at_block,
+                        prev_tx_hash,
+                        *output_index,
+                    ),
+                    type_hash_key: info.type_script_hash.as_ref().map(|h| {
+                        keys::encode_cell_index_key(
+                            h,
+                            info.created_at_block,
+                            prev_tx_hash,
+                            *output_index,
+                        )
+                    }),
+                    type_code_hash_key: info.type_code_hash.as_ref().map(|h| {
+                        keys::encode_cell_index_key(
+                            h,
+                            info.created_at_block,
+                            prev_tx_hash,
+                            *output_index,
+                        )
+                    }),
+                })
+            },
+        )
+        .collect();
+
+    // Compute per-tx address entries for addr_txs index
+    let mut addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)> = Vec::new();
+    for tx_data in all_tx_data {
+        let mut touched: HashSet<Vec<u8>> = HashSet::new();
+        for cell in &tx_data.cells {
+            touched.insert(cell.lock_script_hash.clone());
+        }
+        if !tx_data.is_cellbase {
+            for input in &tx_data.inputs {
+                let key = (
+                    input.previous_tx_hash.to_vec(),
+                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
+                );
+                let info = input_cell_info
+                    .get(&key)
+                    .or_else(|| batch_cell_infos.get(&key));
+                if let Some(info) = info {
+                    touched.insert(info.lock_script_hash.clone());
+                }
+            }
+        }
+        for lock_hash in touched {
+            addr_tx_entries.push((
+                lock_hash,
+                tx_data.block_number,
+                tx_data.tx_index,
+                tx_data.hash.to_vec(),
+            ));
+        }
+    }
+
+    // Build owned changes_ref
+    let changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)> =
+        address_balance_changes
+            .iter()
+            .map(|(k, (a, b, c, d, e, f, g))| (k.clone(), (*a, *b, *c, *d, *e, f.clone(), *g)))
+            .collect();
+
+    Ok(PrecomputedBatchData {
+        all_cells_indices,
+        all_consumptions,
+        cell_index_puts,
+        cell_index_deletes,
+        addr_tx_entries,
+        changes_ref,
+    })
+}
+
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -3108,189 +3331,54 @@ impl Indexer {
         }
 
         let t_precompute = Instant::now();
+        let precomputed = precompute_batch_data(
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+            &address_balance_changes,
+        )?;
 
-        // Build reference vectors from pre-computed data (Passes 1-3 done in parser)
-        let mut all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = Vec::new();
-        let mut all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = Vec::new();
-        let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();
-
-        for tx_data in &all_tx_data {
-            for (output_index, cell) in tx_data.cells.iter().enumerate() {
-                let output_index_i16 =
-                    checked_usize_to_i16(output_index, "pipeline sync output index for all_cells")
-                        .map_err(|e| {
-                            anyhow!(
-                                "{}: tx_hash=0x{}, block={}",
-                                e,
-                                hex::encode(tx_data.hash),
-                                tx_data.block_number
-                            )
-                        })?;
-                all_cells.push((
-                    tx_data.hash.as_slice(),
-                    output_index_i16,
-                    cell,
-                    tx_data.block_number,
-                ));
-            }
-
-            if !tx_data.is_cellbase {
-                for (input_index, input) in tx_data.inputs.iter().enumerate() {
-                    let input_index_i16 = checked_usize_to_i16(
-                        input_index,
-                        "pipeline sync input index for consumptions",
-                    )
-                    .map_err(|e| {
-                        anyhow!(
-                            "{}: tx_hash=0x{}, block={}",
-                            e,
-                            hex::encode(tx_data.hash),
-                            tx_data.block_number
-                        )
-                    })?;
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        ),
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        all_consumptions.push((
-                            input.previous_tx_hash.as_slice(),
-                            parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ),
-                            info.created_at_block,
-                            tx_data.hash.as_slice(),
-                            tx_data.block_number,
-                            input_index_i16,
-                        ));
-                    }
-                }
-            }
-        }
-
-        let cell_index_puts: Vec<CellIndexOp> =
-            all_cells
-                .iter()
-                .map(|(tx_hash, output_index, cell, block_number)| CellIndexOp {
-                    lock_hash_key: keys::encode_cell_index_key(
-                        &cell.lock_script_hash,
-                        *block_number,
-                        tx_hash,
-                        *output_index,
-                    ),
-                    lock_code_hash_key: keys::encode_cell_index_key(
-                        &cell.lock_code_hash,
-                        *block_number,
-                        tx_hash,
-                        *output_index,
-                    ),
-                    type_hash_key: cell.type_script_hash.as_ref().map(|h| {
-                        keys::encode_cell_index_key(h, *block_number, tx_hash, *output_index)
-                    }),
-                    type_code_hash_key: cell.type_code_hash.as_ref().map(|h| {
-                        keys::encode_cell_index_key(h, *block_number, tx_hash, *output_index)
-                    }),
-                })
-                .collect();
-
-        let cell_index_deletes: Vec<CellIndexOp> = all_consumptions
+        // Reconstruct reference vectors that write threads need
+        let all_cells: Vec<(&[u8], i16, &crate::parser::cell::ParsedCell, i64)> = precomputed
+            .all_cells_indices
             .iter()
-            .filter_map(
-                |(
-                    tx_hash,
-                    output_index,
-                    _created_at_block,
-                    _consumed_by_tx,
-                    _consumed_at_block,
-                    _input_index,
-                )| {
-                    let key = (tx_hash.to_vec(), *output_index);
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    info.map(|info| CellIndexOp {
-                        lock_hash_key: keys::encode_cell_index_key(
-                            &info.lock_script_hash,
-                            info.created_at_block,
-                            tx_hash,
-                            *output_index,
-                        ),
-                        lock_code_hash_key: keys::encode_cell_index_key(
-                            &info.lock_code_hash,
-                            info.created_at_block,
-                            tx_hash,
-                            *output_index,
-                        ),
-                        type_hash_key: info.type_script_hash.as_ref().map(|h| {
-                            keys::encode_cell_index_key(
-                                h,
-                                info.created_at_block,
-                                tx_hash,
-                                *output_index,
-                            )
-                        }),
-                        type_code_hash_key: info.type_code_hash.as_ref().map(|h| {
-                            keys::encode_cell_index_key(
-                                h,
-                                info.created_at_block,
-                                tx_hash,
-                                *output_index,
-                            )
-                        }),
-                    })
+            .map(|(tx_idx, output_idx, block_number)| {
+                let tx_data = &all_tx_data[*tx_idx];
+                let cell = &tx_data.cells[*output_idx];
+                let output_index =
+                    checked_usize_to_i16(*output_idx, "precomputed all_cells ref rebuild").unwrap(); // already validated during precompute
+                (tx_data.hash.as_slice(), output_index, cell, *block_number)
+            })
+            .collect();
+
+        let all_consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> = precomputed
+            .all_consumptions
+            .iter()
+            .map(
+                |(prev_tx, prev_idx, created_at, consuming_tx, consumed_at, input_idx)| {
+                    (
+                        prev_tx.as_slice(),
+                        *prev_idx,
+                        *created_at,
+                        consuming_tx.as_slice(),
+                        *consumed_at,
+                        *input_idx,
+                    )
                 },
             )
             .collect();
 
-        // Compute per-tx address entries for addr_txs index
-        let mut addr_tx_entries: Vec<(Vec<u8>, i64, i32, Vec<u8>)> = Vec::new();
-        for tx_data in &all_tx_data {
-            let mut touched: HashSet<Vec<u8>> = HashSet::new();
-            for cell in &tx_data.cells {
-                touched.insert(cell.lock_script_hash.clone());
-            }
-            if !tx_data.is_cellbase {
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        ),
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key));
-                    if let Some(info) = info {
-                        touched.insert(info.lock_script_hash.clone());
-                    }
-                }
-            }
-            for lock_hash in touched {
-                addr_tx_entries.push((
-                    lock_hash,
-                    tx_data.block_number,
-                    tx_data.tx_index,
-                    tx_data.hash.to_vec(),
-                ));
-            }
-        }
+        let cell_index_puts = precomputed.cell_index_puts;
+        let cell_index_deletes = precomputed.cell_index_deletes;
+        let addr_tx_entries = precomputed.addr_tx_entries;
 
-        let changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> =
-            address_balance_changes
-                .iter()
-                .map(|(k, (a, b, c, d, e, f, g))| {
-                    (k.clone(), (*a, *b, *c, *d, *e, f.as_slice(), *g))
-                })
-                .collect();
+        let changes_ref: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = precomputed
+            .changes_ref
+            .iter()
+            .map(|(k, (a, b, c, d, e, f, g))| (k.clone(), (*a, *b, *c, *d, *e, f.as_slice(), *g)))
+            .collect();
 
+        let txs_for_batch: Vec<&TxData> = all_tx_data.iter().collect();
         let block_refs: Vec<&crate::parser::block::ParsedBlock> =
             all_parsed_blocks.iter().collect();
 
