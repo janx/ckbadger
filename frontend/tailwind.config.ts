@@ -6,63 +6,84 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 青绿暖白 palette (Qinglv Light)
+        // Midnight City Pop palette
         base: {
-          bg: '#faf6f0', // 宣纸白
-          surface: '#f3ede5', // 素纸
-          elevated: '#efe8de', // 绢白
-          border: '#e0d8cc', // 麻色
+          bg: '#0c0e15',
+          surface: '#10131c',
+          elevated: '#161a25',
+          border: '#1a1f30',
         },
         text: {
-          primary: '#2a2520',
-          secondary: '#6a6058',
-          muted: '#8a8078',
-          dim: '#a8a090',
+          primary: '#dee2ec',
+          secondary: '#a0a8be',
+          muted: '#606880',
+          dim: '#343c50',
         },
         interactive: {
-          DEFAULT: '#3aaa80',
-          hover: '#2cc878',
-          muted: '#3aaa8020',
-          dim: '#2d8a68',
+          DEFAULT: '#f0b866',
+          hover: '#f8ca80',
+          muted: '#f0b86620',
+          dim: '#c89440',
         },
         emphasis: {
-          DEFAULT: '#1e7a6a',
-          dim: '#166858',
-          glow: '#1e7a6a30',
-          bright: '#28a088',
+          DEFAULT: '#f0b866',
+          dim: '#c89440',
+          glow: '#f0b86630',
+          bright: '#f8ca80',
         },
         positive: {
-          DEFAULT: '#4a8c5c', // 竹青
-          dim: '#3a7048',
+          DEFAULT: '#5ce0b8',
+          dim: '#3cb898',
         },
         negative: {
-          DEFAULT: '#c04040', // 朱红
-          dim: '#a03535',
-          bright: '#d45050',
+          DEFAULT: '#e86080',
+          dim: '#c04860',
+          bright: '#f07898',
         },
         warning: {
-          DEFAULT: '#b88420', // 琥珀
-          dim: '#9a6e1a',
-          bright: '#d4a030',
+          DEFAULT: '#f0b866',
+          dim: '#c89440',
+          bright: '#f8ca80',
         },
         info: {
-          DEFAULT: '#3a6ea0', // 靛青
-          dim: '#2e5a84',
-          bright: '#4a88c0',
+          DEFAULT: '#6ab0e8',
+          dim: '#4a88c0',
+          bright: '#82c0f0',
+        },
+        // City pop accent colors (new)
+        amber: {
+          DEFAULT: '#f0b866',
+          dim: '#c89440',
+        },
+        rose: {
+          DEFAULT: '#e87ea0',
+          dim: '#c0608a',
+        },
+        sky: {
+          DEFAULT: '#6ab0e8',
+          dim: '#4a88c0',
+        },
+        mint: {
+          DEFAULT: '#5ce0b8',
+          dim: '#3cb898',
+        },
+        violet: {
+          DEFAULT: '#b08af0',
+          dim: '#8a68c8',
         },
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
-        display: ['var(--font-display)', 'var(--font-mono)', 'monospace'], // For headers/titles
+        display: ['var(--font-mono)', 'ui-monospace', 'monospace'],
       },
       fontFeatureSettings: {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 6px #1e7a6a18, 0 0 14px #1e7a6a10',
-        'glow-strong': '0 0 5px #1e7a6a28, 0 0 12px #1e7a6a18',
-        'glow-inset': 'inset 0 1px 6px #1e7a6a08',
-        'interactive-glow': '0 0 6px #3aaa8020, 0 0 14px #3aaa8010',
+        glow: '0 0 8px #f0b86618, 0 0 16px #f0b86610',
+        'glow-strong': '0 0 6px #f0b86628, 0 0 14px #f0b86618',
+        'glow-inset': 'inset 0 1px 8px #f0b86608',
+        'interactive-glow': '0 0 8px #f0b86620, 0 0 16px #f0b86610',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',
