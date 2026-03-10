@@ -3723,6 +3723,8 @@ impl Indexer {
         let mut thread_times: Option<[f64; 9]> = None;
         let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
+        let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
+        let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut data_batch = StoreBatch::new(self.writer.store());
         if bulk_sync_mode {
             // Parallel write path: each thread writes to its own StoreBatch and commits independently.
@@ -3742,11 +3744,15 @@ impl Indexer {
                 write_commit_ms,
                 daily_activity_accum,
                 daily_activity_addrs,
+                hourly_activity_accum,
+                hourly_activity_addrs,
             ) = std::thread::scope(
                 |s| -> Result<(
                     BatchStats,
                     [f64; 9],
                     f64,
+                    HashMap<String, DailyActivityStats>,
+                    HashMap<String, HashSet<[u8; 32]>>,
                     HashMap<String, DailyActivityStats>,
                     HashMap<String, HashSet<[u8; 32]>>,
                 )> {
@@ -4757,6 +4763,8 @@ impl Indexer {
                         f64,
                         HashMap<String, DailyActivityStats>,
                         HashMap<String, HashSet<[u8; 32]>>,
+                        HashMap<String, DailyActivityStats>,
+                        HashMap<String, HashSet<[u8; 32]>>,
                     );
                     let h_act = if !skip_activities {
                         Some(s.spawn(|| -> Result<ActResult> {
@@ -4769,6 +4777,10 @@ impl Indexer {
                             let mut act_stats_accum: HashMap<String, DailyActivityStats> =
                                 HashMap::new();
                             let mut act_stats_addrs: HashMap<String, HashSet<[u8; 32]>> =
+                                HashMap::new();
+                            let mut hourly_accum: HashMap<String, DailyActivityStats> =
+                                HashMap::new();
+                            let mut hourly_addrs: HashMap<String, HashSet<[u8; 32]>> =
                                 HashMap::new();
                             let mut block_tx_idx = 0usize;
                             for parsed in all_parsed_blocks {
@@ -4839,6 +4851,20 @@ impl Indexer {
                                         act_stats_addrs.entry(date).or_default().insert(hash);
                                     }
 
+                                    // Accumulate hourly activity stats
+                                    let hour = ckbadger_common::block_date_from_ms(entry.timestamp)
+                                        .format("%Y%m%d%H")
+                                        .to_string();
+                                    let hour_stats = hourly_accum.entry(hour.clone()).or_default();
+                                    BatchWriter::accumulate_activity_stats(
+                                        &entry, &scripts, hour_stats,
+                                    );
+                                    if !entry.is_cellbase && lock_hash.len() == 32 {
+                                        let mut hash = [0u8; 32];
+                                        hash.copy_from_slice(&lock_hash);
+                                        hourly_addrs.entry(hour).or_default().insert(hash);
+                                    }
+
                                     activity_batch.put_activity(
                                         &lock_hash,
                                         entry.block_number,
@@ -4861,6 +4887,8 @@ impl Indexer {
                                 commit_ms,
                                 act_stats_accum,
                                 act_stats_addrs,
+                                hourly_accum,
+                                hourly_addrs,
                             ))
                         }))
                     } else {
@@ -4875,14 +4903,22 @@ impl Indexer {
                     let (t6a_ms, t6a_commit_ms) = h6a.join().expect("T6a panicked")?;
                     let (t6b_ms, t6b_commit_ms) = h6b.join().expect("T6b panicked")?;
                     let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
-                    let (t_act_ms, t_act_commit_ms, act_accum, act_addrs) = match h_act {
-                        Some(h) => {
-                            let (ms, commit_ms, accum, addrs) =
-                                h.join().expect("T_ACT panicked")?;
-                            (ms, commit_ms, accum, addrs)
-                        }
-                        None => (0.0, 0.0, HashMap::new(), HashMap::new()),
-                    };
+                    let (t_act_ms, t_act_commit_ms, act_accum, act_addrs, h_accum, h_addrs) =
+                        match h_act {
+                            Some(h) => {
+                                let (ms, commit_ms, accum, addrs, h_accum, h_addrs) =
+                                    h.join().expect("T_ACT panicked")?;
+                                (ms, commit_ms, accum, addrs, h_accum, h_addrs)
+                            }
+                            None => (
+                                0.0,
+                                0.0,
+                                HashMap::new(),
+                                HashMap::new(),
+                                HashMap::new(),
+                                HashMap::new(),
+                            ),
+                        };
                     let commit_total_ms = t1_commit_ms
                         + t1b_commit_ms
                         + t2_commit_ms
@@ -4899,6 +4935,8 @@ impl Indexer {
                         commit_total_ms,
                         act_accum,
                         act_addrs,
+                        h_accum,
+                        h_addrs,
                     ))
                 },
             )?;
@@ -6028,6 +6066,18 @@ impl Indexer {
                             daily_activity_addrs.entry(date).or_default().insert(hash);
                         }
 
+                        // Accumulate hourly activity stats
+                        let hour = ckbadger_common::block_date_from_ms(entry.timestamp)
+                            .format("%Y%m%d%H")
+                            .to_string();
+                        let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
+                        BatchWriter::accumulate_activity_stats(&entry, &scripts, hour_stats);
+                        if !entry.is_cellbase && lock_hash.len() == 32 {
+                            let mut hash = [0u8; 32];
+                            hash.copy_from_slice(&lock_hash);
+                            hourly_activity_addrs.entry(hour).or_default().insert(hash);
+                        }
+
                         put_activity_with_undo_log(
                             &mut activity_batch,
                             &mut append_undo_seq_by_block,
@@ -6355,6 +6405,18 @@ impl Indexer {
                 let unique_count = daily_activity_addrs.get(date).map_or(0, |s| s.len() as u32);
                 self.writer.update_daily_activity_stats(
                     date,
+                    stats,
+                    unique_count,
+                    &mut stats_batch,
+                )?;
+            }
+            // Write accumulated hourly activity stats
+            for (hour, stats) in &hourly_activity_accum {
+                let unique_count = hourly_activity_addrs
+                    .get(hour)
+                    .map_or(0, |s| s.len() as u32);
+                self.writer.update_hourly_activity_stats(
+                    hour,
                     stats,
                     unique_count,
                     &mut stats_batch,
