@@ -1485,7 +1485,9 @@ async fn get_common_knowledge_composition_chart(
     ok(response)
 }
 
-fn load_block_date_transitions(
+const CACHE_KEY_DATE_TRANSITIONS: &str = "internal:block-date-transitions";
+
+pub(crate) fn load_block_date_transitions(
     store: &ckbadger_store::CkbadgerStore,
 ) -> Result<Vec<(i64, NaiveDate)>, String> {
     if let Some(state) = store.get_hodl_tracker_state().map_err(|e| e.to_string())? {
@@ -1524,6 +1526,22 @@ fn load_block_date_transitions(
             }
         }
     }
+    Ok(transitions)
+}
+
+pub(crate) fn load_block_date_transitions_cached(
+    state: &AppState,
+) -> Result<Vec<(i64, NaiveDate)>, String> {
+    if let Some(cached) = state
+        .mem_cache
+        .get::<Vec<(i64, NaiveDate)>>(CACHE_KEY_DATE_TRANSITIONS)
+    {
+        return Ok(cached);
+    }
+    let transitions = load_block_date_transitions(state.store.as_ref())?;
+    state
+        .mem_cache
+        .set(CACHE_KEY_DATE_TRANSITIONS, &transitions, CacheTtl::CHART);
     Ok(transitions)
 }
 
@@ -1630,8 +1648,7 @@ async fn get_cell_age_vs_occupied_capacity_chart(
     }
 
     let snapshot_date = current_snapshot_date(state.store.as_ref()).map_err(ApiError::internal)?;
-    let transitions =
-        load_block_date_transitions(state.store.as_ref()).map_err(ApiError::internal)?;
+    let transitions = load_block_date_transitions_cached(&state).map_err(ApiError::internal)?;
 
     let mut lt_1d: i128 = 0;
     let mut d1_7d: i128 = 0;
@@ -1864,8 +1881,7 @@ async fn get_address_cohort_retention_chart(
         return ok(cached);
     }
 
-    let transitions =
-        load_block_date_transitions(state.store.as_ref()).map_err(ApiError::internal)?;
+    let transitions = load_block_date_transitions_cached(&state).map_err(ApiError::internal)?;
     let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
 
     let iter = state
