@@ -9,7 +9,7 @@ import { DataField } from '@/components/ui/data-field';
 describe('UI readability classes', () => {
   it('uses readable slate tone for terminal divider label', () => {
     render(<TerminalDivider label="network" />);
-    expect(screen.getByText('network')).toHaveClass('text-text-muted');
+    expect(screen.getByText('network')).toHaveClass('text-text-dim');
   });
 
   it('uses readable slate tone for stat metadata text', () => {
@@ -25,9 +25,9 @@ describe('UI readability classes', () => {
       </div>
     );
 
-    expect(screen.getByText('24h')).toHaveClass('text-text-muted');
-    expect(screen.getByText('stable')).toHaveClass('text-text-muted');
-    expect(screen.getByText('delta')).toHaveClass('text-text-muted');
+    expect(screen.getByText('24h')).toHaveClass('text-text-dim');
+    expect(screen.getByText('stable')).toHaveClass('text-text-dim');
+    expect(screen.getByText('delta')).toHaveClass('text-text-dim');
   });
 
   it('uses readable slate tone for spark chart empty state', () => {

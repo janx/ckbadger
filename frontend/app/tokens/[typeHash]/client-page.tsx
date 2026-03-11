@@ -168,9 +168,9 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
             <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
             <TerminalPanelContent>
               <StatGrid columns={token.operatorWebsite || token.manager || token.email ? 2 : 3}>
-                <StatBlock label="Holders" value={token.holdersCount} color="green" />
-                <StatBlock label="Transfers" value={token.transfersCount} color="amber" />
-                <StatBlock label="Decimals" value={token.decimals} color="white" />
+                <StatBlock label="Holders" value={token.holdersCount} color="jade" />
+                <StatBlock label="Transfers" value={token.transfersCount} color="gold" />
+                <StatBlock label="Decimals" value={token.decimals} color="default" />
                 <StatBlock
                   label="Total Circulation"
                   value={(() => {
@@ -180,7 +180,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                     );
                     return decimal ? `${integer}.${decimal}` : integer;
                   })()}
-                  color="green"
+                  color="jade"
                 />
                 <StatBlock
                   label="Maximum Supply"
@@ -195,10 +195,10 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                     );
                     return decimal ? `${integer}.${decimal}` : integer;
                   })()}
-                  color="white"
+                  color="default"
                 />
                 {token.cellsCount != null && (
-                  <StatBlock label="Cells" value={token.cellsCount} color="white" />
+                  <StatBlock label="Cells" value={token.cellsCount} color="default" />
                 )}
               </StatGrid>
               {token.description && (

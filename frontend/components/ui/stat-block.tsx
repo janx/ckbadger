@@ -1,9 +1,11 @@
 'use client';
 
-import { ReactNode } from 'react';
+import { CSSProperties, ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type TrendDirection = 'up' | 'down' | 'neutral';
+type AccentColor = 'jade' | 'aqua' | 'gold' | 'rouge' | 'lavender' | 'default';
+type GlowTier = 'neon' | 'soft' | 'none';
 
 interface StatBlockProps {
   label: string;
@@ -17,7 +19,8 @@ interface StatBlockProps {
     label?: string;
   };
   size?: 'sm' | 'md' | 'lg';
-  color?: 'green' | 'amber' | 'white';
+  color?: AccentColor;
+  glowTier?: GlowTier;
   className?: string;
   labelClassName?: string;
   subtext?: ReactNode;
@@ -29,11 +32,51 @@ const sizeClasses = {
   lg: { label: 'text-base', value: 'text-3xl', trend: 'text-base', gap: 'gap-3' },
 };
 
-const colorClasses = {
-  green: 'text-amber',
-  amber: 'text-warning',
-  white: 'text-text-primary',
+const colorClasses: Record<AccentColor, string> = {
+  jade: 'text-jade',
+  aqua: 'text-aqua',
+  gold: 'text-gold',
+  rouge: 'text-rouge',
+  lavender: 'text-lavender',
+  default: 'text-text-bright',
 };
+
+const glowColors: Record<
+  Exclude<AccentColor, 'default'>,
+  { color: string; mid: string; far: string }
+> = {
+  jade: { color: '#2edba3', mid: 'rgba(46, 219, 163, 0.25)', far: 'rgba(46, 219, 163, 0.15)' },
+  aqua: { color: '#68ccf0', mid: 'rgba(104, 204, 240, 0.25)', far: 'rgba(104, 204, 240, 0.15)' },
+  gold: { color: '#f2c55c', mid: 'rgba(242, 197, 92, 0.25)', far: 'rgba(242, 197, 92, 0.15)' },
+  rouge: { color: '#e8555a', mid: 'rgba(232, 85, 90, 0.25)', far: 'rgba(232, 85, 90, 0.15)' },
+  lavender: {
+    color: '#b8a9e8',
+    mid: 'rgba(184, 169, 232, 0.25)',
+    far: 'rgba(184, 169, 232, 0.15)',
+  },
+};
+
+function getGlowStyle(color: AccentColor, glowTier: GlowTier): CSSProperties | undefined {
+  if (glowTier === 'none' || color === 'default') return undefined;
+  const glow = glowColors[color];
+  if (glowTier === 'neon') {
+    return {
+      '--glow-color': glow.color,
+      '--glow-color-mid': glow.mid,
+      '--glow-color-far': glow.far,
+    } as CSSProperties;
+  }
+  // soft
+  return {
+    '--glow-color-mid': glow.mid,
+    '--glow-color-far': glow.far,
+  } as CSSProperties;
+}
+
+function getGlowClass(color: AccentColor, glowTier: GlowTier): string | undefined {
+  if (glowTier === 'none' || color === 'default') return undefined;
+  return glowTier === 'neon' ? 'glow-neon' : 'glow-soft';
+}
 
 export function StatBlock({
   label,
@@ -43,7 +86,8 @@ export function StatBlock({
   suffix,
   trend,
   size = 'md',
-  color = 'green',
+  color = 'jade',
+  glowTier = 'none',
   className,
   labelClassName,
   subtext,
@@ -51,9 +95,9 @@ export function StatBlock({
   const config = sizeClasses[size];
 
   const trendColors: Record<TrendDirection, string> = {
-    up: 'text-positive',
-    down: 'text-negative',
-    neutral: 'text-text-muted',
+    up: 'text-jade',
+    down: 'text-rouge',
+    neutral: 'text-text-dim',
   };
 
   const trendIcons: Record<TrendDirection, string> = {
@@ -70,11 +114,14 @@ export function StatBlock({
     return decPart ? `${formatted}.${decPart}` : formatted;
   };
 
+  const glowStyle = getGlowStyle(color, glowTier);
+  const glowClass = getGlowClass(color, glowTier);
+
   return (
     <div className={cn('flex flex-col', config.gap, className)}>
       <div
         className={cn(
-          'text-text-muted font-mono uppercase tracking-wider',
+          'text-text-dim font-mono uppercase tracking-wider',
           config.label,
           labelClassName
         )}
@@ -87,8 +134,10 @@ export function StatBlock({
           className={cn(
             'font-mono font-bold tabular-nums transition-all',
             config.value,
-            colorClasses[color]
+            colorClasses[color],
+            glowClass
           )}
+          style={glowStyle}
         >
           {prefix}
           {formatValue(value)}
@@ -99,12 +148,12 @@ export function StatBlock({
           <span className={cn('flex items-center gap-1', trendColors[trend.direction])}>
             <span>{trendIcons[trend.direction]}</span>
             <span className={cn('font-mono', config.trend)}>{trend.value}</span>
-            {trend.label && <span className="text-text-muted ml-1">{trend.label}</span>}
+            {trend.label && <span className="text-text-dim ml-1">{trend.label}</span>}
           </span>
         )}
       </div>
 
-      {subtext && <div className="text-text-muted font-mono text-sm">{subtext}</div>}
+      {subtext && <div className="text-text-dim font-mono text-sm">{subtext}</div>}
     </div>
   );
 }
@@ -152,24 +201,28 @@ export function StatDivider({ orientation = 'horizontal', className }: StatDivid
   );
 }
 
+type MiniStatColor = 'jade' | 'aqua' | 'gold' | 'rouge' | 'default' | 'dim';
+
 interface MiniStatProps {
   label: string;
   value: string | number;
-  color?: 'green' | 'amber' | 'white' | 'dim';
+  color?: MiniStatColor;
   className?: string;
 }
 
 export function MiniStat({ label, value, color = 'dim', className }: MiniStatProps) {
-  const miniColorClasses = {
-    green: 'text-amber',
-    amber: 'text-warning',
-    white: 'text-text-primary',
-    dim: 'text-text-secondary',
+  const miniColorClasses: Record<MiniStatColor, string> = {
+    jade: 'text-jade',
+    aqua: 'text-aqua',
+    gold: 'text-gold',
+    rouge: 'text-rouge',
+    default: 'text-text-bright',
+    dim: 'text-text',
   };
 
   return (
     <div className={cn('flex items-center justify-between gap-4', className)}>
-      <span className="text-text-muted font-mono text-xs uppercase tracking-wide">{label}</span>
+      <span className="text-text-dim font-mono text-xs uppercase tracking-wide">{label}</span>
       <span className={cn('font-mono text-sm tabular-nums', miniColorClasses[color])}>{value}</span>
     </div>
   );

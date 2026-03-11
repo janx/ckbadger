@@ -324,11 +324,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 label="Balance"
                 value={formatCkbAmount(address.balance).full}
                 suffix=" CKB"
-                color="green"
+                color="jade"
                 className="col-span-2"
               />
-              <StatBlock label="Live Cells" value={address.liveCellsCount} color="amber" />
-              <StatBlock label="Transactions" value={address.transactionsCount} color="white" />
+              <StatBlock label="Live Cells" value={address.liveCellsCount} color="gold" />
+              <StatBlock label="Transactions" value={address.transactionsCount} color="default" />
             </div>
             {(() => {
               const balanceBig = BigInt(address.balance);
@@ -395,24 +395,24 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   label="Total Locked"
                   value={formatCkbCompact(daoSummary.totalLockedCapacity).value}
                   suffix=" CKB"
-                  color="white"
+                  color="default"
                   subtext={formatCkbAmount(daoSummary.totalLockedCapacity).full}
                 />
                 <StatBlock
                   label="Active Deposits"
                   value={daoSummary.activeDepositsCount}
-                  color="green"
+                  color="jade"
                 />
                 <StatBlock
                   label="Pending Withdrawals"
                   value={daoSummary.pendingWithdrawalsCount}
-                  color={daoSummary.pendingWithdrawalsCount > 0 ? 'amber' : 'white'}
+                  color={daoSummary.pendingWithdrawalsCount > 0 ? 'gold' : 'default'}
                 />
                 <StatBlock
                   label="Compensation Earned"
                   value={`+${formatCkbCompact(daoSummary.totalCompensationEarned).value}`}
                   suffix=" CKB"
-                  color="green"
+                  color="jade"
                   subtext={formatCkbAmount(daoSummary.totalCompensationEarned).full}
                 />
               </StatGrid>
