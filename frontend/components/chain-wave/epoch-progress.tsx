@@ -27,17 +27,17 @@ export function EpochProgress({
     <div className="border-base-border bg-base-surface h-full overflow-hidden rounded-lg border p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-baseline gap-3">
-          <span className="text-text-muted font-mono text-xs uppercase tracking-wider">Epoch</span>
-          <span className="text-amber font-mono text-2xl font-bold tabular-nums">
+          <span className="text-text-dim font-mono text-xs uppercase tracking-wider">Epoch</span>
+          <span className="text-gold font-mono text-2xl font-bold tabular-nums">
             {epochNumber.toLocaleString()}
           </span>
-          <span className="bg-base-elevated text-text-secondary rounded px-2 py-0.5 font-mono text-xs tabular-nums">
+          <span className="bg-base-elevated text-text rounded px-2 py-0.5 font-mono text-xs tabular-nums">
             {progressClamped.toFixed(1)}%
           </span>
         </div>
         {estimatedTimeRemaining && (
           <div className="flex items-baseline gap-2">
-            <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
+            <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
               Est. Time
             </span>
             <span className="text-warning font-mono tabular-nums">{estimatedTimeRemaining}</span>
@@ -50,11 +50,11 @@ export function EpochProgress({
           className={cn(
             'absolute inset-y-0 left-0 rounded-full transition-all duration-1000',
             progress < 25
-              ? 'from-amber-dim to-amber-dim bg-gradient-to-r'
+              ? 'from-gold-dim to-gold-dim bg-gradient-to-r'
               : progress < 50
-                ? 'from-amber-dim to-amber bg-gradient-to-r'
+                ? 'from-gold-dim to-gold bg-gradient-to-r'
                 : progress < 75
-                  ? 'from-amber to-warning-dim bg-gradient-to-r'
+                  ? 'from-gold to-warning-dim bg-gradient-to-r'
                   : 'from-warning-dim to-warning bg-gradient-to-r'
           )}
           style={{ width: `${progressClamped}%` }}
@@ -65,7 +65,7 @@ export function EpochProgress({
         />
       </div>
 
-      <div className="text-text-muted mt-2 flex items-center justify-between text-[10px] sm:text-xs">
+      <div className="text-text-dim mt-2 flex items-center justify-between text-[10px] sm:text-xs">
         <span className="font-mono tabular-nums">#{epochStartBlock.toLocaleString()}</span>
         <span className="font-mono tabular-nums">
           {epochIndex.toLocaleString()} / {epochLength.toLocaleString()}

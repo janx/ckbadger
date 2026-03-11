@@ -35,7 +35,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="border-negative/30 bg-negative/10 flex min-h-[200px] flex-col items-center justify-center rounded-lg border p-6">
           <div className="text-negative mb-2 text-xl">Something went wrong</div>
-          <div className="text-text-muted mb-4 text-sm">
+          <div className="text-text-dim mb-4 text-sm">
             {this.state.error?.message || 'An unexpected error occurred'}
           </div>
           <button
@@ -66,7 +66,7 @@ export function ErrorFallback({
   return (
     <div className="border-negative/30 bg-negative/10 flex min-h-[200px] flex-col items-center justify-center rounded-lg border p-6">
       <div className="text-negative mb-2 text-xl">{title}</div>
-      <div className="text-text-muted mb-4 text-sm">{message}</div>
+      <div className="text-text-dim mb-4 text-sm">{message}</div>
       {onRetry && (
         <button
           onClick={onRetry}

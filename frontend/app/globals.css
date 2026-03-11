@@ -154,7 +154,7 @@ body {
     animation: glow-pulse 1.5s ease-in-out infinite;
   }
 
-  .indicator-light-amber {
+  .indicator-light-gold {
     background: #f2c55c;
     box-shadow: 0 0 6px #f2c55c;
   }

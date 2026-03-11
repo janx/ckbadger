@@ -26,7 +26,7 @@ export default function CellCountPage() {
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             &larr; Back to Charts
           </Link>
@@ -39,7 +39,7 @@ export default function CellCountPage() {
               <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="text-text-muted flex h-96 items-center justify-center">
+              <div className="text-text-dim flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}

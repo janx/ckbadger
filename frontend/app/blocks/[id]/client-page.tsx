@@ -36,8 +36,8 @@ function FormatReward({ reward }: { reward: string | null }) {
   return (
     <span className="font-mono tabular-nums">
       {integer}
-      <span className="text-text-muted text-[0.85em]">.{decimal}</span>
-      <span className="text-text-secondary ml-1 text-[0.85em]">CKB</span>
+      <span className="text-text-dim text-[0.85em]">.{decimal}</span>
+      <span className="text-text ml-1 text-[0.85em]">CKB</span>
     </span>
   );
 }
@@ -142,7 +142,7 @@ export default function BlockDetailPage() {
         <main className="container mx-auto px-4 py-4">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Block not found</h2>
+              <h2 className="text-text-dim text-xl">Block not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -168,7 +168,7 @@ export default function BlockDetailPage() {
           hash={block.hash}
           badge={
             activationHardfork ? (
-              <Badge variant="amber">
+              <Badge variant="gold">
                 HARDFORK ACTIVATION · {activationHardfork.shortName.toUpperCase()}
               </Badge>
             ) : undefined
@@ -208,7 +208,7 @@ export default function BlockDetailPage() {
           <TerminalPanelContent>
             <div className="mb-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-text-muted text-sm">Epoch</span>
+                <span className="text-text-dim text-sm">Epoch</span>
                 <Link
                   href={`/blocks/${epochStartNumber}`}
                   className="text-interactive font-mono hover:underline"
@@ -217,12 +217,12 @@ export default function BlockDetailPage() {
                 </Link>
               </div>
               <div className="flex items-center gap-2 text-sm">
-                <span className="text-text-primary font-mono">
+                <span className="text-text-bright font-mono">
                   {block.epochIndex + 1}
                   <sup className="text-xs">{ordinalSuffix}</sup>
                 </span>
-                <span className="text-text-muted">of</span>
-                <span className="text-text-primary font-mono">{block.epochLength}</span>
+                <span className="text-text-dim">of</span>
+                <span className="text-text-bright font-mono">{block.epochLength}</span>
               </div>
             </div>
             <ProgressBar
@@ -231,13 +231,13 @@ export default function BlockDetailPage() {
               color="green"
               labelFormat="percent"
             />
-            <div className="text-text-muted mt-2 flex justify-between font-mono text-xs">
-              <Link href={`/blocks/${epochStartNumber}`} className="hover:text-text-secondary">
+            <div className="text-text-dim mt-2 flex justify-between font-mono text-xs">
+              <Link href={`/blocks/${epochStartNumber}`} className="hover:text-text">
                 #{epochStartNumber.toLocaleString()}
               </Link>
               <Link
                 href={`/blocks/${epochStartNumber + block.epochLength - 1}`}
-                className="hover:text-text-secondary"
+                className="hover:text-text"
               >
                 #{(epochStartNumber + block.epochLength - 1).toLocaleString()}
               </Link>
@@ -279,28 +279,28 @@ export default function BlockDetailPage() {
                       <FormatReward reward={block.miningReward} />
                     )
                   ) : (
-                    <Badge variant="amber">Pending</Badge>
+                    <Badge variant="gold">Pending</Badge>
                   )}
                 </DataField>
                 <DataField label="Miner">
                   {block.minerAddress ? (
                     <Address address={block.minerAddress} className="text-emphasis" />
                   ) : (
-                    <span className="text-text-muted">-</span>
+                    <span className="text-text-dim">-</span>
                   )}
                 </DataField>
                 <DataField label="Miner Message" copyValue={block.minerMessage || undefined}>
                   {block.minerMessage ? (
                     <span className="max-w-[200px] truncate">{block.minerMessage}</span>
                   ) : (
-                    <span className="text-text-muted">-</span>
+                    <span className="text-text-dim">-</span>
                   )}
                 </DataField>
                 <DataField label="Cycles">
                   {feeStats && (feeStats.totalCycles > 0 || block.number === 0) ? (
                     <UsageBar value={feeStats.totalCycles} max={BLOCK_MAX_CYCLES} />
                   ) : (
-                    <span className="text-text-muted italic">Calculating...</span>
+                    <span className="text-text-dim italic">Calculating...</span>
                   )}
                 </DataField>
                 <DataField label="Uncle Count">{block.unclesCount}</DataField>
@@ -315,13 +315,13 @@ export default function BlockDetailPage() {
               <TabsList className="gap-6 bg-transparent p-0">
                 <TabsTrigger
                   value="transactions"
-                  className="data-[state=active]:border-interactive data-[state=active]:text-interactive text-text-muted rounded-none border-b-2 border-transparent px-0 pb-2 data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                  className="data-[state=active]:border-interactive data-[state=active]:text-interactive text-text-dim rounded-none border-b-2 border-transparent px-0 pb-2 data-[state=active]:bg-transparent data-[state=active]:shadow-none"
                 >
                   Transactions ({txs?.data?.length ?? block.transactionsCount})
                 </TabsTrigger>
                 <TabsTrigger
                   value="proposals"
-                  className="data-[state=active]:border-interactive data-[state=active]:text-interactive text-text-muted rounded-none border-b-2 border-transparent px-0 pb-2 data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+                  className="data-[state=active]:border-interactive data-[state=active]:text-interactive text-text-dim rounded-none border-b-2 border-transparent px-0 pb-2 data-[state=active]:bg-transparent data-[state=active]:shadow-none"
                 >
                   Proposals ({block.proposalsCount})
                 </TabsTrigger>
@@ -341,20 +341,20 @@ export default function BlockDetailPage() {
                           >
                             <Hash hash={tx.hash} copyable={false} />
                           </Link>
-                          {tx.isCellbase && <Badge variant="amber">Cellbase</Badge>}
+                          {tx.isCellbase && <Badge variant="gold">Cellbase</Badge>}
                         </div>
-                        <span className="text-text-muted text-xs">Index: {index}</span>
+                        <span className="text-text-dim text-xs">Index: {index}</span>
                       </div>
-                      <div className="text-text-secondary text-right font-mono text-sm">
+                      <div className="text-text text-right font-mono text-sm">
                         <span className="text-emphasis-dim">{tx.inputsCount}</span>
-                        <span className="text-text-muted mx-1">→</span>
+                        <span className="text-text-dim mx-1">→</span>
                         <span className="text-warning-dim">{tx.outputsCount}</span>
                       </div>
                     </div>
                   </TerminalRow>
                 ))
               ) : (
-                <TerminalPanelContent className="text-text-muted py-8 text-center">
+                <TerminalPanelContent className="text-text-dim py-8 text-center">
                   No transactions
                 </TerminalPanelContent>
               )}
@@ -368,16 +368,14 @@ export default function BlockDetailPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-3">
-                            <span className="text-text-muted text-xs">
-                              #{proposal.proposalIndex}
-                            </span>
-                            <span className="text-text-secondary font-mono text-sm">
+                            <span className="text-text-dim text-xs">#{proposal.proposalIndex}</span>
+                            <span className="text-text font-mono text-sm">
                               {proposal.proposalId}
                             </span>
                           </div>
                           {proposal.committedTxHash && (
                             <div className="flex items-center gap-2 text-xs">
-                              <span className="text-text-muted">Committed:</span>
+                              <span className="text-text-dim">Committed:</span>
                               <Link
                                 href={`/tx/${proposal.committedTxHash}`}
                                 className="text-interactive font-mono hover:underline"
@@ -393,18 +391,18 @@ export default function BlockDetailPage() {
                         {proposal.committedTxHash ? (
                           <Badge variant="green">Committed</Badge>
                         ) : (
-                          <Badge variant="amber">Pending</Badge>
+                          <Badge variant="gold">Pending</Badge>
                         )}
                       </div>
                     </TerminalRow>
                   ))
                 ) : (
-                  <TerminalPanelContent className="text-text-muted py-8 text-center">
+                  <TerminalPanelContent className="text-text-dim py-8 text-center">
                     Loading proposals...
                   </TerminalPanelContent>
                 )
               ) : (
-                <TerminalPanelContent className="text-text-muted py-8 text-center">
+                <TerminalPanelContent className="text-text-dim py-8 text-center">
                   No proposals in this block
                 </TerminalPanelContent>
               )}

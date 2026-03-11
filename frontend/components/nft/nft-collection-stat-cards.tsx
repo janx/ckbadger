@@ -48,26 +48,26 @@ export function NftCollectionStatCards({
     <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
-          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
             {totalLabel}
           </div>
           <div className="text-warning text-2xl font-semibold tabular-nums">
             {formatNumber(totalCount)}
           </div>
-          <div className="text-text-muted font-mono text-xs">Full collection supply</div>
+          <div className="text-text-dim font-mono text-xs">Full collection supply</div>
         </TerminalPanelContent>
       </TerminalPanel>
 
       {showLiveCount && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
               Live Items
             </div>
-            <div className="text-amber text-2xl font-semibold tabular-nums">
+            <div className="text-gold text-2xl font-semibold tabular-nums">
               {formatNumber(liveCount)}
             </div>
-            <div className="text-text-muted font-mono text-xs">Currently on-chain</div>
+            <div className="text-text-dim font-mono text-xs">Currently on-chain</div>
           </TerminalPanelContent>
         </TerminalPanel>
       )}
@@ -75,14 +75,14 @@ export function NftCollectionStatCards({
       {storageTier && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
               Storage Integrity
             </div>
-            <div className="text-amber text-base font-semibold">
+            <div className="text-gold text-base font-semibold">
               {formatStorageTier(storageTier)}
             </div>
             {storageOnchainRatio && (
-              <div className="text-text-muted font-mono text-xs">
+              <div className="text-text-dim font-mono text-xs">
                 On-chain ratio: {(Number(storageOnchainRatio) * 100).toFixed(2)}%
               </div>
             )}
@@ -92,21 +92,21 @@ export function NftCollectionStatCards({
 
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
-          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
             Live Capacity
           </div>
-          <div className="text-text-primary font-mono text-lg">{compactCapacity}</div>
-          <div className="text-text-muted font-mono text-xs">Total live CKB in this collection</div>
+          <div className="text-text-bright font-mono text-lg">{compactCapacity}</div>
+          <div className="text-text-dim font-mono text-xs">Total live CKB in this collection</div>
         </TerminalPanelContent>
       </TerminalPanel>
 
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
-          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
             Occupied Capacity
           </div>
-          <div className="text-text-primary font-mono text-lg">{compactOccupied}</div>
-          <div className="text-text-muted font-mono text-xs">
+          <div className="text-text-bright font-mono text-lg">{compactOccupied}</div>
+          <div className="text-text-dim font-mono text-xs">
             Occupied Ratio: {occupationPercent ? `${occupationPercent}%` : '--'}
           </div>
         </TerminalPanelContent>
@@ -115,18 +115,16 @@ export function NftCollectionStatCards({
       {createdAtBlock !== undefined && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
               Created At
             </div>
             <Link
               href={`/blocks/${createdAtBlock}`}
-              className="text-amber font-mono text-lg hover:underline"
+              className="text-gold font-mono text-lg hover:underline"
             >
               #{formatNumber(createdAtBlock)}
             </Link>
-            <div className="text-text-muted font-mono text-xs">
-              Genesis block of this collection
-            </div>
+            <div className="text-text-dim font-mono text-xs">Genesis block of this collection</div>
           </TerminalPanelContent>
         </TerminalPanel>
       )}

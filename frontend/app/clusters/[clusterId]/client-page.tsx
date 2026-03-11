@@ -361,7 +361,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Spore Cluster not found</h2>
+              <h2 className="text-text-dim text-xl">Spore Cluster not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -375,7 +375,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
         <div className="mb-6">
           <Link
             href="/assets?type=nft"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to NFTs
           </Link>
@@ -429,7 +429,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     {creatorAddress ? (
                       <Address address={creatorAddress} truncate={false} />
                     ) : (
-                      <span className="text-text-muted font-mono">Address unavailable</span>
+                      <span className="text-text-dim font-mono">Address unavailable</span>
                     )}
                   </DataField>
                 </DataGrid>
@@ -441,9 +441,9 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
               </TerminalPanelHeader>
               <TerminalPanelContent>
                 {sporesLoading ? (
-                  <div className="text-text-muted py-4 text-sm">Preparing content snapshot...</div>
+                  <div className="text-text-dim py-4 text-sm">Preparing content snapshot...</div>
                 ) : !filteredAndSortedSpores.length ? (
-                  <div className="text-text-muted py-4 text-sm">
+                  <div className="text-text-dim py-4 text-sm">
                     No spores to summarize for current filters.
                   </div>
                 ) : (
@@ -454,10 +454,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                         className="border-base-border bg-base-surface/40 rounded border p-2.5"
                       >
                         <div className="mb-1 flex items-center justify-between gap-3">
-                          <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
+                          <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
                             {item.type}
                           </span>
-                          <span className="text-text-secondary font-mono text-xs">
+                          <span className="text-text font-mono text-xs">
                             {item.count} ({item.percent}%)
                           </span>
                         </div>
@@ -470,10 +470,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                       </div>
                     ))}
                     <div className="border-base-border bg-base-surface/40 rounded border px-3 py-2">
-                      <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+                      <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
                         Average Payload Size
                       </div>
-                      <div className="text-text-primary mt-1 font-mono text-sm">
+                      <div className="text-text-bright mt-1 font-mono text-sm">
                         {avgPayloadBytes !== null ? `${formatNumber(avgPayloadBytes)} B` : '--'}
                       </div>
                     </div>
@@ -520,7 +520,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                             value={listQuery}
                             onChange={(event) => setListQuery(event.target.value)}
                             placeholder="Search hash / owner / type"
-                            className="border-base-border bg-base-surface text-text-primary placeholder:text-text-muted w-full rounded border px-2 py-1 font-mono text-xs sm:w-48"
+                            className="border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-full rounded border px-2 py-1 font-mono text-xs sm:w-48"
                           />
                           <label className="sr-only" htmlFor="spore-content-filter">
                             Filter spores by content type
@@ -540,7 +540,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   | 'other'
                               )
                             }
-                            className="border-base-border bg-base-surface text-text-primary rounded border px-2 py-1 font-mono text-xs"
+                            className="border-base-border bg-base-surface text-text-bright rounded border px-2 py-1 font-mono text-xs"
                           >
                             <option value="all">All Types</option>
                             <option value="image">Image</option>
@@ -549,7 +549,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                             <option value="text">Text</option>
                             <option value="other">Other</option>
                           </select>
-                          <div className="text-text-muted font-mono text-xs">
+                          <div className="text-text-dim font-mono text-xs">
                             {filteredAndSortedSpores.length} shown /{' '}
                             {formatNumber(cluster.sporesCount)} total
                           </div>
@@ -578,13 +578,13 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
                     {isClusterActivitiesLoading && !clusterActivities ? (
-                      <div className="text-text-muted py-8 text-center">Loading activities...</div>
+                      <div className="text-text-dim py-8 text-center">Loading activities...</div>
                     ) : isClusterActivitiesError ? (
-                      <div className="py-8 text-center text-rose-400">
+                      <div className="text-rouge py-8 text-center">
                         Failed to load activities. Please refresh and try again.
                       </div>
                     ) : !clusterActivities?.data?.length ? (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No activities in this collection
                       </div>
                     ) : (
@@ -621,10 +621,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                 <TabsContent value="nfts" className="py-0">
                   <TerminalPanelContent padding="none">
                     {sporesLoading ? (
-                      <div className="text-text-muted py-8 text-center">Loading spores...</div>
+                      <div className="text-text-dim py-8 text-center">Loading spores...</div>
                     ) : filteredAndSortedSpores.length ? (
                       <>
-                        <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:block">
+                        <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:block">
                           <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(0,1fr)_90px_80px_minmax(0,1.2fr)_110px] items-center gap-3">
                             <div>Spore ID</div>
                             <div>Content</div>
@@ -637,7 +637,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   )
                                 }
                                 aria-label="Sort spores by size"
-                                className="text-text-muted hover:text-text-secondary ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider transition"
+                                className="text-text-dim hover:text-text ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider transition"
                               >
                                 <span>Size</span>
                                 <span aria-hidden>{getSortIndicator(sizeSortDirection)}</span>
@@ -654,7 +654,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   )
                                 }
                                 aria-label="Sort spores by block"
-                                className="text-text-muted hover:text-text-secondary ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider transition"
+                                className="text-text-dim hover:text-text ml-auto inline-flex items-center gap-1 text-right font-mono text-xs uppercase tracking-wider transition"
                               >
                                 <span>Block</span>
                                 <span aria-hidden>{getSortIndicator(blockSortDirection)}</span>
@@ -689,15 +689,13 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                       <HexDisplay value={sporeId} size="sm" />
                                     </Link>
                                   ) : (
-                                    <span className="text-text-muted font-mono text-xs">
+                                    <span className="text-text-dim font-mono text-xs">
                                       Unknown spore ID
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-text-secondary font-mono text-xs">
-                                  {contentType}
-                                </div>
-                                <div className="text-text-secondary text-right font-mono text-xs">
+                                <div className="text-text font-mono text-xs">{contentType}</div>
+                                <div className="text-text text-right font-mono text-xs">
                                   {formatNumber(contentSize)} B
                                 </div>
                                 <div className="text-center">
@@ -711,7 +709,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   {resolvedOwnerAddress ? (
                                     <Address address={resolvedOwnerAddress} truncate />
                                   ) : (
-                                    <span className="text-text-muted font-mono text-xs">
+                                    <span className="text-text-dim font-mono text-xs">
                                       Address unavailable
                                     </span>
                                   )}
@@ -736,7 +734,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                         <HexDisplay value={sporeId} size="sm" />
                                       </Link>
                                     ) : (
-                                      <span className="text-text-muted font-mono text-xs">
+                                      <span className="text-text-dim font-mono text-xs">
                                         Unknown spore ID
                                       </span>
                                     )}
@@ -748,19 +746,19 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   )}
                                 </div>
                                 <div className="flex items-center justify-between gap-3 text-xs">
-                                  <span className="text-text-muted font-mono">{contentType}</span>
-                                  <span className="text-text-secondary font-mono">
+                                  <span className="text-text-dim font-mono">{contentType}</span>
+                                  <span className="text-text font-mono">
                                     {formatNumber(contentSize)} B
                                   </span>
                                 </div>
                                 <div className="flex items-center justify-between gap-3 text-xs">
-                                  <span className="text-text-muted font-mono">
+                                  <span className="text-text-dim font-mono">
                                     Block #{formatNumber(createdAtBlock)}
                                   </span>
                                   {resolvedOwnerAddress ? (
                                     <Address address={resolvedOwnerAddress} truncate />
                                   ) : (
-                                    <span className="text-text-muted font-mono text-xs">
+                                    <span className="text-text-dim font-mono text-xs">
                                       Address unavailable
                                     </span>
                                   )}
@@ -771,11 +769,11 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                         })}
                       </>
                     ) : (sporesData?.data?.length ?? 0) > 0 ? (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No spores match current filters
                       </div>
                     ) : (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No spores in this collection
                       </div>
                     )}
@@ -799,13 +797,13 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                 <TabsContent value="holders" className="py-0">
                   <TerminalPanelContent>
                     {isClusterHoldersLoading && !clusterHolders ? (
-                      <div className="text-text-muted py-8 text-center">Loading holders...</div>
+                      <div className="text-text-dim py-8 text-center">Loading holders...</div>
                     ) : isClusterHoldersError ? (
-                      <div className="py-8 text-center text-rose-400">
+                      <div className="text-rouge py-8 text-center">
                         Failed to load holders. Please refresh and try again.
                       </div>
                     ) : !clusterHolders?.data?.length ? (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No holders in this collection
                       </div>
                     ) : (
@@ -818,7 +816,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                             <div className="min-w-0">
                               <Link
                                 href={`/address/${holder.address ?? holder.lockScriptHash}`}
-                                className="text-text-secondary font-mono text-xs hover:underline"
+                                className="text-text font-mono text-xs hover:underline"
                               >
                                 {holder.address ? (
                                   holder.address
@@ -832,7 +830,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                 )}
                               </Link>
                             </div>
-                            <div className="text-text-primary shrink-0 font-mono text-sm">
+                            <div className="text-text-bright shrink-0 font-mono text-sm">
                               {formatNumber(holder.itemCount)}
                             </div>
                           </div>

@@ -9,7 +9,7 @@ const CellGraphRenderer = dynamic(() => import('@/components/cell-graph-renderer
       className="border-base-border bg-base-surface/50 flex w-full items-center justify-center rounded-lg border"
       style={{ width: props.width ?? '100%', height: props.height ?? 500 }}
     >
-      <p className="text-text-muted">Loading graph...</p>
+      <p className="text-text-dim">Loading graph...</p>
     </div>
   ),
 });

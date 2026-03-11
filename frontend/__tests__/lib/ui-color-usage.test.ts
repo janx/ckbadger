@@ -21,25 +21,24 @@ function walkFiles(dir: string): string[] {
   return files;
 }
 
-// Files that have been intentionally migrated to the new palette tokens
-// (text-text-dim replaces text-text-muted as the canonical dim text color)
-const migratedFiles = new Set([
-  'components/ui/terminal-panel.tsx',
-  'components/ui/stat-block.tsx',
-  'components/search-bar.tsx',
-  'components/command-palette.tsx',
-]);
+// Deprecated tokens that should no longer appear in source files.
+// These have been replaced by the new palette tokens:
+//   text-text-muted    -> text-text-dim
+//   text-text-secondary -> text-text
+//   text-text-primary   -> text-text-bright
+const DEPRECATED_TOKENS = ['text-text-muted', 'text-text-secondary', 'text-text-primary'];
 
-function findUnexpectedDimUsages(root: string): string[] {
+function findDeprecatedTokenUsages(root: string): string[] {
   const files = walkFiles(root);
   const offenders: string[] = [];
 
   for (const file of files) {
     const relative = path.relative(process.cwd(), file);
-    if (migratedFiles.has(relative)) continue;
     const content = fs.readFileSync(file, 'utf8');
-    if (content.includes('text-text-dim')) {
-      offenders.push(relative);
+    for (const token of DEPRECATED_TOKENS) {
+      if (content.includes(token)) {
+        offenders.push(`${relative} (${token})`);
+      }
     }
   }
 
@@ -47,10 +46,10 @@ function findUnexpectedDimUsages(root: string): string[] {
 }
 
 describe('ui color usage guard', () => {
-  it('does not use text-text-dim in non-migrated app and components views', () => {
+  it('does not use deprecated color tokens in app and components views', () => {
     const frontendRoot = process.cwd();
-    const appOffenders = findUnexpectedDimUsages(path.join(frontendRoot, 'app'));
-    const componentOffenders = findUnexpectedDimUsages(path.join(frontendRoot, 'components'));
+    const appOffenders = findDeprecatedTokenUsages(path.join(frontendRoot, 'app'));
+    const componentOffenders = findDeprecatedTokenUsages(path.join(frontendRoot, 'components'));
     const offenders = [...appOffenders, ...componentOffenders];
 
     expect(offenders).toEqual([]);

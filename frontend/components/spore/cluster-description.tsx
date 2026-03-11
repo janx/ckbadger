@@ -14,11 +14,11 @@ export function ClusterDescription({ description }: ClusterDescriptionProps) {
 
   return (
     <div className="w-full space-y-3 text-left">
-      <div className="border-base-border bg-base-surface/60 text-text-muted inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider">
+      <div className="border-base-border bg-base-surface/60 text-text-dim inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider">
         {parsed.isJson ? 'JSON description' : 'Text description'}
       </div>
 
-      <p className="text-text-secondary whitespace-pre-wrap break-words text-sm leading-relaxed">
+      <p className="text-text whitespace-pre-wrap break-words text-sm leading-relaxed">
         {parsed.summary}
       </p>
 
@@ -29,10 +29,10 @@ export function ClusterDescription({ description }: ClusterDescriptionProps) {
               key={entry.key}
               className="border-base-border bg-base-surface/50 rounded border p-2.5"
             >
-              <div className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+              <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                 {entry.label}
               </div>
-              <div className="text-text-primary mt-1 break-words font-mono text-xs">
+              <div className="text-text-bright mt-1 break-words font-mono text-xs">
                 {entry.value}
               </div>
             </div>
@@ -42,10 +42,10 @@ export function ClusterDescription({ description }: ClusterDescriptionProps) {
 
       {parsed.isJson && parsed.rawJson && (
         <details className="border-base-border bg-base-bg/40 w-full overflow-hidden rounded border">
-          <summary className="text-text-muted cursor-pointer px-3 py-2 text-left font-mono text-xs uppercase tracking-wider">
+          <summary className="text-text-dim cursor-pointer px-3 py-2 text-left font-mono text-xs uppercase tracking-wider">
             View Raw Cluster Metadata JSON
           </summary>
-          <pre className="border-base-border bg-base-bg/90 text-text-primary max-h-64 overflow-auto whitespace-pre-wrap break-all border-t px-3 py-2 text-left font-mono text-xs">
+          <pre className="border-base-border bg-base-bg/90 text-text-bright max-h-64 overflow-auto whitespace-pre-wrap break-all border-t px-3 py-2 text-left font-mono text-xs">
             {parsed.rawJson}
           </pre>
         </details>

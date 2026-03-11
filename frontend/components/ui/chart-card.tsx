@@ -33,9 +33,9 @@ export function ChartCard({
       )}
     >
       <div className="from-base-elevated/50 border-base-border flex items-center justify-between border-b bg-gradient-to-r to-transparent px-3 py-2">
-        <h3 className="text-text-secondary font-mono text-sm uppercase tracking-wide">{title}</h3>
+        <h3 className="text-text font-mono text-sm uppercase tracking-wide">{title}</h3>
         {href && (
-          <span className="text-amber font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="text-jade font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
             VIEW →
           </span>
         )}
@@ -52,7 +52,7 @@ export function ChartCard({
             </div>
           </div>
         ) : error ? (
-          <div className="text-text-muted flex h-full items-center justify-center text-sm">
+          <div className="text-text-dim flex h-full items-center justify-center text-sm">
             Failed to load data
           </div>
         ) : (
@@ -82,7 +82,7 @@ interface ChartSectionProps {
 export function ChartSection({ title, children, className }: ChartSectionProps) {
   return (
     <section className={cn('mb-6', className)}>
-      <h2 className="text-text-primary mb-4 flex items-center gap-3 font-mono text-lg uppercase tracking-wider">
+      <h2 className="text-text-bright mb-4 flex items-center gap-3 font-mono text-lg uppercase tracking-wider">
         <span className="bg-emphasis h-2 w-2 rounded-full" />
         {title}
       </h2>
@@ -114,7 +114,7 @@ export function StatCard({
   const trendColors = {
     up: 'text-positive',
     down: 'text-negative',
-    neutral: 'text-text-muted',
+    neutral: 'text-text-dim',
   };
 
   const trendIcons = {
@@ -125,16 +125,16 @@ export function StatCard({
 
   return (
     <div className={cn('text-center', className)}>
-      <div className="text-text-muted font-mono text-xs uppercase tracking-wider">{label}</div>
+      <div className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</div>
       <div
         className={cn(
-          'text-text-primary mt-2 font-mono text-2xl font-bold tabular-nums',
+          'text-text-bright mt-2 font-mono text-2xl font-bold tabular-nums',
           valueClassName
         )}
       >
         {value}
       </div>
-      {subValue && <div className="text-text-secondary mt-1 text-sm">{subValue}</div>}
+      {subValue && <div className="text-text mt-1 text-sm">{subValue}</div>}
       {trend && (
         <div className={cn('mt-1 font-mono text-sm', trendColors[trend.direction])}>
           {trendIcons[trend.direction]} {trend.value}
@@ -167,7 +167,7 @@ export function FilterButtonGroup({
             'rounded px-3 py-1 font-mono text-xs transition-colors',
             selected === option.value
               ? 'bg-emphasis text-base-bg'
-              : 'bg-base-elevated text-text-muted hover:bg-base-border hover:text-text-secondary'
+              : 'bg-base-elevated text-text-dim hover:bg-base-border hover:text-text'
           )}
         >
           {option.label}

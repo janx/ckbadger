@@ -13,8 +13,8 @@ import {
 import { Badge, PageHeader } from '@/components/ui/page-header';
 import { api } from '@/lib/api';
 
-function statusVariant(status: 'activated' | 'upcoming'): 'green' | 'amber' {
-  return status === 'activated' ? 'green' : 'amber';
+function statusVariant(status: 'activated' | 'upcoming'): 'green' | 'gold' {
+  return status === 'activated' ? 'green' : 'gold';
 }
 
 export default function HardforksPage() {
@@ -45,7 +45,7 @@ export default function HardforksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Protocol Upgrades</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+            <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
               <div className="w-44">Edition</div>
               <div className="w-56">Activation</div>
               <div className="w-24 text-center">Status</div>
@@ -78,16 +78,16 @@ export default function HardforksPage() {
                 <TerminalRow key={`${event.id}-${event.activationEpoch}`}>
                   <div className="flex items-center gap-4">
                     <div className="w-44">
-                      <div className="text-text-primary font-mono text-sm">{event.name}</div>
-                      <div className="text-text-muted font-mono text-xs">
+                      <div className="text-text-bright font-mono text-sm">{event.name}</div>
+                      <div className="text-text-dim font-mono text-xs">
                         {event.editionYear} · {event.shortName}
                       </div>
                     </div>
                     <div className="w-56">
-                      <div className="text-text-secondary font-mono text-sm">
+                      <div className="text-text font-mono text-sm">
                         Epoch #{event.activationEpoch.toLocaleString()}
                       </div>
-                      <div className="text-text-muted font-mono text-xs">
+                      <div className="text-text-dim font-mono text-xs">
                         {event.activationDate}
                         {event.activationBlock !== null
                           ? ` · Block #${event.activationBlock.toLocaleString()}`
@@ -99,9 +99,7 @@ export default function HardforksPage() {
                         {event.status.toUpperCase()}
                       </Badge>
                     </div>
-                    <div className="text-text-secondary flex-1 pr-4 font-mono text-sm">
-                      {event.summary}
-                    </div>
+                    <div className="text-text flex-1 pr-4 font-mono text-sm">{event.summary}</div>
                     <div className="w-56">
                       <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-xs">
                         {event.resources.map((resource) => (

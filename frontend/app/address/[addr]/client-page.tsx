@@ -176,7 +176,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         <main className="container mx-auto px-4 py-4">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Address not found</h2>
+              <h2 className="text-text-dim text-xl">Address not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -221,7 +221,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       case 'deposited':
         return <Badge variant="green">Active</Badge>;
       case 'withdrawing':
-        return <Badge variant="amber">Withdraw Request</Badge>;
+        return <Badge variant="gold">Withdraw Request</Badge>;
       case 'withdrawn':
         return <Badge variant="gray">Completed</Badge>;
       default:
@@ -252,7 +252,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         const absDelta = change.delta.startsWith('-') ? change.delta.slice(1) : change.delta;
         const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
         const sign = isZero ? '' : isPositive ? '+' : '-';
-        const color = isZero ? 'text-text-muted' : isPositive ? 'text-positive' : 'text-negative';
+        const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
         const tokenLabel = change.symbol?.trim()
           ? change.symbol.trim()
           : shortHash(change.typeScriptHash);
@@ -283,7 +283,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       case 'daoDeposit':
         return <Badge variant="neutral">DAO Deposit</Badge>;
       case 'daoWithdrawRequest':
-        return <Badge variant="amber">DAO Withdraw Request</Badge>;
+        return <Badge variant="gold">DAO Withdraw Request</Badge>;
       case 'daoWithdrawComplete':
         return (
           <span className="flex items-center gap-1">
@@ -308,7 +308,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               {address.lockScriptInfo && (
                 <Link
                   href={`/scripts/${encodeURIComponent(address.lockScriptInfo.name)}`}
-                  className="border-base-border bg-base-elevated/70 text-text-secondary hover:bg-base-elevated inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium transition-colors"
+                  className="border-base-border bg-base-elevated/70 text-text hover:bg-base-elevated inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium transition-colors"
                 >
                   {address.lockScriptInfo.name}
                 </Link>
@@ -339,10 +339,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               return (
                 <div className="mt-6">
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
+                    <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
                       Capacity Utilization
                     </span>
-                    <span className="text-text-secondary font-mono text-xs">
+                    <span className="text-text font-mono text-xs">
                       {ratio.toFixed(1)}% occupied
                     </span>
                   </div>
@@ -376,7 +376,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           <TerminalPanel className="mb-8" variant="elevated">
             <TerminalPanelHeader>
               <div className="flex items-center gap-2">
-                <div className="bg-base-elevated text-text-secondary flex h-5 w-5 items-center justify-center rounded-full text-xs">
+                <div className="bg-base-elevated text-text flex h-5 w-5 items-center justify-center rounded-full text-xs">
                   D
                 </div>
                 <Link href="/dao" className="hover:text-emphasis transition-colors">
@@ -422,7 +422,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <TerminalPanelContent padding="none">
                   <div className="min-w-full overflow-x-auto">
                     <div
-                      className="border-base-border bg-base-surface/50 text-text-muted hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
+                      className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
                       style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
                     >
                       <div>Deposit</div>
@@ -449,14 +449,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             </Link>
                             <Link
                               href={`/blocks/${deposit.depositBlockNumber}`}
-                              className="text-text-muted hover:text-text-secondary block font-mono text-xs"
+                              className="text-text-dim hover:text-text block font-mono text-xs"
                             >
                               #{deposit.depositBlockNumber.toLocaleString()}
                             </Link>
                           </div>
                           <div className="self-center">{getDaoStatusBadge(deposit.status)}</div>
                           <div className="self-center text-right">
-                            <Capacity value={deposit.capacity} className="text-text-primary" />
+                            <Capacity value={deposit.capacity} className="text-text-bright" />
                           </div>
                           <div className="self-center text-right">
                             {deposit.compensation ? (
@@ -464,18 +464,18 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 +{formatCkbAmount(deposit.compensation).full} CKB
                               </span>
                             ) : deposit.status === 'deposited' ? (
-                              <span className="text-text-muted text-sm">Accruing...</span>
+                              <span className="text-text-dim text-sm">Accruing...</span>
                             ) : (
-                              <span className="text-text-muted">-</span>
+                              <span className="text-text-dim">-</span>
                             )}
                           </div>
-                          <div className="text-text-secondary self-center font-mono text-sm">
+                          <div className="text-text self-center font-mono text-sm">
                             {formatDaoDuration(
                               deposit.depositTimestamp,
                               deposit.withdrawTimestamp || deposit.withdrawRequestTimestamp
                             )}
                           </div>
-                          <div className="text-text-muted self-center text-right text-sm">
+                          <div className="text-text-dim self-center text-right text-sm">
                             {formatTimeAgo(deposit.depositTimestamp)}
                           </div>
                         </div>
@@ -492,16 +492,16 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             {getDaoStatusBadge(deposit.status)}
                           </div>
                           <div className="flex items-center justify-between gap-2 text-sm">
-                            <Capacity value={deposit.capacity} className="text-text-primary" />
+                            <Capacity value={deposit.capacity} className="text-text-bright" />
                             {deposit.compensation ? (
                               <span className="text-positive font-mono">
                                 +{formatCkbAmount(deposit.compensation).full} CKB
                               </span>
                             ) : deposit.status === 'deposited' ? (
-                              <span className="text-text-muted">Accruing...</span>
+                              <span className="text-text-dim">Accruing...</span>
                             ) : null}
                           </div>
-                          <div className="text-text-muted flex items-center gap-3 text-xs">
+                          <div className="text-text-dim flex items-center gap-3 text-xs">
                             <span>
                               {formatDaoDuration(
                                 deposit.depositTimestamp,
@@ -511,7 +511,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             <span>{formatTimeAgo(deposit.depositTimestamp)}</span>
                             <Link
                               href={`/blocks/${deposit.depositBlockNumber}`}
-                              className="text-text-muted font-mono hover:underline"
+                              className="text-text-dim font-mono hover:underline"
                             >
                               #{deposit.depositBlockNumber.toLocaleString()}
                             </Link>
@@ -544,7 +544,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             <TerminalPanelHeader>Holdings ({tokens?.data?.length || 0})</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
               <div className="min-w-full">
-                <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
+                <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
                   <div className="min-w-0 flex-1">Asset</div>
                   <div className="w-28 shrink-0">Standard</div>
                   <div className="w-44 shrink-0 text-right">Balance</div>
@@ -589,7 +589,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 {tokenDisplayName(token)}
                               </Link>
                               {token.symbol && token.name && (
-                                <span className="text-text-muted ml-2 text-xs">{token.symbol}</span>
+                                <span className="text-text-dim ml-2 text-xs">{token.symbol}</span>
                               )}
                             </div>
                           </div>
@@ -597,7 +597,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             <Badge variant="gray">{token.standard}</Badge>
                           </div>
                           <div className="w-44 shrink-0 text-right">
-                            <span className="text-text-primary font-mono">
+                            <span className="text-text-bright font-mono">
                               {formatTokenBalance(token.balance, token.decimals)}
                             </span>
                           </div>
@@ -631,7 +631,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               <Badge variant="gray">{token.standard}</Badge>
                             </div>
                           </div>
-                          <div className="text-text-primary text-right font-mono text-sm">
+                          <div className="text-text-bright text-right font-mono text-sm">
                             {formatTokenBalance(token.balance, token.decimals)}
                           </div>
                         </div>
@@ -651,7 +651,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
                     activeTab === 'activities'
                       ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text-secondary hover:text-text-primary'
+                      : 'text-text hover:text-text-bright'
                   }`}
                 >
                   Activities
@@ -662,7 +662,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
                     activeTab === 'cells'
                       ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text-secondary hover:text-text-primary'
+                      : 'text-text hover:text-text-bright'
                   }`}
                 >
                   Live Cells
@@ -677,7 +677,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
                     activeTab === 'transactions'
                       ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text-secondary hover:text-text-primary'
+                      : 'text-text hover:text-text-bright'
                   }`}
                 >
                   Transactions
@@ -692,7 +692,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <div className="flex items-center gap-2">
                 <span>Cells</span>
                 {selectedToken && (
-                  <Badge variant="amber" className="ml-2">
+                  <Badge variant="gold" className="ml-2">
                     Filter: {tokenDisplayName(selectedToken)}
                   </Badge>
                 )}
@@ -708,7 +708,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           </TerminalPanelHeader>
           {selectedToken && activeTab === 'cells' && (
             <div className="border-base-border bg-base-surface/50 flex items-center justify-between border-b px-4 py-2">
-              <span className="text-text-secondary text-sm">
+              <span className="text-text text-sm">
                 Showing cells for{' '}
                 <span className="text-warning">{tokenDisplayName(selectedToken)}</span>
               </span>
@@ -722,8 +722,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           )}
           {selectedDao && activeTab === 'cells' && (
             <div className="border-base-border bg-base-surface/50 flex items-center justify-between border-b px-4 py-2">
-              <span className="text-text-secondary text-sm">
-                Showing cells for <span className="text-text-secondary">Nervos DAO</span>
+              <span className="text-text text-sm">
+                Showing cells for <span className="text-text">Nervos DAO</span>
               </span>
               <button
                 onClick={() => setSelectedDao(false)}
@@ -749,7 +749,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
                         activityFilter === f
                           ? 'bg-emphasis/15 text-emphasis'
-                          : 'text-text-muted hover:text-text-secondary'
+                          : 'text-text-dim hover:text-text'
                       }`}
                     >
                       {
@@ -767,10 +767,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   ))}
                 </div>
                 {activitiesLoading ? (
-                  <div className="text-text-muted py-12 text-center">Loading activities...</div>
+                  <div className="text-text-dim py-12 text-center">Loading activities...</div>
                 ) : activities?.data && activities?.data.length > 0 ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-muted hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
+                    <div className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
                       <div className="flex-1">Transaction</div>
                       <div className="w-20">Type</div>
                       <div className="w-44 text-right">CKB Change</div>
@@ -785,7 +785,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         ? 'text-positive'
                         : isNegative
                           ? 'text-negative'
-                          : 'text-text-muted';
+                          : 'text-text-dim';
                       return (
                         <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
                           <div className="hidden w-full items-center gap-4 md:flex">
@@ -800,14 +800,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               </Link>
                               <Link
                                 href={`/blocks/${activity.blockNumber}`}
-                                className="text-text-muted hover:text-text-secondary block font-mono text-xs"
+                                className="text-text-dim hover:text-text block font-mono text-xs"
                               >
                                 #{activity.blockNumber.toLocaleString()}
                               </Link>
                             </div>
                             <div className="w-20">
                               {activity.isCellbase ? (
-                                <Badge variant="amber">Coinbase</Badge>
+                                <Badge variant="gold">Coinbase</Badge>
                               ) : isPositive ? (
                                 <Badge variant="green">Received</Badge>
                               ) : isNegative ? (
@@ -827,7 +827,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 <AssetChangeBadge key={i} change={change} />
                               ))}
                             </div>
-                            <div className="text-text-muted w-20 text-right text-sm">
+                            <div className="text-text-dim w-20 text-right text-sm">
                               {formatTimeAgo(Number(activity.timestamp))}
                             </div>
                           </div>
@@ -841,14 +841,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   endChars={6}
                                 />
                               </Link>
-                              <span className="text-text-muted shrink-0 text-xs">
+                              <span className="text-text-dim shrink-0 text-xs">
                                 {formatTimeAgo(Number(activity.timestamp))}
                               </span>
                             </div>
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex items-center gap-2">
                                 {activity.isCellbase ? (
-                                  <Badge variant="amber">Coinbase</Badge>
+                                  <Badge variant="gold">Coinbase</Badge>
                                 ) : isPositive ? (
                                   <Badge variant="green">Received</Badge>
                                 ) : isNegative ? (
@@ -858,7 +858,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 )}
                                 <Link
                                   href={`/blocks/${activity.blockNumber}`}
-                                  className="text-text-muted font-mono text-xs hover:underline"
+                                  className="text-text-dim font-mono text-xs hover:underline"
                                 >
                                   #{activity.blockNumber.toLocaleString()}
                                 </Link>
@@ -895,7 +895,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     )}
                   </>
                 ) : (
-                  <div className="text-text-muted py-12 text-center">
+                  <div className="text-text-dim py-12 text-center">
                     {activityFilter === 'all'
                       ? 'No activities'
                       : `No ${activityFilter === 'ckb' ? 'CKB' : activityFilter === 'script_call' ? 'Script Call' : activityFilter.charAt(0).toUpperCase() + activityFilter.slice(1)} activities on this page`}
@@ -913,7 +913,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
                         cellFilter === f
                           ? 'bg-emphasis/15 text-emphasis'
-                          : 'text-text-muted hover:text-text-secondary'
+                          : 'text-text-dim hover:text-text'
                       }`}
                     >
                       {{ all: 'All', ckb: 'CKB', token: 'Token', dao: 'DAO' }[f]}
@@ -922,7 +922,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 </div>
                 <div className="p-4">
                   {cellsLoading ? (
-                    <div className="text-text-muted py-12 text-center">Loading cells...</div>
+                    <div className="text-text-dim py-12 text-center">Loading cells...</div>
                   ) : filteredCells && filteredCells.length > 0 ? (
                     <>
                       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -958,29 +958,27 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                       size="sm"
                                     />
                                   </Link>
-                                  <span className="text-text-muted font-mono text-xs">
+                                  <span className="text-text-dim font-mono text-xs">
                                     #{cell.createdAtBlock.toLocaleString()}
                                   </span>
                                 </div>
                                 <div className="border-base-border bg-base-surface/50 mb-2 rounded border p-2">
                                   <Capacity
                                     value={cell.capacity}
-                                    className="text-text-primary text-lg"
+                                    className="text-text-bright text-lg"
                                   />
                                 </div>
                                 {cellIsDao && (
                                   <div className="border-base-border bg-base-surface/50 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
-                                      <span className="text-text-secondary font-mono">
-                                        Nervos DAO
-                                      </span>
+                                      <span className="text-text font-mono">Nervos DAO</span>
                                       {daoDepositInfo && (
                                         <Badge
                                           variant={
                                             daoDepositInfo.status === 'deposited'
                                               ? 'green'
                                               : daoDepositInfo.status === 'withdrawing'
-                                                ? 'amber'
+                                                ? 'gold'
                                                 : 'gray'
                                           }
                                         >
@@ -993,7 +991,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                       )}
                                     </div>
                                     {daoDepositBlock !== null && daoDepositBlock > 0 && (
-                                      <div className="text-text-muted mt-1 text-xs">
+                                      <div className="text-text-dim mt-1 text-xs">
                                         Deposit Block: #{daoDepositBlock.toLocaleString()}
                                       </div>
                                     )}
@@ -1006,7 +1004,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   </div>
                                 )}
                                 {cellToken && cell.udtAmount && (
-                                  <div className="bg-warning-900/10 border-warning-900/30 rounded border px-2 py-1.5">
+                                  <div className="bg-gold/10 border-gold-dim/30 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
                                       <span className="text-warning-dim font-mono">
                                         {formatTokenBalance(cell.udtAmount, cellToken.decimals)}
@@ -1020,18 +1018,18 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 {!cellToken && !cellIsDao && cell.udtAmount && (
                                   <div className="border-base-border bg-base-elevated/50 rounded border px-2 py-1.5">
                                     <div className="flex items-center justify-between text-sm">
-                                      <span className="text-text-secondary font-mono">
+                                      <span className="text-text font-mono">
                                         {formatTokenBalance(cell.udtAmount, 0)}
                                       </span>
                                       {cell.typeScriptHash ? (
                                         <Link
                                           href={`/tokens/${cell.typeScriptHash}`}
-                                          className="text-text-muted hover:text-text-secondary text-xs hover:underline"
+                                          className="text-text-dim hover:text-text text-xs hover:underline"
                                         >
                                           {shortHash(cell.typeScriptHash)}
                                         </Link>
                                       ) : (
-                                        <span className="text-text-muted text-xs">Token</span>
+                                        <span className="text-text-dim text-xs">Token</span>
                                       )}
                                     </div>
                                   </div>
@@ -1041,7 +1039,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   !cell.udtAmount &&
                                   cell.dataSize > 0 && (
                                     <div className="border-base-border bg-base-elevated/30 rounded border px-2 py-1">
-                                      <span className="text-text-muted font-mono text-xs">
+                                      <span className="text-text-dim font-mono text-xs">
                                         {cell.dataSize} bytes data
                                       </span>
                                     </div>
@@ -1069,7 +1067,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       )}
                     </>
                   ) : (
-                    <div className="text-text-muted py-12 text-center">
+                    <div className="text-text-dim py-12 text-center">
                       {cellFilter !== 'all'
                         ? `No ${cellFilter === 'ckb' ? 'CKB' : cellFilter.toUpperCase()} cells on this page`
                         : selectedToken
@@ -1083,10 +1081,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {activeTab === 'transactions' && (
               <>
                 {txLoading ? (
-                  <div className="text-text-muted py-12 text-center">Loading transactions...</div>
+                  <div className="text-text-dim py-12 text-center">Loading transactions...</div>
                 ) : transactions?.data && transactions.data.length > 0 ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-muted hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
+                    <div className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
                       <div className="flex-1">Transaction</div>
                       <div className="w-20 text-center">In/Out</div>
                       <div className="w-32 text-right">Fee</div>
@@ -1121,31 +1119,31 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               </div>
                               <Link
                                 href={`/blocks/${tx.blockNumber}`}
-                                className="text-text-muted hover:text-text-secondary block font-mono text-xs"
+                                className="text-text-dim hover:text-text block font-mono text-xs"
                               >
                                 #{tx.blockNumber.toLocaleString()}
                               </Link>
                             </div>
-                            <div className="text-text-secondary w-20 text-center font-mono">
+                            <div className="text-text w-20 text-center font-mono">
                               <span className="text-emphasis/70">{tx.inputsCount}</span>
-                              <span className="text-text-muted mx-1">→</span>
+                              <span className="text-text-dim mx-1">→</span>
                               <span className="text-emphasis/70">{tx.outputsCount}</span>
                             </div>
                             <div className="w-32 whitespace-nowrap text-right">
                               {tx.isCellbase ? (
-                                <span className="text-text-muted">{'\u2014'}</span>
+                                <span className="text-text-dim">{'\u2014'}</span>
                               ) : (
                                 <div>
-                                  <Capacity value={tx.fee} className="text-text-secondary" />
+                                  <Capacity value={tx.fee} className="text-text" />
                                   {feeRate != null && (
-                                    <div className="text-text-muted font-mono text-xs">
+                                    <div className="text-text-dim font-mono text-xs">
                                       {feeRate.toFixed(1)} shannons/B
                                     </div>
                                   )}
                                 </div>
                               )}
                             </div>
-                            <div className="text-text-muted hidden w-28 whitespace-nowrap text-right font-mono text-xs xl:block">
+                            <div className="text-text-dim hidden w-28 whitespace-nowrap text-right font-mono text-xs xl:block">
                               {tx.txSize != null ? (
                                 <span>
                                   {tx.txSize >= 1000
@@ -1153,11 +1151,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                     : `${tx.txSize} B`}
                                 </span>
                               ) : (
-                                <span className="text-text-muted">{'\u2014'}</span>
+                                <span className="text-text-dim">{'\u2014'}</span>
                               )}
                               {tx.cycles != null && (
                                 <>
-                                  <span className="text-text-muted mx-1">/</span>
+                                  <span className="text-text-dim mx-1">/</span>
                                   <span>
                                     {tx.cycles >= 1000000
                                       ? `${(tx.cycles / 1000000).toFixed(1)}M`
@@ -1173,7 +1171,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 showSign
                               />
                             </div>
-                            <div className="text-text-muted w-20 text-right text-sm">
+                            <div className="text-text-dim w-20 text-right text-sm">
                               {formatTimeAgo(tx.timestamp)}
                             </div>
                           </div>
@@ -1187,12 +1185,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                   endChars={6}
                                 />
                               </Link>
-                              <span className="text-text-muted shrink-0 text-xs">
+                              <span className="text-text-dim shrink-0 text-xs">
                                 {formatTimeAgo(tx.timestamp)}
                               </span>
                             </div>
                             <div className="flex items-center justify-between gap-2">
-                              <div className="text-text-muted flex items-center gap-3 font-mono text-xs">
+                              <div className="text-text-dim flex items-center gap-3 font-mono text-xs">
                                 <span>
                                   <span className="text-emphasis-dim">{tx.inputsCount}</span>
                                   <span className="mx-1">→</span>
@@ -1227,7 +1225,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     )}
                   </>
                 ) : (
-                  <div className="text-text-muted py-12 text-center">No transactions</div>
+                  <div className="text-text-dim py-12 text-center">No transactions</div>
                 )}
               </>
             )}

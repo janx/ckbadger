@@ -94,7 +94,7 @@ export default function ScriptsPage() {
       aria-label={`Sort by ${label}`}
     >
       <span>{label}</span>
-      <span className={sortKey === key ? 'text-emphasis' : 'text-text-muted'}>
+      <span className={sortKey === key ? 'text-emphasis' : 'text-text-dim'}>
         {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
       </span>
     </button>
@@ -137,13 +137,13 @@ export default function ScriptsPage() {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   placeholder="Search by name or code hash..."
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-primary w-64 rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-bright w-64 rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                 />
                 {search && (
                   <button
                     type="button"
                     onClick={clearSearch}
-                    className="text-text-muted hover:text-text-secondary absolute right-2 top-1/2 -translate-y-1/2"
+                    className="text-text-dim hover:text-text absolute right-2 top-1/2 -translate-y-1/2"
                   >
                     ×
                   </button>
@@ -217,7 +217,7 @@ export default function ScriptsPage() {
               </div>
             ) : data?.data?.length ? (
               <>
-                <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
+                <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
                   {renderSortHeader('name', 'Script', 'w-44 shrink-0')}
                   {renderSortHeader('kind', 'Kind', 'w-16 shrink-0')}
                   {renderSortHeader('description', 'Description', 'min-w-0 flex-1 px-4')}
@@ -244,7 +244,7 @@ export default function ScriptsPage() {
                         ) : (
                           <AppLink
                             href={getScriptHref(script)}
-                            className="hover:text-emphasis text-text-secondary font-medium hover:underline"
+                            className="hover:text-emphasis text-text font-medium hover:underline"
                             title={getScriptRefFull(script)}
                           >
                             {UNLABELED_SCRIPT_LABEL}
@@ -257,33 +257,33 @@ export default function ScriptsPage() {
                             {script.scriptKind}
                           </Badge>
                         ) : (
-                          <span className="text-text-muted">-</span>
+                          <span className="text-text-dim">-</span>
                         )}
                       </div>
-                      <div className="text-text-muted min-w-0 flex-1 truncate px-4 text-sm">
+                      <div className="text-text-dim min-w-0 flex-1 truncate px-4 text-sm">
                         {hasKnownScriptName(script.name) ? (
                           script.description
                         ) : (
                           <span
                             title={getScriptRefFull(script)}
-                            className="text-text-muted font-mono text-xs"
+                            className="text-text-dim font-mono text-xs"
                           >
                             {getScriptRefDisplay(script)}
                           </span>
                         )}
                       </div>
                       <div className="hidden xl:contents">
-                        <div className="text-text-secondary w-24 shrink-0 text-right font-mono tabular-nums">
+                        <div className="text-text w-24 shrink-0 text-right font-mono tabular-nums">
                           {script.liveCellsCount != null
                             ? new Intl.NumberFormat().format(script.liveCellsCount)
                             : '-'}
                         </div>
-                        <div className="text-text-muted w-24 shrink-0 text-right font-mono tabular-nums">
+                        <div className="text-text-dim w-24 shrink-0 text-right font-mono tabular-nums">
                           {script.cellsCount != null
                             ? new Intl.NumberFormat().format(script.cellsCount)
                             : '-'}
                         </div>
-                        <div className="text-text-muted w-24 shrink-0 text-right font-mono tabular-nums">
+                        <div className="text-text-dim w-24 shrink-0 text-right font-mono tabular-nums">
                           {script.deployedAt != null ? (
                             <AppLink
                               href={`/blocks/${script.deployedAt}`}
@@ -296,21 +296,21 @@ export default function ScriptsPage() {
                           )}
                         </div>
                       </div>
-                      <div className="text-text-secondary w-28 shrink-0 text-right font-mono">
+                      <div className="text-text w-28 shrink-0 text-right font-mono">
                         {(() => {
                           const occupied = script.liveOccupiedCapacitySum;
                           if (!occupied) {
-                            return <span className="text-text-muted">-</span>;
+                            return <span className="text-text-dim">-</span>;
                           }
                           const compact = formatCkbCompact(occupied);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                         })()}
                       </div>
-                      <div className="text-text-secondary w-28 shrink-0 text-right font-mono">
+                      <div className="text-text w-28 shrink-0 text-right font-mono">
                         {(() => {
                           const capacity = script.liveCapacitySum;
                           if (!capacity) {
-                            return <span className="text-text-muted">-</span>;
+                            return <span className="text-text-dim">-</span>;
                           }
                           const compact = formatCkbCompact(capacity);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -335,19 +335,19 @@ export default function ScriptsPage() {
                         )}
                       </div>
                       {hasKnownScriptName(script.name) && script.description && (
-                        <div className="text-text-muted line-clamp-2 text-xs">
+                        <div className="text-text-dim line-clamp-2 text-xs">
                           {script.description}
                         </div>
                       )}
                       {!hasKnownScriptName(script.name) && (
                         <div
-                          className="text-text-muted font-mono text-xs"
+                          className="text-text-dim font-mono text-xs"
                           title={getScriptRefFull(script)}
                         >
                           {getScriptRefDisplay(script)}
                         </div>
                       )}
-                      <div className="text-text-secondary flex items-center gap-4 font-mono text-xs">
+                      <div className="text-text flex items-center gap-4 font-mono text-xs">
                         <span>
                           Occupied:{' '}
                           {(() => {
@@ -368,7 +368,7 @@ export default function ScriptsPage() {
                 ))}
               </>
             ) : (
-              <div className="text-text-muted py-8 text-center">No scripts found</div>
+              <div className="text-text-dim py-8 text-center">No scripts found</div>
             )}
           </TerminalPanelContent>
 

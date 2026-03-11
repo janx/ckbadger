@@ -33,8 +33,8 @@ export function ScriptView({
 
   if (!script) {
     return (
-      <div className={cn('text-text-muted', className)}>
-        {label && <span className="text-text-muted mr-2">{label}:</span>}
+      <div className={cn('text-text-dim', className)}>
+        {label && <span className="text-text-dim mr-2">{label}:</span>}
         None
       </div>
     );
@@ -42,7 +42,7 @@ export function ScriptView({
 
   const headerContent = (
     <div className="flex items-center gap-2">
-      <span className="text-text-secondary font-mono text-sm font-medium">{label}</span>
+      <span className="text-text font-mono text-sm font-medium">{label}</span>
       {scriptInfo && (
         <AppLink
           href={getScriptDetailHref({
@@ -52,11 +52,11 @@ export function ScriptView({
             scriptKind: scriptInfo.scriptKind,
           })}
           onClick={(e) => e.stopPropagation()}
-          className="border-base-border bg-base-elevated/70 text-text-secondary hover:bg-base-elevated inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs transition-colors"
+          className="border-base-border bg-base-elevated/70 text-text hover:bg-base-elevated inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs transition-colors"
         >
           {scriptInfo.name}
           {scriptInfo.scriptKind && (
-            <span className="text-text-muted">({scriptInfo.scriptKind})</span>
+            <span className="text-text-dim">({scriptInfo.scriptKind})</span>
           )}
         </AppLink>
       )}
@@ -75,30 +75,30 @@ export function ScriptView({
         >
           {headerContent}
           {collapsible && (
-            <span className="text-text-muted transition-transform">{expanded ? '▼' : '▶'}</span>
+            <span className="text-text-dim transition-transform">{expanded ? '▼' : '▶'}</span>
           )}
         </div>
       )}
       {expanded && (
         <div className="space-y-2 p-3 font-mono text-sm">
           <div className="flex items-start gap-2">
-            <span className="text-text-muted w-20 shrink-0">code_hash:</span>
-            <Hash hash={script.codeHash} className="text-text-secondary" />
+            <span className="text-text-dim w-20 shrink-0">code_hash:</span>
+            <Hash hash={script.codeHash} className="text-text" />
           </div>
           <div className="flex items-start gap-2">
-            <span className="text-text-muted w-20 shrink-0">hash_type:</span>
-            <span className="border-base-border bg-base-elevated/70 text-text-secondary rounded border px-2 py-0.5 text-xs">
+            <span className="text-text-dim w-20 shrink-0">hash_type:</span>
+            <span className="border-base-border bg-base-elevated/70 text-text rounded border px-2 py-0.5 text-xs">
               {getScriptRefBadgeLabel(script.hashType)}
             </span>
           </div>
           <div className="flex items-start gap-2">
-            <span className="text-text-muted w-20 shrink-0">args:</span>
+            <span className="text-text-dim w-20 shrink-0">args:</span>
             <Hash
               hash={script.args}
               truncate={script.args.length > 66}
               startChars={20}
               endChars={20}
-              className="text-text-secondary break-all"
+              className="text-text break-all"
             />
           </div>
         </div>

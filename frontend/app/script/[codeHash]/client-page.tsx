@@ -160,7 +160,7 @@ export default function ScriptByCodeHashPage({
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="text-text-muted text-sm">Resolving script page...</div>
+          <div className="text-text-dim text-sm">Resolving script page...</div>
         </main>
       </div>
     );
@@ -185,7 +185,7 @@ export default function ScriptByCodeHashPage({
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Deployment</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+            <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
               <div className="w-40">Code Cell</div>
               <div className="flex-1">Code Hash</div>
               <div className="w-20 text-center">Hash Type</div>
@@ -209,7 +209,7 @@ export default function ScriptByCodeHashPage({
                       />
                     </Link>
                   ) : (
-                    <span className="text-text-muted">-</span>
+                    <span className="text-text-dim">-</span>
                   )}
                 </div>
                 <div className="flex-1">
@@ -224,19 +224,19 @@ export default function ScriptByCodeHashPage({
                   {knownScript?.scriptKind || (scriptKind !== 'both' ? scriptKind : null) ? (
                     <Badge variant="neutral">{knownScript?.scriptKind || scriptKind}</Badge>
                   ) : (
-                    <span className="text-text-muted">-</span>
+                    <span className="text-text-dim">-</span>
                   )}
                 </div>
-                <div className="text-text-muted w-24 text-right font-mono">
+                <div className="text-text-dim w-24 text-right font-mono">
                   {knownScript ? knownScript.liveCellsCount.toLocaleString() : '-'}
                 </div>
-                <div className="text-text-muted w-32 text-right">
+                <div className="text-text-dim w-32 text-right">
                   {knownScript ? <Capacity value={knownScript.liveCapacitySum} /> : '-'}
                 </div>
               </div>
             </TerminalRow>
             <div className="border-base-border border-t px-4 py-3">
-              <div className="text-text-muted mb-2 text-[11px] uppercase tracking-wider">
+              <div className="text-text-dim mb-2 text-[11px] uppercase tracking-wider">
                 Same Deployment References
               </div>
               <div className="grid gap-2 md:grid-cols-2">
@@ -255,7 +255,7 @@ export default function ScriptByCodeHashPage({
                       />
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono text-xs">Unavailable</span>
+                    <span className="text-text-dim font-mono text-xs">Unavailable</span>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -273,18 +273,18 @@ export default function ScriptByCodeHashPage({
                       />
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono text-xs">Unavailable</span>
+                    <span className="text-text-dim font-mono text-xs">Unavailable</span>
                   )}
                 </div>
               </div>
             </div>
             <div className="border-base-border border-t px-4 py-3">
-              <div className="text-text-muted mb-2 text-[11px] uppercase tracking-wider">
+              <div className="text-text-dim mb-2 text-[11px] uppercase tracking-wider">
                 Reference Semantics
               </div>
-              <div className="text-text-muted space-y-1 text-xs">
+              <div className="text-text-dim space-y-1 text-xs">
                 <div>
-                  <span className="text-text-secondary font-mono">type ref</span>
+                  <span className="text-text font-mono">type ref</span>
                   <span>
                     {' '}
                     resolves code by matching type script hash (upgradeable; runs latest VM
@@ -292,7 +292,7 @@ export default function ScriptByCodeHashPage({
                   </span>
                 </div>
                 <div>
-                  <span className="text-text-secondary font-mono">
+                  <span className="text-text font-mono">
                     bytecode hash ref family (data/data1/data2)
                   </span>
                   <span>
@@ -301,7 +301,7 @@ export default function ScriptByCodeHashPage({
                     data/data1/data2).
                   </span>
                 </div>
-                <div className="text-text-muted">
+                <div className="text-text-dim">
                   Tradeoff: choose type for upgradeability, choose data/data1/data2 for fixed code
                   behavior.
                 </div>
@@ -330,11 +330,11 @@ export default function ScriptByCodeHashPage({
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
           <TerminalPanelContent>
-            <div className="text-text-muted mb-3 text-xs">
+            <div className="text-text-dim mb-3 text-xs">
               Daily cumulative live CKB occupation for this deployment.
             </div>
             {isOccupationChartLoading ? (
-              <div className="text-text-muted py-8 text-center">Loading occupation history...</div>
+              <div className="text-text-dim py-8 text-center">Loading occupation history...</div>
             ) : occupationChart && occupationChart.data.length > 0 ? (
               <StackedAreaChart
                 data={occupationChart.data}
@@ -342,7 +342,7 @@ export default function ScriptByCodeHashPage({
                 valueUnit="shannon"
               />
             ) : (
-              <div className="text-text-muted py-8 text-center">No occupation history yet</div>
+              <div className="text-text-dim py-8 text-center">No occupation history yet</div>
             )}
           </TerminalPanelContent>
         </TerminalPanel>
@@ -352,14 +352,14 @@ export default function ScriptByCodeHashPage({
             actions={
               <div className="flex flex-wrap gap-4 text-sm font-normal">
                 <div className="flex items-center gap-2">
-                  <span className="text-text-muted">Hash Type:</span>
+                  <span className="text-text-dim">Hash Type:</span>
                   <select
                     value={hashType}
                     onChange={(e) => {
                       setHashType(e.target.value as HashType);
                       cellsPagination.reset();
                     }}
-                    className="border-base-border bg-base-elevated text-text-primary rounded border px-2 py-1 font-mono text-xs"
+                    className="border-base-border bg-base-elevated text-text-bright rounded border px-2 py-1 font-mono text-xs"
                   >
                     <option value="type">
                       {supportsTypeRef ? 'type (upgradeable ref)' : 'type (unavailable)'}
@@ -370,20 +370,20 @@ export default function ScriptByCodeHashPage({
                   </select>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-text-muted">Reference Mode:</span>
-                  <Badge variant={supportsTypeRef ? 'green' : 'amber'}>
+                  <span className="text-text-dim">Reference Mode:</span>
+                  <Badge variant={supportsTypeRef ? 'green' : 'gold'}>
                     {supportsTypeRef ? 'Type + Data' : 'Data-only'}
                   </Badge>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-text-muted">Script Kind:</span>
+                  <span className="text-text-dim">Script Kind:</span>
                   <select
                     value={scriptKind}
                     onChange={(e) => {
                       setScriptKind(e.target.value as ScriptKind);
                       cellsPagination.reset();
                     }}
-                    className="border-base-border bg-base-elevated text-text-primary rounded border px-2 py-1 font-mono text-xs"
+                    className="border-base-border bg-base-elevated text-text-bright rounded border px-2 py-1 font-mono text-xs"
                   >
                     <option value="both">Both</option>
                     <option value="lock">Lock</option>
@@ -403,10 +403,10 @@ export default function ScriptByCodeHashPage({
               </div>
             )}
             {isCellsLoading ? (
-              <div className="text-text-muted py-8 text-center">Loading cells...</div>
+              <div className="text-text-dim py-8 text-center">Loading cells...</div>
             ) : cellsData && cellsData.data.length > 0 ? (
               <>
-                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="flex-1">Cell</div>
                   <div className="w-32 text-right">Capacity</div>
                   <div className="w-28 text-right">Data Size</div>
@@ -428,10 +428,10 @@ export default function ScriptByCodeHashPage({
                           />
                         </Link>
                       </div>
-                      <div className="text-text-muted w-32 text-right text-sm">
+                      <div className="text-text-dim w-32 text-right text-sm">
                         <Capacity value={cell.capacity} className="text-sm" />
                       </div>
-                      <div className="text-text-muted w-28 text-right font-mono text-sm">
+                      <div className="text-text-dim w-28 text-right font-mono text-sm">
                         {cell.dataSize.toLocaleString()} bytes
                       </div>
                       <div className="w-28 text-right">
@@ -447,7 +447,7 @@ export default function ScriptByCodeHashPage({
                 ))}
               </>
             ) : (
-              <div className="text-text-muted py-8 text-center">
+              <div className="text-text-dim py-8 text-center">
                 No cells found for this script with hash_type=&quot;{hashType}&quot;
               </div>
             )}

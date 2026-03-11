@@ -603,35 +603,35 @@ function TxBubbleLayer({
   const tooltip = hovered ? (
     <div
       data-testid="tx-bubble-tooltip"
-      className="border-base-border/55 bg-base-surface/95 text-text-primary pointer-events-none fixed z-[9999] min-w-[196px] rounded-xl border px-3 py-2.5 text-[10px] shadow-2xl shadow-black/45 backdrop-blur-md"
+      className="border-base-border/55 bg-base-surface/95 text-text-bright pointer-events-none fixed z-[9999] min-w-[196px] rounded-xl border px-3 py-2.5 text-[10px] shadow-2xl shadow-black/45 backdrop-blur-md"
       style={{
         left: tooltipX,
         top: tooltipY,
       }}
     >
-      <div className="border-base-border/55 text-text-primary border-b pb-1.5 font-mono text-[10px] tracking-wide">
+      <div className="border-base-border/55 text-text-bright border-b pb-1.5 font-mono text-[10px] tracking-wide">
         {hovered.bubble.txLabel}
       </div>
-      <div className="text-text-muted mt-1.5">
-        Stage: <span className="text-text-primary font-medium">{hovered.bubble.stageLabel}</span>
+      <div className="text-text-dim mt-1.5">
+        Stage: <span className="text-text-bright font-medium">{hovered.bubble.stageLabel}</span>
       </div>
       {hovered.bubble.proposalLabel && (
-        <div className="text-text-muted">
+        <div className="text-text-dim">
           Proposal:{' '}
-          <span className="text-text-primary font-mono">{hovered.bubble.proposalLabel}</span>
+          <span className="text-text-bright font-mono">{hovered.bubble.proposalLabel}</span>
         </div>
       )}
-      <div className="text-text-muted">
-        Size: <span className="text-text-primary font-mono">{hovered.bubble.sizeLabel}</span>
+      <div className="text-text-dim">
+        Size: <span className="text-text-bright font-mono">{hovered.bubble.sizeLabel}</span>
       </div>
-      <div className="text-text-muted">
-        Fee: <span className="text-text-primary font-mono">{hovered.bubble.feeLabel}</span>
+      <div className="text-text-dim">
+        Fee: <span className="text-text-bright font-mono">{hovered.bubble.feeLabel}</span>
       </div>
-      <div className="text-text-muted">
-        Fee rate: <span className="text-text-primary font-mono">{hovered.bubble.feeRateLabel}</span>
+      <div className="text-text-dim">
+        Fee rate: <span className="text-text-bright font-mono">{hovered.bubble.feeRateLabel}</span>
       </div>
-      <div className="text-text-muted">
-        Cycles: <span className="text-text-primary font-mono">{hovered.bubble.cyclesLabel}</span>
+      <div className="text-text-dim">
+        Cycles: <span className="text-text-bright font-mono">{hovered.bubble.cyclesLabel}</span>
       </div>
     </div>
   ) : null;
@@ -724,7 +724,7 @@ function PendingBlock({
   const gradient = isEmpty
     ? ''
     : tone === 'mempool'
-      ? 'from-warning-bright via-amber to-warning-dim'
+      ? 'from-warning-bright via-gold to-warning-dim'
       : tone === 'proposals'
         ? 'from-emphasis-dim via-emphasis-dim to-emphasis'
         : large
@@ -740,7 +740,7 @@ function PendingBlock({
         ? 'border-emphasis-dim/70'
         : 'border-emphasis/70';
   const topLabelClass = isEmpty
-    ? 'text-text-muted'
+    ? 'text-text-dim'
     : tone === 'mempool'
       ? 'text-warning'
       : tone === 'proposals' || tone === 'next'
@@ -777,8 +777,8 @@ function PendingBlock({
           </div>
         ) : isEmpty ? (
           <>
-            <div className="text-text-muted text-[11px] font-medium">Empty</div>
-            <div className="text-text-muted text-[10px]">0 txs</div>
+            <div className="text-text-dim text-[11px] font-medium">Empty</div>
+            <div className="text-text-dim text-[10px]">0 txs</div>
           </>
         ) : (
           <div className="flex h-full w-full flex-col gap-1">
@@ -807,17 +807,14 @@ function PendingBlock({
       {large && (
         <div className="mt-1.5 text-center text-[10px] sm:text-[11px]">
           <div
-            className={cn(
-              'font-mono tabular-nums',
-              isEmpty ? 'text-text-muted' : 'text-text-primary'
-            )}
+            className={cn('font-mono tabular-nums', isEmpty ? 'text-text-dim' : 'text-text-bright')}
           >
             ~{formatFeeRate(block.medianFeeRate)} sh/B
           </div>
-          <div className="text-text-muted font-mono tabular-nums">
+          <div className="text-text-dim font-mono tabular-nums">
             {formatFeeRate(block.feeRateRange.min)}-{formatFeeRate(block.feeRateRange.max)}
           </div>
-          <div className="text-text-secondary">
+          <div className="text-text">
             {formatCapacity(block.totalFee)} CKB · {block.transactionCount} txs
           </div>
         </div>
@@ -887,7 +884,7 @@ function MinedBlock({
   const minedBlockTooltip = isHovered && anchorRect && typeof document !== 'undefined' && (
     <div
       data-testid={`mined-block-tooltip-${block.number}`}
-      className="border-base-border/50 bg-base-surface/95 text-text-primary pointer-events-none fixed z-[10000] w-[296px] rounded-xl border px-4 py-3 text-xs shadow-2xl backdrop-blur-sm"
+      className="border-base-border/50 bg-base-surface/95 text-text-bright pointer-events-none fixed z-[10000] w-[296px] rounded-xl border px-4 py-3 text-xs shadow-2xl backdrop-blur-sm"
       style={{
         left: tooltipLeft,
         top: tooltipTop,
@@ -900,33 +897,33 @@ function MinedBlock({
         {stats && (
           <>
             <div className="flex justify-between gap-4">
-              <span className="text-text-muted">Avg Fee Rate:</span>
+              <span className="text-text-dim">Avg Fee Rate:</span>
               <span className="font-mono tabular-nums">
                 ~{formatFeeRate(stats.avgFeeRate)} shannons/B
               </span>
             </div>
             <div className="flex justify-between gap-4">
-              <span className="text-text-muted">Fee Range:</span>
+              <span className="text-text-dim">Fee Range:</span>
               <span className="font-mono tabular-nums">
                 {formatFeeRate(stats.minFeeRate)} - {formatFeeRate(stats.maxFeeRate)}
               </span>
             </div>
             <div className="flex justify-between gap-4">
-              <span className="text-text-muted">Size:</span>
+              <span className="text-text-dim">Size:</span>
               <span>{formatBytes(stats.totalSize)}</span>
             </div>
           </>
         )}
         <div className="flex justify-between gap-4">
-          <span className="text-text-muted">Transactions:</span>
+          <span className="text-text-dim">Transactions:</span>
           <span>{block.transactionsCount}</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="text-text-muted">Proposals:</span>
+          <span className="text-text-dim">Proposals:</span>
           <span>{block.proposalsCount ?? 0}</span>
         </div>
         <div className="flex justify-between gap-4">
-          <span className="text-text-muted">Time:</span>
+          <span className="text-text-dim">Time:</span>
           <span>{formatTimeAgo(block.timestamp)} ago</span>
         </div>
       </div>
@@ -948,7 +945,7 @@ function MinedBlock({
       </div>
       {block.hardforkActivation && (
         <div
-          className="border-warning-900/60 bg-warning-900/30 text-warning-300 mb-1 rounded border px-1.5 py-0.5 font-mono text-[9px]"
+          className="border-gold-dim/60 bg-gold/30 text-gold mb-1 rounded border px-1.5 py-0.5 font-mono text-[9px]"
           data-testid={`mempool-mined-hardfork-${block.number}`}
         >
           HF {block.hardforkActivation.shortName.toUpperCase()}
@@ -1025,23 +1022,23 @@ function MinedBlock({
             </>
           ) : stats ? (
             <>
-              <div className="text-text-primary font-mono tabular-nums">
+              <div className="text-text-bright font-mono tabular-nums">
                 ~{formatFeeRate(stats.avgFeeRate)} sh/B
               </div>
-              <div className="text-text-muted font-mono tabular-nums">
+              <div className="text-text-dim font-mono tabular-nums">
                 {formatFeeRate(stats.minFeeRate)}-{formatFeeRate(stats.maxFeeRate)}
               </div>
-              <div className="text-text-secondary">
+              <div className="text-text">
                 {formatBytes(stats.totalSize)} · {block.transactionsCount} txs
               </div>
-              <div className="text-text-muted">{formatTimeAgo(block.timestamp)} ago</div>
+              <div className="text-text-dim">{formatTimeAgo(block.timestamp)} ago</div>
             </>
           ) : (
             <>
-              <div className="text-text-primary font-mono tabular-nums">
+              <div className="text-text-bright font-mono tabular-nums">
                 {block.transactionsCount} txs
               </div>
-              <div className="text-text-muted">{formatTimeAgo(block.timestamp)} ago</div>
+              <div className="text-text-dim">{formatTimeAgo(block.timestamp)} ago</div>
             </>
           )}
         </div>
@@ -1571,7 +1568,7 @@ export function MempoolBlocks({
     return (
       <div className={containerClassName}>
         {showHeader && (
-          <h2 className="text-text-primary mb-5 text-lg font-bold tracking-tight sm:text-xl">
+          <h2 className="text-text-bright mb-5 text-lg font-bold tracking-tight sm:text-xl">
             Chain Tip Intelligence
           </h2>
         )}
@@ -1596,7 +1593,7 @@ export function MempoolBlocks({
     <div className={containerClassName}>
       {showHeader && (
         <div className="mb-5">
-          <h2 className="text-text-primary text-lg font-bold tracking-tight sm:text-xl">
+          <h2 className="text-text-bright text-lg font-bold tracking-tight sm:text-xl">
             Chain Tip Intelligence
           </h2>
           <div
@@ -1604,14 +1601,14 @@ export function MempoolBlocks({
             className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
           >
             <p className="text-xs sm:text-sm">
-              <span className="text-warning-300">Mempool ({formatCount(totalPending)})</span>
-              <span className="text-text-muted"> {'->'} </span>
+              <span className="text-gold">Mempool ({formatCount(totalPending)})</span>
+              <span className="text-text-dim"> {'->'} </span>
               <span className="text-emphasis-dim">Proposals ({formatCount(totalProposed)})</span>
-              <span className="text-text-muted"> {'->'} </span>
+              <span className="text-text-dim"> {'->'} </span>
               <span className="text-emphasis">New Committed ({formatCount(totalCommitted)})</span>
             </p>
             {legendMode === 'row' && (
-              <p className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px] sm:text-right">
+              <p className="border-base-border/60 bg-base-surface/70 text-text rounded-md border px-2 py-1 text-[11px] sm:text-right">
                 w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
               </p>
             )}
@@ -1621,7 +1618,7 @@ export function MempoolBlocks({
 
       {legendMode === 'row' && !showHeader && (
         <div className="mb-1 mt-1 flex items-center">
-          <span className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px]">
+          <span className="border-base-border/60 bg-base-surface/70 text-text rounded-md border px-2 py-1 text-[11px]">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </span>
         </div>

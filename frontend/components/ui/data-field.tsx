@@ -37,27 +37,22 @@ export function DataField({
     return (
       <div className={cn('flex flex-col gap-1', className)}>
         <div className={cn('flex items-center gap-2', labelClassName)}>
-          <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
-            {label}
-          </span>
+          <span className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</span>
           {helpText && (
-            <span
-              className="text-text-muted hover:text-text-secondary cursor-help"
-              title={helpText}
-            >
+            <span className="text-text-dim hover:text-text cursor-help" title={helpText}>
               <HelpIcon className="h-3.5 w-3.5" />
             </span>
           )}
         </div>
         <div
           className={cn(
-            'text-text-primary min-w-0 break-words font-mono text-sm',
-            copyValue && 'hover:text-amber cursor-pointer transition-colors',
+            'text-text-bright min-w-0 break-words font-mono text-sm',
+            copyValue && 'hover:text-jade cursor-pointer transition-colors',
             valueClassName
           )}
           onClick={copyValue ? handleCopy : undefined}
         >
-          {copied ? <span className="text-amber">Copied!</span> : children}
+          {copied ? <span className="text-jade">Copied!</span> : children}
         </div>
       </div>
     );
@@ -71,28 +66,28 @@ export function DataField({
       )}
     >
       <div className={cn('flex shrink-0 items-center gap-2', labelClassName)}>
-        <span className="text-text-muted text-sm">{label}</span>
+        <span className="text-text-dim text-sm">{label}</span>
         {helpText && (
-          <span className="text-text-muted hover:text-text-secondary cursor-help" title={helpText}>
+          <span className="text-text-dim hover:text-text cursor-help" title={helpText}>
             <HelpIcon className="h-4 w-4" />
           </span>
         )}
       </div>
       <div
         className={cn(
-          'text-text-primary flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm sm:w-auto sm:justify-end sm:text-right',
-          copyValue && 'hover:text-amber group cursor-pointer transition-colors',
+          'text-text-bright flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm sm:w-auto sm:justify-end sm:text-right',
+          copyValue && 'hover:text-jade group cursor-pointer transition-colors',
           valueClassName
         )}
         onClick={copyValue ? handleCopy : undefined}
       >
         {copied ? (
-          <span className="text-amber">Copied!</span>
+          <span className="text-jade">Copied!</span>
         ) : (
           <>
             {children}
             {copyValue && (
-              <CopyIcon className="group-hover:text-amber text-text-muted h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
+              <CopyIcon className="group-hover:text-jade text-text-dim h-3.5 w-3.5 opacity-0 transition-opacity group-hover:opacity-100" />
             )}
           </>
         )}
@@ -127,7 +122,7 @@ export function DataSection({ title, children, className }: DataSectionProps) {
   return (
     <div className={cn('', className)}>
       {title && (
-        <h3 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
+        <h3 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           {title}
         </h3>
       )}

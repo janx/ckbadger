@@ -123,7 +123,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">mNFT item not found</h2>
+              <h2 className="text-text-dim text-xl">mNFT item not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -138,13 +138,13 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
         <div className="mb-6 flex items-center gap-4">
           <Link
             href={`/nfts/${detail.class.classId}`}
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to Class
           </Link>
           <Link
             href="/assets?type=nft"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             Back to NFTs
           </Link>
@@ -169,12 +169,12 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
             <TerminalPanelContent>
               <DataGrid columns={2}>
                 <DataField label="Standard">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     {detail.standard.toUpperCase()}
                   </span>
                 </DataField>
                 <DataField label="Token Index">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     #{formatNumber(detail.tokenIndex)}
                   </span>
                 </DataField>
@@ -219,12 +219,12 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
             <TerminalPanelContent>
               <DataGrid columns={1}>
                 <DataField label="State">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     {decodeTokenState(detail.state)}
                   </span>
                 </DataField>
                 <DataField label="Configure">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     {decodeTokenConfigure(detail.configure)}
                   </span>
                 </DataField>
@@ -246,7 +246,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                       <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono">Unavailable</span>
+                    <span className="text-text-dim font-mono">Unavailable</span>
                   )}
                 </DataField>
                 <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
@@ -255,7 +255,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                       <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono">Unavailable</span>
+                    <span className="text-text-dim font-mono">Unavailable</span>
                   )}
                 </DataField>
                 <DataField label="Live Outpoint">
@@ -267,7 +267,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                       <HexDisplay value={detail.txHash} size="sm" />-{detail.outputIndex}
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono">No live outpoint</span>
+                    <span className="text-text-dim font-mono">No live outpoint</span>
                   )}
                 </DataField>
               </DataGrid>
@@ -278,30 +278,28 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
             <TerminalPanelContent>
               <DataGrid columns={1}>
                 <DataField label="Class Name">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     {detail.class.name || 'Unnamed Class'}
                   </span>
                 </DataField>
                 <DataField label="Class Description">
-                  <span className="text-text-secondary">{detail.class.description || 'None'}</span>
+                  <span className="text-text">{detail.class.description || 'None'}</span>
                 </DataField>
                 <DataField label="Renderer">
-                  <span className="text-text-secondary font-mono">
-                    {detail.class.renderer || 'None'}
-                  </span>
+                  <span className="text-text font-mono">{detail.class.renderer || 'None'}</span>
                 </DataField>
                 <DataField label="Issued / Total">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     {formatNumber(detail.class.issued)} / {formatNumber(detail.class.total)}
                   </span>
                 </DataField>
                 <DataField label="Issuer Name">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     {detail.issuer.name || 'Unnamed Issuer'}
                   </span>
                 </DataField>
                 <DataField label="Issuer Counts">
-                  <span className="text-text-primary font-mono">
+                  <span className="text-text-bright font-mono">
                     classes {formatNumber(detail.issuer.classCount)} / sets{' '}
                     {formatNumber(detail.issuer.setCount)}
                   </span>
@@ -319,7 +317,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                     className="border-base-border bg-base-surface/40 rounded border p-3"
                   >
                     <div className="mb-1 flex items-center justify-between gap-3">
-                      <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
+                      <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
                         {event.event}
                       </span>
                       {event.blockNumber !== null && (
@@ -339,7 +337,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
                         <HexDisplay value={event.txHash} size="sm" />-{event.outputIndex}
                       </Link>
                     )}
-                    {event.note && <div className="text-text-muted mt-1 text-xs">{event.note}</div>}
+                    {event.note && <div className="text-text-dim mt-1 text-xs">{event.note}</div>}
                   </div>
                 ))}
               </div>
@@ -349,9 +347,9 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
             <TerminalPanelHeader indicator="active">Activities</TerminalPanelHeader>
             <TerminalPanelContent>
               {isActivitiesLoading ? (
-                <div className="text-text-muted py-2 text-sm">Loading activities...</div>
+                <div className="text-text-dim py-2 text-sm">Loading activities...</div>
               ) : !itemActivities?.data?.length ? (
-                <div className="text-text-muted py-2 text-sm">No related activities found.</div>
+                <div className="text-text-dim py-2 text-sm">No related activities found.</div>
               ) : (
                 <div className="space-y-2">
                   {itemActivities.data.map((activity) => (

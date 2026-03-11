@@ -35,7 +35,7 @@ const SECTION_TAB_TITLES: Record<SectionTab, string> = {
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => (
     <div className="border-base-border/70 bg-base-surface/70 flex h-[240px] items-center justify-center rounded border">
-      <p className="text-text-muted text-sm">Loading graph section...</p>
+      <p className="text-text-dim text-sm">Loading graph section...</p>
     </div>
   ),
 });
@@ -348,11 +348,11 @@ export default function TransactionDetailPage() {
         <main className="container mx-auto px-4 py-4">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">
+              <h2 className="text-text-dim text-xl">
                 {isNotFoundError ? 'Transaction not found' : 'Failed to load transaction'}
               </h2>
               {!isNotFoundError && errorMessage && (
-                <p className="text-text-muted mt-3 break-all text-sm">{errorMessage}</p>
+                <p className="text-text-dim mt-3 break-all text-sm">{errorMessage}</p>
               )}
             </TerminalPanelContent>
           </TerminalPanel>
@@ -384,17 +384,17 @@ export default function TransactionDetailPage() {
                 ) : lifecycle?.proposedIn ? (
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-text-muted text-xs">Proposed</span>
+                      <span className="text-text-dim text-xs">Proposed</span>
                       <Link
                         href={`/blocks/${lifecycle.proposedIn.blockNumber}`}
-                        className="text-text-secondary hover:text-text-primary hover:underline"
+                        className="text-text hover:text-text-bright hover:underline"
                       >
                         #{lifecycle.proposedIn.blockNumber.toLocaleString()}
                       </Link>
                     </div>
-                    <span className="text-text-muted">→</span>
+                    <span className="text-text-dim">→</span>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-text-muted text-xs">Committed</span>
+                      <span className="text-text-dim text-xs">Committed</span>
                       <Link
                         href={`/blocks/${tx.blockNumber}`}
                         className="text-interactive font-medium hover:underline"
@@ -408,7 +408,7 @@ export default function TransactionDetailPage() {
                           lifecycle.commitmentDistance <= 4
                             ? 'green'
                             : lifecycle.commitmentDistance <= 7
-                              ? 'amber'
+                              ? 'gold'
                               : 'red'
                         }
                       >
@@ -437,14 +437,14 @@ export default function TransactionDetailPage() {
               </DataField>
               <DataField label="Fee">
                 <div className="flex flex-col items-end gap-1">
-                  <span className="text-text-primary">
-                    <Capacity value={tx.fee} className="text-text-primary" />
-                    <span className="text-text-secondary ml-2 font-mono text-sm tabular-nums">
+                  <span className="text-text-bright">
+                    <Capacity value={tx.fee} className="text-text-bright" />
+                    <span className="text-text ml-2 font-mono text-sm tabular-nums">
                       ({BigInt(tx.fee).toLocaleString()} shannon)
                     </span>
                   </span>
                   {tx.feeRate && (
-                    <span className="text-text-secondary font-mono text-xs tabular-nums">
+                    <span className="text-text font-mono text-xs tabular-nums">
                       {Number(tx.feeRate).toLocaleString()} shannon/KB
                     </span>
                   )}
@@ -460,21 +460,21 @@ export default function TransactionDetailPage() {
                   {hasCycles && cycles !== null ? (
                     <UsageBar value={cycles} max={3_500_000_000} />
                   ) : isCalculating ? (
-                    <span className="text-text-secondary inline-flex items-center gap-2 italic">
+                    <span className="text-text inline-flex items-center gap-2 italic">
                       <span className="border-base-border inline-block h-3 w-3 animate-spin rounded-full border-2 border-t-transparent" />
                       <span className="cycles-calculating-marquee">Calculating ...</span>
                     </span>
                   ) : hasFailed ? (
                     <span className="text-negative italic">Calculation failed</span>
                   ) : (
-                    <span className="text-text-muted italic">Not available</span>
+                    <span className="text-text-dim italic">Not available</span>
                   )}
                 </DataField>
               )}
               <DataField label="Carried Capacity">
                 <Capacity
                   value={(BigInt(tx.outputsCapacity || '0') + BigInt(tx.fee)).toString()}
-                  className="text-text-primary"
+                  className="text-text-bright"
                 />
               </DataField>
               <DataField label="Occupied Capacity Change">
@@ -504,7 +504,7 @@ export default function TransactionDetailPage() {
                         </span>
                       )}
                       {!isIncrease && !isDecrease && (
-                        <span className="border-base-border bg-base-elevated text-text-secondary inline-flex items-center rounded border px-2 py-1 text-sm">
+                        <span className="border-base-border bg-base-elevated text-text inline-flex items-center rounded border px-2 py-1 text-sm">
                           No change
                         </span>
                       )}
@@ -560,7 +560,7 @@ export default function TransactionDetailPage() {
                         className={`rounded px-2.5 py-1 text-xs transition-colors ${
                           txGraphView === 'flow'
                             ? 'bg-emphasis/15 text-emphasis'
-                            : 'text-text-secondary hover:text-text-primary'
+                            : 'text-text hover:text-text-bright'
                         }`}
                         onClick={() => setTxGraphView('flow')}
                       >
@@ -571,7 +571,7 @@ export default function TransactionDetailPage() {
                         className={`rounded px-2.5 py-1 text-xs transition-colors ${
                           txGraphView === 'graph'
                             ? 'bg-emphasis/15 text-emphasis'
-                            : 'text-text-secondary hover:text-text-primary'
+                            : 'text-text hover:text-text-bright'
                         }`}
                         onClick={() => setTxGraphView('graph')}
                       >
@@ -579,7 +579,7 @@ export default function TransactionDetailPage() {
                       </button>
                     </div>
                     {graphInsights.nodeCount > 0 && (
-                      <span className="text-text-muted text-xs">
+                      <span className="text-text-dim text-xs">
                         {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
                       </span>
                     )}
@@ -588,23 +588,23 @@ export default function TransactionDetailPage() {
                     <div data-testid="tx-relationship-flow" className="space-y-3">
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text-secondary text-xs uppercase tracking-wide">
+                          <div className="text-text text-xs uppercase tracking-wide">
                             Inputs in Graph
                           </div>
-                          <div className="text-text-primary mt-1 font-mono text-lg">
+                          <div className="text-text-bright mt-1 font-mono text-lg">
                             {graphInsights.inputLinkCount}
                           </div>
                         </div>
                         <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text-secondary text-xs uppercase tracking-wide">
+                          <div className="text-text text-xs uppercase tracking-wide">
                             Outputs in Graph
                           </div>
-                          <div className="text-text-primary mt-1 font-mono text-lg">
+                          <div className="text-text-bright mt-1 font-mono text-lg">
                             {graphInsights.outputNodes.length}
                           </div>
                         </div>
                         <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text-secondary text-xs uppercase tracking-wide">
+                          <div className="text-text text-xs uppercase tracking-wide">
                             Live Outputs
                           </div>
                           <div className="text-emphasis mt-1 font-mono text-lg">
@@ -615,7 +615,7 @@ export default function TransactionDetailPage() {
                           </div>
                         </div>
                         <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text-secondary text-xs uppercase tracking-wide">
+                          <div className="text-text text-xs uppercase tracking-wide">
                             Dead Outputs
                           </div>
                           <div className="text-negative mt-1 font-mono text-lg">
@@ -627,16 +627,16 @@ export default function TransactionDetailPage() {
                         </div>
                       </div>
                       <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                        <div className="text-text-secondary text-xs uppercase tracking-wide">
+                        <div className="text-text text-xs uppercase tracking-wide">
                           Transaction Flow Snapshot
                         </div>
-                        <div className="text-text-secondary mt-2 text-sm">
+                        <div className="text-text mt-2 text-sm">
                           Inputs:{' '}
-                          <span className="text-text-primary font-mono">{tx.inputsCount}</span>{' '}
+                          <span className="text-text-bright font-mono">{tx.inputsCount}</span>{' '}
                           {'->'} Outputs:{' '}
-                          <span className="text-text-primary font-mono">{tx.outputsCount}</span> |
+                          <span className="text-text-bright font-mono">{tx.outputsCount}</span> |
                           Graph Edges:{' '}
-                          <span className="text-text-primary font-mono">
+                          <span className="text-text-bright font-mono">
                             {graphInsights.outputLinkCount}
                           </span>
                         </div>
@@ -651,7 +651,7 @@ export default function TransactionDetailPage() {
                       height={graphInsights.graphHeight}
                     />
                   ) : (
-                    <p className="text-text-muted py-8 text-center">Loading graph...</p>
+                    <p className="text-text-dim py-8 text-center">Loading graph...</p>
                   )}
                 </div>
               </TabsContent>
@@ -747,7 +747,7 @@ function InputsOutputsTab({
   return (
     <div className="grid gap-6 p-4 lg:grid-cols-2">
       <div>
-        <h4 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
+        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           Inputs ({tx.inputsCount})
         </h4>
         {tx.inputs && tx.inputs.length > 0 ? (
@@ -772,14 +772,14 @@ function InputsOutputsTab({
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-text-muted font-mono text-xs">#{index}</span>
+                      <span className="text-text-dim font-mono text-xs">#{index}</span>
                       <ScriptLabel script={input.lock} scriptLookup={scriptLookup} type="lock" />
                       <ScriptLabel script={input.type} scriptLookup={scriptLookup} type="type" />
                     </div>
                     {input.previousOutput && (
                       <Link
                         href={`/cell/${input.previousOutput.txHash}-${input.previousOutput.index}`}
-                        className="hover:text-interactive text-text-secondary group flex items-center gap-1 font-mono text-xs"
+                        className="hover:text-interactive text-text group flex items-center gap-1 font-mono text-xs"
                       >
                         <HexDisplay
                           value={input.previousOutput.txHash}
@@ -800,7 +800,7 @@ function InputsOutputsTab({
                         <span className="text-negative text-sm">Address error</span>
                       )}
                       {input.capacity && (
-                        <Capacity value={input.capacity} className="text-text-secondary text-sm" />
+                        <Capacity value={input.capacity} className="text-text text-sm" />
                       )}
                     </div>
                   )}
@@ -809,13 +809,13 @@ function InputsOutputsTab({
             })}
           </div>
         ) : tx.isCellbase ? (
-          <p className="text-text-muted text-sm">Cellbase has no inputs</p>
+          <p className="text-text-dim text-sm">Cellbase has no inputs</p>
         ) : (
-          <p className="text-text-muted text-sm">Loading inputs...</p>
+          <p className="text-text-dim text-sm">Loading inputs...</p>
         )}
       </div>
       <div>
-        <h4 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
+        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           Outputs ({tx.outputsCount})
         </h4>
         {tx.outputs && tx.outputs.length > 0 ? (
@@ -840,7 +840,7 @@ function InputsOutputsTab({
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-text-muted font-mono text-xs">#{index}</span>
+                      <span className="text-text-dim font-mono text-xs">#{index}</span>
                       <ScriptLabel script={output.lock} scriptLookup={scriptLookup} type="lock" />
                       <ScriptLabel script={output.type} scriptLookup={scriptLookup} type="type" />
                     </div>
@@ -857,14 +857,14 @@ function InputsOutputsTab({
                     ) : (
                       <span className="text-negative text-sm">Address error</span>
                     )}
-                    <Capacity value={output.capacity} className="text-text-secondary" />
+                    <Capacity value={output.capacity} className="text-text" />
                   </div>
                 </TerminalRow>
               );
             })}
           </div>
         ) : (
-          <p className="text-text-muted text-sm">Loading outputs...</p>
+          <p className="text-text-dim text-sm">Loading outputs...</p>
         )}
       </div>
     </div>
@@ -971,7 +971,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   if (!witnessesAvailable && witnessAnalyses.length === 0) {
     return (
       <div className="p-4" data-testid="tx-witness-tab">
-        <div className="border-base-border bg-base-surface/60 text-text-secondary rounded border p-4 text-sm">
+        <div className="border-base-border bg-base-surface/60 text-text rounded border p-4 text-sm">
           Witness bytes are unavailable in current API mode. Set `[ckb].data_path` in
           `ckbadger.toml` to enable witness inspection.
         </div>
@@ -981,7 +981,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
   if (witnessAnalyses.length === 0) {
     return (
       <div className="p-4" data-testid="tx-witness-tab">
-        <div className="border-base-border bg-base-surface/60 text-text-secondary rounded border p-4 text-sm">
+        <div className="border-base-border bg-base-surface/60 text-text rounded border p-4 text-sm">
           This transaction has no witness entries.
         </div>
       </div>
@@ -1069,7 +1069,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       <div className={`grid gap-3 ${scriptGroupLens.length > 0 ? 'md:grid-cols-2' : ''}`}>
         <div className="border-base-border bg-base-surface/50 rounded border p-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-text-muted text-[11px] uppercase tracking-wider">
+            <div className="text-text-dim text-[11px] uppercase tracking-wider">
               Witness Entries
             </div>
             <div className="flex flex-wrap items-center gap-1">
@@ -1080,13 +1080,13 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                 disabled={activeWitnessIndex === null && activeScriptGroupKey === null}
                 className={`rounded border px-1.5 py-0.5 font-mono text-[11px] transition ${
                   activeWitnessIndex === null && activeScriptGroupKey === null
-                    ? 'border-base-border text-text-muted cursor-not-allowed'
-                    : 'border-base-border/70 text-text-secondary hover:text-text-primary hover:border-base-border/80'
+                    ? 'border-base-border text-text-dim cursor-not-allowed'
+                    : 'border-base-border/70 text-text hover:text-text-bright hover:border-base-border/80'
                 }`}
               >
                 clear
               </button>
-              <span className="border-base-border/70 bg-base-surface/80 text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[11px]">
+              <span className="border-base-border/70 bg-base-surface/80 text-text rounded border px-1.5 py-0.5 font-mono text-[11px]">
                 total {witnessAnalyses.length}
               </span>
               <span className="border-emphasis/30 bg-emphasis/10 text-emphasis rounded border px-1.5 py-0.5 font-mono text-[11px]">
@@ -1111,15 +1111,15 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="text-text-primary font-mono text-[11px]">#{witness.index}</div>
+                  <div className="text-text-bright font-mono text-[11px]">#{witness.index}</div>
                   <Badge variant={witness.role === 'input' ? 'green' : 'gray'}>
                     {witness.role}
                   </Badge>
                 </div>
-                <div className="text-text-secondary mt-1 font-mono text-[11px]">
+                <div className="text-text mt-1 font-mono text-[11px]">
                   {witness.byteLength.toLocaleString()} bytes
                 </div>
-                <div className="text-text-muted mt-0.5 truncate font-mono text-[11px]">
+                <div className="text-text-dim mt-0.5 truncate font-mono text-[11px]">
                   {witness.previewHex ? `0x${witness.previewHex.slice(0, 40)}` : '0x'}
                 </div>
               </button>
@@ -1128,7 +1128,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
         </div>
         {scriptGroupLens.length > 0 && (
           <div className="border-base-border bg-base-surface/50 rounded border p-3">
-            <div className="text-text-muted mb-2 text-[11px] uppercase tracking-wider">
+            <div className="text-text-dim mb-2 text-[11px] uppercase tracking-wider">
               Script Groups
             </div>
             <div className="grid gap-1.5">
@@ -1194,7 +1194,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                         />
                       </Link>
                     )}
-                    <div className="text-text-muted mt-1 font-mono text-[11px]">
+                    <div className="text-text-dim mt-1 font-mono text-[11px]">
                       inputs: [{group.inputIndices.join(', ')}]
                     </div>
                   </div>
@@ -1231,15 +1231,15 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
         <>
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
             <div className="border-base-border/70 bg-base-surface/70 inline-flex items-center gap-2 rounded border px-2.5 py-1.5">
-              <span className="text-text-secondary uppercase tracking-wide">Active</span>
-              <span className="text-text-primary font-mono">#{activeWitness.index}</span>
+              <span className="text-text uppercase tracking-wide">Active</span>
+              <span className="text-text-bright font-mono">#{activeWitness.index}</span>
               <Badge variant={activeWitness.role === 'input' ? 'green' : 'gray'}>
                 {activeWitness.role}
               </Badge>
             </div>
             <div className="border-base-border/70 bg-base-surface/70 inline-flex items-center gap-2 rounded border px-2.5 py-1.5">
-              <span className="text-text-secondary uppercase tracking-wide">Size</span>
-              <span className="text-text-primary font-mono">
+              <span className="text-text uppercase tracking-wide">Size</span>
+              <span className="text-text-bright font-mono">
                 {activeWitness.byteLength.toLocaleString()}B
               </span>
             </div>
@@ -1250,7 +1250,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                   : 'border-emphasis/25 bg-emphasis/5'
               }`}
             >
-              <span className="text-text-secondary uppercase tracking-wide">Preview</span>
+              <span className="text-text uppercase tracking-wide">Preview</span>
               {activeWitness.isPreviewTruncated ? (
                 <span className="text-warning font-mono">
                   Truncated at {activeWitness.previewBytes.toLocaleString()}B
@@ -1266,25 +1266,25 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               className="border-base-border bg-base-bg/70 rounded border p-2"
             >
               <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
-                <span className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
+                <span className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
                   Deterministic Decode
                 </span>
                 <Badge variant="neutral">{deterministicAnalysis.kind}</Badge>
-                <span className="border-base-border/80 bg-base-surface/70 text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
+                <span className="border-base-border/80 bg-base-surface/70 text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
                   {deterministicAnalysis.segments.length} segments
                 </span>
                 {pinnedSegmentIndex !== null && (
                   <span data-testid="tx-witness-segment-pinned">
-                    <Badge variant="amber">Pinned</Badge>
+                    <Badge variant="gold">Pinned</Badge>
                   </span>
                 )}
               </div>
-              <div className="text-text-secondary mb-1.5 text-[11px] leading-4">
+              <div className="text-text mb-1.5 text-[11px] leading-4">
                 {deterministicAnalysis.summary}
               </div>
               <div className="grid gap-2 md:grid-cols-2">
                 <div className="border-base-border bg-base-bg/60 rounded border p-1.5">
-                  <div className="text-text-muted mb-1 text-[10px] uppercase tracking-[0.12em]">
+                  <div className="text-text-dim mb-1 text-[10px] uppercase tracking-[0.12em]">
                     Parsed Segments
                   </div>
                   <div
@@ -1310,15 +1310,15 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                             isActive
                               ? segmentTone.activePill
                               : inPreview
-                                ? 'border-base-border/70 bg-base-surface/60 text-text-secondary hover:border-base-border/70'
-                                : 'border-base-border/70 bg-base-surface/40 text-text-muted'
+                                ? 'border-base-border/70 bg-base-surface/60 text-text hover:border-base-border/70'
+                                : 'border-base-border/70 bg-base-surface/40 text-text-dim'
                           }`}
                         >
                           <span
                             className={`h-1.5 w-1.5 shrink-0 rounded-full ${segmentTone.dot}`}
                           />
                           <span className="truncate">{segment.label}</span>
-                          <span className="text-text-muted shrink-0 text-[10px]">
+                          <span className="text-text-dim shrink-0 text-[10px]">
                             [{segment.start}..{segment.end})
                           </span>
                         </button>
@@ -1332,13 +1332,13 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                 >
                   {activeSegment ? (
                     <>
-                      <div className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
+                      <div className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
                         Segment Detail
                       </div>
-                      <div className="text-text-secondary mt-1 font-mono text-[11px]">
+                      <div className="text-text mt-1 font-mono text-[11px]">
                         {activeSegment.label}
                       </div>
-                      <div className="text-text-secondary mt-0.5 text-[10px] leading-4">
+                      <div className="text-text mt-0.5 text-[10px] leading-4">
                         {activeSegment.meaning}
                       </div>
                       <div
@@ -1347,7 +1347,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                       >
                         {activeSegment.humanValue}
                       </div>
-                      <div className="text-text-secondary mt-1.5 font-mono text-[11px]">
+                      <div className="text-text mt-1.5 font-mono text-[11px]">
                         [{activeSegment.start}..{activeSegment.end})
                       </div>
                       {activeSegmentHex && (
@@ -1359,17 +1359,17 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                         </div>
                       )}
                       {activeSegmentHex?.truncated && (
-                        <div className="text-text-muted mt-1 text-[11px]">
+                        <div className="text-text-dim mt-1 text-[11px]">
                           Hex preview truncated for readability.
                         </div>
                       )}
                     </>
                   ) : (
                     <>
-                      <div className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
+                      <div className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
                         Segment Detail
                       </div>
-                      <div className="text-text-muted mt-1 text-xs">
+                      <div className="text-text-dim mt-1 text-xs">
                         Hover a segment/byte to preview it, or click a segment to pin it.
                       </div>
                     </>
@@ -1384,10 +1384,10 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
               className="border-base-border bg-base-bg/70 rounded border p-2"
             >
               <div className="mb-1 flex items-center justify-between gap-2">
-                <div className="text-text-muted text-[10px] uppercase tracking-[0.12em]">
+                <div className="text-text-dim text-[10px] uppercase tracking-[0.12em]">
                   Heuristic Guesses
                 </div>
-                <span className="border-base-border/80 bg-base-surface/70 text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
+                <span className="border-base-border/80 bg-base-surface/70 text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
                   {heuristicGuesses.length}
                 </span>
               </div>
@@ -1415,15 +1415,13 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                             <span
                               className={`h-1.5 w-1.5 shrink-0 rounded-full ${guessTone.dot}`}
                             />
-                            <span className="text-text-secondary font-mono text-[11px]">
-                              {guess.kind}
-                            </span>
+                            <span className="text-text font-mono text-[11px]">{guess.kind}</span>
                             <Badge
                               variant={
                                 guess.confidence === 'high'
                                   ? 'green'
                                   : guess.confidence === 'medium'
-                                    ? 'amber'
+                                    ? 'gold'
                                     : 'gray'
                               }
                             >
@@ -1431,7 +1429,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                             </Badge>
                           </div>
                         </div>
-                        <span className="text-text-muted font-mono text-[10px]">
+                        <span className="text-text-dim font-mono text-[10px]">
                           {isExpanded ? '[-]' : '[+]'}
                         </span>
                       </div>
@@ -1440,9 +1438,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                           data-testid={`tx-witness-heuristic-detail-${idx}`}
                           className="border-base-border/80 mt-1 border-t pt-1"
                         >
-                          <div className="text-text-secondary text-[10px] leading-4">
-                            {guess.reason}
-                          </div>
+                          <div className="text-text text-[10px] leading-4">{guess.reason}</div>
                           {guess.humanValue && (
                             <div
                               className={`mt-0.5 break-all font-mono text-[11px] ${guessTone.valueText}`}
@@ -1460,7 +1456,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
           )}
           <div className="border-base-border bg-base-bg overflow-x-auto rounded-md border p-4 font-mono text-xs">
             {activeWitness.previewHex.length === 0 ? (
-              <div className="text-text-muted">No bytes to render for this witness.</div>
+              <div className="text-text-dim">No bytes to render for this witness.</div>
             ) : (
               <div
                 data-testid="tx-witness-bytes-grid"
@@ -1491,29 +1487,29 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                     const byteClass =
                       segmentIndex < 0
                         ? hasActiveSegment
-                          ? 'text-text-muted'
-                          : 'rounded bg-base-elevated/70 text-text-secondary'
+                          ? 'text-text-dim'
+                          : 'rounded bg-base-elevated/70 text-text'
                         : isActiveSegment
                           ? (segmentTone?.byteActive ??
                             'rounded bg-emphasis/25 text-emphasis ring-1 ring-emphasis/70')
                           : hasActiveSegment
-                            ? 'text-text-muted opacity-40'
+                            ? 'text-text-dim opacity-40'
                             : (segmentTone?.byte ?? 'rounded bg-emphasis/15 text-emphasis/70');
                     const asciiClass =
                       segmentIndex < 0
                         ? hasActiveSegment
-                          ? 'text-text-muted'
-                          : 'text-text-muted'
+                          ? 'text-text-dim'
+                          : 'text-text-dim'
                         : isActiveSegment
                           ? (segmentTone?.asciiActive ?? 'rounded-sm bg-emphasis/20 text-emphasis')
                           : hasActiveSegment
-                            ? 'text-text-muted opacity-40'
-                            : 'text-text-muted';
+                            ? 'text-text-dim opacity-40'
+                            : 'text-text-dim';
                     const asciiHoverClass = isHoveredByte
                       ? segmentIndex >= 0
                         ? (segmentTone?.asciiHover ??
                           'rounded-sm bg-emphasis/30 text-emphasis shadow-[inset_0_0_0_1px_rgba(0,255,65,0.45)]')
-                        : 'rounded-sm bg-base-border/50 text-text-secondary'
+                        : 'rounded-sm bg-base-border/50 text-text'
                       : '';
                     const hoverBreatheClass = isHoveredByte
                       ? segmentIndex >= 0
@@ -1546,7 +1542,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                       data-row-index={rowIndex}
                       className="hover:bg-base-elevated/50 flex py-0.5"
                     >
-                      <span className="text-text-muted mr-4 select-none">0x{offset}:</span>
+                      <span className="text-text-dim mr-4 select-none">0x{offset}:</span>
                       <div className="text-emphasis/70 mr-6 flex gap-1.5">
                         {byteEntries.map((entry) => (
                           <span
@@ -1608,7 +1604,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
                   );
                 })}
                 {activeWitness.remainingBytes > 0 && (
-                  <div className="text-text-muted mt-2 select-none italic">
+                  <div className="text-text-dim mt-2 select-none italic">
                     ... {activeWitness.remainingBytes.toLocaleString()} more bytes
                   </div>
                 )}
@@ -1619,7 +1615,7 @@ function WitnessTab({ tx, scriptLookup, onSelectionChange }: WitnessTabProps) {
       ) : (
         <div
           data-testid="tx-witness-selection-empty"
-          className="border-base-border bg-base-surface/60 text-text-secondary rounded border p-4 text-sm"
+          className="border-base-border bg-base-surface/60 text-text rounded border p-4 text-sm"
         >
           Select a witness entry or script group to inspect deterministic decode and bytes.
         </div>
@@ -1673,7 +1669,7 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
   return (
     <div className="grid gap-6 p-4 lg:grid-cols-2">
       <div>
-        <h4 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
+        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           Lock Scripts
         </h4>
         <div className="border-base-border bg-base-surface/50 rounded-lg border">
@@ -1722,12 +1718,12 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
             </TerminalRow>
           ))}
           {scriptSummary.lockScripts.size === 0 && (
-            <div className="text-text-muted p-4 text-center text-sm">No lock scripts</div>
+            <div className="text-text-dim p-4 text-center text-sm">No lock scripts</div>
           )}
         </div>
       </div>
       <div>
-        <h4 className="border-base-border text-text-muted mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
+        <h4 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
           Type Scripts
         </h4>
         <div className="border-base-border bg-base-surface/50 rounded-lg border">
@@ -1776,7 +1772,7 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
             </TerminalRow>
           ))}
           {scriptSummary.typeScripts.size === 0 && (
-            <div className="text-text-muted p-4 text-center text-sm">No type scripts</div>
+            <div className="text-text-dim p-4 text-center text-sm">No type scripts</div>
           )}
         </div>
       </div>
@@ -1789,10 +1785,10 @@ interface CellDepsTabProps {
 }
 function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
   if (isLoading) {
-    return <p className="text-text-muted py-8 text-center">Loading cell deps...</p>;
+    return <p className="text-text-dim py-8 text-center">Loading cell deps...</p>;
   }
   if (!cellDeps || cellDeps.length === 0) {
-    return <p className="text-text-muted py-8 text-center">No cell dependencies</p>;
+    return <p className="text-text-dim py-8 text-center">No cell dependencies</p>;
   }
   return (
     <div className="border-base-border bg-base-surface/50 m-4 rounded-lg border">
@@ -1802,7 +1798,7 @@ function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
           className="flex items-center justify-between"
         >
           <div className="flex items-center gap-3">
-            <span className="text-text-muted font-mono text-xs">#{index}</span>
+            <span className="text-text-dim font-mono text-xs">#{index}</span>
             <Link
               href={`/cell/${cellDep.outPointTxHash}-${cellDep.outPointIndex}`}
               className="hover:text-interactive group flex items-center gap-1"
@@ -1813,8 +1809,8 @@ function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
                 endChars={8}
                 copyable={false}
               />
-              <span className="group-hover:text-interactive text-text-muted">:</span>
-              <span className="group-hover:text-interactive text-text-secondary font-mono text-sm">
+              <span className="group-hover:text-interactive text-text-dim">:</span>
+              <span className="group-hover:text-interactive text-text font-mono text-sm">
                 {cellDep.outPointIndex}
               </span>
             </Link>

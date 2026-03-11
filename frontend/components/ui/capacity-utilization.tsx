@@ -39,11 +39,11 @@ export function CapacityUtilization({
   return (
     <div className={className}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-text-muted font-mono text-xs uppercase tracking-wider">
+        <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
           {totalLabel}
         </span>
         <span
-          className="text-text-primary font-mono text-xs tabular-nums"
+          className="text-text-bright font-mono text-xs tabular-nums"
           title={formatCkbAmount(total.toString()).full + ' CKB'}
         >
           {formatCkbCompact(total.toString()).value} CKB
@@ -51,10 +51,10 @@ export function CapacityUtilization({
       </div>
       <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
         <div
-          className="bg-amber transition-all duration-300"
+          className="bg-gold transition-all duration-300"
           style={{ width: `${Math.max(ratio, 0.5)}%` }}
         />
-        <div className="bg-amber/30 flex-1" />
+        <div className="bg-gold/30 flex-1" />
       </div>
       <div className="mt-1.5 flex items-center justify-between">
         <span
@@ -62,10 +62,10 @@ export function CapacityUtilization({
           title={formatCkbAmount(occupied.toString()).full + ' CKB'}
         >
           Occupied: {formatCkbCompact(occupied.toString()).value} CKB
-          <span className="text-text-muted ml-1.5">({ratio.toFixed(1)}% occupied)</span>
+          <span className="text-text-dim ml-1.5">({ratio.toFixed(1)}% occupied)</span>
         </span>
         <span
-          className="text-amber font-mono text-xs"
+          className="text-gold font-mono text-xs"
           title={formatCkbAmount(unoccupied.toString()).full + ' CKB'}
         >
           Unoccupied: {formatCkbCompact(unoccupied.toString()).value} CKB

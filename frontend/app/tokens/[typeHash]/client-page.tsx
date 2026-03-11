@@ -110,7 +110,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Token not found</h2>
+              <h2 className="text-text-dim text-xl">Token not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -203,10 +203,10 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
               </StatGrid>
               {token.description && (
                 <div className="border-base-border mt-4 border-t pt-4">
-                  <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+                  <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
                     Description
                   </div>
-                  <div className="text-text-secondary mt-1 text-sm">{token.description}</div>
+                  <div className="text-text mt-1 text-sm">{token.description}</div>
                 </div>
               )}
             </TerminalPanelContent>
@@ -249,7 +249,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                   )}
                   {token.udtType && (
                     <DataField label="UDT Type">
-                      <span className="text-text-primary">{token.udtType}</span>
+                      <span className="text-text-bright">{token.udtType}</span>
                     </DataField>
                   )}
                 </div>
@@ -294,7 +294,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                         className="border-base-border bg-base-surface/40 space-y-2 rounded border p-3"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="text-text-muted font-mono text-xs">
+                          <div className="text-text-dim font-mono text-xs">
                             Block{' '}
                             <Link
                               href={`/blocks/${activity.blockNumber}`}
@@ -302,7 +302,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                             >
                               #{formatNumber(activity.blockNumber)}
                             </Link>
-                            <span className="text-text-muted mx-1">&bull;</span>
+                            <span className="text-text-dim mx-1">&bull;</span>
                             Tx Index {activity.txIndex}
                           </div>
                           <div className="flex flex-wrap gap-1.5">
@@ -319,7 +319,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                         <div className="flex items-center justify-between gap-2">
                           <Link
                             href={`/tx/${activity.txHash}`}
-                            className="text-text-secondary block font-mono text-xs hover:underline"
+                            className="text-text block font-mono text-xs hover:underline"
                           >
                             <HexDisplay
                               value={activity.txHash}
@@ -328,7 +328,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                               endChars={10}
                             />
                           </Link>
-                          <span className="text-text-muted font-mono text-xs">
+                          <span className="text-text-dim font-mono text-xs">
                             {formatTimeAgo(activity.timestamp)}
                           </span>
                         </div>
@@ -345,7 +345,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                   ) : transfer.fromAddress ? (
                                     <Address
                                       address={transfer.fromAddress}
-                                      className="text-text-muted"
+                                      className="text-text-dim"
                                     />
                                   ) : transfer.fromLockHash ? (
                                     <Link href={`/address/${transfer.fromLockHash}`}>
@@ -357,10 +357,10 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                       />
                                     </Link>
                                   ) : (
-                                    <span className="text-text-muted">-</span>
+                                    <span className="text-text-dim">-</span>
                                   )}
                                   <svg
-                                    className="text-text-muted h-3 w-3 flex-shrink-0"
+                                    className="text-text-dim h-3 w-3 flex-shrink-0"
                                     fill="none"
                                     viewBox="0 0 24 24"
                                     stroke="currentColor"
@@ -377,7 +377,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                   ) : transfer.toAddress ? (
                                     <Address
                                       address={transfer.toAddress}
-                                      className="text-text-muted"
+                                      className="text-text-dim"
                                     />
                                   ) : (
                                     <Link href={`/address/${transfer.toLockHash}`}>
@@ -389,7 +389,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                                       />
                                     </Link>
                                   )}
-                                  <span className="text-text-primary ml-auto">
+                                  <span className="text-text-bright ml-auto">
                                     <TokenAmount
                                       amount={transfer.amount}
                                       decimals={token.decimals}
@@ -404,7 +404,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                     ))}
                   </div>
                 ) : (
-                  <div className="text-text-muted py-8 text-center">No activities</div>
+                  <div className="text-text-dim py-8 text-center">No activities</div>
                 )}
               </TerminalPanelContent>
               {activities?.data?.length ? (
@@ -427,7 +427,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
               <TerminalPanelContent padding="none">
                 {holders?.data?.length ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                    <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                       <div className="flex-1">Address</div>
                       <div className="w-48 text-right">Balance</div>
                     </div>
@@ -446,7 +446,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                               </Link>
                             )}
                           </div>
-                          <div className="text-text-primary w-48 text-right">
+                          <div className="text-text-bright w-48 text-right">
                             <TokenAmount amount={holder.balance} decimals={token.decimals} />
                           </div>
                         </div>
@@ -454,7 +454,7 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
                     ))}
                   </>
                 ) : (
-                  <div className="text-text-muted py-8 text-center">No holders</div>
+                  <div className="text-text-dim py-8 text-center">No holders</div>
                 )}
               </TerminalPanelContent>
               {holders?.data?.length ? (

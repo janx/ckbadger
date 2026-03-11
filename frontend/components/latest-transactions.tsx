@@ -68,7 +68,7 @@ export function LatestTransactions({
   const headerActions = (
     <Link
       href="/transactions"
-      className="text-text-muted hover:text-interactive font-mono text-xs transition-colors"
+      className="text-text-dim hover:text-interactive font-mono text-xs transition-colors"
     >
       VIEW ALL →
     </Link>
@@ -117,10 +117,10 @@ export function LatestTransactions({
                       />
                     </Link>
                     <div className="mt-1.5 flex items-center gap-2 text-xs">
-                      <span className="text-text-muted">Block</span>
+                      <span className="text-text-dim">Block</span>
                       <Link
                         href={`/blocks/${tx.blockNumber}`}
-                        className="text-text-muted hover:text-interactive font-mono"
+                        className="text-text-dim hover:text-interactive font-mono"
                       >
                         #{tx.blockNumber.toLocaleString()}
                       </Link>
@@ -129,11 +129,11 @@ export function LatestTransactions({
 
                   <div className="shrink-0 text-right">
                     <div className="flex items-center gap-1.5 font-mono text-sm">
-                      <span className="text-amber-dim">{tx.inputsCount}</span>
-                      <span className="text-text-muted">→</span>
+                      <span className="text-gold-dim">{tx.inputsCount}</span>
+                      <span className="text-text-dim">→</span>
                       <span className="text-warning-dim">{tx.outputsCount}</span>
                     </div>
-                    <div className="text-text-muted mt-1.5 text-xs">
+                    <div className="text-text-dim mt-1.5 text-xs">
                       {formatTimeAgo(tx.timestamp)}
                     </div>
                   </div>

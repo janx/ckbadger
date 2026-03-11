@@ -32,7 +32,7 @@ describe('UI readability classes', () => {
 
   it('uses readable slate tone for spark chart empty state', () => {
     render(<SparkChart data={[]} />);
-    expect(screen.getByText('No data')).toHaveClass('text-text-muted');
+    expect(screen.getByText('No data')).toHaveClass('text-text-dim');
   });
 
   it('uses readable slate tone for page header copy icon', () => {
@@ -41,7 +41,7 @@ describe('UI readability classes', () => {
     const copyIcon = copyContainer.querySelector('svg');
 
     expect(copyIcon).toBeTruthy();
-    expect(copyIcon).toHaveClass('text-text-muted');
+    expect(copyIcon).toHaveClass('text-text-dim');
   });
 
   it('uses readable slate tone for data-field help and copy icons', () => {
@@ -54,9 +54,9 @@ describe('UI readability classes', () => {
     const helpIconWrapper = screen.getByTitle('Cell hash');
     const copyIcon = container.querySelector('.group .h-3\\.5.w-3\\.5');
 
-    expect(helpIconWrapper).toHaveClass('text-text-muted');
+    expect(helpIconWrapper).toHaveClass('text-text-dim');
     expect(copyIcon).toBeTruthy();
-    expect(copyIcon).toHaveClass('text-text-muted');
+    expect(copyIcon).toHaveClass('text-text-dim');
   });
 
   it('uses responsive wrapping layout for page header actions', () => {

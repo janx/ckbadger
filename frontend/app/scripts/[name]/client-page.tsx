@@ -240,7 +240,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Script not found</h2>
+              <h2 className="text-text-dim text-xl">Script not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -356,28 +356,28 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
               className="border-base-border grid gap-3 border-b px-4 py-4 md:grid-cols-3"
             >
               <div className="border-base-border bg-base-surface/60 rounded-md border p-3">
-                <div className="text-text-muted mb-1 font-mono text-[11px] uppercase tracking-wider">
+                <div className="text-text-dim mb-1 font-mono text-[11px] uppercase tracking-wider">
                   Script Ref
                 </div>
-                <div className="text-text-secondary font-mono text-xs">type ref</div>
-                <div className="text-text-muted mt-1 text-xs">
+                <div className="text-text font-mono text-xs">type ref</div>
+                <div className="text-text-dim mt-1 text-xs">
                   Resolves by type script hash. Upgradeable flow, executes on latest CKB-VM.
                 </div>
               </div>
               <div className="border-base-border bg-base-surface/60 rounded-md border p-3">
-                <div className="text-text-muted mb-1 font-mono text-[11px] uppercase tracking-wider">
+                <div className="text-text-dim mb-1 font-mono text-[11px] uppercase tracking-wider">
                   Script Ref
                 </div>
-                <div className="text-text-secondary font-mono text-xs">data/data1/data2</div>
-                <div className="text-text-muted mt-1 text-xs">
+                <div className="text-text font-mono text-xs">data/data1/data2</div>
+                <div className="text-text-dim mt-1 text-xs">
                   Resolves by bytecode hash. Immutable binary, VM version fixed to v0/v1/v2.
                 </div>
               </div>
               <div className="border-base-border bg-base-surface/60 rounded-md border p-3">
-                <div className="text-text-muted mb-1 font-mono text-[11px] uppercase tracking-wider">
+                <div className="text-text-dim mb-1 font-mono text-[11px] uppercase tracking-wider">
                   Tradeoff
                 </div>
-                <div className="text-text-muted text-xs">
+                <div className="text-text-dim text-xs">
                   `type` favors upgradability; `data` family favors deterministic, reproducible
                   execution.
                 </div>
@@ -392,7 +392,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
               </div>
             </div>
             <div className="overflow-x-auto">
-              <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+              <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                 <div className="flex-1">Deployment</div>
                 <div className="w-56">Deployed At</div>
                 <div className="w-24">Kind</div>
@@ -430,12 +430,12 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                               />
                             </Link>
                           ) : (
-                            <span className="text-text-muted">-</span>
+                            <span className="text-text-dim">-</span>
                           )}
                         </div>
                         <div className="space-y-1 text-xs">
                           <div className="flex items-center gap-2">
-                            <span className="border-base-border/80 bg-base-elevated/70 text-text-muted inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
+                            <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
                               type
                             </span>
                             {refs.typeRef ? (
@@ -446,11 +446,11 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                                 endChars={8}
                               />
                             ) : (
-                              <span className="text-text-muted font-mono">Unavailable</span>
+                              <span className="text-text-dim font-mono">Unavailable</span>
                             )}
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="border-base-border/80 bg-base-elevated/70 text-text-muted inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
+                            <span className="border-base-border/80 bg-base-elevated/70 text-text-dim inline-flex rounded border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide">
                               {getScriptRefBadgeLabel(refs.dataRefType)}
                             </span>
                             {refs.dataRef ? (
@@ -461,13 +461,13 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                                 endChars={8}
                               />
                             ) : (
-                              <span className="text-text-muted font-mono">Unavailable</span>
+                              <span className="text-text-dim font-mono">Unavailable</span>
                             )}
                           </div>
                         </div>
                       </div>
                       <div
-                        className="text-text-muted w-56 font-mono text-xs"
+                        className="text-text-dim w-56 font-mono text-xs"
                         title={
                           deployment.deployedAt
                             ? new Date(deployment.deployedAt).toISOString()
@@ -478,16 +478,16 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                           ? new Date(deployment.deployedAt).toLocaleString()
                           : '-'}
                       </div>
-                      <div className="text-text-muted w-24">
+                      <div className="text-text-dim w-24">
                         {stats?.scriptKind ? (
                           <Badge variant="neutral" className="px-1.5 py-0.5 text-[10px]">
                             {stats.scriptKind}
                           </Badge>
                         ) : (
-                          <span className="text-text-muted">-</span>
+                          <span className="text-text-dim">-</span>
                         )}
                       </div>
-                      <div className="text-text-secondary w-24 text-right font-mono tabular-nums">
+                      <div className="text-text w-24 text-right font-mono tabular-nums">
                         {stats ? (
                           <span title={`Total: ${formatNumber(stats.cellsCount)}`}>
                             {formatNumber(stats.liveCellsCount)}
@@ -496,7 +496,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                           '-'
                         )}
                       </div>
-                      <div className="text-text-secondary w-32 text-right font-mono tabular-nums">
+                      <div className="text-text w-32 text-right font-mono tabular-nums">
                         {stats ? (
                           <span title={`${formatCkbCompact(stats.liveCapacitySum).full} CKB`}>
                             {formatCkbCompact(stats.liveCapacitySum).value} CKB
@@ -512,7 +512,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
               {usage && (
                 <>
                   <div className="border-base-border bg-base-bg/95 sticky bottom-0 z-10 flex border-t px-4 py-3 font-medium backdrop-blur">
-                    <div className="text-text-muted flex-1">Total</div>
+                    <div className="text-text-dim flex-1">Total</div>
                     <div className="w-56" />
                     <div className="w-24" />
                     <div className="text-emphasis w-24 text-right font-mono tabular-nums">
@@ -537,7 +537,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
                   <span>Capacity &amp; Occupation</span>
-                  <span className="text-text-muted">|</span>
+                  <span className="text-text-dim">|</span>
                   <div
                     data-testid="capacity-selected-refs"
                     className="flex flex-wrap items-center gap-2 text-xs"
@@ -551,7 +551,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                         endChars={8}
                       />
                     ) : (
-                      <span className="text-text-muted font-mono">Unavailable</span>
+                      <span className="text-text-dim font-mono">Unavailable</span>
                     )}
                     <Badge variant="gray">
                       {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
@@ -564,7 +564,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                         endChars={8}
                       />
                     ) : (
-                      <span className="text-text-muted font-mono">Unavailable</span>
+                      <span className="text-text-dim font-mono">Unavailable</span>
                     )}
                   </div>
                 </div>
@@ -579,12 +579,12 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                   </div>
                 )}
                 <div className="px-4 py-4">
-                  <div className="text-text-muted mb-3 text-xs">
+                  <div className="text-text-dim mb-3 text-xs">
                     Historical occupied/unoccupied live capacity for the selected deployment.
                   </div>
                   <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
                   {isSelectedOccupationChartLoading ? (
-                    <div className="text-text-muted py-6 text-center">
+                    <div className="text-text-dim py-6 text-center">
                       Loading deployment history...
                     </div>
                   ) : selectedOccupationChart && selectedOccupationChart.data.length > 0 ? (
@@ -595,9 +595,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                       valueUnit="shannon"
                     />
                   ) : (
-                    <div className="text-text-muted py-6 text-center">
-                      No deployment history yet
-                    </div>
+                    <div className="text-text-dim py-6 text-center">No deployment history yet</div>
                   )}
                 </div>
               </TerminalPanelContent>
@@ -606,7 +604,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
                   <span>Cells</span>
-                  <span className="text-text-muted">|</span>
+                  <span className="text-text-dim">|</span>
                   <div
                     data-testid="cells-selected-refs"
                     className="flex flex-wrap items-center gap-2 text-xs"
@@ -620,7 +618,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                         endChars={8}
                       />
                     ) : (
-                      <span className="text-text-muted font-mono">Unavailable</span>
+                      <span className="text-text-dim font-mono">Unavailable</span>
                     )}
                     <Badge variant="gray">
                       {getScriptRefBadgeLabel(selectedDeploymentRefs.dataRefType)}
@@ -633,17 +631,17 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                         endChars={8}
                       />
                     ) : (
-                      <span className="text-text-muted font-mono">Unavailable</span>
+                      <span className="text-text-dim font-mono">Unavailable</span>
                     )}
                   </div>
                 </div>
               </TerminalPanelHeader>
               <TerminalPanelContent padding="none">
                 {isCellsLoading ? (
-                  <div className="text-text-muted py-8 text-center">Loading cells...</div>
+                  <div className="text-text-dim py-8 text-center">Loading cells...</div>
                 ) : cellsData && cellsData.data.length > 0 ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                    <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                       <div className="flex-1">Cell</div>
                       <div className="w-52 shrink-0 text-right">Capacity</div>
                       <div className="w-24 shrink-0 text-right">Data Size</div>
@@ -660,10 +658,10 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                               <HexDisplay value={`${cell.txHash}:${cell.outputIndex}`} />
                             </Link>
                           </div>
-                          <div className="text-text-primary w-52 shrink-0 text-right">
+                          <div className="text-text-bright w-52 shrink-0 text-right">
                             <Capacity value={cell.capacity} />
                           </div>
-                          <div className="text-text-muted w-24 shrink-0 text-right font-mono">
+                          <div className="text-text-dim w-24 shrink-0 text-right font-mono">
                             {cell.cellType === 'genesis_special_burn' ? (
                               <span
                                 className="border-base-border cursor-help border-b border-dashed"
@@ -700,7 +698,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                     </div>
                   </>
                 ) : (
-                  <div className="text-text-muted py-8 text-center">
+                  <div className="text-text-dim py-8 text-center">
                     No cells found for this script
                   </div>
                 )}

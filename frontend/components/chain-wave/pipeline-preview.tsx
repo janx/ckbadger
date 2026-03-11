@@ -60,7 +60,7 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
   return (
     <section className="from-base-surface via-base-surface to-base-elevated ring-base-border/70 overflow-visible rounded-2xl bg-gradient-to-br p-4 ring-1 ring-inset">
       <div className="mb-2">
-        <h2 className="text-text-primary text-base font-semibold sm:text-lg">
+        <h2 className="text-text-bright text-base font-semibold sm:text-lg">
           Transaction Pipeline
         </h2>
         <div
@@ -68,13 +68,13 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
           className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between"
         >
           <p className="text-xs sm:text-sm">
-            <span className="text-warning-300">Mempool ({formatCount(mempoolCount)})</span>
-            <span className="text-text-muted"> {'->'} </span>
-            <span className="text-amber-dim">Proposals ({formatCount(proposalsCount)})</span>
-            <span className="text-text-muted"> {'->'} </span>
-            <span className="text-amber">New Committed ({formatCount(committedCount)})</span>
+            <span className="text-gold">Mempool ({formatCount(mempoolCount)})</span>
+            <span className="text-text-dim"> {'->'} </span>
+            <span className="text-gold-dim">Proposals ({formatCount(proposalsCount)})</span>
+            <span className="text-text-dim"> {'->'} </span>
+            <span className="text-gold">New Committed ({formatCount(committedCount)})</span>
           </p>
-          <p className="border-base-border/60 bg-base-surface/70 text-text-secondary rounded-md border px-2 py-1 text-[11px] sm:text-right">
+          <p className="border-base-border/60 bg-base-surface/70 text-text rounded-md border px-2 py-1 text-[11px] sm:text-right">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
           </p>
         </div>

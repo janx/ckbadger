@@ -45,7 +45,7 @@ export default function ForkDetailPage() {
         <Header />
         <main className="container mx-auto px-4 py-8 text-center">
           <h1 className="text-negative text-2xl font-bold">Error loading fork event</h1>
-          <p className="text-text-muted mt-2">{(error as Error).message}</p>
+          <p className="text-text-dim mt-2">{(error as Error).message}</p>
         </main>
       </div>
     );
@@ -88,7 +88,7 @@ export default function ForkDetailPage() {
                 <DataField label="Detected">
                   <span>
                     {new Date(event.detectedAt).toLocaleString()}{' '}
-                    <span className="text-text-muted">({formatTimeAgo(event.detectedAt)})</span>
+                    <span className="text-text-dim">({formatTimeAgo(event.detectedAt)})</span>
                   </span>
                 </DataField>
                 <DataField label="Depth">
@@ -127,7 +127,7 @@ export default function ForkDetailPage() {
                     Old Tip (Orphaned)
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-text-secondary font-mono">
+                    <span className="text-text font-mono">
                       Height: {event.oldTipNumber.toLocaleString()}
                     </span>
                   </div>
@@ -143,7 +143,7 @@ export default function ForkDetailPage() {
                     New Tip (Canonical)
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-text-secondary font-mono">
+                    <span className="text-text font-mono">
                       Height: {event.newTipNumber.toLocaleString()}
                     </span>
                   </div>
@@ -165,14 +165,14 @@ export default function ForkDetailPage() {
           <TerminalPanel className="mt-4">
             <TabsContent value="blocks" className="m-0">
               <TerminalPanelContent padding="none">
-                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="w-32">Number</div>
                   <div className="flex-1">Hash</div>
                   <div className="w-24 text-center">Tx Count</div>
                   <div className="w-28 text-right">Time</div>
                 </div>
                 {orphanedBlocks.length === 0 ? (
-                  <div className="text-text-muted px-4 py-8 text-center">
+                  <div className="text-text-dim px-4 py-8 text-center">
                     No orphaned blocks data available
                   </div>
                 ) : (
@@ -190,10 +190,10 @@ export default function ForkDetailPage() {
                         <div className="flex-1">
                           <HexDisplay value={block.hash} size="sm" />
                         </div>
-                        <div className="text-text-secondary w-24 text-center font-mono">
+                        <div className="text-text w-24 text-center font-mono">
                           {block.transactionsCount}
                         </div>
-                        <div className="text-text-muted w-28 text-right">
+                        <div className="text-text-dim w-28 text-right">
                           {formatTimeAgo(block.timestamp)}
                         </div>
                       </div>
@@ -204,13 +204,13 @@ export default function ForkDetailPage() {
             </TabsContent>
             <TabsContent value="transactions" className="m-0">
               <TerminalPanelContent padding="none">
-                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
                   <div className="flex-1">Transaction</div>
                   <div className="w-36">Fee</div>
                   <div className="w-24 text-right">I/O</div>
                 </div>
                 {orphanedTransactions.length === 0 ? (
-                  <div className="text-text-muted px-4 py-8 text-center">
+                  <div className="text-text-dim px-4 py-8 text-center">
                     No orphaned transactions data available
                   </div>
                 ) : (
@@ -223,16 +223,16 @@ export default function ForkDetailPage() {
                           </Link>
                           <Link
                             href={`/blocks/${tx.blockNumber}`}
-                            className="text-text-muted hover:text-text-secondary block font-mono text-xs"
+                            className="text-text-dim hover:text-text block font-mono text-xs"
                           >
                             #{tx.blockNumber.toLocaleString()}
                           </Link>
                         </div>
-                        <div className="text-text-secondary w-36 font-mono">
+                        <div className="text-text w-36 font-mono">
                           {tx.totalCapacity ? parseInt(tx.totalCapacity).toLocaleString() : '-'}{' '}
-                          <span className="text-text-muted">shannons</span>
+                          <span className="text-text-dim">shannons</span>
                         </div>
-                        <div className="text-text-muted w-24 text-right font-mono">
+                        <div className="text-text-dim w-24 text-right font-mono">
                           {tx.inputsCount ?? '-'} / {tx.outputsCount ?? '-'}
                         </div>
                       </div>

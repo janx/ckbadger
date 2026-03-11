@@ -242,7 +242,7 @@ function AssetTable({
       aria-label={`Sort by ${label}`}
     >
       <span>{label}</span>
-      <span className={sortKey === key ? 'text-emphasis' : 'text-text-muted'}>
+      <span className={sortKey === key ? 'text-emphasis' : 'text-text-dim'}>
         {sortKey === key ? (sortDirection === 'asc' ? '↑' : '↓') : '↕'}
       </span>
     </button>
@@ -309,11 +309,11 @@ function AssetTable({
     );
   }
   if (!data?.data?.length) {
-    return <div className="text-text-muted py-8 text-center">No assets found</div>;
+    return <div className="text-text-dim py-8 text-center">No assets found</div>;
   }
   return (
     <>
-      <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
+      <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
         {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
         {renderSortHeader('type', 'Standard', typeColumnClass)}
         {assetType !== 'token' &&
@@ -365,7 +365,7 @@ function AssetTable({
                         {getAssetName(asset)}
                       </span>
                       {asset.assetType === 'object' && getStorageBadgeLabel(asset) && (
-                        <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
+                        <span className="border-base-border text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
                           {getStorageBadgeLabel(asset)}
                         </span>
                       )}
@@ -399,36 +399,36 @@ function AssetTable({
               </div>
             </div>
             {assetType !== 'token' && (
-              <div className={`${smallNumberColumnClass} text-text-primary font-mono tabular-nums`}>
+              <div className={`${smallNumberColumnClass} text-text-bright font-mono tabular-nums`}>
                 {formatNumber(asset.totalSupply || 0)}
               </div>
             )}
             <div className={`${smallNumberColumnClass} text-warning font-mono tabular-nums`}>
               {formatNumber(asset.transfers24h)}
             </div>
-            <div className={`${mediumNumberColumnClass} text-text-muted font-mono tabular-nums`}>
+            <div className={`${mediumNumberColumnClass} text-text-dim font-mono tabular-nums`}>
               {formatNumber(asset.holdersCount)}
             </div>
             {assetType === 'token' && (
               <div className="hidden xl:block">
-                <div className={`${capacityColumnClass} text-text-primary font-mono tabular-nums`}>
+                <div className={`${capacityColumnClass} text-text-bright font-mono tabular-nums`}>
                   {(() => {
                     const formatted = formatTokenSupply(asset.totalSupply, asset.decimals);
                     return formatted ? (
                       <span title={`Total Circulation: ${formatted}`}>{formatted}</span>
                     ) : (
-                      <span className="text-text-muted">-</span>
+                      <span className="text-text-dim">-</span>
                     );
                   })()}
                 </div>
               </div>
             )}
             <div className="hidden xl:block">
-              <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
+              <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
                 {(() => {
                   const occupied = asset.liveOccupiedCapacity;
                   if (!occupied) {
-                    return <span className="text-text-muted">-</span>;
+                    return <span className="text-text-dim">-</span>;
                   }
                   const compact = formatCkbCompact(occupied);
                   return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -436,7 +436,7 @@ function AssetTable({
               </div>
             </div>
             <div className="hidden xl:block">
-              <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
+              <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
                 {asset.hMultiplier != null ? (
                   <span
                     title={`H-Multiplier: capacity / occupied = ×${asset.hMultiplier.toFixed(2)}`}
@@ -444,15 +444,15 @@ function AssetTable({
                     ×{asset.hMultiplier.toFixed(2)}
                   </span>
                 ) : (
-                  <span className="text-text-muted">-</span>
+                  <span className="text-text-dim">-</span>
                 )}
               </div>
             </div>
-            <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
+            <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
               {(() => {
                 const capacity = asset.liveCapacity;
                 if (!capacity) {
-                  return <span className="text-text-muted">-</span>;
+                  return <span className="text-text-dim">-</span>;
                 }
                 const compact = formatCkbCompact(capacity);
                 return <span title={`${compact.full} CKB`}>{compact.value}</span>;
@@ -519,11 +519,11 @@ function AssetTable({
               <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
             </div>
             {assetType === 'object' && getStorageBadgeLabel(asset) && (
-              <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
+              <span className="border-base-border text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
                 {getStorageBadgeLabel(asset)}
               </span>
             )}
-            <div className="text-text-muted flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
+            <div className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
               <span>
                 24h: <span className="text-warning">{formatNumber(asset.transfers24h)}</span>
               </span>
@@ -643,13 +643,13 @@ export function AssetsPageClient() {
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   placeholder="Search by name..."
-                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-primary w-full rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1 sm:w-64"
+                  className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface placeholder-text-dim text-text-bright w-full rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1 sm:w-64"
                 />
                 {search && (
                   <button
                     type="button"
                     onClick={clearSearch}
-                    className="text-text-muted hover:text-text-secondary absolute right-2 top-1/2 -translate-y-1/2"
+                    className="text-text-dim hover:text-text absolute right-2 top-1/2 -translate-y-1/2"
                   >
                     ×
                   </button>
@@ -674,7 +674,7 @@ export function AssetsPageClient() {
                     value={standard ?? ''}
                     onChange={(event) => handleStandardChange(event.target.value)}
                     aria-label="Filter by standard"
-                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-primary min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
+                    className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[10.5rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                   >
                     <option value="">All standards</option>
                     {standardOptions.map((item) => (
@@ -688,7 +688,7 @@ export function AssetsPageClient() {
                       value={storageTier}
                       onChange={(event) => handleStorageTierChange(event.target.value)}
                       aria-label="Filter by storage tier"
-                      className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-primary min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
+                      className="focus:border-emphasis-dim focus:ring-emphasis-dim border-base-border bg-base-surface text-text-bright min-w-[12rem] rounded border px-3 py-1.5 font-mono text-sm transition-colors focus:outline-none focus:ring-1"
                     >
                       {STORAGE_TIER_OPTIONS.map((item) => (
                         <option key={item} value={item}>

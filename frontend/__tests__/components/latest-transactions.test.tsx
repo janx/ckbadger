@@ -45,6 +45,6 @@ describe('LatestTransactions', () => {
       expect(screen.getByText('Block')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Block')).toHaveClass('text-text-muted');
+    expect(screen.getByText('Block')).toHaveClass('text-text-dim');
   });
 });

@@ -176,7 +176,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Identity collection not found</h2>
+              <h2 className="text-text-dim text-xl">Identity collection not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -190,7 +190,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
         <div className="mb-6">
           <Link
             href="/assets?type=nft"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             &larr; Back to Assets
           </Link>
@@ -238,7 +238,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                             setStatusFilter(event.target.value as NftItemStatusFilter)
                           }
                           aria-label="Status Filter"
-                          className="focus:border-emphasis border-base-border bg-base-surface text-text-primary rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
                         >
                           <option value="all">All</option>
                           <option value="live">Live</option>
@@ -250,10 +250,10 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                           onChange={(event) => setSearchInput(event.target.value)}
                           placeholder={searchLabel}
                           aria-label={searchLabel}
-                          className="focus:border-emphasis border-base-border bg-base-surface text-text-primary placeholder:text-text-muted w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
                         />
                         {isItemsFetching && (
-                          <span className="text-text-muted font-mono text-xs">Searching...</span>
+                          <span className="text-text-dim font-mono text-xs">Searching...</span>
                         )}
                       </div>
                     )}
@@ -270,13 +270,13 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
               <TabsContent value="activities" className="py-0">
                 <TerminalPanelContent>
                   {isActivitiesLoading ? (
-                    <div className="text-text-muted py-8 text-center">Loading activities...</div>
+                    <div className="text-text-dim py-8 text-center">Loading activities...</div>
                   ) : isActivitiesError ? (
-                    <div className="py-8 text-center text-rose-400">
+                    <div className="text-rouge py-8 text-center">
                       Failed to load activities. Please refresh and try again.
                     </div>
                   ) : !collectionActivities?.data?.length ? (
-                    <div className="text-text-muted py-8 text-center">
+                    <div className="text-text-dim py-8 text-center">
                       No activities in this collection
                     </div>
                   ) : (
@@ -313,13 +313,13 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
               <TabsContent value="identities" className="py-0">
                 <TerminalPanelContent>
                   {isItemsLoading ? (
-                    <div className="text-text-muted py-8 text-center">Loading identities...</div>
+                    <div className="text-text-dim py-8 text-center">Loading identities...</div>
                   ) : isItemsError ? (
-                    <div className="py-8 text-center text-rose-400">
+                    <div className="text-rouge py-8 text-center">
                       Failed to load identities. Please refresh and try again.
                     </div>
                   ) : !collectionItems?.data?.length ? (
-                    <div className="text-text-muted py-8 text-center">
+                    <div className="text-text-dim py-8 text-center">
                       No identities in this collection
                     </div>
                   ) : (
@@ -332,7 +332,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                           <div className="mb-1 flex items-center justify-between gap-3">
                             <Link
                               href={`${itemDetailPrefix}/${encodeURIComponent(item.nftId)}`}
-                              className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
+                              className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                             >
                               {item.name || item.nftId}
                             </Link>
@@ -342,10 +342,10 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                               <Badge variant="red">Recycled</Badge>
                             )}
                           </div>
-                          <div className="text-text-muted flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
+                          <div className="text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
                             <span>
                               ID:{' '}
-                              <span className="text-text-secondary">
+                              <span className="text-text">
                                 <HexDisplay
                                   value={item.nftId}
                                   size="sm"
@@ -374,7 +374,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                                     -{item.outputIndex}
                                   </Link>
                                 ) : (
-                                  <span className="text-text-muted">Unavailable</span>
+                                  <span className="text-text-dim">Unavailable</span>
                                 )}
                               </span>
                             )}
@@ -418,13 +418,13 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
               <TabsContent value="holders" className="py-0">
                 <TerminalPanelContent>
                   {isHoldersLoading ? (
-                    <div className="text-text-muted py-8 text-center">Loading holders...</div>
+                    <div className="text-text-dim py-8 text-center">Loading holders...</div>
                   ) : isHoldersError ? (
-                    <div className="py-8 text-center text-rose-400">
+                    <div className="text-rouge py-8 text-center">
                       Failed to load holders. Please refresh and try again.
                     </div>
                   ) : !collectionHolders?.data?.length ? (
-                    <div className="text-text-muted py-8 text-center">
+                    <div className="text-text-dim py-8 text-center">
                       No holders in this collection
                     </div>
                   ) : (
@@ -437,7 +437,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                           <div className="min-w-0">
                             <Link
                               href={`/address/${holder.address ?? holder.lockScriptHash}`}
-                              className="text-text-secondary font-mono text-xs hover:underline"
+                              className="text-text font-mono text-xs hover:underline"
                             >
                               {holder.address ? (
                                 holder.address
@@ -451,7 +451,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                               )}
                             </Link>
                           </div>
-                          <div className="text-text-primary shrink-0 font-mono text-sm">
+                          <div className="text-text-bright shrink-0 font-mono text-sm">
                             {formatNumber(holder.itemCount)}
                           </div>
                         </div>

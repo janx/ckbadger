@@ -23,7 +23,7 @@ function SeriesLegend({
       {series.map((item) => (
         <div key={item.key} className="flex items-center gap-2 text-xs">
           <span className="h-2.5 w-2.5 shrink-0 rounded" style={{ backgroundColor: item.color }} />
-          <span className="text-text-muted truncate font-mono" title={item.label}>
+          <span className="text-text-dim truncate font-mono" title={item.label}>
             {item.label}
           </span>
         </div>
@@ -45,7 +45,7 @@ export default function MostUtilizedAssetsPage() {
         <div className="mb-6">
           <Link
             href="/charts"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to Charts
           </Link>
@@ -60,14 +60,14 @@ export default function MostUtilizedAssetsPage() {
               <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="text-text-muted flex h-96 items-center justify-center">
+              <div className="text-text-dim flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}
             {data && (
               <>
                 <section>
-                  <h3 className="text-text-secondary mb-3 font-mono text-sm uppercase tracking-wider">
+                  <h3 className="text-text mb-3 font-mono text-sm uppercase tracking-wider">
                     Occupied CKBytes Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
@@ -81,7 +81,7 @@ export default function MostUtilizedAssetsPage() {
                 </section>
 
                 <section className="border-base-border border-t pt-6">
-                  <h3 className="text-text-secondary mb-3 font-mono text-sm uppercase tracking-wider">
+                  <h3 className="text-text mb-3 font-mono text-sm uppercase tracking-wider">
                     Total CKBytes Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
@@ -94,7 +94,7 @@ export default function MostUtilizedAssetsPage() {
                   <SeriesLegend series={data.capacityShare.series} />
                 </section>
 
-                <div className="text-text-muted text-center font-mono text-xs">
+                <div className="text-text-dim text-center font-mono text-xs">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

@@ -387,7 +387,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">Asset not found</h2>
+              <h2 className="text-text-dim text-xl">Asset not found</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -402,7 +402,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
           <div className="mb-6">
             <Link
               href="/assets?type=nft"
-              className="hover:text-emphasis text-text-muted text-sm transition-colors"
+              className="hover:text-emphasis text-text-dim text-sm transition-colors"
             >
               ← Back to NFTs
             </Link>
@@ -462,7 +462,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               )
                             }
                             aria-label="Status Filter"
-                            className="focus:border-emphasis border-base-border bg-base-surface text-text-primary rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                            className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
                           >
                             <option value="all">All</option>
                             <option value="live">Live</option>
@@ -474,10 +474,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             onChange={(event) => setSearchInput(event.target.value)}
                             placeholder={collectionSearchLabel}
                             aria-label={collectionSearchLabel}
-                            className="focus:border-emphasis border-base-border bg-base-surface text-text-primary placeholder:text-text-muted w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+                            className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
                           />
                           {isCollectionItemsFetching && (
-                            <span className="text-text-muted font-mono text-xs">Searching...</span>
+                            <span className="text-text-dim font-mono text-xs">Searching...</span>
                           )}
                         </div>
                       )}
@@ -493,13 +493,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
                     {isCollectionActivitiesLoading ? (
-                      <div className="text-text-muted py-8 text-center">Loading activities...</div>
+                      <div className="text-text-dim py-8 text-center">Loading activities...</div>
                     ) : isCollectionActivitiesError ? (
-                      <div className="py-8 text-center text-rose-400">
+                      <div className="text-rouge py-8 text-center">
                         Failed to load activities. Please refresh and try again.
                       </div>
                     ) : !collectionActivities?.data?.length ? (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No activities in this collection
                       </div>
                     ) : (
@@ -538,13 +538,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                   <TerminalPanelContent>
                     {isDotbitCollectionView ? (
                       isCollectionItemsLoading ? (
-                        <div className="text-text-muted py-8 text-center">Loading NFTs...</div>
+                        <div className="text-text-dim py-8 text-center">Loading NFTs...</div>
                       ) : isCollectionItemsError ? (
-                        <div className="py-8 text-center text-rose-400">
+                        <div className="text-rouge py-8 text-center">
                           Failed to load NFTs. Please refresh and try again.
                         </div>
                       ) : !collectionItems?.data?.length ? (
-                        <div className="text-text-muted py-8 text-center">
+                        <div className="text-text-dim py-8 text-center">
                           No NFTs in this collection
                         </div>
                       ) : (
@@ -557,7 +557,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               <div className="mb-1 flex items-center justify-between gap-3">
                                 <Link
                                   href={`/nfts/dotbit/${encodeURIComponent(item.nftId)}`}
-                                  className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
+                                  className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
                                 </Link>
@@ -567,10 +567,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                                   <Badge variant="red">Recycled</Badge>
                                 )}
                               </div>
-                              <div className="text-text-muted flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
+                              <div className="text-text-dim flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs">
                                 <span>
                                   ID:{' '}
-                                  <span className="text-text-secondary">
+                                  <span className="text-text">
                                     <HexDisplay
                                       value={item.nftId}
                                       size="sm"
@@ -599,7 +599,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                                         -{item.outputIndex}
                                       </Link>
                                     ) : (
-                                      <span className="text-text-muted">Unavailable</span>
+                                      <span className="text-text-dim">Unavailable</span>
                                     )}
                                   </span>
                                 )}
@@ -625,13 +625,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         </div>
                       )
                     ) : isCollectionItemsLoading || isCollectionItemsFetching ? (
-                      <div className="text-text-muted py-8 text-center">Loading NFTs...</div>
+                      <div className="text-text-dim py-8 text-center">Loading NFTs...</div>
                     ) : isCollectionItemsError ? (
-                      <div className="py-8 text-center text-rose-400">
+                      <div className="text-rouge py-8 text-center">
                         Failed to load NFTs. Please refresh and try again.
                       </div>
                     ) : !collectionItems?.data?.length ? (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No NFTs in this collection
                       </div>
                     ) : (
@@ -645,7 +645,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               {item.standard.toLowerCase() === 'm-nft' ? (
                                 <Link
                                   href={`/nfts/mnft/${item.nftId}`}
-                                  className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
+                                  className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
                                 </Link>
@@ -653,12 +653,12 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                                 item.standard.toLowerCase() === 'did:ckb' ? (
                                 <Link
                                   href={`/nfts/did/${encodeURIComponent(item.nftId)}`}
-                                  className="hover:text-emphasis text-text-primary font-mono text-sm hover:underline"
+                                  className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
                                 </Link>
                               ) : (
-                                <div className="text-text-primary font-mono text-sm">
+                                <div className="text-text-bright font-mono text-sm">
                                   {item.name || item.nftId}
                                 </div>
                               )}
@@ -688,11 +688,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             ) : (
                               <HexDisplay value={item.nftId} size="sm" />
                             )}
-                            <div className="text-text-muted font-mono text-xs">
+                            <div className="text-text-dim font-mono text-xs">
                               Created at block #{formatNumber(item.createdAtBlock)}
                             </div>
                             {item.ownerLockHash && (
-                              <div className="text-text-muted font-mono text-xs">
+                              <div className="text-text-dim font-mono text-xs">
                                 Owner:{' '}
                                 <Link
                                   href={`/address/${item.ownerLockHash}`}
@@ -728,13 +728,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 <TabsContent value="holders" className="py-0">
                   <TerminalPanelContent>
                     {isCollectionHoldersLoading ? (
-                      <div className="text-text-muted py-8 text-center">Loading holders...</div>
+                      <div className="text-text-dim py-8 text-center">Loading holders...</div>
                     ) : isCollectionHoldersError ? (
-                      <div className="py-8 text-center text-rose-400">
+                      <div className="text-rouge py-8 text-center">
                         Failed to load holders. Please refresh and try again.
                       </div>
                     ) : !collectionHolders?.data?.length ? (
-                      <div className="text-text-muted py-8 text-center">
+                      <div className="text-text-dim py-8 text-center">
                         No holders in this collection
                       </div>
                     ) : (
@@ -747,7 +747,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             <div className="min-w-0">
                               <Link
                                 href={`/address/${holder.address ?? holder.lockScriptHash}`}
-                                className="text-text-secondary font-mono text-xs hover:underline"
+                                className="text-text font-mono text-xs hover:underline"
                               >
                                 {holder.address ? (
                                   holder.address
@@ -761,7 +761,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                                 )}
                               </Link>
                             </div>
-                            <div className="text-text-primary shrink-0 font-mono text-sm">
+                            <div className="text-text-bright shrink-0 font-mono text-sm">
                               {formatNumber(holder.itemCount)}
                             </div>
                           </div>
@@ -825,7 +825,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const renderSporePreview = () => {
     if (isSporeCellLoading) {
       return (
-        <div className="text-text-muted flex h-64 items-center justify-center px-4 text-center font-mono text-xs">
+        <div className="text-text-dim flex h-64 items-center justify-center px-4 text-center font-mono text-xs">
           Loading on-chain payload...
         </div>
       );
@@ -893,7 +893,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     if (mediaPreviewUrl && previewContentType.startsWith('audio/')) {
       return (
         <div className="bg-base-bg/60 flex h-64 flex-col items-center justify-center gap-3 p-3">
-          <div className="text-text-muted font-mono text-xs tracking-[0.2em]">AUDIO</div>
+          <div className="text-text-dim font-mono text-xs tracking-[0.2em]">AUDIO</div>
           <audio src={mediaPreviewUrl} controls className="w-full max-w-xs" />
         </div>
       );
@@ -907,8 +907,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 key={`${trait.name}-${trait.value}`}
                 className="border-base-border bg-base-surface/70 rounded border p-2"
               >
-                <div className="text-text-muted">{trait.name}</div>
-                <div className="text-text-primary break-all">{trait.value}</div>
+                <div className="text-text-dim">{trait.name}</div>
+                <div className="text-text-bright break-all">{trait.value}</div>
               </div>
             ))}
           </div>
@@ -918,7 +918,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     if (previewTextSnippet) {
       return (
         <div className="bg-base-bg/60 h-64 overflow-y-auto p-3">
-          <pre className="text-text-primary max-w-full whitespace-pre-wrap break-all font-mono text-xs">
+          <pre className="text-text-bright max-w-full whitespace-pre-wrap break-all font-mono text-xs">
             {previewTextSnippet}
           </pre>
         </div>
@@ -937,7 +937,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         <div className="mb-6">
           <Link
             href="/assets?type=nft"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to NFTs
           </Link>
@@ -962,30 +962,30 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
                   <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2">
-                    <div className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                       Content Type
                     </div>
-                    <div className="text-text-primary mt-1 break-all font-mono text-xs">
+                    <div className="text-text-bright mt-1 break-all font-mono text-xs">
                       {previewContentType}
                     </div>
                   </div>
                   <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2">
-                    <div className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                       Payload Size
                     </div>
-                    <div className="text-text-primary mt-1 font-mono text-xs">
+                    <div className="text-text-bright mt-1 font-mono text-xs">
                       {formatNumber(previewBytes)} bytes
                     </div>
                   </div>
                   <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2 sm:col-span-2">
-                    <div className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+                    <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                       Rendering Pipeline
                     </div>
-                    <div className="text-text-secondary mt-1 text-xs">{renderPipeline}</div>
+                    <div className="text-text mt-1 text-xs">{renderPipeline}</div>
                   </div>
                   {spore.mediaProfile && (
                     <div className="border-base-border bg-base-surface/50 rounded border px-3 py-2 sm:col-span-2">
-                      <div className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                         Storage Tier
                       </div>
                       <div className="mt-1 flex items-center gap-2 text-xs">
@@ -1002,7 +1002,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         >
                           {formatStorageTier(spore.mediaProfile.tier)}
                         </Badge>
-                        <span className="text-text-muted">
+                        <span className="text-text-dim">
                           {spore.mediaProfile.hasRenderableImage
                             ? 'Renderable image detected'
                             : 'No renderable image detected'}
@@ -1028,9 +1028,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 <TerminalPanelHeader indicator="active">Media Sources</TerminalPanelHeader>
                 <TerminalPanelContent>
                   {!spore.mediaProfile.sources.length ? (
-                    <div className="text-text-muted text-xs">
-                      No explicit media URI dependencies.
-                    </div>
+                    <div className="text-text-dim text-xs">No explicit media URI dependencies.</div>
                   ) : (
                     <div className="space-y-2">
                       {spore.mediaProfile.sources.map((source, index) => (
@@ -1050,11 +1048,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             >
                               {formatStorageTier(source.dependencyTier)}
                             </Badge>
-                            <span className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+                            <span className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                               {source.sourceLocation}
                             </span>
                           </div>
-                          <div className="text-text-primary break-all font-mono text-xs">
+                          <div className="text-text-bright break-all font-mono text-xs">
                             {source.uri}
                           </div>
                         </div>
@@ -1062,7 +1060,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     </div>
                   )}
                   {!!spore.mediaProfile.issues.length && (
-                    <div className="mt-3 space-y-1 rounded border border-rose-900/40 bg-rose-950/10 p-2 font-mono text-xs text-rose-300">
+                    <div className="border-rouge-dim/40 bg-rouge/10 text-rouge-dim mt-3 space-y-1 rounded border p-2 font-mono text-xs">
                       {spore.mediaProfile.issues.map((issue) => (
                         <div key={issue}>- {issue}</div>
                       ))}
@@ -1088,15 +1086,15 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     )}
                   </DataField>
                   <DataField label="Content Type">
-                    <span className="text-text-primary font-mono">{previewContentType}</span>
+                    <span className="text-text-bright font-mono">{previewContentType}</span>
                   </DataField>
                   <DataField label="Payload Size">
-                    <span className="text-text-primary font-mono">
+                    <span className="text-text-bright font-mono">
                       {formatNumber(previewBytes)} bytes
                     </span>
                   </DataField>
                   <DataField label="Interpreted As">
-                    <span className="text-text-primary font-mono">
+                    <span className="text-text-bright font-mono">
                       {normalizedPreviewContentType.startsWith('image/')
                         ? 'Image'
                         : normalizedPreviewContentType.startsWith('video/')
@@ -1114,7 +1112,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     {resolvedOwnerAddress ? (
                       <Address address={resolvedOwnerAddress} truncate={false} />
                     ) : (
-                      <span className="text-text-muted font-mono">Address unavailable</span>
+                      <span className="text-text-dim font-mono">Address unavailable</span>
                     )}
                   </DataField>
                   <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
@@ -1131,7 +1129,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         <HexDisplay value={spore.txHash} size="sm" />-{sporeOutputIndex}
                       </Link>
                     ) : (
-                      <span className="text-text-muted font-mono">Unavailable</span>
+                      <span className="text-text-dim font-mono">Unavailable</span>
                     )}
                   </DataField>
                   <DataField label="Created at Block">
@@ -1149,7 +1147,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               <TerminalPanel>
                 <TerminalPanelHeader indicator="active">Decoded Traits</TerminalPanelHeader>
                 <TerminalPanelContent>
-                  <div className="text-text-muted mb-3 text-sm">
+                  <div className="text-text-dim mb-3 text-sm">
                     Traits derived from DOB metadata and on-chain DNA bytes.
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2">
@@ -1158,10 +1156,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         key={`${trait.name}-${trait.value}`}
                         className="border-base-border bg-base-surface/50 rounded border p-2.5"
                       >
-                        <div className="text-text-muted font-mono text-[10px] uppercase tracking-wider">
+                        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
                           {trait.name}
                         </div>
-                        <div className="text-text-primary mt-1 break-all font-mono text-xs">
+                        <div className="text-text-bright mt-1 break-all font-mono text-xs">
                           {trait.value}
                         </div>
                       </div>
@@ -1174,11 +1172,11 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               <TerminalPanel>
                 <TerminalPanelHeader indicator="active">Payload Text View</TerminalPanelHeader>
                 <TerminalPanelContent>
-                  <pre className="border-base-border bg-base-bg/40 text-text-primary max-h-80 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all rounded border p-3 font-mono text-xs">
+                  <pre className="border-base-border bg-base-bg/40 text-text-bright max-h-80 max-w-full overflow-x-auto overflow-y-auto whitespace-pre-wrap break-all rounded border p-3 font-mono text-xs">
                     {previewTextSnippet}
                   </pre>
                   {previewTextTruncated && (
-                    <div className="text-text-muted mt-2 text-xs">
+                    <div className="text-text-dim mt-2 text-xs">
                       Showing first 600 characters from on-chain payload text.
                     </div>
                   )}

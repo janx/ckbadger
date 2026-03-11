@@ -48,7 +48,7 @@ export default function ForksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="warning">Fork Event Log</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
+            <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
               <div className="w-24">Event</div>
               <div className="w-16 text-center">Depth</div>
               <div className="w-28">Fork Point</div>
@@ -123,7 +123,7 @@ export default function ForksPage() {
                         </Link>
                       </div>
                       <div className="flex-1">
-                        <div className="text-text-secondary font-mono">
+                        <div className="text-text font-mono">
                           #{event.oldTipNumber.toLocaleString()}
                         </div>
                         <HexDisplay
@@ -134,7 +134,7 @@ export default function ForksPage() {
                         />
                       </div>
                       <div className="flex-1">
-                        <div className="text-text-secondary font-mono">
+                        <div className="text-text font-mono">
                           #{event.newTipNumber.toLocaleString()}
                         </div>
                         <HexDisplay
@@ -148,11 +148,11 @@ export default function ForksPage() {
                         <div className="text-negative font-mono text-sm">
                           {event.orphanedBlocksCount} blocks
                         </div>
-                        <div className="text-text-muted font-mono text-xs">
+                        <div className="text-text-dim font-mono text-xs">
                           {event.orphanedTxsCount} txs
                         </div>
                       </div>
-                      <div className="text-text-muted w-28 text-right">
+                      <div className="text-text-dim w-28 text-right">
                         {formatTimeAgo(event.detectedAt)}
                       </div>
                     </div>
@@ -164,12 +164,12 @@ export default function ForksPage() {
                             {event.eventType.toUpperCase()}
                           </Badge>
                         </Link>
-                        <span className="text-text-muted text-xs">
+                        <span className="text-text-dim text-xs">
                           {formatTimeAgo(event.detectedAt)}
                         </span>
                       </div>
                       <div className="flex items-center gap-4 text-xs">
-                        <span className="text-text-secondary">
+                        <span className="text-text">
                           Depth: <span className="text-warning font-mono">{event.depth}</span>
                         </span>
                         <Link
@@ -180,15 +180,15 @@ export default function ForksPage() {
                         </Link>
                       </div>
                       <div className="flex items-center gap-4 text-xs">
-                        <span className="text-text-muted">
+                        <span className="text-text-dim">
                           Old:{' '}
-                          <span className="text-text-secondary font-mono">
+                          <span className="text-text font-mono">
                             #{event.oldTipNumber.toLocaleString()}
                           </span>
                         </span>
-                        <span className="text-text-muted">
+                        <span className="text-text-dim">
                           New:{' '}
-                          <span className="text-text-secondary font-mono">
+                          <span className="text-text font-mono">
                             #{event.newTipNumber.toLocaleString()}
                           </span>
                         </span>

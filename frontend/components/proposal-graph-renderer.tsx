@@ -12,7 +12,7 @@ const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), {
   ssr: false,
   loading: () => (
     <div className="bg-base-surface/50 flex h-full w-full items-center justify-center">
-      <div className="text-text-muted">Loading graph...</div>
+      <div className="text-text-dim">Loading graph...</div>
     </div>
   ),
 });
@@ -155,14 +155,14 @@ export function ProposalGraphRenderer({
         className="border-base-border bg-base-surface/50 flex items-center justify-center rounded-lg border"
         style={{ width, height }}
       >
-        <p className="text-text-muted">No proposal data available</p>
+        <p className="text-text-dim">No proposal data available</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      <div className="text-text-muted flex flex-wrap items-center gap-4 text-sm">
+      <div className="text-text-dim flex flex-wrap items-center gap-4 text-sm">
         <div className="flex items-center gap-2">
           <div
             className="h-3 w-3 rotate-45"
@@ -192,14 +192,14 @@ export function ProposalGraphRenderer({
       </div>
 
       <div className="flex items-center gap-6 text-sm">
-        <div className="text-text-muted">
-          Total Proposals: <span className="text-text-primary">{metadata.totalProposals}</span>
+        <div className="text-text-dim">
+          Total Proposals: <span className="text-text-bright">{metadata.totalProposals}</span>
         </div>
-        <div className="text-text-muted">
+        <div className="text-text-dim">
           Committed: <span className="text-positive">{metadata.committedCount}</span>
         </div>
         {metadata.totalProposals > metadata.committedCount && (
-          <div className="text-text-muted">
+          <div className="text-text-dim">
             Pending:{' '}
             <span className="text-warning">
               {metadata.totalProposals - metadata.committedCount}

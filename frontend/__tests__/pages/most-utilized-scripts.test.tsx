@@ -54,7 +54,7 @@ describe('MostUtilizedScriptsPage', () => {
         screen.getByText('Total Cells Capacity Share (%) - Top 20 + Others')
       ).toBeInTheDocument();
       expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
-      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-muted');
+      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');
       expect(screen.getByText('Description')).toBeInTheDocument();
       expect(
         screen.getByText(

@@ -42,7 +42,7 @@ export function PageHeader({
           {navigation?.prev && (
             <Link
               href={navigation.prev.href}
-              className="hover:text-amber hover:border-amber-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
+              className="hover:text-jade hover:border-jade-dim border-base-border text-text-dim rounded border p-1.5 transition-colors"
               title={navigation.prev.label || 'Previous'}
             >
               <ChevronLeftIcon className="h-4 w-4" />
@@ -51,18 +51,16 @@ export function PageHeader({
 
           <div>
             <div className="flex min-w-0 flex-wrap items-center gap-3">
-              <h1 className="text-text-primary break-words font-mono text-2xl font-bold">
-                {title}
-              </h1>
+              <h1 className="text-text-bright break-words font-mono text-2xl font-bold">{title}</h1>
               {badge}
             </div>
-            {subtitle && <div className="text-text-muted mt-1 break-words text-sm">{subtitle}</div>}
+            {subtitle && <div className="text-text-dim mt-1 break-words text-sm">{subtitle}</div>}
           </div>
 
           {navigation?.next && (
             <Link
               href={navigation.next.href}
-              className="hover:text-amber hover:border-amber-dim border-base-border text-text-muted rounded border p-1.5 transition-colors"
+              className="hover:text-jade hover:border-jade-dim border-base-border text-text-dim rounded border p-1.5 transition-colors"
               title={navigation.next.label || 'Next'}
             >
               <ChevronRightIcon className="h-4 w-4" />
@@ -81,13 +79,13 @@ export function PageHeader({
           onClick={handleCopy}
           title="Click to copy"
         >
-          <span className="text-text-secondary group-hover:text-text-secondary break-all font-mono text-sm">
+          <span className="text-text group-hover:text-text break-all font-mono text-sm">
             {hash}
           </span>
           {copied ? (
             <CheckIcon className="text-emphasis h-4 w-4 shrink-0" />
           ) : (
-            <CopyIcon className="text-text-muted group-hover:text-text-secondary h-4 w-4 shrink-0" />
+            <CopyIcon className="text-text-dim group-hover:text-text h-4 w-4 shrink-0" />
           )}
         </div>
       )}
@@ -97,19 +95,19 @@ export function PageHeader({
 
 interface BadgeProps {
   children: ReactNode;
-  variant?: 'green' | 'amber' | 'blue' | 'purple' | 'red' | 'gray' | 'neutral';
+  variant?: 'green' | 'gold' | 'blue' | 'purple' | 'red' | 'gray' | 'neutral';
   className?: string;
 }
 
 export function Badge({ children, variant = 'gray', className }: BadgeProps) {
   const variantClasses = {
     green: 'bg-positive/10 text-positive border-positive/20',
-    amber: 'bg-warning/10 text-warning border-warning/20',
+    gold: 'bg-warning/10 text-warning border-warning/20',
     blue: 'bg-info/10 text-info border-info/20',
     purple: 'bg-info/10 text-info-bright border-info/20',
     red: 'bg-negative/10 text-negative border-negative/20',
-    gray: 'bg-base-elevated text-text-muted border-base-border',
-    neutral: 'bg-base-elevated/70 text-text-secondary border-base-border',
+    gray: 'bg-base-elevated text-text-dim border-base-border',
+    neutral: 'bg-base-elevated/70 text-text border-base-border',
   };
 
   return (

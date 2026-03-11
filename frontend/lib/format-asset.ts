@@ -42,10 +42,10 @@ export function getAssetLabel(transfer: AssetTransfer): string {
 
 export function getAssetBadgeVariant(
   category: string
-): 'green' | 'amber' | 'red' | 'gray' | 'purple' | 'blue' {
+): 'green' | 'gold' | 'red' | 'gray' | 'purple' | 'blue' {
   switch (category) {
     case 'token':
-      return 'amber';
+      return 'gold';
     case 'object':
       return 'purple';
     case 'identity':

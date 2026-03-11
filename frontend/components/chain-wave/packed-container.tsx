@@ -30,8 +30,8 @@ const TYPE_CONFIG = {
   mempool: {
     borderColor: 'border-base-border/50',
     bgGradient: 'from-base-elevated/50 to-base-surface/50',
-    titleColor: 'text-text-secondary',
-    countColor: 'text-text-muted',
+    titleColor: 'text-text',
+    countColor: 'text-text-dim',
   },
   proposals: {
     borderColor: 'border-warning-600/50',
@@ -40,10 +40,10 @@ const TYPE_CONFIG = {
     countColor: 'text-warning-500/80',
   },
   tip: {
-    borderColor: 'border-amber/50',
-    bgGradient: 'from-amber-dim/20 to-base-surface/50',
-    titleColor: 'text-amber',
-    countColor: 'text-amber-dim',
+    borderColor: 'border-gold/50',
+    bgGradient: 'from-gold-dim/20 to-base-surface/50',
+    titleColor: 'text-gold',
+    countColor: 'text-gold-dim',
   },
 };
 
@@ -51,7 +51,7 @@ const CATEGORY_COLORS: Record<TxCategory, Record<'mempool' | 'proposals' | 'tip'
   normal: {
     mempool: 'bg-base-border/80 hover:bg-base-border',
     proposals: 'bg-warning-600/80 hover:bg-warning',
-    tip: 'bg-amber/80 hover:bg-amber-dim',
+    tip: 'bg-gold/80 hover:bg-gold-dim',
   },
   cellbase: {
     mempool: 'bg-positive/80 hover:bg-positive',
@@ -211,25 +211,24 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
               top: tooltipPos.y - 8,
             }}
           >
-            <div className="text-text-muted mb-1 text-[10px]">{CATEGORY_LABELS[item.category]}</div>
-            <div className="text-text-muted space-y-0.5">
+            <div className="text-text-dim mb-1 text-[10px]">{CATEGORY_LABELS[item.category]}</div>
+            <div className="text-text-dim space-y-0.5">
               <div>
-                TX: <span className="text-text-primary font-mono">{truncateHash(item.id)}</span>
+                TX: <span className="text-text-bright font-mono">{truncateHash(item.id)}</span>
               </div>
               {item.size > 0 && (
                 <div>
-                  Size: <span className="text-text-primary">{formatBytes(item.size)}</span>
+                  Size: <span className="text-text-bright">{formatBytes(item.size)}</span>
                 </div>
               )}
               {item.fee !== undefined && item.fee > 0 && (
                 <div>
-                  Fee: <span className="text-text-primary">{formatFee(item.fee)}</span>
+                  Fee: <span className="text-text-bright">{formatFee(item.fee)}</span>
                 </div>
               )}
               {item.feeRate !== undefined && item.feeRate > 0 && (
                 <div>
-                  Fee Rate:{' '}
-                  <span className="text-text-primary">{item.feeRate.toFixed(2)} sh/B</span>
+                  Fee Rate: <span className="text-text-bright">{item.feeRate.toFixed(2)} sh/B</span>
                 </div>
               )}
             </div>
@@ -283,23 +282,23 @@ export function PackedContainer({
         config.bgGradient,
         type === 'tip' &&
           blockNumber &&
-          'hover:border-amber/70 hover:shadow-glow cursor-pointer hover:shadow-lg'
+          'hover:border-gold/70 hover:shadow-glow cursor-pointer hover:shadow-lg'
       )}
     >
       <div className="mb-2 flex items-center justify-between sm:mb-3">
         <div>
           <h3 className={cn('text-sm font-bold sm:text-base', config.titleColor)}>{title}</h3>
-          {subtitle && <div className="text-text-muted text-[10px] sm:text-xs">{subtitle}</div>}
+          {subtitle && <div className="text-text-dim text-[10px] sm:text-xs">{subtitle}</div>}
         </div>
         <div className={cn('text-right text-xs sm:text-sm', config.countColor)}>
-          <span className="text-text-primary font-bold">{totalCount.toLocaleString()}</span>
+          <span className="text-text-bright font-bold">{totalCount.toLocaleString()}</span>
           <span className="ml-1">txs</span>
         </div>
       </div>
 
       <div ref={containerRef} className="relative flex-1 overflow-hidden rounded-lg bg-black/20">
         {items.length === 0 ? (
-          <div className="text-text-muted flex h-full w-full items-center justify-center text-xs">
+          <div className="text-text-dim flex h-full w-full items-center justify-center text-xs">
             {emptyText}
           </div>
         ) : (

@@ -85,7 +85,7 @@ describe('getAssetLabel', () => {
 
 describe('getAssetBadgeVariant', () => {
   it('returns correct variants for categories', () => {
-    expect(getAssetBadgeVariant('token')).toBe('amber');
+    expect(getAssetBadgeVariant('token')).toBe('gold');
     expect(getAssetBadgeVariant('object')).toBe('purple');
     expect(getAssetBadgeVariant('identity')).toBe('blue');
     expect(getAssetBadgeVariant('dao')).toBe('gray');

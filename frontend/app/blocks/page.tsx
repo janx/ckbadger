@@ -37,7 +37,7 @@ export default function BlocksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Block List</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
+            <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
               <div className="w-24 shrink-0">Block</div>
               <div className="min-w-0 flex-1">Hash</div>
               <div className="w-16 shrink-0 text-center">Txs</div>
@@ -84,7 +84,7 @@ export default function BlocksPage() {
                         </Link>
                         {block.hardforkActivation && (
                           <div className="mt-1">
-                            <Badge variant="amber" className="text-[10px]">
+                            <Badge variant="gold" className="text-[10px]">
                               HF · {block.hardforkActivation.shortName.toUpperCase()}
                             </Badge>
                           </div>
@@ -98,7 +98,7 @@ export default function BlocksPage() {
                       <div className="text-warning w-16 shrink-0 text-center font-mono">
                         {block.transactionsCount}
                       </div>
-                      <div className="text-text-muted w-24 shrink-0 text-right">
+                      <div className="text-text-dim w-24 shrink-0 text-right">
                         {formatTimeAgo(block.timestamp)}
                       </div>
                     </div>
@@ -111,7 +111,7 @@ export default function BlocksPage() {
                         >
                           #{block.number.toLocaleString()}
                         </Link>
-                        <span className="text-text-muted text-xs">
+                        <span className="text-text-dim text-xs">
                           {formatTimeAgo(block.timestamp)}
                         </span>
                       </div>
@@ -125,7 +125,7 @@ export default function BlocksPage() {
                           {block.transactionsCount} txs
                         </span>
                         {block.hardforkActivation && (
-                          <Badge variant="amber" className="text-[10px]">
+                          <Badge variant="gold" className="text-[10px]">
                             HF · {block.hardforkActivation.shortName.toUpperCase()}
                           </Badge>
                         )}

@@ -41,7 +41,7 @@ describe('TotalSupplyPage', () => {
       expect(screen.getByTestId('stacked-area-chart')).toBeInTheDocument();
       expect(screen.getByText('Primary Issuance')).toBeInTheDocument();
       expect(screen.getByText('Secondary Issuance')).toBeInTheDocument();
-      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-muted');
+      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');
     });
   });
 });

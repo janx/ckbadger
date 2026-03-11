@@ -8,7 +8,7 @@ interface ProgressBarProps {
   showLabel?: boolean;
   labelFormat?: 'percent' | 'value' | 'both';
   size?: 'sm' | 'md' | 'lg';
-  color?: 'auto' | 'green' | 'amber' | 'blue';
+  color?: 'auto' | 'green' | 'gold' | 'blue';
   className?: string;
 }
 
@@ -26,22 +26,22 @@ export function ProgressBar({
   const getColor = () => {
     if (color !== 'auto') return color;
     if (percent < 33) return 'green';
-    if (percent < 66) return 'amber';
+    if (percent < 66) return 'gold';
     return 'red';
   };
 
   const colorClass = getColor();
 
   const barColors = {
-    green: 'bg-gradient-to-r from-mint-dim via-mint to-mint',
-    amber: 'bg-gradient-to-r from-amber-dim via-amber to-amber',
-    blue: 'bg-gradient-to-r from-sky via-sky to-sky',
+    green: 'bg-gradient-to-r from-jade-dim via-jade to-jade',
+    gold: 'bg-gradient-to-r from-gold-dim via-gold to-gold',
+    blue: 'bg-gradient-to-r from-aqua via-aqua to-aqua',
     red: 'bg-gradient-to-r from-negative-dim via-negative to-negative-bright',
   };
 
   const glowColors = {
     green: '',
-    amber: '',
+    gold: '',
     blue: '',
     red: '',
   };
@@ -81,7 +81,7 @@ export function ProgressBar({
         />
       </div>
       {showLabel && (
-        <div className="text-text-muted mt-1 font-mono text-xs tabular-nums">{formatLabel()}</div>
+        <div className="text-text-dim mt-1 font-mono text-xs tabular-nums">{formatLabel()}</div>
       )}
     </div>
   );
@@ -106,7 +106,7 @@ export function UsageBar({ value, max, unit = '', className }: UsageBarProps) {
   return (
     <span
       className={cn(
-        'bg-base-elevated text-text-primary relative inline-flex overflow-hidden rounded px-2 py-1 font-mono text-sm',
+        'bg-base-elevated text-text-bright relative inline-flex overflow-hidden rounded px-2 py-1 font-mono text-sm',
         className
       )}
     >

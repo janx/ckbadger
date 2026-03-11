@@ -44,7 +44,7 @@ export default function TransactionsPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Transaction List</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
+            <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
               <div className="min-w-0 flex-1">Transaction</div>
               <div className="w-20 shrink-0 text-center">In/Out</div>
               <div className="w-24 shrink-0 text-right">Time</div>
@@ -91,12 +91,12 @@ export default function TransactionsPage() {
                           #{formattedNumbers.get(tx.hash)}
                         </Link>
                       </div>
-                      <div className="text-text-muted w-20 shrink-0 text-center font-mono">
+                      <div className="text-text-dim w-20 shrink-0 text-center font-mono">
                         <span className="text-emphasis-dim">{tx.inputsCount}</span>
-                        <span className="text-text-muted mx-1">→</span>
+                        <span className="text-text-dim mx-1">→</span>
                         <span className="text-emphasis-dim">{tx.outputsCount}</span>
                       </div>
-                      <div className="text-text-muted w-24 shrink-0 text-right">
+                      <div className="text-text-dim w-24 shrink-0 text-right">
                         {formatTimeAgo(tx.timestamp)}
                       </div>
                     </div>
@@ -105,7 +105,7 @@ export default function TransactionsPage() {
                         <Link href={`/tx/${tx.hash}`} className="hover:underline">
                           <HexDisplay value={tx.hash} startChars={10} endChars={6} />
                         </Link>
-                        <span className="text-text-muted shrink-0 text-xs">
+                        <span className="text-text-dim shrink-0 text-xs">
                           {formatTimeAgo(tx.timestamp)}
                         </span>
                       </div>
@@ -116,7 +116,7 @@ export default function TransactionsPage() {
                         >
                           #{formattedNumbers.get(tx.hash)}
                         </Link>
-                        <span className="text-text-muted font-mono text-xs">
+                        <span className="text-text-dim font-mono text-xs">
                           <span className="text-emphasis-dim">{tx.inputsCount}</span>
                           <span className="mx-1">→</span>
                           <span className="text-emphasis-dim">{tx.outputsCount}</span>

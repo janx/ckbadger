@@ -79,7 +79,7 @@ export function TerminalPanelHeader({
       case 'active':
         return <span className="live-dot" />;
       case 'warning':
-        return <div className="indicator-light indicator-light-amber" />;
+        return <div className="indicator-light indicator-light-gold" />;
       case 'inactive':
         return <div className="indicator-light indicator-light-static opacity-30" />;
       case 'none':

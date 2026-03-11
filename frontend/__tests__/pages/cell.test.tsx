@@ -435,7 +435,7 @@ describe('CellDetailPage', () => {
     expect(screen.queryByTestId('data-deterministic-panel')).not.toBeInTheDocument();
     expect(screen.queryByTestId('data-heuristic-panel')).not.toBeInTheDocument();
     expect(screen.getByTestId('data-byte-0').className).toContain('bg-emphasis/15');
-    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('text-text-muted');
+    expect(screen.getByTestId('data-ascii-byte-0').className).toContain('text-text-dim');
 
     fireEvent.mouseEnter(screen.getByTestId('data-byte-0'));
     expect(screen.getByTestId('data-active-segment-value')).toHaveTextContent('42');

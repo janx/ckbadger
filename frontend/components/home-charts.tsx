@@ -79,7 +79,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
   };
 
   if (!data.length) {
-    return <div className="text-text-muted flex h-32 items-center justify-center">No data</div>;
+    return <div className="text-text-dim flex h-32 items-center justify-center">No data</div>;
   }
 
   return (
@@ -99,7 +99,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
             y={yScale(tick)}
             textAnchor="end"
             dominantBaseline="middle"
-            className="fill-text-muted font-mono tabular-nums"
+            className="fill-text-dim font-mono tabular-nums"
             fontSize="10"
           >
             {formatYTick(tick)}
@@ -113,7 +113,7 @@ function MiniLineChart({ data, color = CHART_PRIMARY_COLOR }: MiniChartProps) {
           x={x}
           y={height - 5}
           textAnchor="middle"
-          className="fill-text-muted font-mono tabular-nums"
+          className="fill-text-dim font-mono tabular-nums"
           fontSize="10"
         >
           {formatXLabel(label)}
@@ -154,7 +154,7 @@ function ChartCard({
     >
       <div className="mb-3 flex items-start justify-between">
         <div>
-          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
             {leftLabel}
           </div>
           <div
@@ -164,7 +164,7 @@ function ChartCard({
           </div>
         </div>
         <div className="text-right">
-          <div className="text-text-muted font-mono text-xs uppercase tracking-wider">
+          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
             {rightLabel}
           </div>
           <div
@@ -174,7 +174,7 @@ function ChartCard({
           </div>
         </div>
       </div>
-      <div className="text-text-muted mb-1 font-mono text-xs">{chartTitle}</div>
+      <div className="text-text-dim mb-1 font-mono text-xs">{chartTitle}</div>
       <MiniLineChart data={data} color={chartColor} />
     </div>
   );

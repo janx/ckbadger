@@ -53,10 +53,10 @@ describe('TransactionsPage', () => {
       expect(document.querySelector('a[href="/blocks/123456"]')).toBeTruthy();
     });
     expect(document.querySelector('a[href="/blocks/123456"]')).toHaveClass('text-emphasis');
-    expect(screen.getAllByText('→')[0]).toHaveClass('text-text-muted');
+    expect(screen.getAllByText('→')[0]).toHaveClass('text-text-dim');
     expect(
       document.querySelector(
-        '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-sky-dim'
+        '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-aqua-dim'
       )
     ).toBeTruthy();
   });

@@ -154,7 +154,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
         <main className="container mx-auto px-4 py-8">
           <TerminalPanel>
             <TerminalPanelContent className="py-12 text-center">
-              <h2 className="text-text-muted text-xl">{labels.notFoundMsg}</h2>
+              <h2 className="text-text-dim text-xl">{labels.notFoundMsg}</h2>
             </TerminalPanelContent>
           </TerminalPanel>
         </main>
@@ -173,13 +173,13 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
         <div className="mb-6 flex items-center gap-4">
           <Link
             href={labels.backHref}
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← {labels.backLabel}
           </Link>
           <Link
             href="/identities"
-            className="hover:text-emphasis text-text-muted text-sm transition-colors"
+            className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             Back to Identities
           </Link>
@@ -202,7 +202,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
             <TerminalPanelContent>
               <DataGrid columns={2}>
                 <DataField label="Standard">
-                  <span className="text-text-primary font-mono">{labels.standardDisplay}</span>
+                  <span className="text-text-bright font-mono">{labels.standardDisplay}</span>
                 </DataField>
                 <DataField label="Status">
                   {detail.isLive ? (
@@ -221,7 +221,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                 </DataField>
                 {labels.showExpiry && (
                   <DataField label="Expires At">
-                    <span className="text-text-primary font-mono">
+                    <span className="text-text-bright font-mono">
                       {formatExpiry(detail.expiredAt)}
                     </span>
                   </DataField>
@@ -235,9 +235,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
             <TerminalPanelContent>
               <DataGrid columns={1}>
                 <DataField label={labels.nameLabel}>
-                  <span className="text-text-primary font-mono">
-                    {detail.name || 'Unavailable'}
-                  </span>
+                  <span className="text-text-bright font-mono">{detail.name || 'Unavailable'}</span>
                 </DataField>
                 <DataField label={labels.idLabel} layout="vertical" valueClassName="w-full">
                   <HexDisplay value={detail.nftId} truncate={false} />
@@ -250,7 +248,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                       <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono">Unavailable</span>
+                    <span className="text-text-dim font-mono">Unavailable</span>
                   )}
                 </DataField>
                 <DataField label="Owner Lock Hash" layout="vertical" valueClassName="w-full">
@@ -259,7 +257,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                       <HexDisplay value={detail.ownerLockHash} truncate={false} />
                     </Link>
                   ) : (
-                    <span className="text-text-muted font-mono">Unavailable</span>
+                    <span className="text-text-dim font-mono">Unavailable</span>
                   )}
                 </DataField>
               </DataGrid>
@@ -279,7 +277,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                   </Link>
                 </DataField>
               ) : (
-                <div className="text-text-muted font-mono text-sm">{labels.recycledMsg}</div>
+                <div className="text-text-dim font-mono text-sm">{labels.recycledMsg}</div>
               )}
             </TerminalPanelContent>
           </TerminalPanel>
@@ -294,9 +292,9 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
               </div>
               <div className="p-4">
                 {isActivitiesLoading ? (
-                  <div className="text-text-muted py-2 text-sm">Loading activities...</div>
+                  <div className="text-text-dim py-2 text-sm">Loading activities...</div>
                 ) : !itemActivities?.data?.length ? (
-                  <div className="text-text-muted py-2 text-sm">No related activities found.</div>
+                  <div className="text-text-dim py-2 text-sm">No related activities found.</div>
                 ) : (
                   <div className="space-y-2">
                     {itemActivities.data.map((activity) => (

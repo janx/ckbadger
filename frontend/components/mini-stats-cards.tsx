@@ -17,7 +17,7 @@ function formatNumber(value: number): string {
 
 interface BarChartProps {
   data: TxStatsDataPoint[];
-  color: 'green' | 'amber';
+  color: 'green' | 'gold';
   height?: number;
 }
 
@@ -26,15 +26,15 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
 
   if (!data.length) {
     return (
-      <div className="text-text-muted flex items-center justify-center" style={{ height }}>
+      <div className="text-text-dim flex items-center justify-center" style={{ height }}>
         No data
       </div>
     );
   }
 
   const maxValue = Math.max(...data.map((d) => d.value), 1);
-  const barColor = color === 'green' ? 'bg-amber-dim' : 'bg-warning-dim';
-  const barColorHover = color === 'green' ? 'bg-amber' : 'bg-warning';
+  const barColor = color === 'green' ? 'bg-jade-dim' : 'bg-warning-dim';
+  const barColorHover = color === 'green' ? 'bg-jade' : 'bg-warning';
 
   return (
     <div className="relative" style={{ height }}>
@@ -60,7 +60,7 @@ function BarChart({ data, color, height = 48 }: BarChartProps) {
               />
               {isHovered && (
                 <div className="bg-base-elevated absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 whitespace-nowrap rounded px-2 py-1 text-xs shadow-lg">
-                  <div className="text-text-secondary font-mono">{point.label}</div>
+                  <div className="text-text font-mono">{point.label}</div>
                   <div
                     className={cn(
                       'font-mono font-bold',
@@ -83,14 +83,14 @@ interface TxStatWidgetProps {
   label: string;
   value: number;
   data: TxStatsDataPoint[];
-  color: 'green' | 'amber';
+  color: 'green' | 'gold';
 }
 
 function TxStatWidget({ label, value, data, color }: TxStatWidgetProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between">
-        <span className="text-text-muted font-mono text-xs uppercase tracking-wider">{label}</span>
+        <span className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</span>
         <span
           className={cn(
             'font-mono text-xl font-bold tabular-nums',
@@ -101,7 +101,7 @@ function TxStatWidget({ label, value, data, color }: TxStatWidgetProps) {
         </span>
       </div>
       <BarChart data={data} color={color} height={48} />
-      <div className="text-text-muted flex justify-between font-mono text-[10px]">
+      <div className="text-text-dim flex justify-between font-mono text-[10px]">
         <span>{data.length > 0 ? data[0].label : ''}</span>
         <span>{data.length > 0 ? data[data.length - 1].label : ''}</span>
       </div>
@@ -137,7 +137,7 @@ export function MiniStatsCards({ className }: MiniStatsCardsProps) {
           label="TXs Last 24 Hours"
           value={txsLast24Hours}
           data={dailyData}
-          color="amber"
+          color="gold"
         />
       </div>
     </div>
