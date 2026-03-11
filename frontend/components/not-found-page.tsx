@@ -26,13 +26,6 @@ function formatHashRate(value: string | undefined): string {
 }
 
 export function NotFoundPage() {
-  const oceanConfig = {
-    cellCount: 8,
-    splitPulse: 1.2,
-    haloBloom: 1.2,
-    motionSpeed: 1,
-  } as const;
-
   const { data: stats } = useQuery({
     queryKey: ['network-stats'],
     queryFn: () => api.getNetworkStats(),
@@ -51,12 +44,7 @@ export function NotFoundPage() {
 
   return (
     <main className="bg-base-bg text-text-bright relative min-h-screen overflow-hidden">
-      <NotFoundCellOcean
-        cellCount={oceanConfig.cellCount}
-        splitPulse={oceanConfig.splitPulse}
-        haloBloom={oceanConfig.haloBloom}
-        motionSpeed={oceanConfig.motionSpeed}
-      />
+      <NotFoundCellOcean />
 
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,rgba(2,6,23,0.72)_0%,rgba(2,6,23,0.28)_38%,rgba(2,6,23,0.86)_100%)]" />
 

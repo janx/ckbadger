@@ -2,13 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-interface NotFoundCellOceanProps {
-  cellCount: number;
-  splitPulse: number;
-  haloBloom: number;
-  motionSpeed: number;
-}
-
 const VERTEX_SHADER_SOURCE = `
 attribute vec2 a_position;
 
@@ -20,83 +13,109 @@ void main() {
 const FRAGMENT_SHADER_SOURCE = `
 precision highp float;
 
-uniform vec2 u_resolution;
 uniform float u_time;
-uniform float u_cell_count;
-uniform float u_split_pulse;
-uniform float u_halo_bloom;
-uniform float u_motion_speed;
+uniform vec2 u_resolution;
 
-float hash(float n) {
-  return fract(sin(n) * 43758.5453123);
+float hash2(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-vec2 swimmer(float seed, float t) {
-  float speed = 0.14 + hash(seed * 3.17) * 0.28;
-  float drift = 0.22 + hash(seed * 7.31) * 0.45;
-  float phase = hash(seed * 11.7) * 6.28318530718;
-  return vec2(
-    0.5 + 0.35 * sin(t * speed + phase) + 0.08 * sin(t * (speed + drift) + phase * 1.7),
-    0.5 + 0.35 * cos(t * (speed * 1.23) + phase * 1.31) + 0.08 * cos(t * (speed + drift * 0.77))
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(hash2(i), hash2(i + vec2(1, 0)), f.x),
+    mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), f.x),
+    f.y
   );
 }
 
-void main() {
-  float t = u_time * u_motion_speed;
-  vec2 uv = gl_FragCoord.xy / u_resolution.xy;
-  float aspect = u_resolution.x / u_resolution.y;
-  uv.x = (uv.x - 0.5) * aspect + 0.5;
-
-  float field = 0.0;
-  float haloField = 0.0;
-
-  const int MAX_CELL_COUNT = 36;
-  for (int i = 0; i < MAX_CELL_COUNT; i++) {
-    float fi = float(i);
-    if (fi >= u_cell_count) {
-      continue;
-    }
-    float seed = fi + 1.0;
-    vec2 center = swimmer(seed, t);
-
-    float split = 0.5 + 0.5 * sin(t * (0.45 + hash(seed * 2.1) * 0.7) + seed * 2.7);
-    float angle = t * (0.2 + hash(seed * 5.3) * 0.6) + seed * 1.91;
-    vec2 dir = vec2(cos(angle), sin(angle));
-    float splitDistance = mix(0.003, 0.02 + 0.03 * u_split_pulse, split * split);
-
-    float radius = mix(0.012, 0.028, hash(seed * 13.7));
-    float pulse = 0.82 + (0.24 + 0.14 * u_split_pulse) * sin(t * (1.0 + hash(seed * 4.4) * 1.6) + seed * 4.0);
-    float activeRadius = radius * pulse;
-
-    vec2 p1 = center + dir * splitDistance;
-    vec2 p2 = center - dir * splitDistance;
-
-    float d1 = distance(uv, p1);
-    float d2 = distance(uv, p2);
-
-    field += activeRadius / (d1 * d1 + 0.0007);
-    field += activeRadius / (d2 * d2 + 0.0007);
-
-    haloField += activeRadius * (0.7 + u_halo_bloom) / (d1 * d1 + 0.0018);
-    haloField += activeRadius * (0.7 + u_halo_bloom) / (d2 * d2 + 0.0018);
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+  for (int i = 0; i < 6; i++) {
+    v += a * vnoise(p);
+    p = rot * p * 2.0;
+    a *= 0.5;
   }
+  return v;
+}
 
-  float core = smoothstep(2.2, 3.7, field);
-  float body = smoothstep(1.0, 2.6, field);
-  float halo = smoothstep(0.35, 1.5, haloField) - smoothstep(1.5, 3.0, haloField);
+void main() {
+  vec2 uv = (gl_FragCoord.xy - u_resolution * 0.5) / u_resolution.y;
 
-  vec3 bg = vec3(0.01, 0.03, 0.02);
-  vec3 mid = vec3(0.02, 0.24, 0.10);
-  vec3 bright = vec3(0.24, 1.00, 0.43);
+  // Occasional horizontal tear
+  float tearY = mod(u_time * 0.15, 1.0) * 2.0 - 1.0;
+  float tearStrength = smoothstep(0.015, 0.0, abs(uv.y - tearY))
+                     * step(fract(u_time * 0.27), 0.12);
+  uv.x += tearStrength * 0.04 * sin(u_time * 60.0);
 
-  vec3 color = mix(bg, mid, body);
-  color += bright * core * 0.9;
-  color += vec3(0.16, 0.82, 0.34) * halo * (0.45 + 0.75 * u_halo_bloom);
+  // Three noise scales
+  float macro = fbm(uv * 6.0 + u_time * 0.06)
+              + fbm(uv * 10.0 - u_time * 0.1 + 100.0) * 0.5;
+  macro = smoothstep(0.48, 0.72, macro);
 
-  float vignette = smoothstep(0.95, 0.22, distance(uv, vec2(0.5)));
-  color *= vignette;
+  float mid = fbm(uv * 14.0 + u_time * 0.18 + 50.0)
+            + 0.25 * sin(u_time * 0.4 + fbm(uv * 7.0) * 6.28);
+  mid = smoothstep(0.52, 0.78, mid);
 
-  gl_FragColor = vec4(color, 1.0);
+  float fine = smoothstep(0.58, 0.82, fbm(uv * 24.0 + u_time * 0.35 + 200.0));
+
+  float field = macro * 0.5 + macro * mid * 0.35 + macro * mid * fine * 0.15;
+
+  // Petri dish clear zone
+  field *= smoothstep(0.15, 0.45, length(uv));
+
+  // Edge detection via finite-difference gradient
+  float eps = 1.5 / u_resolution.y;
+  float fx, fy;
+  {
+    vec2 u2 = uv + vec2(eps, 0);
+    float c2 = smoothstep(0.15, 0.45, length(u2));
+    float m2 = smoothstep(0.48, 0.72,
+      fbm(u2 * 6.0 + u_time * 0.06) + fbm(u2 * 10.0 - u_time * 0.1 + 100.0) * 0.5);
+    float i2 = smoothstep(0.52, 0.78,
+      fbm(u2 * 14.0 + u_time * 0.18 + 50.0) + 0.25 * sin(u_time * 0.4 + fbm(u2 * 7.0) * 6.28));
+    float f2 = smoothstep(0.58, 0.82, fbm(u2 * 24.0 + u_time * 0.35 + 200.0));
+    fx = (m2 * 0.5 + m2 * i2 * 0.35 + m2 * i2 * f2 * 0.15) * c2;
+  }
+  {
+    vec2 u2 = uv + vec2(0, eps);
+    float c2 = smoothstep(0.15, 0.45, length(u2));
+    float m2 = smoothstep(0.48, 0.72,
+      fbm(u2 * 6.0 + u_time * 0.06) + fbm(u2 * 10.0 - u_time * 0.1 + 100.0) * 0.5);
+    float i2 = smoothstep(0.52, 0.78,
+      fbm(u2 * 14.0 + u_time * 0.18 + 50.0) + 0.25 * sin(u_time * 0.4 + fbm(u2 * 7.0) * 6.28));
+    float f2 = smoothstep(0.58, 0.82, fbm(u2 * 24.0 + u_time * 0.35 + 200.0));
+    fy = (m2 * 0.5 + m2 * i2 * 0.35 + m2 * i2 * f2 * 0.15) * c2;
+  }
+  float edge = smoothstep(0.0, 3.0, length(vec2(fx - field, fy - field)) / eps);
+
+  // Color composition
+  vec3 col = vec3(0.01, 0.015, 0.025);
+  col = mix(col, vec3(0.04, 0.12, 0.09), field * 0.7);
+
+  // Glowing cell membranes: jade #2edba3 / aqua #68ccf0 color mix
+  col += mix(vec3(0.18, 0.86, 0.64), vec3(0.41, 0.80, 0.94),
+    sin(u_time * 0.3 + uv.x * 3.0) * 0.5 + 0.5) * edge * field * 0.4;
+
+  col += vec3(0.18, 0.86, 0.64) * smoothstep(0.7, 0.95, field) * 0.2;
+  col += vec3(0.18, 0.86, 0.64) * smoothstep(0.0, 0.5, field) * 0.03;
+
+  // Red death zones at cell boundary edges
+  col += vec3(0.4, 0.1, 0.12)
+       * smoothstep(0.02, 0.12, field)
+       * (1.0 - smoothstep(0.12, 0.25, field))
+       * 0.3;
+
+  // Chromatic aberration from tear
+  col.r += tearStrength * 0.35;
+  col.b -= tearStrength * 0.15;
+
+  // Film grain overlay
+  col += (hash2(gl_FragCoord.xy + u_time * 0.1) - 0.5) * 0.02;
+
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
 `;
 
@@ -145,29 +164,9 @@ function createProgram(gl: WebGLRenderingContext): WebGLProgram {
   return program;
 }
 
-export function NotFoundCellOcean({
-  cellCount,
-  splitPulse,
-  haloBloom,
-  motionSpeed,
-}: NotFoundCellOceanProps) {
+export function NotFoundCellOcean() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [useFallback, setUseFallback] = useState(false);
-  const configRef = useRef({
-    cellCount,
-    splitPulse,
-    haloBloom,
-    motionSpeed,
-  });
-
-  useEffect(() => {
-    configRef.current = {
-      cellCount,
-      splitPulse,
-      haloBloom,
-      motionSpeed,
-    };
-  }, [cellCount, splitPulse, haloBloom, motionSpeed]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -234,18 +233,7 @@ export function NotFoundCellOcean({
 
     const resolutionLoc = gl.getUniformLocation(program, 'u_resolution');
     const timeLoc = gl.getUniformLocation(program, 'u_time');
-    const cellCountLoc = gl.getUniformLocation(program, 'u_cell_count');
-    const splitPulseLoc = gl.getUniformLocation(program, 'u_split_pulse');
-    const haloBloomLoc = gl.getUniformLocation(program, 'u_halo_bloom');
-    const motionSpeedLoc = gl.getUniformLocation(program, 'u_motion_speed');
-    if (
-      !resolutionLoc ||
-      !timeLoc ||
-      !cellCountLoc ||
-      !splitPulseLoc ||
-      !haloBloomLoc ||
-      !motionSpeedLoc
-    ) {
+    if (!resolutionLoc || !timeLoc) {
       gl.deleteBuffer(positionBuffer);
       gl.deleteProgram(program);
       console.error('Missing uniforms in 404 GLSL program.');
@@ -271,13 +259,8 @@ export function NotFoundCellOcean({
     const startedAt = performance.now();
     const renderFrame = (now: number) => {
       const elapsed = (now - startedAt) / 1000;
-      const config = configRef.current;
       gl.uniform2f(resolutionLoc, canvas.width, canvas.height);
       gl.uniform1f(timeLoc, elapsed);
-      gl.uniform1f(cellCountLoc, config.cellCount);
-      gl.uniform1f(splitPulseLoc, config.splitPulse);
-      gl.uniform1f(haloBloomLoc, config.haloBloom);
-      gl.uniform1f(motionSpeedLoc, config.motionSpeed);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       animationFrame = window.requestAnimationFrame(renderFrame);
     };
