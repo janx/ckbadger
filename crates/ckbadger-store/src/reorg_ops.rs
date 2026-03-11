@@ -89,6 +89,14 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow:
             })?);
             Ok(date >= cutoff_date)
         }
+        // activity daily: YYYYMMDD
+        keys::STATS_PREFIX_ACTIVITY_DAILY => {
+            Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
+        }
+        // activity hourly: YYYYMMDDHH
+        keys::STATS_PREFIX_ACTIVITY_HOURLY => {
+            Ok(suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd)
+        }
         _ => Ok(false),
     }
 }

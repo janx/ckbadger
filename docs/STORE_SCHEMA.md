@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (42 total: 41 domain + 1 append-only)
+# ckbadger-store Column Families (44 total: 43 domain + 1 append-only)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 41 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 43 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode. Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
@@ -40,8 +40,10 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `identity_data`                  | identity_id (32B)                                     | IdentityEntry           | Identity metadata (.bit, did:ckb)                            |
 | `object_collection_agg`          | collection_id                                         | ObjectCollectionAgg     | Object collection aggregate stats                            |
 | `object_collection_activities`   | collection_id + block + tx                            | ActivityRecord          | Pre-computed Object collection activity feed                 |
+| `identity_by_collection`         | collection_id + identity_id                           | empty                   | Identity index by collection                                 |
 | `identity_agg`                   | collection_id (sentinel 32B)                          | IdentityCollectionAgg   | Identity collection aggregate stats (domain)                 |
 | `identity_collection_activities` | collection_id + block + tx                            | ActivityRecord          | Pre-computed Identity collection activity feed (domain)      |
+| `stats_identity`                 | collection_id + lock_hash                             | i64 (owner count)       | Per-owner identity counts by collection                      |
 | `activities`                     | addr/token/entity + block+tx                          | ActivityRecord          | Unified activity feed                                        |
 | `cluster_agg`                    | cluster_id                                            | ClusterAgg              | Spore cluster aggregate stats                                |
 | `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Known script metadata                                        |

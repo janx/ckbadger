@@ -534,7 +534,8 @@ impl BatchWriter {
         // Total CKB moved (absolute value) — excludes coinbase
         stats.total_ckb_moved = stats
             .total_ckb_moved
-            .saturating_add(entry.ckb_delta.unsigned_abs());
+            .checked_add(entry.ckb_delta.unsigned_abs())
+            .expect("total_ckb_moved overflow in accumulate_activity_stats");
 
         // Count each involved script — excludes coinbase
         for code_hash in scripts {
@@ -627,7 +628,13 @@ impl BatchWriter {
                 e.unique_address_count = unique_addresses;
                 e.total_ckb_moved = e
                     .total_ckb_moved
-                    .saturating_add(accumulated.total_ckb_moved);
+                    .checked_add(accumulated.total_ckb_moved)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "total_ckb_moved overflow merging daily activity stats for date {}",
+                            date
+                        )
+                    })?;
                 // Merge script counts
                 for (code_hash, count) in &accumulated.script_counts {
                     *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
@@ -671,7 +678,13 @@ impl BatchWriter {
                 e.unique_address_count = unique_addresses;
                 e.total_ckb_moved = e
                     .total_ckb_moved
-                    .saturating_add(accumulated.total_ckb_moved);
+                    .checked_add(accumulated.total_ckb_moved)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "total_ckb_moved overflow merging hourly activity stats for hour {}",
+                            hour_key
+                        )
+                    })?;
                 // Merge script counts
                 for (code_hash, count) in &accumulated.script_counts {
                     *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;

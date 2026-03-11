@@ -135,17 +135,31 @@ The 36-block limit balances:
 
 With ~10s block time, 36 blocks is about 6 minutes.
 
-## Unified Undo-Log
+## Rollback Mechanisms
 
-CKBadger should use a unified rollback mechanism:
+CKBadger uses two rollback mechanisms depending on the column family:
+
+### Undo-Log Replay (for stateful CFs)
+
+CFs with delta-based state (e.g. `addr_balance`, `script_info`, `token_holders`, cell indexes) use undo-log replay:
 
 - Write path records undo entries into `reorg_undo_log_by_block`
 - Key: `block_number + seq`
 - Value: `UndoLogEntry { target_store, cf_name, key, previous_value }`
 - Rollback replays entries for `block > rollback_to` in reverse order
 
-Key Insights:
+### Direct Deletion (for activity/event CFs)
+
+Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
+
+- `CF_ACTIVITIES`, `CF_ADDR_TXS` — scan all keys, delete where `block_num > rollback_to`
+- `CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES` — same approach
+- Stats CFs (`ACTIVITY_DAILY`, `ACTIVITY_HOURLY` prefixes in `CF_STATS_CHAIN`) — deleted via `should_delete_stats_for_replay`
+
+No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
+
+### Key Insights
 
 1. CF ownership isolation alone is not enough; write semantics must also be isolated.
-2. The append-only store contains only `CF_CELLS` (immutable cell payloads). All other CFs (activities, addr_txs, collection activities, indexes, stats) are in the domain store and are directly deleted on rollback.
+2. The append-only store contains only `CF_CELLS` (immutable cell payloads). All other CFs (activities, addr_txs, collection activities, indexes, stats) are in the domain store.
 3. In normal sync, append-store keys (`CF_CELLS`) are expected to be first-write-only; if a key already exists, that is an upstream bug signal. Duplicate append key writes are treated as correctness violations and should fail immediately.

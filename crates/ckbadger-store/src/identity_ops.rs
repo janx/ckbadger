@@ -140,7 +140,13 @@ impl CkbadgerStore {
             Some(value) if value.len() == 8 => {
                 Ok(i64::from_le_bytes(value[..8].try_into().unwrap()))
             }
-            _ => Ok(0),
+            Some(value) => anyhow::bail!(
+                "invalid identity owner value length for collection {} lock_hash {}: expected 8, got {}",
+                bytes_to_hex(collection_id),
+                bytes_to_hex(lock_hash),
+                value.len()
+            ),
+            None => Ok(0),
         }
     }
 

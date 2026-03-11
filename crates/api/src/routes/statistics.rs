@@ -3325,9 +3325,18 @@ async fn get_activity_summary_24h(
         agg.token_count += s.token_count;
         agg.object_count += s.object_count;
         agg.identity_count += s.identity_count;
+        agg.script_call_count += s.script_call_count;
+        agg.unknown_count += s.unknown_count;
         agg.coinbase_count += s.coinbase_count;
         agg.unique_address_count += s.unique_address_count;
-        agg.total_ckb_moved = agg.total_ckb_moved.saturating_add(s.total_ckb_moved);
+        agg.total_ckb_moved = agg
+            .total_ckb_moved
+            .checked_add(s.total_ckb_moved)
+            .ok_or_else(|| {
+                ApiError::internal(
+                    "total_ckb_moved overflow aggregating 24h activity stats".to_string(),
+                )
+            })?;
         for (code_hash, count) in &s.script_counts {
             *agg_script_counts.entry(code_hash.clone()).or_insert(0) += count;
         }

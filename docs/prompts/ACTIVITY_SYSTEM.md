@@ -46,12 +46,14 @@ Financial ledger precision. If Alice sends CKB to Bob in a transaction that also
 ```rust
 pub struct ActivityEntry {
     pub tx_hash: Vec<u8>,        // 32-byte transaction hash
+    pub block_hash: Vec<u8>,     // 32-byte block hash
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: i64,          // Unix timestamp
     pub ckb_delta: i128,         // Net CKB change (shannons) — i128 for overflow safety
     pub occupied_delta: i64,     // Net occupied capacity change (shannons)
     pub is_cellbase: bool,
+    pub has_type_script: bool,   // Whether any cell for this owner had a type script
     pub asset_changes: Vec<AssetChange>,
     pub peers: Vec<Vec<u8>>,     // Lock hashes of other parties
 }
@@ -67,19 +69,22 @@ pub enum AssetChange {
         symbol: Option<String>,  // e.g. "SEAL"
         decimals: Option<u8>,    // e.g. 8
     },
-    Object {                     // Spore, did:ckb
+    Object {                     // Spore
         object_id: Vec<u8>,
-        standard: String,        // "spore", "did_ckb"
-        action: AssetAction,     // Mint | Transfer | Burn
+        standard: String,        // "spore"
+        action: AssetAction,     // Mint | Transfer | Burn | Recycle | Renew | Update
     },
-    Identity {                   // mNFT, .bit
+    Identity {                   // mNFT, .bit, did:ckb
         identity_id: Vec<u8>,
-        standard: String,        // "m-nft", "dotbit"
+        standard: String,        // "m-nft", "dotbit", "did_ckb"
         action: AssetAction,
     },
     DaoDeposit { capacity: i64 },
     DaoWithdrawRequest { capacity: i64, deposit_block: i64 },
     DaoWithdrawComplete { capacity: i64, compensation: i64 },
+    ScriptCall {
+        type_code_hash: Vec<u8>, // Unrecognized type script interaction
+    },
 }
 ```
 
@@ -102,6 +107,26 @@ NFT/DOB action detection uses set comparison:
 - ID in outputs only → **Mint**
 - ID in both inputs and outputs → **Transfer**
 - ID in inputs only → **Burn**
+
+Additional .bit-specific actions:
+
+- **Recycle**: expired account removed from chain (capacity refunded)
+- **Renew**: account expiry extended (no ownership change)
+- **Update**: metadata changed (edit_records, edit_manager, etc.)
+
+### Activity Classification
+
+Each activity is exclusively classified for stats aggregation using `has_type_script`:
+
+| Classification                  | Condition                                                           |
+| ------------------------------- | ------------------------------------------------------------------- |
+| DAO (deposit/withdraw/complete) | Has DAO asset change                                                |
+| Token                           | Has Token asset change                                              |
+| Object                          | Has Object asset change                                             |
+| Identity                        | Has Identity asset change                                           |
+| ScriptCall                      | Has ScriptCall asset change (unrecognized type script)              |
+| Transfer                        | No asset changes AND `has_type_script == false` (pure CKB transfer) |
+| Unknown                         | No asset changes AND `has_type_script == true` (fallback)           |
 
 ## Storage Schema
 
@@ -150,6 +175,17 @@ Activities live in the domain store and are directly deleted during reorg rollba
 - No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
 
 See `docs/prompts/REORG_HANDLING.md` for the authoritative rollback boundary.
+
+## Hourly & Daily Activity Stats
+
+Activity stats are aggregated at two time granularities for charting and the 24h rolling summary:
+
+- **Daily stats** (`ACTIVITY_DAILY` prefix in `CF_STATS_CHAIN`): key = `0x1D` + `YYYYMMDD`, value = `DailyActivityStats`
+- **Hourly stats** (`ACTIVITY_HOURLY` prefix in `CF_STATS_CHAIN`): key = `0x1E` + `YYYYMMDDHH`, value = `DailyActivityStats`
+
+`DailyActivityStats` contains per-classification counts (`transfer_count`, `dao_deposit_count`, `dao_withdraw_request_count`, `dao_withdraw_complete_count`, `token_count`, `object_count`, `identity_count`, `script_call_count`, `unknown_count`, `coinbase_count`), `unique_address_count`, `total_ckb_moved` (u128), and `script_counts` (HashMap of code_hash → count).
+
+The API endpoint `GET /stats/activity-summary-24h` aggregates all hourly buckets within a 24h rolling window. Both daily and hourly stats are cleaned up during reorg rollback via `should_delete_stats_for_replay`.
 
 ## Activity Builder Algorithm
 
