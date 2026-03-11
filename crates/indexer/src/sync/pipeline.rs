@@ -1884,6 +1884,16 @@ impl Indexer {
         // === Writer loop ===
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
+
+        // Resolve disk device once for per-batch I/O delta tracking
+        let disk_device = {
+            let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+            crate::sys_info::parse_mount_info(&mounts, &self.config.domain_data_path)
+                .map(|(dev, _fs)| dev)
+                .unwrap_or_default()
+        };
+        let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
+
         loop {
             if self.shutdown_requested.load(Ordering::SeqCst) {
                 info!(run_id = %self.run_id, "Shutdown requested, aborting pipeline");
@@ -2333,6 +2343,7 @@ impl Indexer {
                         }
                         let adaptive_snapshot = self.adaptive_batch_controller.snapshot();
                         let perf_stats = self.writer.store().memory_stats();
+                        let batch_env = crate::sys_info::read_batch_environment(&mut disk_tracker);
                         self.record_bulk_sync_perf_batch_sample(BatchSample {
                             txs: write_metrics.txs,
                             cells: write_metrics.cells,
@@ -2358,11 +2369,13 @@ impl Indexer {
                                 perf_stats.compaction_pending_bytes / (1024 * 1024),
                                 perf_stats.l0_files_count,
                                 perf_stats.immutable_memtables,
-                                String::new(),
-                                0.0,
-                                0,
-                                0.0,
-                                0.0,
+                                chrono::Utc::now()
+                                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                                    .to_string(),
+                                batch_env.load_avg_1m,
+                                batch_env.mem_available_mb,
+                                batch_env.disk_read_mb,
+                                batch_env.disk_write_mb,
                             )
                         });
                         info!(

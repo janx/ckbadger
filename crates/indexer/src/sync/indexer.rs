@@ -532,6 +532,25 @@ impl Indexer {
             &self.run_id,
             &self.config.build_version,
         )?;
+
+        // After the run is created, capture and set environment snapshot
+        if let Some(run) = guard.as_mut() {
+            let env = crate::sys_info::capture_environment(&self.config.domain_data_path);
+            let profile = self.writer.store().memory_profile();
+            let rocksdb_config = crate::bulk_sync_perf::RocksDbConfig {
+                rocksdb_budget_gb: profile.rocksdb_budget_bytes as u64 / (1024 * 1024 * 1024),
+                block_cache_bulk_mb: profile.block_cache_bulk_sync_bytes as u64 / (1024 * 1024),
+                wbm_bulk_mb: profile.wbm_bulk_sync_bytes as u64 / (1024 * 1024),
+                write_buffer_mega_mb: profile.write_buffer_mega_bytes as u64 / (1024 * 1024),
+                l0_slowdown_bulk: 64,
+                l0_stop_bulk: 128,
+                max_background_jobs: profile.max_background_jobs,
+                max_subcompactions: profile.max_subcompactions,
+                unordered_write: true,
+                direct_io_reads: self.writer.store().runtime_config().direct_io_reads,
+            };
+            run.set_environment(env, rocksdb_config)?;
+        }
         Ok(())
     }
 
