@@ -79,6 +79,9 @@ const mockNetworkStatsComplete = {
     chainTip: null,
     forkPoint: null,
   },
+  knowledgeSize: null,
+  circulatingSupply: null,
+  daoLocked: null,
 };
 
 const mockNetworkStatsSyncing = {

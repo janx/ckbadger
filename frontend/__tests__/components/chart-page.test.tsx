@@ -55,6 +55,9 @@ describe('ChartPage', () => {
         chainTip: null,
         forkPoint: null,
       },
+      knowledgeSize: null,
+      circulatingSupply: null,
+      daoLocked: null,
     });
   });
 

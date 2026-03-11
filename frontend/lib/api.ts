@@ -95,6 +95,9 @@ interface NetworkStats {
   transactionsPerDay: string;
   syncStatus: SyncStatus;
   deepForkStatus: DeepForkStatus;
+  knowledgeSize: string | null;
+  circulatingSupply: string | null;
+  daoLocked: string | null;
 }
 
 interface DeepForkStatus {
@@ -1237,6 +1240,26 @@ async function fetchApi<T>(endpoint: string): Promise<T> {
   return res.json();
 }
 
+interface TopTokenEntry {
+  typeScriptHash: string;
+  name: string | null;
+  symbol: string | null;
+  holdersCount: number;
+  totalCapacityCkb: string;
+}
+
+interface CapacityCategory {
+  category: string;
+  capacityCkb: string;
+  percentage: string;
+}
+
+interface AssetEcosystemResponse {
+  topTokens: TopTokenEntry[];
+  capacityBreakdown: CapacityCategory[];
+  totalKnowledgeSizeCkb: string;
+}
+
 export type {
   GraphNode,
   GraphLink,
@@ -1337,6 +1360,9 @@ export type {
   ScriptCountEntry,
   DailyActivityStats,
   ActivitySummary24h,
+  TopTokenEntry,
+  CapacityCategory,
+  AssetEcosystemResponse,
 };
 
 export const api = {
@@ -1509,6 +1535,10 @@ export const api = {
 
   getRecentBlocks: (): Promise<RecentBlocksResponse> => {
     return fetchApi('/statistics/recent-blocks');
+  },
+
+  getAssetEcosystem: (): Promise<AssetEcosystemResponse> => {
+    return fetchApi('/statistics/asset-ecosystem');
   },
 
   getCellGraph: (
