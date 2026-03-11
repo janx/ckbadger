@@ -422,7 +422,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <TerminalPanelContent padding="none">
                   <div className="min-w-full overflow-x-auto">
                     <div
-                      className="border-base-border bg-base-surface/50 text-text-muted grid items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider"
+                      className="border-base-border bg-base-surface/50 text-text-muted hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
                       style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
                     >
                       <div>Deposit</div>
@@ -435,7 +435,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     {daoDeposits.data.map((deposit: DaoDeposit) => (
                       <TerminalRow key={`dao-${deposit.txHash}-${deposit.outputIndex}`}>
                         <div
-                          className="grid w-full items-start gap-x-4"
+                          className="hidden w-full items-start gap-x-4 md:grid"
                           style={{ gridTemplateColumns: '10rem 6rem 1fr 1fr 6rem 5.5rem' }}
                         >
                           <div>
@@ -479,6 +479,44 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             {formatTimeAgo(deposit.depositTimestamp)}
                           </div>
                         </div>
+                        <div className="space-y-1.5 md:hidden">
+                          <div className="flex items-center justify-between gap-2">
+                            <Link href={`/tx/${deposit.txHash}`}>
+                              <HexDisplay
+                                value={deposit.txHash}
+                                truncate
+                                startChars={6}
+                                endChars={6}
+                              />
+                            </Link>
+                            {getDaoStatusBadge(deposit.status)}
+                          </div>
+                          <div className="flex items-center justify-between gap-2 text-sm">
+                            <Capacity value={deposit.capacity} className="text-text-primary" />
+                            {deposit.compensation ? (
+                              <span className="text-positive font-mono">
+                                +{formatCkbAmount(deposit.compensation).full} CKB
+                              </span>
+                            ) : deposit.status === 'deposited' ? (
+                              <span className="text-text-muted">Accruing...</span>
+                            ) : null}
+                          </div>
+                          <div className="text-text-muted flex items-center gap-3 text-xs">
+                            <span>
+                              {formatDaoDuration(
+                                deposit.depositTimestamp,
+                                deposit.withdrawTimestamp || deposit.withdrawRequestTimestamp
+                              )}
+                            </span>
+                            <span>{formatTimeAgo(deposit.depositTimestamp)}</span>
+                            <Link
+                              href={`/blocks/${deposit.depositBlockNumber}`}
+                              className="text-text-muted font-mono hover:underline"
+                            >
+                              #{deposit.depositBlockNumber.toLocaleString()}
+                            </Link>
+                          </div>
+                        </div>
                       </TerminalRow>
                     ))}
                   </div>
@@ -506,10 +544,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             <TerminalPanelHeader>Holdings ({tokens?.data?.length || 0})</TerminalPanelHeader>
             <TerminalPanelContent padding="none">
               <div className="min-w-full">
-                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                  <div className="flex-1">Asset</div>
-                  <div className="w-32">Standard</div>
-                  <div className="w-48 text-right">Balance</div>
+                <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
+                  <div className="min-w-0 flex-1">Asset</div>
+                  <div className="w-28 shrink-0">Standard</div>
+                  <div className="w-44 shrink-0 text-right">Balance</div>
                 </div>
                 {[...(tokens?.data ?? [])]
                   .sort((a, b) => {
@@ -525,10 +563,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         className={`cursor-pointer ${isSelected ? 'bg-base-elevated/80' : ''}`}
                       >
                         <div
-                          className="flex w-full items-center"
+                          className="hidden w-full items-center sm:flex"
                           onClick={() => handleTokenSelect(isSelected ? null : token)}
                         >
-                          <div className="flex flex-1 items-center gap-3">
+                          <div className="flex min-w-0 flex-1 items-center gap-3">
                             {token.iconUrl && (
                               <Image
                                 src={token.iconUrl}
@@ -555,13 +593,46 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               )}
                             </div>
                           </div>
-                          <div className="w-32">
+                          <div className="w-28 shrink-0">
                             <Badge variant="gray">{token.standard}</Badge>
                           </div>
-                          <div className="w-48 text-right">
+                          <div className="w-44 shrink-0 text-right">
                             <span className="text-text-primary font-mono">
                               {formatTokenBalance(token.balance, token.decimals)}
                             </span>
+                          </div>
+                        </div>
+                        <div
+                          className="w-full space-y-1 sm:hidden"
+                          onClick={() => handleTokenSelect(isSelected ? null : token)}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                              {token.iconUrl && (
+                                <Image
+                                  src={token.iconUrl}
+                                  alt={token.symbol || token.name || 'Token'}
+                                  className="h-6 w-6 rounded-full"
+                                  width={24}
+                                  height={24}
+                                  unoptimized
+                                  onError={(event) => {
+                                    event.currentTarget.style.display = 'none';
+                                  }}
+                                />
+                              )}
+                              <Link
+                                href={`/tokens/${token.typeScriptHash}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-emphasis truncate font-medium hover:underline"
+                              >
+                                {tokenDisplayName(token)}
+                              </Link>
+                              <Badge variant="gray">{token.standard}</Badge>
+                            </div>
+                          </div>
+                          <div className="text-text-primary text-right font-mono text-sm">
+                            {formatTokenBalance(token.balance, token.decimals)}
                           </div>
                         </div>
                       </TerminalRow>
@@ -699,74 +770,115 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-muted py-12 text-center">Loading activities...</div>
                 ) : activities?.data && activities?.data.length > 0 ? (
                   <>
-                    <div className="overflow-x-auto">
-                      <div className="min-w-[640px]">
-                        <div className="border-base-border bg-base-surface/50 text-text-muted flex items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                          <div className="flex-1">Transaction</div>
-                          <div className="w-20">Type</div>
-                          <div className="w-44 text-right">CKB Change</div>
-                          <div className="w-32 text-right lg:w-48">Assets</div>
-                          <div className="w-20 text-right">Time</div>
-                        </div>
-                        {activities?.data.map((activity: Activity) => {
-                          const delta = BigInt(activity.ckbDelta);
-                          const isPositive = delta > BigInt(0);
-                          const isNegative = delta < BigInt(0);
-                          const deltaColor = isPositive
-                            ? 'text-positive'
-                            : isNegative
-                              ? 'text-negative'
-                              : 'text-text-muted';
-                          return (
-                            <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
-                              <div className="flex w-full items-center gap-4">
-                                <div className="min-w-0 flex-1">
-                                  <Link href={`/tx/${activity.txHash}`}>
-                                    <HexDisplay
-                                      value={activity.txHash}
-                                      truncate
-                                      startChars={6}
-                                      endChars={6}
-                                    />
-                                  </Link>
-                                  <Link
-                                    href={`/blocks/${activity.blockNumber}`}
-                                    className="text-text-muted hover:text-text-secondary block font-mono text-xs"
-                                  >
-                                    #{activity.blockNumber.toLocaleString()}
-                                  </Link>
-                                </div>
-                                <div className="w-20">
-                                  {activity.isCellbase ? (
-                                    <Badge variant="amber">Coinbase</Badge>
-                                  ) : isPositive ? (
-                                    <Badge variant="green">Received</Badge>
-                                  ) : isNegative ? (
-                                    <Badge variant="red">Sent</Badge>
-                                  ) : (
-                                    <Badge variant="gray">Self</Badge>
-                                  )}
-                                </div>
-                                <div className="w-44 whitespace-nowrap text-right">
-                                  <span className={`font-mono text-sm ${deltaColor}`}>
-                                    {isPositive && '+'}
-                                    {formatCkbAmount(activity.ckbDelta).full} CKB
-                                  </span>
-                                </div>
-                                <div className="flex w-32 min-w-0 flex-wrap items-center justify-end gap-1 lg:w-48">
-                                  {activity.assetChanges.map((change, i) => (
-                                    <AssetChangeBadge key={i} change={change} />
-                                  ))}
-                                </div>
-                                <div className="text-text-muted w-20 text-right text-sm">
-                                  {formatTimeAgo(Number(activity.timestamp))}
-                                </div>
-                              </div>
-                            </TerminalRow>
-                          );
-                        })}
-                      </div>
+                    <div className="border-base-border bg-base-surface/50 text-text-muted hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
+                      <div className="flex-1">Transaction</div>
+                      <div className="w-20">Type</div>
+                      <div className="w-44 text-right">CKB Change</div>
+                      <div className="w-32 text-right lg:w-48">Assets</div>
+                      <div className="w-20 text-right">Time</div>
                     </div>
+                    {activities?.data.map((activity: Activity) => {
+                      const delta = BigInt(activity.ckbDelta);
+                      const isPositive = delta > BigInt(0);
+                      const isNegative = delta < BigInt(0);
+                      const deltaColor = isPositive
+                        ? 'text-positive'
+                        : isNegative
+                          ? 'text-negative'
+                          : 'text-text-muted';
+                      return (
+                        <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
+                          <div className="hidden w-full items-center gap-4 md:flex">
+                            <div className="min-w-0 flex-1">
+                              <Link href={`/tx/${activity.txHash}`}>
+                                <HexDisplay
+                                  value={activity.txHash}
+                                  truncate
+                                  startChars={6}
+                                  endChars={6}
+                                />
+                              </Link>
+                              <Link
+                                href={`/blocks/${activity.blockNumber}`}
+                                className="text-text-muted hover:text-text-secondary block font-mono text-xs"
+                              >
+                                #{activity.blockNumber.toLocaleString()}
+                              </Link>
+                            </div>
+                            <div className="w-20">
+                              {activity.isCellbase ? (
+                                <Badge variant="amber">Coinbase</Badge>
+                              ) : isPositive ? (
+                                <Badge variant="green">Received</Badge>
+                              ) : isNegative ? (
+                                <Badge variant="red">Sent</Badge>
+                              ) : (
+                                <Badge variant="gray">Self</Badge>
+                              )}
+                            </div>
+                            <div className="w-44 whitespace-nowrap text-right">
+                              <span className={`font-mono text-sm ${deltaColor}`}>
+                                {isPositive && '+'}
+                                {formatCkbAmount(activity.ckbDelta).full} CKB
+                              </span>
+                            </div>
+                            <div className="flex w-32 min-w-0 flex-wrap items-center justify-end gap-1 lg:w-48">
+                              {activity.assetChanges.map((change, i) => (
+                                <AssetChangeBadge key={i} change={change} />
+                              ))}
+                            </div>
+                            <div className="text-text-muted w-20 text-right text-sm">
+                              {formatTimeAgo(Number(activity.timestamp))}
+                            </div>
+                          </div>
+                          <div className="space-y-1.5 md:hidden">
+                            <div className="flex items-center justify-between gap-2">
+                              <Link href={`/tx/${activity.txHash}`}>
+                                <HexDisplay
+                                  value={activity.txHash}
+                                  truncate
+                                  startChars={8}
+                                  endChars={6}
+                                />
+                              </Link>
+                              <span className="text-text-muted shrink-0 text-xs">
+                                {formatTimeAgo(Number(activity.timestamp))}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                {activity.isCellbase ? (
+                                  <Badge variant="amber">Coinbase</Badge>
+                                ) : isPositive ? (
+                                  <Badge variant="green">Received</Badge>
+                                ) : isNegative ? (
+                                  <Badge variant="red">Sent</Badge>
+                                ) : (
+                                  <Badge variant="gray">Self</Badge>
+                                )}
+                                <Link
+                                  href={`/blocks/${activity.blockNumber}`}
+                                  className="text-text-muted font-mono text-xs hover:underline"
+                                >
+                                  #{activity.blockNumber.toLocaleString()}
+                                </Link>
+                              </div>
+                              <span className={`font-mono text-sm ${deltaColor}`}>
+                                {isPositive && '+'}
+                                {formatCkbAmount(activity.ckbDelta).full} CKB
+                              </span>
+                            </div>
+                            {activity.assetChanges.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {activity.assetChanges.map((change, i) => (
+                                  <AssetChangeBadge key={i} change={change} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </TerminalRow>
+                      );
+                    })}
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
@@ -974,104 +1086,131 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-muted py-12 text-center">Loading transactions...</div>
                 ) : transactions?.data && transactions.data.length > 0 ? (
                   <>
-                    <div className="overflow-x-auto">
-                      <div className="min-w-[700px]">
-                        <div className="border-base-border bg-base-surface/50 text-text-muted flex items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                          <div className="flex-1">Transaction</div>
-                          <div className="w-20 text-center">In/Out</div>
-                          <div className="w-32 text-right">Fee</div>
-                          <div className="hidden w-28 text-right xl:block">Size/Cycles</div>
-                          <div className="w-44 text-right">CKB Change</div>
-                          <div className="w-20 text-right">Time</div>
-                        </div>
-                        {transactions.data.map((tx) => {
-                          const isPositive = !tx.capacityChange.startsWith('-');
-                          const fee = Number(tx.fee);
-                          const feeRate =
-                            tx.txSize && tx.txSize > 0 && fee > 0 ? fee / tx.txSize : null;
-                          return (
-                            <TerminalRow key={tx.txHash}>
-                              <div className="flex w-full items-center gap-4">
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center gap-1.5">
-                                    <Link href={`/tx/${tx.txHash}`}>
-                                      <HexDisplay
-                                        value={tx.txHash}
-                                        truncate
-                                        startChars={6}
-                                        endChars={6}
-                                      />
-                                    </Link>
-                                    {tx.isCellbase && <Badge variant="neutral">Cellbase</Badge>}
-                                    {tx.scriptLabels.map((label) => (
-                                      <Badge key={label} variant="neutral">
-                                        {label}
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                  <Link
-                                    href={`/blocks/${tx.blockNumber}`}
-                                    className="text-text-muted hover:text-text-secondary block font-mono text-xs"
-                                  >
-                                    #{tx.blockNumber.toLocaleString()}
-                                  </Link>
-                                </div>
-                                <div className="text-text-secondary w-20 text-center font-mono">
-                                  <span className="text-emphasis/70">{tx.inputsCount}</span>
-                                  <span className="text-text-muted mx-1">→</span>
-                                  <span className="text-emphasis/70">{tx.outputsCount}</span>
-                                </div>
-                                <div className="w-32 whitespace-nowrap text-right">
-                                  {tx.isCellbase ? (
-                                    <span className="text-text-muted">—</span>
-                                  ) : (
-                                    <div>
-                                      <Capacity value={tx.fee} className="text-text-secondary" />
-                                      {feeRate != null && (
-                                        <div className="text-text-muted font-mono text-xs">
-                                          {feeRate.toFixed(1)} shannons/B
-                                        </div>
-                                      )}
+                    <div className="border-base-border bg-base-surface/50 text-text-muted hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
+                      <div className="flex-1">Transaction</div>
+                      <div className="w-20 text-center">In/Out</div>
+                      <div className="w-32 text-right">Fee</div>
+                      <div className="hidden w-28 text-right xl:block">Size/Cycles</div>
+                      <div className="w-44 text-right">CKB Change</div>
+                      <div className="w-20 text-right">Time</div>
+                    </div>
+                    {transactions.data.map((tx) => {
+                      const isPositive = !tx.capacityChange.startsWith('-');
+                      const fee = Number(tx.fee);
+                      const feeRate =
+                        tx.txSize && tx.txSize > 0 && fee > 0 ? fee / tx.txSize : null;
+                      return (
+                        <TerminalRow key={tx.txHash}>
+                          <div className="hidden w-full items-center gap-4 lg:flex">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <Link href={`/tx/${tx.txHash}`}>
+                                  <HexDisplay
+                                    value={tx.txHash}
+                                    truncate
+                                    startChars={6}
+                                    endChars={6}
+                                  />
+                                </Link>
+                                {tx.isCellbase && <Badge variant="neutral">Cellbase</Badge>}
+                                {tx.scriptLabels.map((label) => (
+                                  <Badge key={label} variant="neutral">
+                                    {label}
+                                  </Badge>
+                                ))}
+                              </div>
+                              <Link
+                                href={`/blocks/${tx.blockNumber}`}
+                                className="text-text-muted hover:text-text-secondary block font-mono text-xs"
+                              >
+                                #{tx.blockNumber.toLocaleString()}
+                              </Link>
+                            </div>
+                            <div className="text-text-secondary w-20 text-center font-mono">
+                              <span className="text-emphasis/70">{tx.inputsCount}</span>
+                              <span className="text-text-muted mx-1">→</span>
+                              <span className="text-emphasis/70">{tx.outputsCount}</span>
+                            </div>
+                            <div className="w-32 whitespace-nowrap text-right">
+                              {tx.isCellbase ? (
+                                <span className="text-text-muted">{'\u2014'}</span>
+                              ) : (
+                                <div>
+                                  <Capacity value={tx.fee} className="text-text-secondary" />
+                                  {feeRate != null && (
+                                    <div className="text-text-muted font-mono text-xs">
+                                      {feeRate.toFixed(1)} shannons/B
                                     </div>
                                   )}
                                 </div>
-                                <div className="text-text-muted hidden w-28 whitespace-nowrap text-right font-mono text-xs xl:block">
-                                  {tx.txSize != null ? (
-                                    <span>
-                                      {tx.txSize >= 1000
-                                        ? `${(tx.txSize / 1000).toFixed(1)} kB`
-                                        : `${tx.txSize} B`}
-                                    </span>
-                                  ) : (
-                                    <span className="text-text-muted">—</span>
-                                  )}
-                                  {tx.cycles != null && (
-                                    <>
-                                      <span className="text-text-muted mx-1">/</span>
-                                      <span>
-                                        {tx.cycles >= 1000000
-                                          ? `${(tx.cycles / 1000000).toFixed(1)}M`
-                                          : `${(tx.cycles / 1000).toFixed(0)}k`}
-                                      </span>
-                                    </>
-                                  )}
-                                </div>
-                                <div className="w-44 whitespace-nowrap text-right">
-                                  <Capacity
-                                    value={tx.capacityChange}
-                                    className={isPositive ? 'text-positive' : 'text-negative'}
-                                    showSign
-                                  />
-                                </div>
-                                <div className="text-text-muted w-20 text-right text-sm">
-                                  {formatTimeAgo(tx.timestamp)}
-                                </div>
+                              )}
+                            </div>
+                            <div className="text-text-muted hidden w-28 whitespace-nowrap text-right font-mono text-xs xl:block">
+                              {tx.txSize != null ? (
+                                <span>
+                                  {tx.txSize >= 1000
+                                    ? `${(tx.txSize / 1000).toFixed(1)} kB`
+                                    : `${tx.txSize} B`}
+                                </span>
+                              ) : (
+                                <span className="text-text-muted">{'\u2014'}</span>
+                              )}
+                              {tx.cycles != null && (
+                                <>
+                                  <span className="text-text-muted mx-1">/</span>
+                                  <span>
+                                    {tx.cycles >= 1000000
+                                      ? `${(tx.cycles / 1000000).toFixed(1)}M`
+                                      : `${(tx.cycles / 1000).toFixed(0)}k`}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                            <div className="w-44 whitespace-nowrap text-right">
+                              <Capacity
+                                value={tx.capacityChange}
+                                className={isPositive ? 'text-positive' : 'text-negative'}
+                                showSign
+                              />
+                            </div>
+                            <div className="text-text-muted w-20 text-right text-sm">
+                              {formatTimeAgo(tx.timestamp)}
+                            </div>
+                          </div>
+                          <div className="space-y-1.5 lg:hidden">
+                            <div className="flex items-center justify-between gap-2">
+                              <Link href={`/tx/${tx.txHash}`}>
+                                <HexDisplay
+                                  value={tx.txHash}
+                                  truncate
+                                  startChars={8}
+                                  endChars={6}
+                                />
+                              </Link>
+                              <span className="text-text-muted shrink-0 text-xs">
+                                {formatTimeAgo(tx.timestamp)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-text-muted flex items-center gap-3 font-mono text-xs">
+                                <span>
+                                  <span className="text-emphasis-dim">{tx.inputsCount}</span>
+                                  <span className="mx-1">→</span>
+                                  <span className="text-emphasis-dim">{tx.outputsCount}</span>
+                                </span>
+                                <span>Fee: {formatCkbAmount(tx.fee).full}</span>
                               </div>
-                            </TerminalRow>
-                          );
-                        })}
-                      </div>
-                    </div>
+                              <span
+                                className={`font-mono text-sm ${tx.capacityChange.startsWith('-') ? 'text-negative' : 'text-positive'}`}
+                              >
+                                {!tx.capacityChange.startsWith('-') && '+'}
+                                {formatCkbAmount(tx.capacityChange).full} CKB
+                              </span>
+                            </div>
+                          </div>
+                        </TerminalRow>
+                      );
+                    })}
                     {(transactions.hasMore || txPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
