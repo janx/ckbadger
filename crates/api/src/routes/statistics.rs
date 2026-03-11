@@ -1886,6 +1886,41 @@ async fn get_address_cohort_retention_chart(
         return ok(cached);
     }
 
+    // Try pre-computed cohort data from warmup (piggybacked on addr_balance scan)
+    if let Some(cohorts) = state
+        .mem_cache
+        .get::<BTreeMap<String, (i128, i128)>>("internal:address-cohort-data")
+    {
+        if !cohorts.is_empty() {
+            let data = cohorts
+                .into_iter()
+                .map(|(cohort, (occupied, total_balance))| {
+                    let retention = if total_balance > 0 {
+                        occupied as f64 * 100.0 / total_balance as f64
+                    } else {
+                        0.0
+                    };
+                    ChartDataPoint {
+                        date: cohort,
+                        value: format!("{retention:.6}"),
+                        value2: Some(shannon_to_ckb_string(occupied)),
+                    }
+                })
+                .collect();
+
+            let response = ChartResponse {
+                data,
+                title: "Address Cohort Retention".to_string(),
+                y_axis_label: "Occupied / Balance (%)".to_string(),
+                y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+            };
+
+            state.cache.set(cache_key, &response, CacheTtl::CHART).await;
+            return ok(response);
+        }
+    }
+
+    // Fallback: full scan when warmup hasn't populated cohort data yet
     let transitions = load_block_date_transitions_cached(&state).map_err(ApiError::internal)?;
     let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
 

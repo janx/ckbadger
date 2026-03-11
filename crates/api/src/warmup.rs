@@ -14,7 +14,7 @@ use crate::AppState;
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -263,6 +263,14 @@ fn cached_address_entry_from_candidate(candidate: AddressCandidate) -> CachedAdd
 fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
     let mut by_balance: BinaryHeap<Reverse<BalanceRank>> = BinaryHeap::new();
     let mut by_activity: BinaryHeap<Reverse<ActivityRank>> = BinaryHeap::new();
+    let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
+
+    // Load date transitions from mem_cache (populated by chart warmup or on-demand)
+    let parsed_transitions: Vec<(i64, chrono::NaiveDate)> = state
+        .mem_cache
+        .get::<Vec<(i64, chrono::NaiveDate)>>("internal:block-date-transitions")
+        .unwrap_or_default();
+
     let iter = state
         .store
         .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
@@ -297,6 +305,18 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
                 hex::encode(&key),
                 balance.txs_count
             );
+        }
+
+        // Accumulate cohort data (piggybacking on the same scan)
+        if !parsed_transitions.is_empty() {
+            if let Some(first_seen_date) =
+                block_number_to_date(&parsed_transitions, balance.first_seen_block)
+            {
+                let cohort = first_seen_date.format("%Y-%m").to_string();
+                let entry = cohorts.entry(cohort).or_insert((0, 0));
+                entry.0 += balance.occupied_capacity;
+                entry.1 += balance.balance;
+            }
         }
 
         let candidate = AddressCandidate {
@@ -354,6 +374,15 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
         &active_cached,
         CacheTtl::ADDRESS_BALANCE,
     );
+
+    if !cohorts.is_empty() {
+        state.mem_cache.set(
+            "internal:address-cohort-data",
+            &cohorts,
+            CacheTtl::ADDRESS_BALANCE,
+        );
+    }
+
     Ok(())
 }
 
