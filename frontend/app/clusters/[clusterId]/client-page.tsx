@@ -28,7 +28,7 @@ import { formatNumber } from '@/lib/utils';
 import { formatActivityTimestamp } from '@/lib/asset-utils';
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
-type CollectionSectionTab = 'activities' | 'nfts' | 'holders';
+type CollectionSectionTab = 'activities' | 'objects' | 'holders';
 const LIST_FILTER_VALUES: ListContentFilter[] = ['all', 'image', 'video', 'audio', 'text', 'other'];
 const LIST_SORT_VALUES: ListSort[] = ['createdDesc', 'createdAsc', 'sizeDesc', 'sizeAsc'];
 function isListContentFilter(value: string | null): value is ListContentFilter {
@@ -38,7 +38,7 @@ function isListSort(value: string | null): value is ListSort {
   return !!value && LIST_SORT_VALUES.includes(value as ListSort);
 }
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
-  return value === 'activities' || value === 'nfts' || value === 'holders';
+  return value === 'activities' || value === 'objects' || value === 'holders';
 }
 function safeString(value: unknown, fallback = ''): string {
   if (typeof value !== 'string') {
@@ -374,7 +374,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
-            href="/assets?type=nft"
+            href="/assets?type=object"
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to Objects
@@ -505,7 +505,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                   indicator="active"
                   actions={
                     <div className="flex w-full flex-wrap items-center justify-between gap-3">
-                      {activeCollectionTab === 'nfts' && (
+                      {activeCollectionTab === 'objects' && (
                         <div
                           data-testid="spore-list-controls"
                           className="flex flex-1 flex-wrap items-center gap-2"
@@ -559,7 +559,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                         <TabsTrigger value="activities">
                           Activities ({formatNumber(cluster.activitiesCount)})
                         </TabsTrigger>
-                        <TabsTrigger value="nfts">
+                        <TabsTrigger value="objects">
                           Objects ({formatNumber(cluster.sporesCount)})
                         </TabsTrigger>
                         <TabsTrigger value="holders">
@@ -618,7 +618,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     />
                   </TerminalPanelFooter>
                 </TabsContent>
-                <TabsContent value="nfts" className="py-0">
+                <TabsContent value="objects" className="py-0">
                   <TerminalPanelContent padding="none">
                     {sporesLoading ? (
                       <div className="text-text-dim py-8 text-center">Loading spores...</div>
@@ -685,7 +685,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                     {getContentTypeIcon(contentType)}
                                   </span>
                                   {sporeId ? (
-                                    <Link href={`/nfts/${sporeId}`} className="hover:underline">
+                                    <Link href={`/objects/${sporeId}`} className="hover:underline">
                                       <HexDisplay value={sporeId} size="sm" />
                                     </Link>
                                   ) : (
@@ -730,7 +730,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                       {getContentTypeIcon(contentType)}
                                     </span>
                                     {sporeId ? (
-                                      <Link href={`/nfts/${sporeId}`} className="hover:underline">
+                                      <Link href={`/objects/${sporeId}`} className="hover:underline">
                                         <HexDisplay value={sporeId} size="sm" />
                                       </Link>
                                     ) : (

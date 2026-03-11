@@ -1,6 +1,6 @@
 # ckbadger
 
-ckbadger is a CKB blockchain explorer.
+ ckbadger is a CKB blockchain explorer.
 
 Primary markdown rule:
 
@@ -15,9 +15,9 @@ Machine-friendly endpoints:
 - Raw pages: `/{page}.raw`
   - Optional profile: `?profile=default|debugger`
   - Example: `/tx/0x....raw?profile=debugger`
-  - Example: `/nfts/dotbit/{nftId}.raw`
-  - Example: `/nfts/did/{nftId}.raw`
-  - Example: `/nfts/mnft/{nftId}.raw`
+  - Example: `/identities/dotbit/{identityId}.raw`
+  - Example: `/identities/did/{identityId}.raw`
+  - Example: `/objects/mnft/{objectId}.raw`
   - `profile=debugger` returns `mockTransaction` for `ckb-debugger --tx-file`
   - `/tx/{hash}.raw` also includes `data.txWitness` (witness analyses + inference)
   - Raw response `meta` includes `buildVersion`
@@ -30,7 +30,7 @@ Core page groups:
 - `/transactions`, `/tx/{hash}`
 - `/address/{addr}`, `/cell/{txHash-outputIndex}`
 - `/tokens`, `/tokens/{typeHash}`
-- `/assets`, `/nfts`, `/nfts/{sporeId}`, `/nfts/dotbit/{nftId}`, `/nfts/did/{nftId}`, `/nfts/mnft/{nftId}`
+- `/assets`, `/objects`, `/objects/{sporeId}`, `/identities/dotbit/{identityId}`, `/identities/did/{identityId}`, `/objects/mnft/{objectId}`
 - `/scripts`, `/scripts/{name}`, `/script/{codeHash}`
 - `/dao`, `/dao/charts`
 - `/charts`, `/charts/{slug}`

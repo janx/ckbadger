@@ -44,7 +44,7 @@ function isDidCkbAlias(assetId: string): boolean {
   );
 }
 
-function normalizeNftAssetId(assetId: string): string {
+function normalizeObjectAssetId(assetId: string): string {
   if (isDotbitAlias(assetId)) return DOTBIT_COLLECTION_ID;
   if (isDidCkbAlias(assetId)) return DID_CKB_COLLECTION_ID;
   return assetId;
@@ -54,9 +54,9 @@ import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';
-type CollectionSectionTab = 'activities' | 'nfts' | 'holders';
+type CollectionSectionTab = 'activities' | 'objects' | 'holders';
 function isCollectionSectionTab(value: string | null): value is CollectionSectionTab {
-  return value === 'activities' || value === 'nfts' || value === 'holders';
+  return value === 'activities' || value === 'objects' || value === 'holders';
 }
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('404');
@@ -88,7 +88,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const occupationRangeParams = getOccupationRangeParams(occupationRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
   const isDidCkbCollection = isDidCkbAlias(rawAssetId);
-  const assetId = normalizeNftAssetId(rawAssetId);
+  const assetId = normalizeObjectAssetId(rawAssetId);
   // Redirect identity collection aliases to /identities/ routes
   useEffect(() => {
     if (isDotbitCollection) {
@@ -108,7 +108,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   }, [searchInput]);
   const sporeQuery = useQuery({
     queryKey: ['spore', rawAssetId],
-    queryFn: () => api.getSporeNft(assetId),
+    queryFn: () => api.getSporeObject(assetId),
     enabled: !isDotbitCollection && !isDidCkbCollection,
     retry: false,
   });
@@ -116,7 +116,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const shouldQueryCollection =
     isDotbitCollection || isDidCkbCollection || (!spore && isNotFoundError(sporeQuery.error));
   const collectionQuery = useQuery({
-    queryKey: ['nft-collection', assetId],
+    queryKey: ['object-collection', assetId],
     queryFn: () => api.getObjectCollection(assetId),
     enabled: shouldQueryCollection,
     retry: false,
@@ -152,7 +152,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   });
   const { data: decodedDobByApi } = useQuery({
     queryKey: ['spore-dob-decoded', assetId],
-    queryFn: () => api.getSporeNftDecoded(assetId),
+    queryFn: () => api.getSporeObjectDecoded(assetId),
     enabled: !!spore && spore.contentType.toLowerCase().startsWith('dob/'),
     retry: false,
   });
@@ -189,13 +189,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     queryKey: ['spore-occupation-chart', assetId, occupationRange],
     queryFn: () =>
       occupationRangeParams
-        ? api.getSporeNftOccupationChart(assetId, occupationRangeParams)
-        : api.getSporeNftOccupationChart(assetId),
+        ? api.getSporeObjectOccupationChart(assetId, occupationRangeParams)
+        : api.getSporeObjectOccupationChart(assetId),
     enabled: !!spore,
   });
   const { data: collectionOccupationChart, isLoading: isCollectionOccupationChartLoading } =
     useQuery({
-      queryKey: ['nft-collection-occupation-chart', collectionAssetId, occupationRange],
+      queryKey: ['object-collection-occupation-chart', collectionAssetId, occupationRange],
       queryFn: () =>
         occupationRangeParams
           ? api.getObjectCollectionOccupationChart(collectionAssetId, occupationRangeParams)
@@ -209,7 +209,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     isError: isCollectionItemsError,
   } = useQuery({
     queryKey: [
-      'nft-collection-items',
+      'object-collection-items',
       collectionAssetId,
       collectionItemsPagination.cursor,
       collectionSearchKeyword,
@@ -230,9 +230,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     isLoading: isCollectionHoldersLoading,
     isError: isCollectionHoldersError,
   } = useQuery({
-    queryKey: ['nft-collection-holders', collectionAssetId, collectionHoldersPagination.cursor],
+    queryKey: ['object-collection-holders', collectionAssetId, collectionHoldersPagination.cursor],
     queryFn: () =>
-      api.getCollectionHolders(collectionAssetId, {
+      api.getObjectCollectionHolders(collectionAssetId, {
         limit: 20,
         cursor: collectionHoldersPagination.cursor,
       }),
@@ -245,7 +245,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     isError: isCollectionActivitiesError,
   } = useQuery({
     queryKey: [
-      'nft-collection-activities',
+      'object-collection-activities',
       collectionAssetId,
       collectionActivitiesPagination.cursor,
     ],
@@ -422,14 +422,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         <main className="container mx-auto px-4 py-8">
           <div className="mb-6">
             <Link
-              href="/assets?type=nft"
+              href="/assets?type=object"
               className="hover:text-emphasis text-text-dim text-sm transition-colors"
             >
-              ← Back to NFTs
+              ← Back to Objects
             </Link>
           </div>
           <PageHeader
-            title={collection.name || 'NFT Collection'}
+            title={collection.name || 'Object Collection'}
             badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
           />
           <ObjectCollectionStatCards
@@ -448,7 +448,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </TerminalPanelContent>
             </TerminalPanel>
             <CapacityOccupationSection
-              description="Daily cumulative live CKB occupation for this NFT collection."
+              description="Daily cumulative live CKB occupation for this Object collection."
               occupationRange={occupationRange}
               onOccupationRangeChange={setOccupationRange}
               occupationChart={collectionOccupationChart}
@@ -466,14 +466,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         <TabsTrigger value="activities">
                           Activities ({formatNumber(collection.activitiesCount)})
                         </TabsTrigger>
-                        <TabsTrigger value="nfts">
-                          NFTs ({formatNumber(collection.totalCount)})
+                        <TabsTrigger value="objects">
+                          Objects ({formatNumber(collection.totalCount)})
                         </TabsTrigger>
                         <TabsTrigger value="holders">
                           Holders ({formatNumber(collection.holdersCount)})
                         </TabsTrigger>
                       </TabsList>
-                      {activeCollectionTab === 'nfts' && supportsCollectionFilters && (
+                      {activeCollectionTab === 'objects' && supportsCollectionFilters && (
                         <div className="flex items-center gap-2">
                           <select
                             value={collectionStatusFilter}
@@ -509,7 +509,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     ? 'Activities'
                     : activeCollectionTab === 'holders'
                       ? 'Holders'
-                      : 'NFTs'}
+                      : 'Objects'}
                 </TerminalPanelHeader>
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
@@ -555,18 +555,18 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                     />
                   </TerminalPanelFooter>
                 </TabsContent>
-                <TabsContent value="nfts" className="py-0">
+                <TabsContent value="objects" className="py-0">
                   <TerminalPanelContent>
                     {isDotbitCollectionView ? (
                       isCollectionItemsLoading ? (
-                        <div className="text-text-dim py-8 text-center">Loading NFTs...</div>
+                        <div className="text-text-dim py-8 text-center">Loading Objects...</div>
                       ) : isCollectionItemsError ? (
                         <div className="text-rouge py-8 text-center">
-                          Failed to load NFTs. Please refresh and try again.
+                          Failed to load Objects. Please refresh and try again.
                         </div>
                       ) : !collectionItems?.data?.length ? (
                         <div className="text-text-dim py-8 text-center">
-                          No NFTs in this collection
+                          No Objects in this collection
                         </div>
                       ) : (
                         <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
@@ -577,7 +577,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             >
                               <div className="mb-1 flex items-center justify-between gap-3">
                                 <Link
-                                  href={`/nfts/dotbit/${encodeURIComponent(item.nftId)}`}
+                                  href={`/identities/dotbit/${encodeURIComponent(item.nftId)}`}
                                   className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
@@ -646,14 +646,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                         </div>
                       )
                     ) : isCollectionItemsLoading || isCollectionItemsFetching ? (
-                      <div className="text-text-dim py-8 text-center">Loading NFTs...</div>
+                      <div className="text-text-dim py-8 text-center">Loading Objects...</div>
                     ) : isCollectionItemsError ? (
                       <div className="text-rouge py-8 text-center">
-                        Failed to load NFTs. Please refresh and try again.
+                        Failed to load Objects. Please refresh and try again.
                       </div>
                     ) : !collectionItems?.data?.length ? (
                       <div className="text-text-dim py-8 text-center">
-                        No NFTs in this collection
+                        No Objects in this collection
                       </div>
                     ) : (
                       <div className="space-y-2">
@@ -665,7 +665,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             <div className="flex items-center justify-between gap-3">
                               {item.standard.toLowerCase() === 'm-nft' ? (
                                 <Link
-                                  href={`/nfts/mnft/${item.nftId}`}
+                                  href={`/objects/mnft/${item.nftId}`}
                                   className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
@@ -673,7 +673,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               ) : item.standard.toLowerCase() === 'did_ckb' ||
                                 item.standard.toLowerCase() === 'did:ckb' ? (
                                 <Link
-                                  href={`/nfts/did/${encodeURIComponent(item.nftId)}`}
+                                  href={`/identities/did/${encodeURIComponent(item.nftId)}`}
                                   className="hover:text-emphasis text-text-bright font-mono text-sm hover:underline"
                                 >
                                   {item.name || item.nftId}
@@ -695,13 +695,13 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               )}
                             </div>
                             {item.standard.toLowerCase() === 'm-nft' ? (
-                              <Link href={`/nfts/mnft/${item.nftId}`} className="hover:underline">
+                              <Link href={`/objects/mnft/${item.nftId}`} className="hover:underline">
                                 <HexDisplay value={item.nftId} size="sm" />
                               </Link>
                             ) : item.standard.toLowerCase() === 'did_ckb' ||
                               item.standard.toLowerCase() === 'did:ckb' ? (
                               <Link
-                                href={`/nfts/did/${encodeURIComponent(item.nftId)}`}
+                                href={`/identities/did/${encodeURIComponent(item.nftId)}`}
                                 className="hover:underline"
                               >
                                 <HexDisplay value={item.nftId} size="sm" />
@@ -736,7 +736,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                   <TerminalPanelFooter>
                     <CursorPagination
                       total={collectionItems?.total ?? undefined}
-                      totalLabel="NFTs"
+                      totalLabel="Objects"
                       pageSize={20}
                       page={collectionItemsPagination.page}
                       hasMore={collectionItems?.hasMore ?? false}
@@ -957,10 +957,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
           <Link
-            href="/assets?type=nft"
+            href="/assets?type=object"
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
-            ← Back to NFTs
+            ← Back to Objects
           </Link>
         </div>
         <PageHeader
@@ -1205,7 +1205,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
               </TerminalPanel>
             )}
             <CapacityOccupationSection
-              description="Daily cumulative live CKB occupation for this NFT."
+              description="Daily cumulative live CKB occupation for this Object."
               occupationRange={occupationRange}
               onOccupationRangeChange={setOccupationRange}
               occupationChart={occupationChart}

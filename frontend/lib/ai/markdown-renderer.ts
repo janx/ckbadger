@@ -945,12 +945,12 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
-    case 'nfts_list': {
+    case 'objects_list': {
       const limit = parseLimit(searchParams);
       const cursor = searchParams.get('cursor') ?? undefined;
-      const nfts = await api.getSporeNfts({ limit, cursor });
+      const objects = await api.getSporeObjects({ limit, cursor });
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
-        '# NFTs',
+        '# Objects',
         '',
         '## Query',
         '',
@@ -960,37 +960,37 @@ export async function renderMarkdownPage(
         '',
         markdownTable(
           ['sporeId', 'clusterId', 'owner', 'isLive', 'createdAtBlock'],
-          nfts.data.map((nft) => [
-            hashShort(nft.sporeId),
-            nft.clusterId ?? '-',
-            nft.ownerAddress ?? hashShort(nft.ownerLockHash),
-            nft.isLive,
-            nft.createdAtBlock,
+          objects.data.map((obj) => [
+            hashShort(obj.sporeId),
+            obj.clusterId ?? '-',
+            obj.ownerAddress ?? hashShort(obj.ownerLockHash),
+            obj.isLive,
+            obj.createdAtBlock,
           ])
         ),
       ]);
       return { status: 200, body };
     }
-    case 'nft_detail': {
-      const nft = await api.getSporeNft(page.sporeId);
+    case 'object_detail': {
+      const obj = await api.getSporeObject(page.sporeId);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
-        `# NFT ${hashShort(nft.sporeId, 14, 12)}`,
+        `# Object ${hashShort(obj.sporeId, 14, 12)}`,
         '',
         markdownTable(
           ['field', 'value'],
           [
-            ['sporeId', nft.sporeId],
-            ['txHash', nft.txHash],
-            ['outputIndex', nft.outputIndex],
-            ['clusterId', nft.clusterId ?? '-'],
-            ['contentType', nft.contentType],
-            ['contentSize', nft.contentSize],
-            ['ownerLockHash', nft.ownerLockHash],
-            ['ownerAddress', nft.ownerAddress ?? '-'],
-            ['isLive', nft.isLive],
-            ['createdAtBlock', nft.createdAtBlock],
-            ['liveCapacity', nft.liveCapacity ?? '-'],
-            ['liveOccupiedCapacity', nft.liveOccupiedCapacity ?? '-'],
+            ['sporeId', obj.sporeId],
+            ['txHash', obj.txHash],
+            ['outputIndex', obj.outputIndex],
+            ['clusterId', obj.clusterId ?? '-'],
+            ['contentType', obj.contentType],
+            ['contentSize', obj.contentSize],
+            ['ownerLockHash', obj.ownerLockHash],
+            ['ownerAddress', obj.ownerAddress ?? '-'],
+            ['isLive', obj.isLive],
+            ['createdAtBlock', obj.createdAtBlock],
+            ['liveCapacity', obj.liveCapacity ?? '-'],
+            ['liveOccupiedCapacity', obj.liveOccupiedCapacity ?? '-'],
           ]
         ),
       ]);
@@ -1021,8 +1021,8 @@ export async function renderMarkdownPage(
       const cursor = searchParams.get('cursor') ?? undefined;
       const action = parseMnftActivityAction(searchParams.get('action'));
       const [item, activities] = await Promise.all([
-        api.getMnftItemDetail(page.nftId),
-        api.getMnftItemActivities(page.nftId, { limit, cursor, action }),
+        api.getMnftItemDetail(page.objectId),
+        api.getMnftItemActivities(page.objectId, { limit, cursor, action }),
       ]);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# mNFT ${hashShort(item.nftId, 14, 12)}`,
@@ -1108,8 +1108,8 @@ export async function renderMarkdownPage(
       const cursor = searchParams.get('cursor') ?? undefined;
       const action = parseMnftActivityAction(searchParams.get('action'));
       const [item, activities] = await Promise.all([
-        api.getDotbitItemDetail(page.nftId),
-        api.getDotbitItemActivities(page.nftId, { limit, cursor, action }),
+        api.getDotbitItemDetail(page.identityId),
+        api.getDotbitItemActivities(page.identityId, { limit, cursor, action }),
       ]);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# .bit ${item.name ?? hashShort(item.nftId, 14, 12)}`,
@@ -1151,8 +1151,8 @@ export async function renderMarkdownPage(
       const cursor = searchParams.get('cursor') ?? undefined;
       const action = parseMnftActivityAction(searchParams.get('action'));
       const [item, activities] = await Promise.all([
-        api.getDidCkbItemDetail(page.nftId),
-        api.getDidCkbItemActivities(page.nftId, { limit, cursor, action }),
+        api.getDidCkbItemDetail(page.identityId),
+        api.getDidCkbItemActivities(page.identityId, { limit, cursor, action }),
       ]);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# did:ckb ${item.name ?? hashShort(item.nftId, 14, 12)}`,
@@ -1217,11 +1217,11 @@ export async function renderMarkdownPage(
         '',
         markdownTable(
           ['sporeId', 'owner', 'isLive', 'createdAtBlock'],
-          spores.data.map((nft) => [
-            hashShort(nft.sporeId),
-            nft.ownerAddress ?? hashShort(nft.ownerLockHash),
-            nft.isLive,
-            nft.createdAtBlock,
+          spores.data.map((spore) => [
+            hashShort(spore.sporeId),
+            spore.ownerAddress ?? hashShort(spore.ownerLockHash),
+            spore.isLive,
+            spore.createdAtBlock,
           ])
         ),
       ]);

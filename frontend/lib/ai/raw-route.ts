@@ -1,18 +1,18 @@
 export type ParsedRawPage =
   | { kind: 'block_detail'; pathname: string; id: string }
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
-  | { kind: 'dotbit_item_detail'; pathname: string; nftId: string }
-  | { kind: 'did_ckb_item_detail'; pathname: string; nftId: string }
-  | { kind: 'mnft_item_detail'; pathname: string; nftId: string }
+  | { kind: 'dotbit_item_detail'; pathname: string; identityId: string }
+  | { kind: 'did_ckb_item_detail'; pathname: string; identityId: string }
+  | { kind: 'mnft_item_detail'; pathname: string; objectId: string }
   | { kind: 'tx_detail'; pathname: string; hash: string }
   | { kind: 'unknown'; pathname: string };
 
 export const RAW_ROUTE_PATTERNS = [
   '/blocks/{id}',
   '/cell/{outpoint}',
-  '/nfts/dotbit/{nftId}',
-  '/nfts/did/{nftId}',
-  '/nfts/mnft/{nftId}',
+  '/identities/dotbit/{identityId}',
+  '/identities/did/{identityId}',
+  '/objects/mnft/{objectId}',
   '/tx/{hash}',
 ] as const;
 
@@ -64,30 +64,30 @@ export function parseRawSourcePath(pathname: string): ParsedRawPage {
     };
   }
 
-  const dotbitMatch = normalized.match(/^\/nfts\/dotbit\/([^/]+)$/);
+  const dotbitMatch = normalized.match(/^\/identities\/dotbit\/([^/]+)$/);
   if (dotbitMatch) {
     return {
       kind: 'dotbit_item_detail',
       pathname: normalized,
-      nftId: decodeParam(dotbitMatch[1]),
+      identityId: decodeParam(dotbitMatch[1]),
     };
   }
 
-  const didMatch = normalized.match(/^\/nfts\/did\/([^/]+)$/);
+  const didMatch = normalized.match(/^\/identities\/did\/([^/]+)$/);
   if (didMatch) {
     return {
       kind: 'did_ckb_item_detail',
       pathname: normalized,
-      nftId: decodeParam(didMatch[1]),
+      identityId: decodeParam(didMatch[1]),
     };
   }
 
-  const mnftMatch = normalized.match(/^\/nfts\/mnft\/([^/]+)$/);
+  const mnftMatch = normalized.match(/^\/objects\/mnft\/([^/]+)$/);
   if (mnftMatch) {
     return {
       kind: 'mnft_item_detail',
       pathname: normalized,
-      nftId: decodeParam(mnftMatch[1]),
+      objectId: decodeParam(mnftMatch[1]),
     };
   }
 

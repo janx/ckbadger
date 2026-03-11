@@ -264,6 +264,8 @@ function SearchResultIcon({ type }: { type: string }) {
     spore: 'text-lavender',
     cluster: 'text-lavender-dim',
     nft: 'text-lavender-dim',
+    object: 'text-lavender-dim',
+    identity: 'text-lavender-dim',
     default: 'text-text-dim',
   };
 

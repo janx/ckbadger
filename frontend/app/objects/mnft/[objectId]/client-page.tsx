@@ -137,16 +137,16 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6 flex items-center gap-4">
           <Link
-            href={`/nfts/${detail.class.classId}`}
+            href={`/objects/${detail.class.classId}`}
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
             ← Back to Class
           </Link>
           <Link
-            href="/assets?type=nft"
+            href="/assets?type=object"
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
-            Back to NFTs
+            Back to Objects
           </Link>
         </div>
         <PageHeader
@@ -204,7 +204,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
                   <HexDisplay value={detail.issuer.issuerId} truncate={false} />
                 </DataField>
                 <DataField label="Class ID" layout="vertical" valueClassName="w-full">
-                  <Link href={`/nfts/${detail.class.classId}`} className="hover:underline">
+                  <Link href={`/objects/${detail.class.classId}`} className="hover:underline">
                     <HexDisplay value={detail.class.classId} truncate={false} />
                   </Link>
                 </DataField>

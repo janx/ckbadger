@@ -45,11 +45,11 @@ export type ParsedMarkdownPage =
   | { kind: 'fork_detail'; pathname: string; id: string }
   | { kind: 'hardforks'; pathname: '/hardforks' }
   | { kind: 'identity_collection'; pathname: string; collectionId: string }
-  | { kind: 'nfts_list'; pathname: '/nfts' }
-  | { kind: 'nft_detail'; pathname: string; sporeId: string }
-  | { kind: 'dotbit_item_detail'; pathname: string; nftId: string }
-  | { kind: 'did_ckb_item_detail'; pathname: string; nftId: string }
-  | { kind: 'mnft_item_detail'; pathname: string; nftId: string }
+  | { kind: 'objects_list'; pathname: '/objects' }
+  | { kind: 'object_detail'; pathname: string; sporeId: string }
+  | { kind: 'dotbit_item_detail'; pathname: string; identityId: string }
+  | { kind: 'did_ckb_item_detail'; pathname: string; identityId: string }
+  | { kind: 'mnft_item_detail'; pathname: string; objectId: string }
   | { kind: 'script_by_code_hash'; pathname: string; codeHash: string }
   | { kind: 'scripts_list'; pathname: '/scripts' }
   | { kind: 'script_detail'; pathname: string; name: string }
@@ -75,11 +75,11 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/forks/{id}',
   '/hardforks',
   '/identities/{collectionId}',
-  '/nfts',
-  '/nfts/{sporeId}',
-  '/nfts/dotbit/{nftId}',
-  '/nfts/did/{nftId}',
-  '/nfts/mnft/{nftId}',
+  '/identities/dotbit/{identityId}',
+  '/identities/did/{identityId}',
+  '/objects',
+  '/objects/{sporeId}',
+  '/objects/mnft/{objectId}',
   '/script/{codeHash}',
   '/scripts',
   '/scripts/{name}',
@@ -118,7 +118,7 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
   if (normalized === '/dao') return { kind: 'dao_overview', pathname: '/dao' };
   if (normalized === '/forks') return { kind: 'forks_list', pathname: '/forks' };
   if (normalized === '/hardforks') return { kind: 'hardforks', pathname: '/hardforks' };
-  if (normalized === '/nfts') return { kind: 'nfts_list', pathname: '/nfts' };
+  if (normalized === '/objects') return { kind: 'objects_list', pathname: '/objects' };
   if (normalized === '/scripts') return { kind: 'scripts_list', pathname: '/scripts' };
   if (normalized === '/tokens') return { kind: 'tokens_list', pathname: '/tokens' };
   if (normalized === '/transactions') {
@@ -188,39 +188,39 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
     };
   }
 
-  const dotbitItemMatch = normalized.match(/^\/nfts\/dotbit\/([^/]+)$/);
+  const dotbitItemMatch = normalized.match(/^\/identities\/dotbit\/([^/]+)$/);
   if (dotbitItemMatch) {
     return {
       kind: 'dotbit_item_detail',
       pathname: normalized,
-      nftId: decodeParam(dotbitItemMatch[1]),
+      identityId: decodeParam(dotbitItemMatch[1]),
     };
   }
 
-  const didItemMatch = normalized.match(/^\/nfts\/did\/([^/]+)$/);
+  const didItemMatch = normalized.match(/^\/identities\/did\/([^/]+)$/);
   if (didItemMatch) {
     return {
       kind: 'did_ckb_item_detail',
       pathname: normalized,
-      nftId: decodeParam(didItemMatch[1]),
+      identityId: decodeParam(didItemMatch[1]),
     };
   }
 
-  const mnftItemMatch = normalized.match(/^\/nfts\/mnft\/([^/]+)$/);
+  const mnftItemMatch = normalized.match(/^\/objects\/mnft\/([^/]+)$/);
   if (mnftItemMatch) {
     return {
       kind: 'mnft_item_detail',
       pathname: normalized,
-      nftId: decodeParam(mnftItemMatch[1]),
+      objectId: decodeParam(mnftItemMatch[1]),
     };
   }
 
-  const nftMatch = normalized.match(/^\/nfts\/([^/]+)$/);
-  if (nftMatch) {
+  const objectMatch = normalized.match(/^\/objects\/([^/]+)$/);
+  if (objectMatch) {
     return {
-      kind: 'nft_detail',
+      kind: 'object_detail',
       pathname: normalized,
-      sporeId: decodeParam(nftMatch[1]),
+      sporeId: decodeParam(objectMatch[1]),
     };
   }
 

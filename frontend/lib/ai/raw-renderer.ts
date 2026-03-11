@@ -774,8 +774,8 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         const cursor = searchParams.get('cursor') ?? undefined;
         const action = parseMnftActivityAction(searchParams.get('action'));
         const [dotbitItem, dotbitActivities] = await Promise.all([
-          api.getDotbitItemDetail(page.nftId),
-          api.getDotbitItemActivities(page.nftId, {
+          api.getDotbitItemDetail(page.identityId),
+          api.getDotbitItemActivities(page.identityId, {
             limit,
             cursor,
             action,
@@ -791,8 +791,8 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         const cursor = searchParams.get('cursor') ?? undefined;
         const action = parseMnftActivityAction(searchParams.get('action'));
         const [didCkbItem, didCkbActivities] = await Promise.all([
-          api.getDidCkbItemDetail(page.nftId),
-          api.getDidCkbItemActivities(page.nftId, {
+          api.getDidCkbItemDetail(page.identityId),
+          api.getDidCkbItemActivities(page.identityId, {
             limit,
             cursor,
             action,
@@ -808,8 +808,8 @@ export async function renderRawPage(input: RenderRawInput): Promise<RenderRawOut
         const cursor = searchParams.get('cursor') ?? undefined;
         const action = parseMnftActivityAction(searchParams.get('action'));
         const [mnftItem, mnftActivities] = await Promise.all([
-          api.getMnftItemDetail(page.nftId),
-          api.getMnftItemActivities(page.nftId, {
+          api.getMnftItemDetail(page.objectId),
+          api.getMnftItemActivities(page.objectId, {
             limit,
             cursor,
             action,

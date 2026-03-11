@@ -32,7 +32,7 @@ export function formatActivityTimestamp(timestamp: string): string {
   return timestamp;
 }
 
-/** Normalize action labels: "burn" → "recycled" for identity-type NFTs. */
+/** Normalize action labels: "burn" → "recycled" for identity-type assets. */
 export function normalizeActivityAction(action: string): string {
   if (action.toLowerCase() === 'burn') {
     return 'recycled';
