@@ -22,7 +22,7 @@ export function Header() {
 
   return (
     <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm">
-      <div className="container relative mx-auto flex h-16 items-center justify-between gap-4 px-4">
+      <div className="container relative mx-auto flex h-[42px] items-center justify-between gap-4 px-4">
         <Logo />
 
         <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
@@ -38,8 +38,8 @@ export function Header() {
               href={link.href}
               className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                 isLinkActive(link.href)
-                  ? 'border-amber/40 bg-amber/8 text-amber'
-                  : 'text-text-secondary hover:text-amber hover:border-amber/20 border-transparent'
+                  ? 'border-jade/40 bg-jade/8 text-jade'
+                  : 'text-text-dim hover:text-jade hover:border-jade/20 border-transparent'
               }`}
             >
               {link.label}
@@ -51,7 +51,7 @@ export function Header() {
           <button
             type="button"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="text-text-muted hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
+            className="text-text-dim hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center rounded-lg transition-colors"
             aria-label="Toggle menu"
           >
             {isMenuOpen ? (
@@ -90,8 +90,8 @@ export function Header() {
                 onClick={() => setIsMenuOpen(false)}
                 className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                   isLinkActive(link.href)
-                    ? 'border-amber/40 bg-amber/8 text-amber'
-                    : 'text-text-secondary hover:text-amber hover:border-amber/20 border-transparent'
+                    ? 'border-jade/40 bg-jade/8 text-jade'
+                    : 'text-text-dim hover:text-jade hover:border-jade/20 border-transparent'
                 }`}
               >
                 {link.label}
