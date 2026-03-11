@@ -60,7 +60,6 @@ pub struct IndexerConfig {
     pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
     pub poll_interval_ms: u64,
-    pub pipeline_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,7 +137,6 @@ impl Default for IndexerConfig {
             pipeline_buffer: 8,
             bulk_sync_threshold: 1000,
             poll_interval_ms: 1000,
-            pipeline_enabled: true,
         }
     }
 }
@@ -342,7 +340,6 @@ parallel_fetch_size = 64
 pipeline_buffer = 8
 bulk_sync_threshold = 1000
 poll_interval_ms = 1000
-pipeline_enabled = true
 
 [store]
 domain_data_path = "data/domain"
@@ -561,7 +558,6 @@ mod tests {
         assert_eq!(cfg.indexer.pipeline_buffer, 8);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 1000);
         assert_eq!(cfg.indexer.poll_interval_ms, 1000);
-        assert!(cfg.indexer.pipeline_enabled);
 
         assert_eq!(cfg.store.domain_data_path, "data/domain");
         assert_eq!(cfg.store.append_only_data_path, "data/append-only");
@@ -621,7 +617,6 @@ parallel_fetch_size = 32
 pipeline_buffer = 4
 bulk_sync_threshold = 500
 poll_interval_ms = 2000
-pipeline_enabled = false
 
 [store]
 domain_data_path = "/data/domain"
@@ -647,7 +642,6 @@ level = "debug"
         assert_eq!(cfg.indexer.pipeline_buffer, 4);
         assert_eq!(cfg.indexer.bulk_sync_threshold, 500);
         assert_eq!(cfg.indexer.poll_interval_ms, 2000);
-        assert!(!cfg.indexer.pipeline_enabled);
         assert_eq!(cfg.store.domain_data_path, "/data/domain");
         assert_eq!(cfg.store.append_only_data_path, "/data/append");
         assert_eq!(cfg.store.memory_budget_gb, Some(48));

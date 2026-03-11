@@ -28,13 +28,6 @@ pub(crate) enum UndoSeqScope {
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────
 
-pub(crate) enum SyncAction {
-    CaughtUp,
-    Continue,
-    ReorgHandled,
-    DeepForkPaused,
-}
-
 #[allow(dead_code)]
 pub(crate) enum ReorgAction {
     Handled(ReorgResult),

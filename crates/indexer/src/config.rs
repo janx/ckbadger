@@ -26,8 +26,6 @@ pub struct Config {
     pub start_block: Option<u64>,
     #[serde(default = "default_parallel_fetch_size")]
     pub parallel_fetch_size: usize,
-    #[serde(default = "default_pipeline_enabled")]
-    pub pipeline_enabled: bool,
     #[serde(default = "default_pipeline_buffer")]
     pub pipeline_buffer: usize,
     #[serde(default = "default_bulk_sync_threshold")]
@@ -57,10 +55,6 @@ fn default_poll_interval_ms() -> u64 {
 
 fn default_parallel_fetch_size() -> usize {
     64
-}
-
-fn default_pipeline_enabled() -> bool {
-    true
 }
 
 fn default_pipeline_buffer() -> usize {
@@ -164,7 +158,6 @@ mod tests {
             poll_interval_ms: 1000,
             start_block: None,
             parallel_fetch_size: 64,
-            pipeline_enabled: true,
             pipeline_buffer: 16,
             bulk_sync_threshold: 72,
             fast_sync_mode: true,

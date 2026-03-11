@@ -688,16 +688,10 @@ impl Indexer {
     }
 
     pub fn pipeline_progress_snapshot(&self) -> Option<PipelineProgressData> {
-        if !self.config.pipeline_enabled {
-            return None;
-        }
         self.pipeline_perf.snapshot()
     }
 
     pub fn adaptive_batch_snapshot(&self) -> Option<AdaptiveBatchProgressSnapshot> {
-        if !self.config.pipeline_enabled {
-            return None;
-        }
         let snapshot = self.adaptive_batch_controller.snapshot();
         Some(AdaptiveBatchProgressSnapshot {
             target_batch_txs: snapshot.target_batch_txs,
@@ -713,9 +707,6 @@ impl Indexer {
     }
 
     pub fn pipeline_reset_snapshot(&self) -> Option<(u64, String)> {
-        if !self.config.pipeline_enabled {
-            return None;
-        }
         let epoch = self.pipeline_reset_epoch.load(Ordering::SeqCst);
         if epoch == 0 {
             return None;
@@ -773,7 +764,7 @@ impl Indexer {
         }
     }
 
-    // === run / run_sequential / run_pipeline ===
+    // === run ===
 
     pub async fn run(&self) -> Result<()> {
         let blocks_behind = self.progress.blocks_remaining();
@@ -790,14 +781,14 @@ impl Indexer {
         );
         info!(
             run_id = %self.run_id,
-            "Starting indexer (pipeline={}, {} blocks behind, threshold={})",
-            self.config.pipeline_enabled, blocks_behind, self.config.bulk_sync_threshold
+            "Starting indexer ({} blocks behind, threshold={})",
+            blocks_behind, self.config.bulk_sync_threshold
         );
         self.record_flight_event(
             "run_start",
             format!(
-                "pipeline_enabled={} blocks_behind={} bulk_threshold={}",
-                self.config.pipeline_enabled, blocks_behind, self.config.bulk_sync_threshold
+                "blocks_behind={} bulk_threshold={}",
+                blocks_behind, self.config.bulk_sync_threshold
             ),
         );
 
@@ -984,11 +975,7 @@ impl Indexer {
             }
         });
 
-        if self.config.pipeline_enabled {
-            self.run_pipeline().await
-        } else {
-            self.run_sequential().await
-        }
+        self.run_pipeline().await
     }
 }
 

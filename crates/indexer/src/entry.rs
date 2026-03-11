@@ -28,7 +28,6 @@ pub struct IndexerServiceConfig {
     pub batch_size: usize,
     pub poll_interval_ms: u64,
     pub parallel_fetch_size: usize,
-    pub pipeline_enabled: bool,
     pub pipeline_buffer: usize,
     pub bulk_sync_threshold: u64,
     pub store_runtime_config: StoreRuntimeConfig,
@@ -46,7 +45,6 @@ impl From<IndexerServiceConfig> for Config {
             poll_interval_ms: svc.poll_interval_ms,
             start_block: None,
             parallel_fetch_size: svc.parallel_fetch_size,
-            pipeline_enabled: svc.pipeline_enabled,
             pipeline_buffer: svc.pipeline_buffer,
             bulk_sync_threshold: svc.bulk_sync_threshold,
             fast_sync_mode: true,
@@ -1215,7 +1213,6 @@ mod tests {
             batch_size: 5000,
             poll_interval_ms: 500,
             parallel_fetch_size: 32,
-            pipeline_enabled: false,
             pipeline_buffer: 4,
             bulk_sync_threshold: 100,
             store_runtime_config: StoreRuntimeConfig {
@@ -1235,7 +1232,6 @@ mod tests {
         assert_eq!(config.batch_size, 5000);
         assert_eq!(config.poll_interval_ms, 500);
         assert_eq!(config.parallel_fetch_size, 32);
-        assert!(!config.pipeline_enabled);
         assert_eq!(config.pipeline_buffer, 4);
         assert_eq!(config.bulk_sync_threshold, 100);
         assert!(config.fast_sync_mode);

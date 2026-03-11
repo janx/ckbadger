@@ -2522,6 +2522,7 @@ impl Indexer {
         drained
     }
 
+    #[allow(dead_code)]
     pub(super) async fn fetch_blocks_parallel(
         &self,
         start: u64,

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use anyhow::{anyhow, Result};
 
 /// Compute a deterministic event order for a DotBit input (consume) within a
@@ -49,11 +47,12 @@ pub(crate) fn should_consume_dotbit_account(
 /// Look up the DotBit account-id for a given outpoint.  Prefers an already-
 /// persisted store mapping (`db_account_id`) and falls back to the in-flight
 /// batch mapping when the outpoint was created within the same batch.
+#[cfg(test)]
 pub(crate) fn resolve_dotbit_account_id_for_outpoint(
     db_account_id: Option<Vec<u8>>,
     prev_tx_hash: &[u8],
     prev_index: i16,
-    batch_dotbit_outpoints: &HashMap<(Vec<u8>, i16), Vec<u8>>,
+    batch_dotbit_outpoints: &std::collections::HashMap<(Vec<u8>, i16), Vec<u8>>,
 ) -> Option<Vec<u8>> {
     db_account_id.or_else(|| {
         batch_dotbit_outpoints
@@ -65,6 +64,7 @@ pub(crate) fn resolve_dotbit_account_id_for_outpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_dotbit_event_order_marks_output_after_input_in_same_tx() {
