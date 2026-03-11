@@ -560,7 +560,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                           Activities ({formatNumber(cluster.activitiesCount)})
                         </TabsTrigger>
                         <TabsTrigger value="nfts">
-                          NFTs ({formatNumber(cluster.sporesCount)})
+                          Objects ({formatNumber(cluster.sporesCount)})
                         </TabsTrigger>
                         <TabsTrigger value="holders">
                           Holders ({formatNumber(cluster.holdersCount)})
@@ -573,7 +573,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     ? 'Activities'
                     : activeCollectionTab === 'holders'
                       ? 'Holders'
-                      : 'NFTs'}
+                      : 'Objects'}
                 </TerminalPanelHeader>
                 <TabsContent value="activities" className="py-0">
                   <TerminalPanelContent>
