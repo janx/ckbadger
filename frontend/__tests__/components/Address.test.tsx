@@ -54,7 +54,7 @@ describe('Address', () => {
     it('applies default classes', () => {
       render(<Address address={testAddress} />);
       const link = screen.getByRole('link');
-      expect(link).toHaveClass('text-sky');
+      expect(link).toHaveClass('text-aqua');
       expect(link).toHaveClass('font-mono');
       expect(link).toHaveClass('text-sm');
     });
@@ -63,7 +63,7 @@ describe('Address', () => {
       render(<Address address={testAddress} className="my-custom-class" />);
       const link = screen.getByRole('link');
       expect(link).toHaveClass('my-custom-class');
-      expect(link).toHaveClass('text-sky');
+      expect(link).toHaveClass('text-aqua');
     });
 
     it('enables line wrapping when truncate is false', () => {
