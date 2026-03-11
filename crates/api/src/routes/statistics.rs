@@ -106,6 +106,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         // Activity stats
         .route("/stats/daily-activities", get(get_daily_activity_stats))
         .route("/stats/activity-summary-24h", get(get_activity_summary_24h))
+        // Asset ecosystem
+        .route("/statistics/asset-ecosystem", get(get_asset_ecosystem))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +158,32 @@ pub struct NetworkStats {
     pub knowledge_size: Option<String>,
     pub circulating_supply: Option<String>,
     pub dao_locked: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetEcosystemResponse {
+    pub top_tokens: Vec<TopTokenEntry>,
+    pub capacity_breakdown: Vec<CapacityCategory>,
+    pub total_knowledge_size_ckb: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopTokenEntry {
+    pub type_script_hash: String,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub holders_count: i64,
+    pub total_capacity_ckb: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapacityCategory {
+    pub category: String,
+    pub capacity_ckb: String,
+    pub percentage: String,
 }
 
 async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStats> {
@@ -3464,6 +3492,132 @@ async fn get_activity_summary_24h(
     ok(result)
 }
 
+async fn get_asset_ecosystem(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<AssetEcosystemResponse> {
+    let cache_key = "statistics:asset-ecosystem";
+    if let Some(cached) = state.cache.get::<AssetEcosystemResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    // Get top 5 tokens from the warmup cache (already sorted by transfers_24h DESC, holders DESC)
+    let token_assets = state
+        .mem_cache
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
+        .ok_or_else(|| ApiError::internal("token asset cache unavailable; warmup in progress"))?;
+
+    let top_tokens: Vec<TopTokenEntry> = token_assets
+        .iter()
+        .take(5)
+        .map(|t| {
+            let capacity_shannon: i128 = t
+                .live_capacity
+                .as_deref()
+                .and_then(|s| s.parse::<i128>().ok())
+                .unwrap_or(0);
+            TopTokenEntry {
+                type_script_hash: t.id.clone(),
+                name: t.name.clone(),
+                symbol: t.symbol.clone(),
+                holders_count: t.holders_count,
+                total_capacity_ckb: shannon_to_ckb_string(capacity_shannon),
+            }
+        })
+        .collect();
+
+    // Sum total token capacity
+    let total_token_capacity: i128 = token_assets
+        .iter()
+        .filter_map(|t| {
+            t.live_capacity
+                .as_deref()
+                .and_then(|s| s.parse::<i128>().ok())
+        })
+        .sum();
+
+    // Get total NFT/object capacity
+    let nft_assets = state
+        .mem_cache
+        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_NFT)
+        .ok_or_else(|| ApiError::internal("nft asset cache unavailable; warmup in progress"))?;
+
+    let total_object_capacity: i128 = nft_assets
+        .iter()
+        .filter_map(|n| {
+            n.live_capacity
+                .as_deref()
+                .and_then(|s| s.parse::<i128>().ok())
+        })
+        .sum();
+
+    // Get DAO locked and knowledge size from latest snapshot
+    let dao_snapshot = state
+        .store
+        .get_latest_dao_daily_snapshot()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+    let (dao_locked, knowledge_size) = match dao_snapshot.as_ref() {
+        Some(s) => (s.total_deposited, s.occupied_capacity),
+        None => (0, 0),
+    };
+
+    // Compute "other" = knowledge_size - (tokens + objects + dao)
+    let categorized = total_token_capacity + total_object_capacity + dao_locked;
+    let other_capacity = if knowledge_size > categorized {
+        knowledge_size - categorized
+    } else {
+        0
+    };
+
+    // Build capacity breakdown with percentages
+    let total = knowledge_size;
+    let pct = |value: i128| -> String {
+        if total <= 0 {
+            return "0.00".to_string();
+        }
+        let scaled = value.saturating_mul(10_000).checked_div(total).unwrap_or(0);
+        let whole = scaled / 100;
+        let frac = (scaled % 100).abs();
+        format!("{whole}.{frac:02}")
+    };
+
+    let capacity_breakdown = vec![
+        CapacityCategory {
+            category: "dao".to_string(),
+            capacity_ckb: shannon_to_ckb_string(dao_locked),
+            percentage: pct(dao_locked),
+        },
+        CapacityCategory {
+            category: "tokens".to_string(),
+            capacity_ckb: shannon_to_ckb_string(total_token_capacity),
+            percentage: pct(total_token_capacity),
+        },
+        CapacityCategory {
+            category: "objects".to_string(),
+            capacity_ckb: shannon_to_ckb_string(total_object_capacity),
+            percentage: pct(total_object_capacity),
+        },
+        CapacityCategory {
+            category: "other".to_string(),
+            capacity_ckb: shannon_to_ckb_string(other_capacity),
+            percentage: pct(other_capacity),
+        },
+    ];
+
+    let response = AssetEcosystemResponse {
+        top_tokens,
+        capacity_breakdown,
+        total_knowledge_size_ckb: shannon_to_ckb_string(knowledge_size),
+    };
+
+    state
+        .cache
+        .set(cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .await;
+
+    ok(response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3857,5 +4011,76 @@ mod tests {
 
         seen_blocks.sort_unstable();
         assert_eq!(seen_blocks, vec![10, 20]);
+    }
+
+    #[test]
+    fn test_asset_ecosystem_response_serializes_camel_case() {
+        let response = AssetEcosystemResponse {
+            top_tokens: vec![TopTokenEntry {
+                type_script_hash: "0xabc".to_string(),
+                name: Some("TestToken".to_string()),
+                symbol: Some("TT".to_string()),
+                holders_count: 42,
+                total_capacity_ckb: "1000".to_string(),
+            }],
+            capacity_breakdown: vec![CapacityCategory {
+                category: "dao".to_string(),
+                capacity_ckb: "500".to_string(),
+                percentage: "50.00".to_string(),
+            }],
+            total_knowledge_size_ckb: "1000".to_string(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"topTokens\""));
+        assert!(json.contains("\"capacityBreakdown\""));
+        assert!(json.contains("\"totalKnowledgeSizeCkb\""));
+        assert!(json.contains("\"typeScriptHash\""));
+        assert!(json.contains("\"holdersCount\""));
+        assert!(json.contains("\"totalCapacityCkb\""));
+        assert!(json.contains("\"capacityCkb\""));
+    }
+
+    #[test]
+    fn test_asset_ecosystem_response_roundtrips_through_serde() {
+        let response = AssetEcosystemResponse {
+            top_tokens: vec![
+                TopTokenEntry {
+                    type_script_hash: "0xaa".to_string(),
+                    name: None,
+                    symbol: None,
+                    holders_count: 0,
+                    total_capacity_ckb: "0".to_string(),
+                },
+                TopTokenEntry {
+                    type_script_hash: "0xbb".to_string(),
+                    name: Some("CKB".to_string()),
+                    symbol: Some("CKB".to_string()),
+                    holders_count: 100,
+                    total_capacity_ckb: "999.5".to_string(),
+                },
+            ],
+            capacity_breakdown: vec![
+                CapacityCategory {
+                    category: "dao".to_string(),
+                    capacity_ckb: "200".to_string(),
+                    percentage: "40.00".to_string(),
+                },
+                CapacityCategory {
+                    category: "other".to_string(),
+                    capacity_ckb: "300".to_string(),
+                    percentage: "60.00".to_string(),
+                },
+            ],
+            total_knowledge_size_ckb: "500".to_string(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        let deserialized: AssetEcosystemResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.top_tokens.len(), 2);
+        assert_eq!(deserialized.capacity_breakdown.len(), 2);
+        assert_eq!(deserialized.total_knowledge_size_ckb, "500");
+        assert_eq!(deserialized.top_tokens[0].type_script_hash, "0xaa");
+        assert_eq!(deserialized.top_tokens[1].holders_count, 100);
+        assert_eq!(deserialized.capacity_breakdown[0].category, "dao");
+        assert_eq!(deserialized.capacity_breakdown[1].percentage, "60.00");
     }
 }
