@@ -31,7 +31,6 @@ describe('tooling config', () => {
       'components/identity/identity-activity-card.tsx',
       'components/object/object-activity-card.tsx',
       'components/object/object-collection-stat-cards.tsx',
-      'components/home-charts.tsx',
       'components/mempool-blocks.tsx',
       'components/latest-transactions.tsx',
       'components/latest-blocks.tsx',
