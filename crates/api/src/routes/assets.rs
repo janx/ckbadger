@@ -861,6 +861,24 @@ pub(crate) fn normalize_nft_activity_action_filter(
     }
 }
 
+pub(crate) fn normalize_identity_activity_action_filter(
+    raw: Option<&str>,
+) -> Result<Option<String>, (axum::http::StatusCode, Json<ApiError>)> {
+    let Some(raw_value) = raw else {
+        return Ok(None);
+    };
+    let normalized = raw_value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    match normalized.as_str() {
+        "mint" | "transfer" | "burn" | "recycle" | "renew" | "update" => Ok(Some(normalized)),
+        _ => Err(ApiError::bad_request(
+            "Invalid identity activity action filter. Expected one of: mint, transfer, burn, recycle, renew, update",
+        )),
+    }
+}
+
 type CanonicalNftActivityLocation = (i64, i32, Vec<u8>);
 type CanonicalNftActivityLocationMap = HashMap<Vec<u8>, CanonicalNftActivityLocation>;
 

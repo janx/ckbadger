@@ -1461,6 +1461,7 @@ impl CkbadgerStore {
             self.cf_cluster_agg(),
             self.cf_object_by_collection(),
             self.cf_object_collection_agg(),
+            self.cf_identity_agg(),
         ];
         for cf in secondary_cfs {
             let iter = self.iterator_cf(cf, IteratorMode::Start);

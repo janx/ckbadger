@@ -11,9 +11,10 @@ use std::time::Duration;
 
 use super::assets::{
     decode_activity_cursor, decode_nft_item_cursor, list_canonical_nft_collection_activities_page,
-    list_identity_items_inner, normalize_nft_activity_action_filter, normalize_nft_items_search,
-    normalize_nft_items_status, NftCollectionActivitiesParams, NftCollectionActivityResponse,
-    NftCollectionHolderResponse, NftCollectionItemResponse, NftItemsParams,
+    list_identity_items_inner, normalize_identity_activity_action_filter,
+    normalize_nft_items_search, normalize_nft_items_status, NftCollectionActivitiesParams,
+    NftCollectionActivityResponse, NftCollectionHolderResponse, NftCollectionItemResponse,
+    NftItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
@@ -254,7 +255,7 @@ async fn list_identity_collection_activities(
         .as_deref()
         .map(decode_activity_cursor)
         .transpose()?;
-    let action_filter = normalize_nft_activity_action_filter(params.action.as_deref())?;
+    let action_filter = normalize_identity_activity_action_filter(params.action.as_deref())?;
 
     // Validate collection exists
     let _agg = state
