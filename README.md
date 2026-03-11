@@ -85,7 +85,7 @@ on localhost deployments:
 - **Real-time Updates** - WebSocket subscriptions for new blocks and transactions
 - **AI-Friendly Multi-Format Pages** - Use `.md` for summaries, `.raw` for tool-oriented payloads, plus `/capabilities` for machine discovery
 - **System Status Page** - Monitor sync progress, pipeline health, and integrity checks
-- **Data Integrity Verification** - 54 built-in checks for acceptance testing via API
+- **Data Integrity Verification** - 56 built-in checks for acceptance testing via API
 - **Developer API** - REST endpoints with rate limiting
 
 ## Architecture
@@ -114,17 +114,17 @@ on localhost deployments:
 
 ## Tech Stack
 
-| Layer             | Technology                                     | Purpose                         |
-| ----------------- | ---------------------------------------------- | ------------------------------- |
-| **CLI**           | Rust (Clap), single `ckbadger` binary          | All subcommands, supervisor     |
-| **Frontend**      | Vite, React 19, React Router, TanStack Query   | Local-first SPA shell           |
-| **UI**            | Tailwind CSS, Custom Components                | Responsive design               |
-| **Visualization** | react-force-graph-2d, D3.js                    | Cell relationship graphs        |
-| **API**           | Rust (Axum)                                    | High-performance REST/WebSocket |
-| **Indexer**       | Rust (3-stage pipeline)                        | Block parsing, cell tracking    |
-| **Storage**       | RocksDB (domain + append-only, ckbadger-store) | Embedded dual-store data engine |
-| **Cache**         | In-memory LRU                                  | API response cache              |
-| **IPC**           | Unix domain sockets                            | Inter-process communication     |
+| Layer             | Technology                                              | Purpose                         |
+| ----------------- | ------------------------------------------------------- | ------------------------------- |
+| **CLI**           | Rust (Clap), single `ckbadger` binary                   | All subcommands, supervisor     |
+| **Frontend**      | Vite, React 19, React Router, TanStack Query            | Local-first SPA shell           |
+| **UI**            | Tailwind CSS, Custom Components                         | Responsive design               |
+| **Visualization** | react-force-graph-2d, D3.js                             | Cell relationship graphs        |
+| **API**           | Rust (Axum)                                             | High-performance REST/WebSocket |
+| **Indexer**       | Rust (3-stage pipeline)                                 | Block parsing, cell tracking    |
+| **Storage**       | RocksDB (43 domain + 1 append-only CFs, ckbadger-store) | Embedded dual-store data engine |
+| **Cache**         | In-memory LRU                                           | API response cache              |
+| **IPC**           | Unix domain sockets                                     | Inter-process communication     |
 
 ## Quick Start
 
@@ -570,12 +570,12 @@ ckbadger/
 │   │       ├── parser/     # Block, cell, script, spore, .bit, mNFT, RGB++ parsers
 │   │       ├── db/         # RocksDB write operations
 │   │       ├── sync/       # Synchronization logic
-│   │       └── verify/     # Data integrity verification (56 checks via API)
+│   │       └── verify/     # Data integrity verification (56 checks, 3 tiers, via API)
 │   ├── api/                # REST API server (library)
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)
 │   │       └── ws/         # WebSocket handlers
-│   ├── ckbadger-store/     # Embedded RocksDB storage engine (41 domain + 1 append-only CFs)
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine (43 domain + 1 append-only CFs)
 │   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 │   └── tui/                # Terminal monitoring UI (library)
 ├── frontend/               # Vite + React SPA
@@ -671,8 +671,8 @@ ckbadger verify --list-checks
 | Tier         | Checks | What it validates                                                                              |
 | ------------ | ------ | ---------------------------------------------------------------------------------------------- |
 | **Fast**     | 6      | API reachable, sync complete, genesis block, tip block, DAO, forks                             |
-| **Sampling** | 21     | Block hash roundtrips, parent chain, balances, charts, supply invariants, tokens, spores, NFTs |
-| **Explorer** | 16     | Last 30 days vs official CKB explorer (cached, 24h freshness)                                  |
+| **Sampling** | 23     | Block hash roundtrips, parent chain, balances, charts, supply invariants, tokens, spores, NFTs |
+| **Explorer** | 27     | Last 30 days vs official CKB explorer (cached, 24h freshness)                                  |
 
 Explorer API responses are cached to `.verify-cache/` with 24-hour freshness. On HTTP failure, stale cache is used as fallback.
 
