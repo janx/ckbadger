@@ -1,12 +1,12 @@
 'use client';
 
 import {
-  IdentityNftItemDetail,
-  type IdentityNftItemDetailConfig,
-} from '@/components/nft/identity-nft-item-detail';
+  IdentityItemDetail,
+  type IdentityItemDetailConfig,
+} from '@/components/identity/identity-item-detail';
 import { api } from '@/lib/api';
 
-const didCkbConfig: IdentityNftItemDetailConfig = {
+const didCkbConfig: IdentityItemDetailConfig = {
   standard: 'did_ckb',
   fetchDetail: (nftId) => api.getDidCkbItemDetail(nftId),
   fetchActivities: (nftId, params) => api.getDidCkbItemActivities(nftId, params),
@@ -24,9 +24,9 @@ const didCkbConfig: IdentityNftItemDetailConfig = {
 };
 
 export interface DidCkbItemDetailPageProps {
-  nftId: string;
+  identityId: string;
 }
 
-export default function DidCkbItemDetailPage({ nftId }: DidCkbItemDetailPageProps) {
-  return <IdentityNftItemDetail config={didCkbConfig} nftId={nftId} />;
+export default function DidCkbItemDetailPage({ identityId }: DidCkbItemDetailPageProps) {
+  return <IdentityItemDetail config={didCkbConfig} nftId={identityId} />;
 }

@@ -1,4 +1,4 @@
-import DotbitItemDetailPage from './client-page';
+import DidCkbItemDetailPage from './client-page';
 
 export const revalidate = 0;
 
@@ -8,10 +8,10 @@ export async function generateStaticParams() {
 
 interface PageProps {
   params: {
-    nftId: string;
+    identityId: string;
   };
 }
 
 export default function Page({ params }: PageProps) {
-  return <DotbitItemDetailPage nftId={params.nftId} />;
+  return <DidCkbItemDetailPage identityId={params.identityId} />;
 }

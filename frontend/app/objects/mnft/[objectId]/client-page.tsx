@@ -40,13 +40,13 @@ function decodeTokenConfigure(configure: number): string {
   return flags.length > 0 ? flags.join(', ') : 'none';
 }
 export interface MnftItemDetailPageProps {
-  nftId: string;
+  objectId: string;
 }
-export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetailPageProps) {
+export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItemDetailPageProps) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nftId = normalizeAssetId(routeNftId);
+  const nftId = normalizeAssetId(routeObjectId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );

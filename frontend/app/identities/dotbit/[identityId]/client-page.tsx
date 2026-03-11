@@ -1,12 +1,12 @@
 'use client';
 
 import {
-  IdentityNftItemDetail,
-  type IdentityNftItemDetailConfig,
-} from '@/components/nft/identity-nft-item-detail';
+  IdentityItemDetail,
+  type IdentityItemDetailConfig,
+} from '@/components/identity/identity-item-detail';
 import { api } from '@/lib/api';
 
-const dotbitConfig: IdentityNftItemDetailConfig = {
+const dotbitConfig: IdentityItemDetailConfig = {
   standard: 'dotbit',
   fetchDetail: (nftId) => api.getDotbitItemDetail(nftId),
   fetchActivities: (nftId, params) => api.getDotbitItemActivities(nftId, params),
@@ -24,9 +24,9 @@ const dotbitConfig: IdentityNftItemDetailConfig = {
 };
 
 export interface DotbitItemDetailPageProps {
-  nftId: string;
+  identityId: string;
 }
 
-export default function DotbitItemDetailPage({ nftId }: DotbitItemDetailPageProps) {
-  return <IdentityNftItemDetail config={dotbitConfig} nftId={nftId} />;
+export default function DotbitItemDetailPage({ identityId }: DotbitItemDetailPageProps) {
+  return <IdentityItemDetail config={dotbitConfig} nftId={identityId} />;
 }

@@ -8,10 +8,10 @@ export async function generateStaticParams() {
 
 interface PageProps {
   params: {
-    nftId: string;
+    objectId: string;
   };
 }
 
 export default function Page({ params }: PageProps) {
-  return <MnftItemDetailPage nftId={params.nftId} />;
+  return <MnftItemDetailPage objectId={params.objectId} />;
 }

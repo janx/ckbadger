@@ -126,27 +126,27 @@ const ClusterDetailRoute = lazyParamPage(
   })
 );
 const SporeDetailRoute = lazyParamPage(
-  () => import('@/app/nfts/[sporeId]/client-page'),
+  () => import('@/app/objects/[sporeId]/client-page'),
   (params) => ({
     sporeId: params.sporeId ?? '',
   })
 );
 const MnftItemDetailRoute = lazyParamPage(
-  () => import('@/app/nfts/mnft/[nftId]/client-page'),
+  () => import('@/app/objects/mnft/[objectId]/client-page'),
   (params) => ({
-    nftId: params.nftId ?? '',
+    objectId: params.objectId ?? '',
   })
 );
 const DotbitItemDetailRoute = lazyParamPage(
-  () => import('@/app/nfts/dotbit/[nftId]/client-page'),
+  () => import('@/app/identities/dotbit/[identityId]/client-page'),
   (params) => ({
-    nftId: params.nftId ?? '',
+    identityId: params.identityId ?? '',
   })
 );
 const DidCkbItemDetailRoute = lazyParamPage(
-  () => import('@/app/nfts/did/[nftId]/client-page'),
+  () => import('@/app/identities/did/[identityId]/client-page'),
   (params) => ({
-    nftId: params.nftId ?? '',
+    identityId: params.identityId ?? '',
   })
 );
 const IdentityCollectionRoute = lazyParamPage(
@@ -359,19 +359,19 @@ export function createAppRouter(): RouteObject[] {
           element: <IdentityCollectionRoute />,
         },
         {
-          path: 'nfts/:sporeId',
+          path: 'objects/:sporeId',
           element: <SporeDetailRoute />,
         },
         {
-          path: 'nfts/mnft/:nftId',
+          path: 'objects/mnft/:objectId',
           element: <MnftItemDetailRoute />,
         },
         {
-          path: 'nfts/dotbit/:nftId',
+          path: 'identities/dotbit/:identityId',
           element: <DotbitItemDetailRoute />,
         },
         {
-          path: 'nfts/did/:nftId',
+          path: 'identities/did/:identityId',
           element: <DidCkbItemDetailRoute />,
         },
         {
