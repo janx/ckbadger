@@ -176,7 +176,6 @@ Three-stage pipeline: **Fetcher** (RPC I/O) -> **Parser** (CPU + DB prefetch) ->
 
 | Parameter             | Default | Description                             |
 | --------------------- | ------- | --------------------------------------- |
-| `pipeline_enabled`    | `true`  | Enable pipeline mode (vs sequential)    |
 | `pipeline_buffer`     | `8`     | Channel capacity between stages         |
 | `batch_size`          | `10000` | Blocks per batch                        |
 | `parallel_fetch_size` | `64`    | Concurrent RPC requests                 |

@@ -18,7 +18,7 @@ The CKB indexer uses a three-stage pipeline architecture to maximize sync throug
 
 1. **Decouple I/O from computation** - Block fetching doesn't block parsing; parsing doesn't block DB writes
 2. **Maximize parallelism** - Each stage can work on different batches simultaneously
-3. **Maintain consistency** - Pipeline mode produces identical data to sequential mode
+3. **Maintain consistency** - Pipeline produces deterministic, correct database state
 4. **Handle failures gracefully** - Stale batches are drained on errors; periodic db_tip resync prevents drift
 
 ## Pipeline Stages
@@ -129,7 +129,6 @@ Block N arrives
 
 | Parameter             | Default | Description                                              |
 | --------------------- | ------- | -------------------------------------------------------- |
-| `pipeline_enabled`    | `true`  | Enable three-stage pipeline (vs sequential sync)         |
 | `pipeline_buffer`     | `8`     | Channel capacity between stages                          |
 | `batch_size`          | `10000` | Blocks per batch                                         |
 | `parallel_fetch_size` | `64`    | Concurrent block fetch work units in the pipeline        |
@@ -148,14 +147,13 @@ rpc_url = "http://127.0.0.1:8114"
 workdir = "/var/lib/ckb"
 ```
 
-`pipeline_enabled`, `pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
+`pipeline_buffer`, `batch_size`, `parallel_fetch_size`, and
 `bulk_sync_threshold` are configured via CLI flags in current builds.
 
 ### CLI Arguments
 
 ```bash
 cargo run -p ckbadger-indexer -- \
-  --pipeline-enabled \
   --pipeline-buffer 4 \
   --batch-size 10000 \
   --parallel-fetch-size 64 \
@@ -203,35 +201,17 @@ If reorg depth exceeds `REORG_LIMIT` (36 blocks):
 
 ## Consistency Guarantees
 
-### Pipeline vs Sequential Mode
+### Data Consistency
 
-Both modes MUST produce identical database state. This is enforced by:
+The pipeline produces deterministic database state. All domain operations go through `write_parsed_batch()`:
 
-1. **Same parsing logic**: `parse_blocks_parallel()` used by both
-2. **Same write logic**: `write_parsed_batch()` mirrors `sync_blocks_batch()`
-3. **Same features**:
-   - DAO deposit/withdrawal tracking
-   - Token transfers (UDT mint/transfer/burn)
-   - NFT transfers (Spore, MNFT, Dotbit)
-   - DOB transfers
-   - Script usage statistics
-   - All hourly/daily/epoch statistics
-
-### Verified Consistency Points
-
-| Feature                           | Sequential | Pipeline |
-| --------------------------------- | ---------- | -------- |
-| `insert_cells_batch()`            | Yes        | Yes      |
-| `consume_cells_batch_preloaded()` | Yes        | Yes      |
-| `insert_dao_deposits()`           | Yes        | Yes      |
-| `complete_dao_withdrawals()`      | Yes        | Yes      |
-| `insert_udt_cells_batch()`        | Yes        | Yes      |
-| `insert_token_transfer()`         | Yes        | Yes      |
-| `insert_nft_transfer()`           | Yes        | Yes      |
-| `insert_dob_transfer()`           | Yes        | Yes      |
-| `build_activities_for_block()`    | Yes        | Yes      |
-| `update_script_usage()`           | Yes        | Yes      |
-| `flush_batch_stats()`             | Yes        | Yes      |
+- Cell insertion and consumption
+- DAO deposit/withdrawal tracking
+- Token transfers (UDT mint/transfer/burn)
+- NFT transfers (Spore, MNFT, Dotbit)
+- DOB transfers
+- Script usage statistics
+- All hourly/daily/epoch statistics
 
 ## Performance Characteristics
 
@@ -239,9 +219,8 @@ Both modes MUST produce identical database state. This is enforced by:
 
 With default settings on typical hardware:
 
-| Mode                 | Blocks/sec   | Bottleneck         |
+| Configuration        | Blocks/sec   | Bottleneck         |
 | -------------------- | ------------ | ------------------ |
-| Sequential           | ~150-200     | RocksDB writes     |
 | Pipeline (buffer=8)  | ~280-320     | RocksDB writes     |
 | Pipeline (buffer=16) | ~400-500     | RocksDB writes     |
 | Pipeline (optimized) | ~5000-7000   | DB reads in Writer |
@@ -306,17 +285,6 @@ Key metrics to monitor:
 - `DB time` - writer stage latency
 - `stale batches drained` - indicates mismatch frequency
 
-## Comparison: Pipeline vs Sequential
-
-| Aspect         | Sequential (`sync_blocks_batch`) | Pipeline (`run_pipeline`)    |
-| -------------- | -------------------------------- | ---------------------------- |
-| Architecture   | Single loop                      | 3 async tasks + channels     |
-| Parallelism    | Within batch (DB writes)         | Across stages + within batch |
-| Memory         | Lower                            | Higher (buffered batches)    |
-| Complexity     | Simpler                          | More complex                 |
-| Error recovery | Simpler                          | Drain + resync               |
-| Best for       | Small syncs, debugging           | Initial sync, production     |
-
 ## Implementation Notes
 
 ### Why Raw Blocks in ParsedBatch?
@@ -353,9 +321,9 @@ All code hash data is now available from `LiveCellInfo` — no separate DB reads
 
 ### Data Inconsistency
 
-1. Compare with sequential mode output
-2. Check `write_parsed_batch()` vs `sync_blocks_batch()` for divergence
-3. Verify all insert/update calls match
+1. Check `write_parsed_batch()` for correctness
+2. Verify all insert/update calls match expected behavior
+3. Run `ckbadger verify --depth sampling` to check data integrity
 
 ### High Memory Usage
 

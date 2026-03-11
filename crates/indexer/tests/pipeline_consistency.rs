@@ -1,7 +1,7 @@
-//! Pipeline vs Sequential Mode Consistency Tests
+//! BatchWriter Integration Tests
 //!
-//! Verifies that the three-stage pipeline (Fetcher → Parser → Writer) produces
-//! identical database state to sequential processing.
+//! Verifies that BatchWriter cell insertion, consumption, address balance
+//! updates, and script usage tracking produce correct database state.
 
 #![allow(clippy::type_complexity)]
 

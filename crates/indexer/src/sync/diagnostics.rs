@@ -40,7 +40,7 @@ pub(crate) struct IncidentReport {
     pub(crate) recent_events: Vec<FlightEvent>,
 }
 
-// ── PerfStats (sequential sync) ─────────────────────────────────────────
+// ── PerfStats ───────────────────────────────────────────────────────────
 
 #[derive(Default)]
 pub(crate) struct PerfStats {
