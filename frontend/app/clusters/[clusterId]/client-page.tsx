@@ -144,9 +144,9 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
   const getContentTypeIcon = (contentType: string | null | undefined) => {
     const normalized = safeString(contentType);
     if (!normalized) return '📦';
-    if (normalized.startsWith('image/')) return '🖼️';
-    if (normalized.startsWith('video/')) return '🎬';
-    if (normalized.startsWith('audio/')) return '🎵';
+    if (normalized.startsWith('image/') || normalized.startsWith('ipfs/image')) return '🖼️';
+    if (normalized.startsWith('video/') || normalized.startsWith('ipfs/video')) return '🎬';
+    if (normalized.startsWith('audio/') || normalized.startsWith('ipfs/audio')) return '🎵';
     if (normalized.startsWith('text/')) return '📄';
     return '📦';
   };

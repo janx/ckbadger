@@ -284,9 +284,9 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     });
   };
   const getContentTypeIcon = (contentType: string) => {
-    if (contentType.startsWith('image/')) return '🖼️';
-    if (contentType.startsWith('video/')) return '🎬';
-    if (contentType.startsWith('audio/')) return '🎵';
+    if (contentType.startsWith('image/') || contentType.startsWith('ipfs/image')) return '🖼️';
+    if (contentType.startsWith('video/') || contentType.startsWith('ipfs/video')) return '🎬';
+    if (contentType.startsWith('audio/') || contentType.startsWith('ipfs/audio')) return '🎵';
     if (contentType.startsWith('text/')) return '📄';
     return '📦';
   };
@@ -353,6 +353,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
         uri.startsWith('https://') ||
         uri.startsWith('http://') ||
         uri.startsWith('data:image/') ||
+        uri.startsWith('ipfs://') ||
+        uri.startsWith('ar://') ||
         uri.endsWith('.png') ||
         uri.endsWith('.jpg') ||
         uri.endsWith('.jpeg') ||

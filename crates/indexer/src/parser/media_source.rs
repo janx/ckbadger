@@ -39,6 +39,18 @@ pub fn analyze_spore_media_profile(
     let mut has_renderable_image =
         normalized_type.starts_with("image/") || normalized_type.contains("svg");
 
+    // Extract IPFS/Arweave CIDs embedded in content type parameters (e.g. "ipfs/image;ipfs=QmHash")
+    // Use original content_type (not lowercased) to preserve case-sensitive CIDs
+    if let Some(mut ct_sources) = extract_content_type_external_refs(content_type.trim()) {
+        let ct_has_image = ct_sources
+            .iter()
+            .any(|s| normalized_type.contains("image") || uri_seems_image(&s.uri));
+        sources.append(&mut ct_sources);
+        if ct_has_image {
+            has_renderable_image = true;
+        }
+    }
+
     if is_text_like_content_type(&normalized_type) {
         match decode_text_payload(content) {
             Ok(text) => {
@@ -58,6 +70,24 @@ pub fn analyze_spore_media_profile(
             }
             Err(err) => {
                 issues.push(err);
+            }
+        }
+    }
+
+    // Also try to extract IPFS CID from cell content for ipfs/* content types
+    if normalized_type.starts_with("ipfs/") && sources.is_empty() {
+        if let Ok(text) = decode_text_payload(content) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_alphanumeric()) {
+                sources.push(SporeMediaSource {
+                    uri: format!("ipfs://{trimmed}"),
+                    scheme: "ipfs".to_string(),
+                    source_location: "payload_cid".to_string(),
+                    dependency_tier: StorageDependencyTier::DecentralizedExternal,
+                });
+                if normalized_type.contains("image") {
+                    has_renderable_image = true;
+                }
             }
         }
     }
@@ -183,6 +213,51 @@ fn extract_dob_media_sources(
     };
     extract_uri_sources(&svg_markup, "dob_svg", &mut sources);
     (sources, true)
+}
+
+/// Extract external references (IPFS/Arweave CIDs) embedded in content type parameters.
+/// Handles patterns like:
+///   "image/png;ipfs=QmHash..."
+///   "ipfs/image;ipfs=QmHash..."
+///   "image/jpeg;ar=ArweaveId..."
+fn extract_content_type_external_refs(content_type: &str) -> Option<Vec<SporeMediaSource>> {
+    let params_start = content_type.find(';')?;
+    let params_str = &content_type[params_start + 1..];
+    let mut sources = Vec::new();
+    for param in params_str.split(';') {
+        let param = param.trim();
+        if let Some((key, value)) = param.split_once('=') {
+            let key = key.trim().to_ascii_lowercase();
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            match key.as_str() {
+                "ipfs" => {
+                    sources.push(SporeMediaSource {
+                        uri: format!("ipfs://{value}"),
+                        scheme: "ipfs".to_string(),
+                        source_location: "content_type_param".to_string(),
+                        dependency_tier: StorageDependencyTier::DecentralizedExternal,
+                    });
+                }
+                "ar" | "arweave" => {
+                    sources.push(SporeMediaSource {
+                        uri: format!("ar://{value}"),
+                        scheme: "ar".to_string(),
+                        source_location: "content_type_param".to_string(),
+                        dependency_tier: StorageDependencyTier::DecentralizedExternal,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    if sources.is_empty() {
+        None
+    } else {
+        Some(sources)
+    }
 }
 
 fn classify_dependency_tier(scheme: &str) -> StorageDependencyTier {
@@ -742,5 +817,44 @@ mod tests {
 
         let snippet = resolve_dob1_snippet(&pattern, &traits).unwrap();
         assert!(snippet.contains("btcfs://rareasseti0"));
+    }
+
+    #[test]
+    fn extracts_ipfs_cid_from_content_type_param() {
+        let profile = analyze_spore_media_profile(
+            "ipfs/image;ipfs=QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL",
+            b"QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL",
+            None,
+        );
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert!(profile.has_renderable_image);
+        assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
+            && s.uri
+                .contains("QmTndjp4f6Z9vnM59AgYGHjep841FVE98EXEeWvWjETmSL")));
+    }
+
+    #[test]
+    fn extracts_ipfs_cid_from_image_png_content_type_param() {
+        let profile = analyze_spore_media_profile(
+            "image/png;ipfs=QmcT5YhBVpqHLGUwPkAtfmhsPUUxsXEihQXdFGDfTjUEeE",
+            b"\x89PNG\r\n\x1a\n",
+            None,
+        );
+        // Has IPFS source so tier is DecentralizedExternal (even though binary is on-chain)
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert!(profile.has_renderable_image);
+        assert!(profile.sources.iter().any(|s| s.scheme == "ipfs"
+            && s.uri
+                .contains("QmcT5YhBVpqHLGUwPkAtfmhsPUUxsXEihQXdFGDfTjUEeE")));
+    }
+
+    #[test]
+    fn ipfs_cid_content_type_without_param_extracts_from_payload() {
+        let profile = analyze_spore_media_profile("ipfs/cid", b"QmHashValue1234567890abcdef", None);
+        assert_eq!(profile.tier, StorageDependencyTier::DecentralizedExternal);
+        assert!(profile
+            .sources
+            .iter()
+            .any(|s| s.scheme == "ipfs" && s.uri == "ipfs://QmHashValue1234567890abcdef"));
     }
 }
