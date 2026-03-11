@@ -1,0 +1,114 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '../utils/test-utils';
+import { DaoOverview } from '@/components/dao-overview';
+import { api, type DaoStatistics, type ChartResponse } from '@/lib/api';
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    getDaoStatistics: vi.fn(),
+    getDaoTotalDepositChart: vi.fn(),
+  },
+}));
+
+function mockDaoStatistics(overrides: Partial<DaoStatistics> = {}): DaoStatistics {
+  return {
+    totalDeposited: '1120000000000000000',
+    totalDepositedCkb: '11200000000.50',
+    totalDepositors: 4521,
+    activeDeposits: 1200,
+    totalCompensationPaid: '50000000000000',
+    totalCompensationPaidCkb: '500000.00',
+    unclaimedCompensation: '30000000000000',
+    unclaimedCompensationCkb: '300000.00',
+    averageDepositDays: '365',
+    estimatedApc: '2.45',
+    miningReward: '100000000000000',
+    miningRewardCkb: '1000000.00',
+    depositCompensation: '50000000000000',
+    depositCompensationCkb: '500000.00',
+    burnt: '840000000000000000',
+    burntCkb: '8400000000.00',
+    ...overrides,
+  };
+}
+
+function mockChartResponse(): ChartResponse {
+  return {
+    title: 'Total Deposit',
+    yAxisLabel: 'CKB',
+    data: Array.from({ length: 60 }, (_, i) => ({
+      date: `2026-01-${String(i + 1).padStart(2, '0')}`,
+      value: String(10000000000 + i * 100000000),
+    })),
+  };
+}
+
+describe('DaoOverview', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders DAO statistics after loading', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue(mockDaoStatistics());
+    vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse());
+
+    render(<DaoOverview />);
+
+    await waitFor(() => {
+      expect(screen.getByText('11.20B')).toBeInTheDocument();
+    });
+
+    // APC value
+    expect(screen.getByText('2.45%')).toBeInTheDocument();
+
+    // Depositors count
+    expect(screen.getByText('4,521')).toBeInTheDocument();
+
+    // Labels
+    expect(screen.getByText('Total Deposited')).toBeInTheDocument();
+    expect(screen.getByText('APC')).toBeInTheDocument();
+    expect(screen.getByText('Depositors')).toBeInTheDocument();
+
+    // Header link to nervos-dao page
+    const headerLink = screen.getByRole('link', { name: /nervos dao/i });
+    expect(headerLink).toHaveAttribute('href', '/nervos-dao');
+  });
+
+  it('shows loading skeleton initially', () => {
+    vi.mocked(api.getDaoStatistics).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getDaoTotalDepositChart).mockReturnValue(new Promise(() => {}));
+
+    const { container } = render(<DaoOverview />);
+
+    const pulseElements = container.querySelectorAll('.animate-pulse');
+    expect(pulseElements.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders sparkline when chart data is available', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue(mockDaoStatistics());
+    vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse());
+
+    const { container } = render(<DaoOverview />);
+
+    await waitFor(() => {
+      expect(screen.getByText('11.20B')).toBeInTheDocument();
+    });
+
+    // SparkChart renders an SVG
+    const svg = container.querySelector('svg');
+    expect(svg).toBeInTheDocument();
+  });
+
+  it('formats millions correctly', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue(
+      mockDaoStatistics({ totalDepositedCkb: '450000000.00' })
+    );
+    vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse());
+
+    render(<DaoOverview />);
+
+    await waitFor(() => {
+      expect(screen.getByText('450.00M')).toBeInTheDocument();
+    });
+  });
+});
