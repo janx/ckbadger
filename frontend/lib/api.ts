@@ -1,4 +1,3 @@
-import { normalizeNftAssetId } from '@/lib/nft-collections';
 import { resolveApiBase } from '@/lib/runtime-config';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 export { resolveApiBase } from '@/lib/runtime-config';
@@ -187,16 +186,16 @@ interface CursorQueryParams {
   cursor?: string;
 }
 
-type NftItemStatusFilter = 'all' | 'live' | 'recycled';
+type ItemStatusFilter = 'all' | 'live' | 'recycled';
 
-interface NftCollectionItemsParams extends CursorQueryParams {
+interface CollectionItemsParams extends CursorQueryParams {
   search?: string;
-  status?: NftItemStatusFilter;
+  status?: ItemStatusFilter;
 }
 
-type NftCollectionHoldersParams = CursorQueryParams;
+type CollectionHoldersParams = CursorQueryParams;
 
-interface NftCollectionActivitiesParams extends CursorQueryParams {
+interface CollectionActivitiesParams extends CursorQueryParams {
   action?: 'mint' | 'transfer' | 'burn' | 'recycle' | 'renew' | 'update';
 }
 
@@ -850,7 +849,7 @@ interface SporeDobDecoded {
   issues: string[];
 }
 
-interface NftCollection {
+interface ObjectCollection {
   collectionId: string;
   standard: string;
   name: string | null;
@@ -880,7 +879,7 @@ export interface IdentityCollection {
   activitiesCount: number;
 }
 
-interface NftCollectionItem {
+interface CollectionItem {
   nftId: string;
   name: string | null;
   standard: string;
@@ -892,13 +891,13 @@ interface NftCollectionItem {
   outputIndex?: number | null;
 }
 
-interface NftCollectionHolder {
+interface CollectionHolder {
   lockScriptHash: string;
   address: string | null;
   itemCount: number;
 }
 
-interface NftCollectionActivity {
+interface CollectionActivity {
   txHash: string;
   blockNumber: number;
   txIndex: number;
@@ -1278,11 +1277,11 @@ export type {
   DaoCalculatorResult,
   SporeCluster,
   SporeNft,
-  NftCollection,
-  NftCollectionItem,
-  NftCollectionHolder,
-  NftCollectionActivity,
-  NftItemStatusFilter,
+  ObjectCollection,
+  CollectionItem,
+  CollectionHolder,
+  CollectionActivity,
+  ItemStatusFilter,
   MnftClassSummary,
   MnftIssuerSummary,
   MnftLifecycleEvent,
@@ -1668,8 +1667,8 @@ export const api = {
 
   getSporeClusterHolders: (
     clusterId: string,
-    params: NftCollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionHolder>> => {
+    params: CollectionHoldersParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -1679,8 +1678,8 @@ export const api = {
 
   getSporeClusterActivities: (
     clusterId: string,
-    params: NftCollectionActivitiesParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionActivity>> => {
+    params: CollectionActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionActivity>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
@@ -1700,22 +1699,22 @@ export const api = {
     return fetchApi(`/spore/clusters/${clusterId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
   },
 
-  getSporeNfts: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<SporeNft>> => {
+  getSporeObjects: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<SporeNft>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
-    return fetchApi(`/spore/nfts?${query}`);
+    return fetchApi(`/spore/objects?${query}`);
   },
 
-  getSporeNft: (sporeId: string): Promise<SporeNft> => {
-    return fetchApi(`/spore/nfts/${sporeId}`);
+  getSporeObject: (sporeId: string): Promise<SporeNft> => {
+    return fetchApi(`/spore/objects/${sporeId}`);
   },
 
-  getSporeNftDecoded: (sporeId: string): Promise<SporeDobDecoded> => {
-    return fetchApi(`/spore/nfts/${sporeId}/decode`);
+  getSporeObjectDecoded: (sporeId: string): Promise<SporeDobDecoded> => {
+    return fetchApi(`/spore/objects/${sporeId}/decode`);
   },
 
-  getSporeNftOccupationChart: (
+  getSporeObjectOccupationChart: (
     sporeId: string,
     range: OccupationChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
@@ -1723,14 +1722,14 @@ export const api = {
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
     const suffix = query.toString();
-    return fetchApi(`/spore/nfts/${sporeId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
+    return fetchApi(`/spore/objects/${sporeId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
   },
 
-  getNftCollection: (collectionId: string): Promise<NftCollection> => {
-    return fetchApi(`/assets/nfts/${normalizeNftAssetId(collectionId)}`);
+  getObjectCollection: (collectionId: string): Promise<ObjectCollection> => {
+    return fetchApi(`/assets/objects/${collectionId}`);
   },
 
-  getNftCollectionOccupationChart: (
+  getObjectCollectionOccupationChart: (
     collectionId: string,
     range: OccupationChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
@@ -1739,101 +1738,89 @@ export const api = {
     if (range.to) query.set('to', range.to);
     const suffix = query.toString();
     return fetchApi(
-      `/assets/nfts/${normalizeNftAssetId(collectionId)}/charts/occupation${suffix ? `?${suffix}` : ''}`
+      `/assets/objects/${collectionId}/charts/occupation${suffix ? `?${suffix}` : ''}`
     );
   },
 
-  getNftCollectionItems: (
+  getObjectCollectionItems: (
     collectionId: string,
-    params: NftCollectionItemsParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionItem>> => {
+    params: CollectionItemsParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionItem>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.search) query.set('search', params.search);
     if (params.status) query.set('status', params.status);
     const suffix = query.toString();
-    return fetchApi(
-      `/assets/nfts/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
-    );
+    return fetchApi(`/assets/objects/${collectionId}/items${suffix ? `?${suffix}` : ''}`);
   },
 
-  getNftCollectionHolders: (
+  getObjectCollectionHolders: (
     collectionId: string,
-    params: NftCollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionHolder>> => {
+    params: CollectionHoldersParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     const suffix = query.toString();
-    return fetchApi(
-      `/assets/nfts/${normalizeNftAssetId(collectionId)}/holders${suffix ? `?${suffix}` : ''}`
-    );
+    return fetchApi(`/assets/objects/${collectionId}/holders${suffix ? `?${suffix}` : ''}`);
   },
 
-  getNftCollectionActivities: (
+  getObjectCollectionActivities: (
     collectionId: string,
-    params: NftCollectionActivitiesParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionActivity>> => {
+    params: CollectionActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionActivity>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.action) query.set('action', params.action);
     const suffix = query.toString();
-    return fetchApi(
-      `/assets/nfts/${normalizeNftAssetId(collectionId)}/activities${suffix ? `?${suffix}` : ''}`
-    );
+    return fetchApi(`/assets/objects/${collectionId}/activities${suffix ? `?${suffix}` : ''}`);
   },
 
   // Identity collection endpoints
   getIdentityCollection: (collectionId: string): Promise<IdentityCollection> => {
-    return fetchApi(`/assets/identities/${normalizeNftAssetId(collectionId)}`);
+    return fetchApi(`/assets/identities/${collectionId}`);
   },
 
   getIdentityCollectionItems: (
     collectionId: string,
-    params: NftCollectionItemsParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionItem>> => {
+    params: CollectionItemsParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionItem>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.search) query.set('search', params.search);
     if (params.status) query.set('status', params.status);
     const suffix = query.toString();
-    return fetchApi(
-      `/assets/identities/${normalizeNftAssetId(collectionId)}/items${suffix ? `?${suffix}` : ''}`
-    );
+    return fetchApi(`/assets/identities/${collectionId}/items${suffix ? `?${suffix}` : ''}`);
   },
 
   getIdentityCollectionHolders: (
     collectionId: string,
-    params: NftCollectionHoldersParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionHolder>> => {
+    params: CollectionHoldersParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionHolder>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     const suffix = query.toString();
-    return fetchApi(
-      `/assets/identities/${normalizeNftAssetId(collectionId)}/holders${suffix ? `?${suffix}` : ''}`
-    );
+    return fetchApi(`/assets/identities/${collectionId}/holders${suffix ? `?${suffix}` : ''}`);
   },
 
   getIdentityCollectionActivities: (
     collectionId: string,
-    params: NftCollectionActivitiesParams = {}
-  ): Promise<CursorPaginatedResponse<NftCollectionActivity>> => {
+    params: CollectionActivitiesParams = {}
+  ): Promise<CursorPaginatedResponse<CollectionActivity>> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.action) query.set('action', params.action);
     const suffix = query.toString();
-    return fetchApi(
-      `/assets/identities/${normalizeNftAssetId(collectionId)}/activities${suffix ? `?${suffix}` : ''}`
-    );
+    return fetchApi(`/assets/identities/${collectionId}/activities${suffix ? `?${suffix}` : ''}`);
   },
 
-  getDotbitItemDetail: (nftId: string): Promise<NftCollectionItem> => {
-    return fetchApi(`/assets/nfts/dotbit/items/${encodeURIComponent(nftId)}`);
+  getDotbitItemDetail: (nftId: string): Promise<CollectionItem> => {
+    return fetchApi(`/assets/identities/dotbit/items/${encodeURIComponent(nftId)}`);
   },
 
   getDotbitItemActivities: (
@@ -1846,12 +1833,12 @@ export const api = {
     if (params.action) query.set('action', params.action);
     const suffix = query.toString();
     return fetchApi(
-      `/assets/nfts/dotbit/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
+      `/assets/identities/dotbit/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 
-  getDidCkbItemDetail: (nftId: string): Promise<NftCollectionItem> => {
-    return fetchApi(`/assets/nfts/did/items/${encodeURIComponent(nftId)}`);
+  getDidCkbItemDetail: (nftId: string): Promise<CollectionItem> => {
+    return fetchApi(`/assets/identities/did/items/${encodeURIComponent(nftId)}`);
   },
 
   getDidCkbItemActivities: (
@@ -1864,12 +1851,12 @@ export const api = {
     if (params.action) query.set('action', params.action);
     const suffix = query.toString();
     return fetchApi(
-      `/assets/nfts/did/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
+      `/assets/identities/did/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 
   getMnftItemDetail: (nftId: string): Promise<MnftItemDetail> => {
-    return fetchApi(`/assets/nfts/items/${encodeURIComponent(nftId)}`);
+    return fetchApi(`/assets/objects/items/${encodeURIComponent(nftId)}`);
   },
 
   getMnftItemActivities: (
@@ -1882,7 +1869,7 @@ export const api = {
     if (params.action) query.set('action', params.action);
     const suffix = query.toString();
     return fetchApi(
-      `/assets/nfts/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
+      `/assets/objects/items/${encodeURIComponent(nftId)}/activities${suffix ? `?${suffix}` : ''}`
     );
   },
 
