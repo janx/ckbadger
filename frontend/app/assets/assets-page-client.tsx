@@ -166,12 +166,11 @@ function AssetTable({
     placeholderData: keepPreviousData,
   });
   const assets = data?.data ?? [];
-  const tableMinWidthClass = assetType === 'token' ? 'min-w-[1040px]' : 'min-w-[1120px]';
-  const nameColumnClass = 'min-w-[17rem] flex-[1.8_0_17rem] pr-4';
-  const typeColumnClass = 'w-24 shrink-0';
-  const smallNumberColumnClass = 'w-24 shrink-0 whitespace-nowrap text-right';
-  const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
-  const capacityColumnClass = 'w-32 shrink-0 whitespace-nowrap text-right';
+  const nameColumnClass = 'min-w-0 flex-[2_0_10rem] pr-4';
+  const typeColumnClass = 'w-20 shrink-0';
+  const smallNumberColumnClass = 'w-20 shrink-0 whitespace-nowrap text-right';
+  const mediumNumberColumnClass = 'w-24 shrink-0 whitespace-nowrap text-right';
+  const capacityColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
   const formatNumber = (num: number | string) => {
     return new Intl.NumberFormat().format(Number(num));
   };
@@ -236,42 +235,49 @@ function AssetTable({
   if (isLoading) {
     return (
       <div className="space-y-2 py-4">
-        <div className="text-text-muted px-4 pb-1 text-xs md:hidden">
-          Swipe horizontally to view all columns.
-        </div>
-        <div className="overflow-x-auto" data-testid="asset-table-scroll">
-          <div className={tableMinWidthClass} data-testid="asset-table-inner">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <TerminalRow key={i} hoverable={false}>
-                <div className="flex animate-pulse items-center">
-                  <div className={nameColumnClass}>
-                    <div className="bg-base-elevated h-4 w-48 rounded" />
-                  </div>
-                  <div className={typeColumnClass}>
-                    <div className="bg-base-elevated h-4 w-12 rounded" />
-                  </div>
-                  {assetType !== 'token' && (
-                    <div className={smallNumberColumnClass}>
-                      <div className="bg-base-elevated ml-auto h-4 w-10 rounded" />
-                    </div>
-                  )}
-                  <div className={smallNumberColumnClass}>
-                    <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
-                  </div>
-                  <div className={mediumNumberColumnClass}>
-                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-                  </div>
-                  <div className={capacityColumnClass}>
-                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-                  </div>
-                  <div className={capacityColumnClass}>
-                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-                  </div>
+        {/* Table skeleton (lg+) */}
+        {Array.from({ length: 5 }).map((_, i) => (
+          <TerminalRow key={i} hoverable={false}>
+            <div className="hidden animate-pulse items-center lg:flex">
+              <div className={nameColumnClass}>
+                <div className="bg-base-elevated h-4 w-48 rounded" />
+              </div>
+              <div className={typeColumnClass}>
+                <div className="bg-base-elevated h-4 w-12 rounded" />
+              </div>
+              {assetType !== 'token' && (
+                <div className={smallNumberColumnClass}>
+                  <div className="bg-base-elevated ml-auto h-4 w-10 rounded" />
                 </div>
-              </TerminalRow>
-            ))}
-          </div>
-        </div>
+              )}
+              <div className={smallNumberColumnClass}>
+                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
+              </div>
+              <div className={mediumNumberColumnClass}>
+                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
+              </div>
+              <div className={capacityColumnClass}>
+                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
+              </div>
+              <div className={capacityColumnClass}>
+                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
+              </div>
+            </div>
+            {/* Card skeleton (<lg) */}
+            <div className="animate-pulse space-y-2 lg:hidden">
+              <div className="flex items-center gap-2">
+                <div className="bg-base-elevated h-6 w-6 shrink-0 rounded-full" />
+                <div className="bg-base-elevated h-4 w-40 rounded" />
+                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
+              </div>
+              <div className="flex gap-4">
+                <div className="bg-base-elevated h-3 w-16 rounded" />
+                <div className="bg-base-elevated h-3 w-20 rounded" />
+                <div className="bg-base-elevated h-3 w-16 rounded" />
+              </div>
+            </div>
+          </TerminalRow>
+        ))}
       </div>
     );
   }
@@ -280,138 +286,203 @@ function AssetTable({
   }
   return (
     <>
-      <div className="text-text-muted px-4 pb-1 pt-3 text-xs md:hidden">
-        Swipe horizontally to view all columns.
-      </div>
-      <div className="overflow-x-auto" data-testid="asset-table-scroll">
-        <div className={tableMinWidthClass} data-testid="asset-table-inner">
-          <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-            {renderSortHeader(
-              'name',
-              assetType === 'token' ? 'Token' : 'Collection',
-              nameColumnClass
-            )}
-            {renderSortHeader('type', 'Standard', typeColumnClass)}
-            {assetType !== 'token' &&
-              renderSortHeader('supply', 'Items', smallNumberColumnClass, 'right')}
-            {renderSortHeader('transfers24h', '24h Txns', smallNumberColumnClass, 'right')}
-            {renderSortHeader('holders', 'Holders', mediumNumberColumnClass, 'right')}
-            {renderSortHeader('occupied', 'Occupied (CKB)', capacityColumnClass, 'right')}
-            {renderSortHeader('capacity', 'Capacity (CKB)', capacityColumnClass, 'right')}
-          </div>
-          {assets.map((asset: Asset) => (
-            <TerminalRow key={asset.id}>
-              <div className="flex items-center">
-                <div className={nameColumnClass}>
-                  <AppLink href={getAssetLink(asset)} className="block">
-                    <div className="flex items-center gap-2">
-                      <span
-                        data-testid="asset-icon-slot"
-                        className="flex h-6 w-6 shrink-0 items-center justify-center"
-                      >
-                        {asset.assetType === 'token' && asset.iconUrl && (
-                          <Image
-                            src={asset.iconUrl}
-                            alt=""
-                            className="h-6 w-6 rounded-full"
-                            width={24}
-                            height={24}
-                            unoptimized
-                            onError={(event) => {
-                              event.currentTarget.style.visibility = 'hidden';
-                            }}
-                          />
-                        )}
-                        {asset.assetType === 'object' && asset.standard === 'spore' && (
-                          <span className="text-sm leading-none">🗂️</span>
-                        )}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className="text-emphasis max-w-full truncate font-medium hover:underline"
-                            title={getAssetName(asset)}
-                          >
-                            {getAssetName(asset)}
-                          </span>
-                          {asset.assetType === 'object' && getStorageBadgeLabel(asset) && (
-                            <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                              {getStorageBadgeLabel(asset)}
-                            </span>
-                          )}
-                          {asset.published && (
-                            <span className="text-emphasis" title="Verified">
-                              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path
-                                  fillRule="evenodd"
-                                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                            </span>
-                          )}
-                          {asset.famous && (
-                            <span className="text-warning" title="Famous">
-                              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                              </svg>
-                            </span>
-                          )}
-                        </div>
-                        <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
-                      </div>
-                    </div>
-                  </AppLink>
-                </div>
-                <div className={typeColumnClass}>
-                  <div className="flex flex-wrap gap-1">
-                    <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
-                  </div>
-                </div>
-                {assetType !== 'token' && (
-                  <div
-                    className={`${smallNumberColumnClass} text-text-primary font-mono tabular-nums`}
-                  >
-                    {formatNumber(asset.totalSupply || 0)}
-                  </div>
-                )}
-                <div className={`${smallNumberColumnClass} text-warning font-mono tabular-nums`}>
-                  {formatNumber(asset.transfers24h)}
-                </div>
-                <div
-                  className={`${mediumNumberColumnClass} text-text-muted font-mono tabular-nums`}
-                >
-                  {formatNumber(asset.holdersCount)}
-                </div>
-                <div
-                  className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}
-                >
-                  {(() => {
-                    const occupied = asset.liveOccupiedCapacity;
-                    if (!occupied) {
-                      return <span className="text-text-muted">-</span>;
-                    }
-                    const compact = formatCkbCompact(occupied);
-                    return <span title={`${compact.full} CKB`}>{compact.value}</span>;
-                  })()}
-                </div>
-                <div
-                  className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}
-                >
-                  {(() => {
-                    const capacity = asset.liveCapacity;
-                    if (!capacity) {
-                      return <span className="text-text-muted">-</span>;
-                    }
-                    const compact = formatCkbCompact(capacity);
-                    return <span title={`${compact.full} CKB`}>{compact.value}</span>;
-                  })()}
-                </div>
-              </div>
-            </TerminalRow>
-          ))}
+      <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
+        {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
+        {renderSortHeader('type', 'Standard', typeColumnClass)}
+        {assetType !== 'token' &&
+          renderSortHeader('supply', 'Items', smallNumberColumnClass, 'right')}
+        {renderSortHeader('transfers24h', '24h Txns', smallNumberColumnClass, 'right')}
+        {renderSortHeader('holders', 'Holders', mediumNumberColumnClass, 'right')}
+        <div className="hidden xl:contents">
+          {renderSortHeader('occupied', 'Occupied (CKB)', capacityColumnClass, 'right')}
         </div>
+        {renderSortHeader('capacity', 'Capacity (CKB)', capacityColumnClass, 'right')}
       </div>
+      {assets.map((asset: Asset) => (
+        <TerminalRow key={asset.id}>
+          {/* Table row (lg+) */}
+          <div className="hidden items-center lg:flex">
+            <div className={nameColumnClass}>
+              <AppLink href={getAssetLink(asset)} className="block">
+                <div className="flex items-center gap-2">
+                  <span
+                    data-testid="asset-icon-slot"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center"
+                  >
+                    {asset.assetType === 'token' && asset.iconUrl && (
+                      <Image
+                        src={asset.iconUrl}
+                        alt=""
+                        className="h-6 w-6 rounded-full"
+                        width={24}
+                        height={24}
+                        unoptimized
+                        onError={(event) => {
+                          event.currentTarget.style.visibility = 'hidden';
+                        }}
+                      />
+                    )}
+                    {asset.assetType === 'object' && asset.standard === 'spore' && (
+                      <span className="text-sm leading-none">🗂️</span>
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="text-emphasis max-w-full truncate font-medium hover:underline"
+                        title={getAssetName(asset)}
+                      >
+                        {getAssetName(asset)}
+                      </span>
+                      {asset.assetType === 'object' && getStorageBadgeLabel(asset) && (
+                        <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
+                          {getStorageBadgeLabel(asset)}
+                        </span>
+                      )}
+                      {asset.published && (
+                        <span className="text-emphasis" title="Verified">
+                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path
+                              fillRule="evenodd"
+                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </span>
+                      )}
+                      {asset.famous && (
+                        <span className="text-warning" title="Famous">
+                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                          </svg>
+                        </span>
+                      )}
+                    </div>
+                    <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
+                  </div>
+                </div>
+              </AppLink>
+            </div>
+            <div className={typeColumnClass}>
+              <div className="flex flex-wrap gap-1">
+                <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
+              </div>
+            </div>
+            {assetType !== 'token' && (
+              <div className={`${smallNumberColumnClass} text-text-primary font-mono tabular-nums`}>
+                {formatNumber(asset.totalSupply || 0)}
+              </div>
+            )}
+            <div className={`${smallNumberColumnClass} text-warning font-mono tabular-nums`}>
+              {formatNumber(asset.transfers24h)}
+            </div>
+            <div className={`${mediumNumberColumnClass} text-text-muted font-mono tabular-nums`}>
+              {formatNumber(asset.holdersCount)}
+            </div>
+            <div className="hidden xl:block">
+              <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
+                {(() => {
+                  const occupied = asset.liveOccupiedCapacity;
+                  if (!occupied) {
+                    return <span className="text-text-muted">-</span>;
+                  }
+                  const compact = formatCkbCompact(occupied);
+                  return <span title={`${compact.full} CKB`}>{compact.value}</span>;
+                })()}
+              </div>
+            </div>
+            <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
+              {(() => {
+                const capacity = asset.liveCapacity;
+                if (!capacity) {
+                  return <span className="text-text-muted">-</span>;
+                }
+                const compact = formatCkbCompact(capacity);
+                return <span title={`${compact.full} CKB`}>{compact.value}</span>;
+              })()}
+            </div>
+          </div>
+          {/* Card layout (<lg) */}
+          <div className="space-y-1.5 lg:hidden">
+            <div className="flex items-center gap-2">
+              <AppLink href={getAssetLink(asset)} className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    data-testid="asset-icon-slot"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center"
+                  >
+                    {asset.assetType === 'token' && asset.iconUrl && (
+                      <Image
+                        src={asset.iconUrl}
+                        alt=""
+                        className="h-6 w-6 rounded-full"
+                        width={24}
+                        height={24}
+                        unoptimized
+                        onError={(event) => {
+                          event.currentTarget.style.visibility = 'hidden';
+                        }}
+                      />
+                    )}
+                    {asset.assetType === 'object' && asset.standard === 'spore' && (
+                      <span className="text-sm leading-none">🗂️</span>
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="text-emphasis max-w-full truncate font-medium hover:underline"
+                        title={getAssetName(asset)}
+                      >
+                        {getAssetName(asset)}
+                      </span>
+                      {asset.published && (
+                        <span className="text-emphasis" title="Verified">
+                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path
+                              fillRule="evenodd"
+                              d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </span>
+                      )}
+                      {asset.famous && (
+                        <span className="text-warning" title="Famous">
+                          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                          </svg>
+                        </span>
+                      )}
+                    </div>
+                    <HexDisplay value={asset.id} size="sm" startChars={8} endChars={6} />
+                  </div>
+                </div>
+              </AppLink>
+              <Badge variant="neutral">{getTypeBadgeLabel(asset)}</Badge>
+            </div>
+            {assetType === 'object' && getStorageBadgeLabel(asset) && (
+              <span className="border-base-border text-text-secondary rounded border px-1.5 py-0.5 font-mono text-[10px]">
+                {getStorageBadgeLabel(asset)}
+              </span>
+            )}
+            <div className="text-text-muted flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs tabular-nums">
+              <span>
+                24h: <span className="text-warning">{formatNumber(asset.transfers24h)}</span>
+              </span>
+              <span>Holders: {formatNumber(asset.holdersCount)}</span>
+              {assetType !== 'token' && <span>Items: {formatNumber(asset.totalSupply || 0)}</span>}
+              <span>
+                Cap:{' '}
+                {(() => {
+                  const c = asset.liveCapacity;
+                  return c ? formatCkbCompact(c).value : '-';
+                })()}
+              </span>
+            </div>
+          </div>
+        </TerminalRow>
+      ))}
       <TerminalPanelFooter>
         <CursorPagination
           total={data.total ?? undefined}

@@ -329,7 +329,8 @@ describe('AssetsPage', () => {
 
     const fallbackLabel = `${typeHash.slice(0, 10)}...${typeHash.slice(-8)}`;
     await waitFor(() => {
-      expect(screen.getByText(fallbackLabel)).toBeInTheDocument();
+      // Dual-render: name appears in both table row and card layout
+      expect(screen.getAllByText(fallbackLabel).length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -341,7 +342,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'object' }));
-      expect(screen.getByText('Test Collection')).toBeInTheDocument();
+      expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -353,7 +354,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'object' }));
-      expect(screen.getByText('Test Collection')).toBeInTheDocument();
+      expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -365,7 +366,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'object' }));
-      expect(screen.getByText('Test Collection')).toBeInTheDocument();
+      expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -406,7 +407,8 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('TEST')).toBeInTheDocument();
+      // Dual-render: text appears in both table and card layouts
+      expect(screen.getAllByText('TEST').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('xUDT').length).toBeGreaterThan(0);
     });
   });
@@ -420,7 +422,7 @@ describe('AssetsPage', () => {
     fireEvent.click(objectsTab);
 
     await waitFor(() => {
-      expect(screen.getByText('Test Collection')).toBeInTheDocument();
+      expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('SPORE').length).toBeGreaterThan(0);
     });
   });
@@ -561,8 +563,9 @@ describe('AssetsPage', () => {
     fireEvent.click(objectsTab);
 
     await waitFor(() => {
-      const link = screen.getByRole('link', { name: /Test Collection/i });
-      expect(link).toHaveAttribute(
+      // Dual-render: links appear in both table and card layouts
+      const links = screen.getAllByRole('link', { name: /Test Collection/i });
+      expect(links[0]).toHaveAttribute(
         'href',
         '/clusters/0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
       );
@@ -576,8 +579,9 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Identities/i }));
 
     await waitFor(() => {
-      const link = screen.getByRole('link', { name: /\.bit/i });
-      expect(link).toHaveAttribute('href', '/nfts/dotbit');
+      // Dual-render: links appear in both table and card layouts
+      const links = screen.getAllByRole('link', { name: /\.bit/i });
+      expect(links[0]).toHaveAttribute('href', '/nfts/dotbit');
       expect(screen.getAllByText('DOTBIT').length).toBeGreaterThan(0);
     });
   });
@@ -589,8 +593,9 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Identities/i }));
 
     await waitFor(() => {
-      const link = screen.getByRole('link', { name: /did:ckb/i });
-      expect(link).toHaveAttribute('href', '/nfts/did:ckb');
+      // Dual-render: links appear in both table and card layouts
+      const links = screen.getAllByRole('link', { name: /did:ckb/i });
+      expect(links[0]).toHaveAttribute('href', '/nfts/did:ckb');
       expect(screen.getAllByText('did:ckb').length).toBeGreaterThan(0);
     });
   });
@@ -605,14 +610,17 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Objects/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Spore With Icon')).toBeInTheDocument();
-      expect(screen.getByText('MNFT Without Icon')).toBeInTheDocument();
+      // Dual-render: names appear in both table and card layouts
+      expect(screen.getAllByText('Spore With Icon').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
     });
 
+    // Dual-render: each asset has icon slots in both table (lg+) and card (<lg) layouts
     const iconSlots = screen.getAllByTestId('asset-icon-slot');
-    expect(iconSlots).toHaveLength(2);
+    expect(iconSlots).toHaveLength(4); // 2 assets x 2 layouts
+    // Order: [0]=table-spore, [1]=card-spore, [2]=table-mnft, [3]=card-mnft
     expect(iconSlots[0]).toHaveTextContent('🗂️');
-    expect(iconSlots[1].textContent?.trim()).toBe('');
+    expect(iconSlots[2].textContent?.trim()).toBe('');
   });
 
   it('shows verified badge for published tokens', async () => {
@@ -621,8 +629,9 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      const verifiedIcon = document.querySelector('[title="Verified"]');
-      expect(verifiedIcon).toBeInTheDocument();
+      // Dual-render: verified badge appears in both table and card layouts
+      const verifiedIcons = document.querySelectorAll('[title="Verified"]');
+      expect(verifiedIcons.length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -748,7 +757,8 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Objects/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('FULLY ON-CHAIN')).toBeInTheDocument();
+      // Dual-render: storage badge appears in both table and card layouts
+      expect(screen.getAllByText('FULLY ON-CHAIN').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -781,24 +791,26 @@ describe('AssetsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Objects/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('MNFT Without Icon')).toBeInTheDocument();
-      expect(screen.getByText('OFFCHAIN DEPENDENT')).toBeInTheDocument();
+      // Dual-render: text appears in both table and card layouts
+      expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('OFFCHAIN DEPENDENT').length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('renders object table in a horizontal scroll container to prevent column clipping', async () => {
+  it('renders object table with dual-render layout (table lg+ and card below lg)', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
     render(<AssetsPage />);
     fireEvent.click(screen.getByRole('button', { name: /Objects/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Test Collection')).toBeInTheDocument();
+      // Dual-render: name appears in both table and card layouts
+      expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
     });
 
-    const scrollContainer = screen.getByTestId('asset-table-scroll');
-    const tableInner = screen.getByTestId('asset-table-inner');
-    expect(scrollContainer).toHaveClass('overflow-x-auto');
-    expect(tableInner).toHaveClass('min-w-[1120px]');
+    // Should have both table and card layouts rendered (dual-render)
+    const iconSlots = screen.getAllByTestId('asset-icon-slot');
+    // Each asset renders two icon slots: one for lg+ table, one for <lg card
+    expect(iconSlots.length).toBeGreaterThanOrEqual(2);
   });
 });
