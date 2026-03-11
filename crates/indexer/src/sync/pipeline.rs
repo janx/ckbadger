@@ -19,7 +19,7 @@ use crate::parser::{
 };
 use crate::rpc::BlockResponseWithCycles;
 use crate::runtime_diag::read_cgroup_memory_snapshot;
-use ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
+use ckbadger_store::types::{DOTBIT_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION};
 
 use ckb_store_reader::CkbChainReader;
 use rayon::prelude::*;
@@ -1292,9 +1292,12 @@ impl Indexer {
                                 spore_daily.0 += i128::from(cell.capacity);
                                 spore_daily.1 += i128::from(cell_occupied);
 
-                                if let Some(cluster_id) = cluster_id {
+                                {
+                                    let effective_cluster_id = cluster_id.unwrap_or_else(|| {
+                                        SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
+                                    });
                                     let cluster_daily = cluster_daily_changes
-                                        .entry((cluster_id, date_yyyymmdd))
+                                        .entry((effective_cluster_id, date_yyyymmdd))
                                         .or_insert((0, 0));
                                     cluster_daily.0 += i128::from(cell.capacity);
                                     cluster_daily.1 += i128::from(cell_occupied);
@@ -1425,9 +1428,13 @@ impl Indexer {
                                             spore_daily.0 -= i128::from(info.capacity);
                                             spore_daily.1 -= i128::from(info.occupied_capacity);
 
-                                            if let Some(cluster_id) = index.cluster_id {
+                                            {
+                                                let effective_cluster_id =
+                                                    index.cluster_id.unwrap_or_else(|| {
+                                                        SOLE_SPORES_SENTINEL_COLLECTION.to_vec()
+                                                    });
                                                 let cluster_daily = cluster_daily_changes
-                                                    .entry((cluster_id, date_yyyymmdd))
+                                                    .entry((effective_cluster_id, date_yyyymmdd))
                                                     .or_insert((0, 0));
                                                 cluster_daily.0 -= i128::from(info.capacity);
                                                 cluster_daily.1 -=
