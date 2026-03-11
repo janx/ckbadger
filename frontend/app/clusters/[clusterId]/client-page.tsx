@@ -694,7 +694,12 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-text font-mono text-xs">{contentType}</div>
+                                <div
+                                  className="text-text truncate font-mono text-xs"
+                                  title={contentType}
+                                >
+                                  {contentType}
+                                </div>
                                 <div className="text-text text-right font-mono text-xs">
                                   {formatNumber(contentSize)} B
                                 </div>
@@ -749,7 +754,12 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                   )}
                                 </div>
                                 <div className="flex items-center justify-between gap-3 text-xs">
-                                  <span className="text-text-dim font-mono">{contentType}</span>
+                                  <span
+                                    className="text-text-dim truncate font-mono"
+                                    title={contentType}
+                                  >
+                                    {contentType}
+                                  </span>
                                   <span className="text-text font-mono">
                                     {formatNumber(contentSize)} B
                                   </span>
