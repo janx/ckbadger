@@ -1,9 +1,13 @@
+use std::sync::LazyLock;
+
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
 
 pub const DAO_CODE_HASH: &str =
     "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+
+static DAO_CODE_HASH_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| parse_hex_to_bytes(DAO_CODE_HASH));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaoState {
@@ -51,8 +55,7 @@ fn checked_usize_to_i32(value: usize, context: &str) -> i32 {
 
 impl DaoParser {
     pub fn is_dao_code_hash(code_hash: &[u8]) -> bool {
-        let dao_hash = parse_hex_to_bytes(DAO_CODE_HASH);
-        code_hash == dao_hash.as_slice()
+        code_hash == DAO_CODE_HASH_BYTES.as_slice()
     }
 
     pub fn is_dao_cell(output: &CellOutput) -> bool {

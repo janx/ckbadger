@@ -68,9 +68,10 @@ pub(super) fn rebuild_hodl_tracker_from_state(
     if tip_block <= 0 {
         return Ok(HodlWaveTracker::new());
     }
-    Ok(state
-        .map(HodlWaveTracker::from_state)
-        .unwrap_or_else(HodlWaveTracker::new))
+    match state {
+        Some(s) => Ok(HodlWaveTracker::from_state(s)?),
+        None => Ok(HodlWaveTracker::new()),
+    }
 }
 
 pub(super) fn require_non_negative_block_number(value: i64, context: &str) -> Result<u64> {
@@ -207,6 +208,7 @@ pub struct Indexer {
     pub(crate) repeated_warning_tracker: RepeatedWarningTracker,
     pub(crate) incident_dir: PathBuf,
     pub(crate) bulk_sync_perf_run: std::sync::Mutex<Option<BulkSyncPerfRun>>,
+    pub(crate) shutdown_requested: Arc<AtomicBool>,
     pub(crate) label_import_started: std::sync::atomic::AtomicBool,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
@@ -263,7 +265,7 @@ impl Indexer {
                     state.date_transitions.len(),
                     state.holder_count,
                 );
-                HodlWaveTracker::from_state(state)
+                HodlWaveTracker::from_state(state)?
             }
             None => {
                 info!("Starting fresh HODL wave tracker");
@@ -300,6 +302,7 @@ impl Indexer {
             repeated_warning_tracker: RepeatedWarningTracker::default(),
             incident_dir,
             bulk_sync_perf_run: std::sync::Mutex::new(None),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
@@ -321,6 +324,10 @@ impl Indexer {
 
     pub fn rebuild_pause_flag(&self) -> Arc<std::sync::atomic::AtomicBool> {
         Arc::clone(&self.rebuild_pause_flag)
+    }
+
+    pub fn shutdown_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.shutdown_requested)
     }
 
     pub fn is_bulk_sync_active(&self) -> bool {

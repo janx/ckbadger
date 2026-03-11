@@ -71,6 +71,40 @@ pub(super) fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
+/// Resolve consumed data_size and occupied_capacity from input cell info maps.
+/// Fails fast if any input is unresolved — at this point all inputs should be resolved.
+fn resolve_consumed_stats(
+    tx_slice: &[TxData],
+    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    block_number: i64,
+) -> Result<(i64, i128)> {
+    let mut data_size_consumed: i64 = 0;
+    let mut occupied_capacity_consumed: i128 = 0;
+    for tx in tx_slice.iter().filter(|tx| !tx.is_cellbase) {
+        for input in &tx.inputs {
+            let key = (
+                input.previous_tx_hash.to_vec(),
+                parsed_input_outpoint_index_i16(input.previous_output_index, "stats"),
+            );
+            let info = input_cell_info
+                .get(&key)
+                .or_else(|| batch_cell_infos.get(&key))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "unresolved input cell info for stats accumulation: block={}, tx_hash=0x{}, idx={}",
+                        block_number,
+                        short_tx_hash(&key.0),
+                        key.1
+                    )
+                })?;
+            data_size_consumed += info.data_size as i64;
+            occupied_capacity_consumed += i128::from(info.occupied_capacity);
+        }
+    }
+    Ok((data_size_consumed, occupied_capacity_consumed))
+}
+
 fn build_activity_input_views(
     tx_data: &TxData,
     block_number: i64,
@@ -228,7 +262,12 @@ fn apply_identity_collection_activity_count_deltas(
         } else {
             store
                 .get_identity_collection_aggregate(&collection_id)?
-                .unwrap_or_default()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "missing identity collection aggregate while applying activity_count delta: collection_id=0x{}",
+                        hex::encode(&collection_id)
+                    )
+                })?
         };
         let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
             anyhow!(
@@ -2071,46 +2110,12 @@ impl Indexer {
                     )
                 })
                 .sum();
-            let data_size_consumed: i64 = tx_slice
-                .iter()
-                .filter(|tx| !tx.is_cellbase)
-                .flat_map(|tx| tx.inputs.iter())
-                .filter_map(|input| {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        ),
-                    );
-                    input_cell_info
-                        .get(&key)
-                        .map(|info| info.data_size as i64)
-                        .or_else(|| batch_cell_infos.get(&key).map(|info| info.data_size as i64))
-                })
-                .sum();
-            let occupied_capacity_consumed: i128 = tx_slice
-                .iter()
-                .filter(|tx| !tx.is_cellbase)
-                .flat_map(|tx| tx.inputs.iter())
-                .filter_map(|input| {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "sync_indexer",
-                        ),
-                    );
-                    input_cell_info
-                        .get(&key)
-                        .map(|info| i128::from(info.occupied_capacity))
-                        .or_else(|| {
-                            batch_cell_infos
-                                .get(&key)
-                                .map(|info| i128::from(info.occupied_capacity))
-                        })
-                })
-                .sum();
+            let (data_size_consumed, occupied_capacity_consumed) = resolve_consumed_stats(
+                tx_slice,
+                &input_cell_info,
+                &batch_cell_infos,
+                parsed.number,
+            )?;
 
             batch_stats.sync_totals.0 += parsed.transactions_count as i64;
             batch_stats.sync_totals.1 += cells_created as i64;
@@ -4628,42 +4633,8 @@ impl Indexer {
                                 )
                             })
                             .sum();
-                        let data_size_consumed: i64 = tx_slice
-                            .iter()
-                            .filter(|tx| !tx.is_cellbase)
-                            .flat_map(|tx| tx.inputs.iter())
-                            .filter_map(|input| {
-                                let key = (
-                                    input.previous_tx_hash.to_vec(),
-                                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
-                                );
-                                input_cell_info
-                                    .get(&key)
-                                    .map(|info| info.data_size as i64)
-                                    .or_else(|| {
-                                        batch_cell_infos.get(&key).map(|info| info.data_size as i64)
-                                    })
-                            })
-                            .sum();
-                        let occupied_capacity_consumed: i128 = tx_slice
-                            .iter()
-                            .filter(|tx| !tx.is_cellbase)
-                            .flat_map(|tx| tx.inputs.iter())
-                            .filter_map(|input| {
-                                let key = (
-                                    input.previous_tx_hash.to_vec(),
-                                    parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
-                                );
-                                input_cell_info
-                                    .get(&key)
-                                    .map(|info| i128::from(info.occupied_capacity))
-                                    .or_else(|| {
-                                        batch_cell_infos
-                                            .get(&key)
-                                            .map(|info| i128::from(info.occupied_capacity))
-                                    })
-                            })
-                            .sum();
+                        let (data_size_consumed, occupied_capacity_consumed) =
+                            resolve_consumed_stats(tx_slice, &input_cell_info, &batch_cell_infos, parsed.number)?;
 
                         stats.sync_totals.0 += parsed.transactions_count as i64;
                         stats.sync_totals.1 += cells_created as i64;
@@ -6289,48 +6260,12 @@ impl Indexer {
                         )
                     })
                     .sum();
-                let data_size_consumed: i64 = tx_slice
-                    .iter()
-                    .filter(|tx| !tx.is_cellbase)
-                    .flat_map(|tx| tx.inputs.iter())
-                    .filter_map(|input| {
-                        let key = (
-                            input.previous_tx_hash.to_vec(),
-                            parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ),
-                        );
-                        input_cell_info
-                            .get(&key)
-                            .map(|info| info.data_size as i64)
-                            .or_else(|| {
-                                batch_cell_infos.get(&key).map(|info| info.data_size as i64)
-                            })
-                    })
-                    .sum();
-                let occupied_capacity_consumed: i128 = tx_slice
-                    .iter()
-                    .filter(|tx| !tx.is_cellbase)
-                    .flat_map(|tx| tx.inputs.iter())
-                    .filter_map(|input| {
-                        let key = (
-                            input.previous_tx_hash.to_vec(),
-                            parsed_input_outpoint_index_i16(
-                                input.previous_output_index,
-                                "sync_indexer",
-                            ),
-                        );
-                        input_cell_info
-                            .get(&key)
-                            .map(|info| i128::from(info.occupied_capacity))
-                            .or_else(|| {
-                                batch_cell_infos
-                                    .get(&key)
-                                    .map(|info| i128::from(info.occupied_capacity))
-                            })
-                    })
-                    .sum();
+                let (data_size_consumed, occupied_capacity_consumed) = resolve_consumed_stats(
+                    tx_slice,
+                    &input_cell_info,
+                    &batch_cell_infos,
+                    parsed.number,
+                )?;
 
                 batch_stats.sync_totals.0 += parsed.transactions_count as i64;
                 batch_stats.sync_totals.1 += cells_created as i64;

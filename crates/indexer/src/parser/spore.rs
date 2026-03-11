@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use ckbadger_store::types::SporeMediaProfile;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
@@ -28,6 +30,23 @@ pub const CLUSTER_CODE_HASH_TESTNET_V2: &str =
 pub const CLUSTER_CODE_HASH_TESTNET_V1: &str =
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080";
 
+static SPORE_DID_HASH: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID));
+static SPORE_NFT_HASHES: LazyLock<[Vec<u8>; 3]> = LazyLock::new(|| {
+    [
+        parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
+        parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V2),
+        parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V1),
+    ]
+});
+static CLUSTER_HASHES: LazyLock<[Vec<u8>; 3]> = LazyLock::new(|| {
+    [
+        parse_hex_to_bytes(CLUSTER_CODE_HASH_MAINNET_V2),
+        parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V2),
+        parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V1),
+    ]
+});
+
 #[derive(Debug, Clone)]
 pub struct ParsedSporeCell {
     pub spore_id: Vec<u8>,
@@ -55,16 +74,11 @@ pub struct SporeParser;
 
 impl SporeParser {
     pub fn is_did_type_script(code_hash: &[u8]) -> bool {
-        code_hash == parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_DID).as_slice()
+        code_hash == SPORE_DID_HASH.as_slice()
     }
 
     pub fn is_spore_nft_type_script(code_hash: &[u8]) -> bool {
-        let spore_hashes = [
-            parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2),
-            parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V2),
-            parse_hex_to_bytes(SPORE_CODE_HASH_TESTNET_V1),
-        ];
-        spore_hashes.iter().any(|h| code_hash == h.as_slice())
+        SPORE_NFT_HASHES.iter().any(|h| code_hash == h.as_slice())
     }
 
     pub fn is_spore_type_script(code_hash: &[u8]) -> bool {
@@ -72,12 +86,7 @@ impl SporeParser {
     }
 
     pub fn is_cluster_type_script(code_hash: &[u8]) -> bool {
-        let cluster_hashes = [
-            parse_hex_to_bytes(CLUSTER_CODE_HASH_MAINNET_V2),
-            parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V2),
-            parse_hex_to_bytes(CLUSTER_CODE_HASH_TESTNET_V1),
-        ];
-        cluster_hashes.iter().any(|h| code_hash == h.as_slice())
+        CLUSTER_HASHES.iter().any(|h| code_hash == h.as_slice())
     }
 
     pub fn parse_spore_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedSporeCell> {

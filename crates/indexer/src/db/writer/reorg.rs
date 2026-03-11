@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use tracing::info;
 
@@ -31,11 +31,13 @@ impl BatchWriter {
         depth: i64,
     ) -> Result<()> {
         // Store the reorg event
+        let depth_i32 = i32::try_from(depth)
+            .map_err(|_| anyhow!("reorg depth exceeds i32 range: depth={}", depth))?;
         let event = ReorgEvent {
             detected_at: Utc::now().timestamp(),
             rollback_from: fork_point + 1,
             rollback_to: fork_point,
-            depth: depth as i32,
+            depth: depth_i32,
         };
         let event_key = next_reorg_event_key();
         let event_bytes = bincode::serialize(&event)?;
@@ -46,7 +48,7 @@ impl BatchWriter {
             db_tip_hash: db_tip_hash.to_vec(),
             chain_tip,
             chain_tip_hash: chain_tip_hash.to_vec(),
-            depth: depth as i32,
+            depth: depth_i32,
             fork_point,
         });
         let status_bytes = bincode::serialize(&status)?;
@@ -70,7 +72,13 @@ impl BatchWriter {
         _new_tip: i64,
         _new_tip_hash: &[u8],
     ) -> Result<ReorgResult> {
-        let depth = (old_tip - fork_point) as i32;
+        let depth = i32::try_from(old_tip - fork_point).map_err(|_| {
+            anyhow!(
+                "reorg depth exceeds i32 range: old_tip={}, fork_point={}",
+                old_tip,
+                fork_point
+            )
+        })?;
 
         // Domain rollback for canonical mutable state.
         self.store

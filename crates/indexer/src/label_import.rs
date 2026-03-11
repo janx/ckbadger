@@ -236,31 +236,18 @@ pub fn run_label_import_bundled(
 
     // Script labels with overrides applied
     let overrides = bundled::script_overrides();
+    let deprecated_set: std::collections::HashSet<String> = overrides
+        .deprecated
+        .iter()
+        .map(|d| d.to_lowercase())
+        .collect();
     let mut scripts = bundled::script_labels();
     for script in &mut scripts {
         if let Some(new_name) = overrides.overrides.get(&script.name) {
             script.name = new_name.clone();
         }
-        for deployment in &mut script.deployments.mainnet {
-            let code_hash_lower = deployment.code_hash.to_lowercase();
-            if overrides
-                .deprecated
-                .iter()
-                .any(|d| d.to_lowercase() == code_hash_lower)
-            {
-                deployment.deprecated = true;
-            }
-        }
-        for deployment in &mut script.deployments.testnet {
-            let code_hash_lower = deployment.code_hash.to_lowercase();
-            if overrides
-                .deprecated
-                .iter()
-                .any(|d| d.to_lowercase() == code_hash_lower)
-            {
-                deployment.deprecated = true;
-            }
-        }
+        apply_deprecated_flags(&mut script.deployments.mainnet, &deprecated_set);
+        apply_deprecated_flags(&mut script.deployments.testnet, &deprecated_set);
     }
     info!("Bundled script labels: {}", scripts.len());
     for script in &scripts {
@@ -396,9 +383,25 @@ fn upsert_token_label(store: &CkbadgerStore, label: &UdtLabelInfo) -> Result<boo
     Ok(true)
 }
 
+fn apply_deprecated_flags(
+    deployments: &mut [ScriptDeployment],
+    deprecated_set: &std::collections::HashSet<String>,
+) {
+    for deployment in deployments {
+        if deprecated_set.contains(&deployment.code_hash.to_lowercase()) {
+            deployment.deprecated = true;
+        }
+    }
+}
+
 fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
     let mut scripts = Vec::new();
     let overrides = load_script_overrides(base_path)?;
+    let deprecated_set: std::collections::HashSet<String> = overrides
+        .deprecated
+        .iter()
+        .map(|d| d.to_lowercase())
+        .collect();
 
     let script_path = Path::new(base_path).join("information").join("script");
 
@@ -425,26 +428,8 @@ fn load_script_labels(base_path: &str) -> Result<Vec<ScriptLabelInfo>> {
                     if let Some(new_name) = overrides.overrides.get(&script.name) {
                         script.name = new_name.clone();
                     }
-                    for deployment in &mut script.deployments.mainnet {
-                        let code_hash_lower = deployment.code_hash.to_lowercase();
-                        if overrides
-                            .deprecated
-                            .iter()
-                            .any(|d| d.to_lowercase() == code_hash_lower)
-                        {
-                            deployment.deprecated = true;
-                        }
-                    }
-                    for deployment in &mut script.deployments.testnet {
-                        let code_hash_lower = deployment.code_hash.to_lowercase();
-                        if overrides
-                            .deprecated
-                            .iter()
-                            .any(|d| d.to_lowercase() == code_hash_lower)
-                        {
-                            deployment.deprecated = true;
-                        }
-                    }
+                    apply_deprecated_flags(&mut script.deployments.mainnet, &deprecated_set);
+                    apply_deprecated_flags(&mut script.deployments.testnet, &deprecated_set);
                     scripts.push(script);
                 }
                 Err(e) => {

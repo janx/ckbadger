@@ -12,6 +12,11 @@ use super::types::SyncAction;
 impl Indexer {
     pub(crate) async fn run_sequential(&self) -> Result<()> {
         loop {
+            if self.shutdown_requested.load(Ordering::SeqCst) {
+                info!(run_id = %self.run_id, "Shutdown requested, exiting sequential sync loop");
+                return Ok(());
+            }
+
             if self.rebuild_pause_flag.load(Ordering::SeqCst) {
                 debug!("Sync paused for index rebuild");
                 sleep(Duration::from_millis(500)).await;

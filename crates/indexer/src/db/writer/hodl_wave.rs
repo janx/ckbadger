@@ -11,6 +11,7 @@ use chrono::NaiveDate;
 use ckbadger_store::{DailyHodlWave, HodlTrackerState};
 
 /// Tracks live cell capacity by creation date for HODL wave chart computation.
+#[derive(Debug)]
 pub struct HodlWaveTracker {
     /// Total live capacity (shannons) per cell creation date.
     capacity_by_creation_date: HashMap<NaiveDate, i128>,
@@ -33,40 +34,51 @@ impl HodlWaveTracker {
     }
 
     /// Restore tracker from persisted state.
-    pub fn from_state(state: HodlTrackerState) -> Self {
-        assert!(
-            state.holder_count >= 0,
-            "invalid hodl tracker state: negative holder_count={}",
-            state.holder_count
-        );
+    pub fn from_state(state: HodlTrackerState) -> Result<Self> {
+        if state.holder_count < 0 {
+            bail!(
+                "invalid hodl tracker state: negative holder_count={}",
+                state.holder_count
+            );
+        }
 
-        let capacity_by_creation_date = state
-            .capacity_by_date
-            .into_iter()
-            .filter_map(|(date_str, cap)| {
-                NaiveDate::parse_from_str(&date_str, "%Y%m%d")
-                    .ok()
-                    .map(|d| (d, cap))
-            })
-            .collect();
-        let block_date_transitions = state
-            .date_transitions
-            .into_iter()
-            .filter_map(|(block, date_str)| {
-                NaiveDate::parse_from_str(&date_str, "%Y%m%d")
-                    .ok()
-                    .map(|d| (block, d))
-            })
-            .collect();
+        let mut capacity_by_creation_date = HashMap::new();
+        for (date_str, cap) in state.capacity_by_date {
+            let date = NaiveDate::parse_from_str(&date_str, "%Y%m%d").map_err(|e| {
+                anyhow::anyhow!(
+                    "corrupt hodl capacity_by_date entry: date='{}': {}",
+                    date_str,
+                    e
+                )
+            })?;
+            capacity_by_creation_date.insert(date, cap);
+        }
+        let mut block_date_transitions = Vec::new();
+        for (block, date_str) in state.date_transitions {
+            let date = NaiveDate::parse_from_str(&date_str, "%Y%m%d").map_err(|e| {
+                anyhow::anyhow!(
+                    "corrupt hodl date_transitions entry: block={}, date='{}': {}",
+                    block,
+                    date_str,
+                    e
+                )
+            })?;
+            block_date_transitions.push((block, date));
+        }
         let last_snapshot_date = state
             .last_snapshot_date
-            .and_then(|s| NaiveDate::parse_from_str(&s, "%Y%m%d").ok());
-        Self {
+            .map(|s| {
+                NaiveDate::parse_from_str(&s, "%Y%m%d").map_err(|e| {
+                    anyhow::anyhow!("corrupt hodl last_snapshot_date: date='{}': {}", s, e)
+                })
+            })
+            .transpose()?;
+        Ok(Self {
             capacity_by_creation_date,
             block_date_transitions,
             holder_count: state.holder_count,
             last_snapshot_date,
-        }
+        })
     }
 
     /// Serialize tracker state for persistence.
@@ -437,7 +449,7 @@ mod tests {
         tracker.last_snapshot_date = Some(jan16);
 
         let state = tracker.to_state();
-        let restored = HodlWaveTracker::from_state(state);
+        let restored = HodlWaveTracker::from_state(state).unwrap();
 
         assert_eq!(restored.block_date_transitions.len(), 2);
         assert_eq!(restored.holder_count, 42);
@@ -453,7 +465,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "negative holder_count")]
     fn test_from_state_rejects_negative_holder_count() {
         let state = HodlTrackerState {
             capacity_by_date: vec![],
@@ -461,6 +472,19 @@ mod tests {
             holder_count: -5,
             last_snapshot_date: None,
         };
-        let _ = HodlWaveTracker::from_state(state);
+        let err = HodlWaveTracker::from_state(state).unwrap_err();
+        assert!(err.to_string().contains("negative holder_count"));
+    }
+
+    #[test]
+    fn test_from_state_rejects_corrupt_date() {
+        let state = HodlTrackerState {
+            capacity_by_date: vec![("not-a-date".to_string(), 100)],
+            date_transitions: vec![],
+            holder_count: 0,
+            last_snapshot_date: None,
+        };
+        let err = HodlWaveTracker::from_state(state).unwrap_err();
+        assert!(err.to_string().contains("corrupt hodl capacity_by_date"));
     }
 }

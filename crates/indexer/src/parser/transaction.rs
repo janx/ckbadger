@@ -48,14 +48,45 @@ impl TransactionParser {
             )
         })?;
 
+        let tx_hash_hex = hex::encode(hash);
         Ok(ParsedTransaction {
             hash,
             version,
-            inputs_count: tx.inputs.len() as i32,
-            outputs_count: tx.outputs.len() as i32,
-            witnesses_count: tx.witnesses.len() as i32,
-            cell_deps_count: tx.cell_deps.len() as i32,
-            header_deps_count: tx.header_deps.len() as i32,
+            inputs_count: i32::try_from(tx.inputs.len()).map_err(|_| {
+                anyhow!(
+                    "tx inputs_count exceeds i32 range for tx 0x{}: {}",
+                    tx_hash_hex,
+                    tx.inputs.len()
+                )
+            })?,
+            outputs_count: i32::try_from(tx.outputs.len()).map_err(|_| {
+                anyhow!(
+                    "tx outputs_count exceeds i32 range for tx 0x{}: {}",
+                    tx_hash_hex,
+                    tx.outputs.len()
+                )
+            })?,
+            witnesses_count: i32::try_from(tx.witnesses.len()).map_err(|_| {
+                anyhow!(
+                    "tx witnesses_count exceeds i32 range for tx 0x{}: {}",
+                    tx_hash_hex,
+                    tx.witnesses.len()
+                )
+            })?,
+            cell_deps_count: i32::try_from(tx.cell_deps.len()).map_err(|_| {
+                anyhow!(
+                    "tx cell_deps_count exceeds i32 range for tx 0x{}: {}",
+                    tx_hash_hex,
+                    tx.cell_deps.len()
+                )
+            })?,
+            header_deps_count: i32::try_from(tx.header_deps.len()).map_err(|_| {
+                anyhow!(
+                    "tx header_deps_count exceeds i32 range for tx 0x{}: {}",
+                    tx_hash_hex,
+                    tx.header_deps.len()
+                )
+            })?,
             is_cellbase,
             tx_size: Self::calculate_serialized_size(tx),
         })
@@ -133,7 +164,8 @@ impl TransactionParser {
             size += MOLECULE_NUMBER_SIZE + witness_data.len();
         }
 
-        size as i32
+        i32::try_from(size)
+            .unwrap_or_else(|_| panic!("transaction serialized size exceeds i32 range: {}", size))
     }
 
     pub fn parse_inputs(tx: &TransactionView) -> Result<Vec<ParsedInput>> {

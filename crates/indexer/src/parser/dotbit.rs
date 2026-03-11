@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use anyhow::{anyhow, Result};
 
@@ -9,6 +10,9 @@ use super::script::ScriptParser;
 
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
     "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918";
+
+static DOTBIT_TYPE_ID_HASH: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
 
 const HASH_BYTES_LEN: usize = 32;
 const ACCOUNT_ID_LEN: usize = 20;
@@ -51,8 +55,7 @@ pub struct DotbitParser;
 
 impl DotbitParser {
     pub fn is_account_cell_type_script(code_hash: &[u8]) -> bool {
-        let hash = parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
-        code_hash == hash.as_slice()
+        code_hash == DOTBIT_TYPE_ID_HASH.as_slice()
     }
 
     pub fn parse_account_cell(output: &CellOutput, data_hex: &str) -> Option<ParsedDotbitAccount> {

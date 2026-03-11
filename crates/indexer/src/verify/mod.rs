@@ -224,10 +224,14 @@ pub fn run(args: VerifyArgs) -> anyhow::Result<()> {
         report::print_summary(&results, total_duration);
     }
 
-    // Exit code: 1 if any failures
     let has_failures = results.iter().any(|r| !r.passed);
     if has_failures {
-        std::process::exit(1);
+        let failed_count = results.iter().filter(|r| !r.passed).count();
+        anyhow::bail!(
+            "verification failed: {} of {} checks did not pass",
+            failed_count,
+            results.len()
+        );
     }
 
     Ok(())

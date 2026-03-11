@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
@@ -550,11 +551,11 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
             Ok(reason) => {
                 info!(
                     reason,
-                    "Received shutdown signal, shutting down gracefully..."
+                    "Received shutdown signal, requesting graceful shutdown..."
                 );
-                indexer_for_shutdown.finalize_bulk_sync_perf_failed();
-                indexer_for_shutdown.mark_runtime_shutdown(reason, 0);
-                std::process::exit(0);
+                indexer_for_shutdown
+                    .shutdown_flag()
+                    .store(true, Ordering::SeqCst);
             }
             Err(e) => {
                 tracing::error!("Failed to listen for shutdown signal: {}", e);

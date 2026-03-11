@@ -43,9 +43,21 @@ impl BlockParser {
             timestamp: Self::parse_timestamp(&header.timestamp),
             version: Self::parse_hex_i32(&header.version),
             compact_target: Self::parse_hex_i64(&header.compact_target),
-            transactions_count: block.transactions.len() as i32,
-            proposals_count: block.proposals.len() as i32,
-            uncles_count: block.uncles.len() as i32,
+            transactions_count: i32::try_from(block.transactions.len()).unwrap_or_else(|_| {
+                panic!(
+                    "block transactions_count exceeds i32: {}",
+                    block.transactions.len()
+                )
+            }),
+            proposals_count: i32::try_from(block.proposals.len()).unwrap_or_else(|_| {
+                panic!(
+                    "block proposals_count exceeds i32: {}",
+                    block.proposals.len()
+                )
+            }),
+            uncles_count: i32::try_from(block.uncles.len()).unwrap_or_else(|_| {
+                panic!("block uncles_count exceeds i32: {}", block.uncles.len())
+            }),
             epoch_number,
             epoch_index,
             epoch_length,

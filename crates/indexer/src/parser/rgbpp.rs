@@ -1,3 +1,7 @@
+use std::sync::LazyLock;
+
+use crate::rpc::parse_hex_to_bytes;
+
 // Mainnet code hashes
 pub const RGBPP_LOCK_CODE_HASH_MAINNET: &str =
     "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936";
@@ -16,6 +20,19 @@ pub const RGBPP_LOCK_CODE_HASH_SIGNET: &str =
 pub const BTC_TIME_LOCK_CODE_HASH_SIGNET: &str =
     "0x80a09eca26d77cea1f5a69471c59481be7404febf40ee90f886c36a948385b55";
 
+static RGBPP_MAINNET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_MAINNET));
+static RGBPP_TESTNET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_TESTNET));
+static RGBPP_SIGNET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(RGBPP_LOCK_CODE_HASH_SIGNET));
+static BTC_TIME_MAINNET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(BTC_TIME_LOCK_CODE_HASH_MAINNET));
+static BTC_TIME_TESTNET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(BTC_TIME_LOCK_CODE_HASH_TESTNET));
+static BTC_TIME_SIGNET: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(BTC_TIME_LOCK_CODE_HASH_SIGNET));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RgbppLockType {
     RgbppLock,
@@ -33,22 +50,18 @@ pub struct RgbppParser;
 
 impl RgbppParser {
     pub fn is_rgbpp_lock_code_hash(code_hash: &[u8], is_mainnet: bool) -> bool {
-        let code_hash_hex = format!("0x{}", hex::encode(code_hash));
         if is_mainnet {
-            code_hash_hex == RGBPP_LOCK_CODE_HASH_MAINNET
+            code_hash == RGBPP_MAINNET.as_slice()
         } else {
-            code_hash_hex == RGBPP_LOCK_CODE_HASH_TESTNET
-                || code_hash_hex == RGBPP_LOCK_CODE_HASH_SIGNET
+            code_hash == RGBPP_TESTNET.as_slice() || code_hash == RGBPP_SIGNET.as_slice()
         }
     }
 
     pub fn is_btc_time_lock_code_hash(code_hash: &[u8], is_mainnet: bool) -> bool {
-        let code_hash_hex = format!("0x{}", hex::encode(code_hash));
         if is_mainnet {
-            code_hash_hex == BTC_TIME_LOCK_CODE_HASH_MAINNET
+            code_hash == BTC_TIME_MAINNET.as_slice()
         } else {
-            code_hash_hex == BTC_TIME_LOCK_CODE_HASH_TESTNET
-                || code_hash_hex == BTC_TIME_LOCK_CODE_HASH_SIGNET
+            code_hash == BTC_TIME_TESTNET.as_slice() || code_hash == BTC_TIME_SIGNET.as_slice()
         }
     }
 

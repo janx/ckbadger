@@ -1878,6 +1878,13 @@ impl Indexer {
         let committed_tip_for_cache_for_writer = Arc::clone(&committed_tip_for_cache);
         let mut consecutive_idle_timeouts: u64 = 0;
         loop {
+            if self.shutdown_requested.load(Ordering::SeqCst) {
+                info!(run_id = %self.run_id, "Shutdown requested, aborting pipeline");
+                fetcher.abort();
+                parser.abort();
+                return Ok(());
+            }
+
             // Bulk sync is an optimistic rebuild path and must not run reorg/deep-fork handling.
             let should_handle_reorg =
                 self.should_handle_reorg_for_lag(self.progress.blocks_remaining());

@@ -16,8 +16,13 @@ pub struct CkbRpcClient {
 
 impl CkbRpcClient {
     pub fn new(url: impl Into<String>) -> Self {
+        let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .expect("failed to build HTTP client");
         Self {
-            client: Client::new(),
+            client,
             url: url.into(),
             request_id: Arc::new(AtomicU64::new(1)),
         }
