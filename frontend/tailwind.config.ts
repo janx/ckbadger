@@ -6,71 +6,91 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Midnight Neon palette — happy hacking in midnight
+        // Chinese traditional palette — ink and silk in midnight
         base: {
-          bg: '#0a0c14',
-          surface: '#0e1119',
-          elevated: '#141820',
-          border: '#1c2236',
+          void: '#08090e',
+          bg: '#0c0e15',
+          surface: '#10131c',
+          elevated: '#161a25',
+          border: '#222840',
+          'border-subtle': '#1a1f30',
         },
         text: {
-          primary: '#e4e8f4',
-          secondary: '#b0b8d0',
-          muted: '#6a7290',
-          dim: '#3a4260',
+          bright: '#dee2ec',
+          DEFAULT: '#a0a8be',
+          dim: '#606880',
+          ghost: '#343c50',
         },
         interactive: {
-          DEFAULT: '#44ee77',
-          hover: '#66ff99',
-          muted: '#44ee7720',
-          dim: '#2daa55',
+          DEFAULT: '#68ccf0',
+          hover: '#2edba3',
+          muted: '#68ccf020',
+          dim: '#4aa8d0',
         },
         emphasis: {
-          DEFAULT: '#44ee77',
-          dim: '#2daa55',
-          glow: '#44ee7740',
-          bright: '#66ff99',
+          DEFAULT: '#2edba3',
+          dim: '#d0a840',
+          glow: '#2edba340',
+          bright: '#3ef0b8',
         },
         positive: {
-          DEFAULT: '#00ffaa',
-          dim: '#00cc88',
+          DEFAULT: '#2edba3',
+          dim: '#1fb88a',
+          bright: '#3ef0b8',
         },
         negative: {
-          DEFAULT: '#ff4477',
-          dim: '#cc3060',
-          bright: '#ff6699',
+          DEFAULT: '#e8555a',
+          dim: '#c04048',
+          bright: '#f06668',
         },
         warning: {
-          DEFAULT: '#44ee77',
-          dim: '#2daa55',
-          bright: '#66ff99',
+          DEFAULT: '#f2c55c',
+          dim: '#d0a840',
+          bright: '#f8d878',
         },
         info: {
-          DEFAULT: '#44bbff',
-          dim: '#2299dd',
-          bright: '#66ddff',
+          DEFAULT: '#68ccf0',
+          dim: '#4aa8d0',
+          bright: '#88ddf8',
         },
-        // Neon accent colors
+        // Chinese traditional named colors
+        jade: {
+          DEFAULT: '#2edba3',
+          dim: '#1fb88a',
+        },
+        rouge: {
+          DEFAULT: '#e8555a',
+          dim: '#c04048',
+        },
+        aqua: {
+          DEFAULT: '#68ccf0',
+          dim: '#4aa8d0',
+        },
+        gold: {
+          DEFAULT: '#f2c55c',
+          dim: '#d0a840',
+        },
+        lavender: {
+          DEFAULT: '#b8a9e8',
+          dim: '#9888c8',
+        },
         amber: {
-          DEFAULT: '#44ee77',
-          dim: '#2daa55',
+          DEFAULT: '#d4883a',
+          dim: '#b07028',
         },
-        rose: {
-          DEFAULT: '#ff66aa',
-          dim: '#dd4488',
-        },
-        sky: {
-          DEFAULT: '#44bbff',
-          dim: '#2299dd',
-        },
-        mint: {
-          DEFAULT: '#00ffaa',
-          dim: '#00cc88',
-        },
-        violet: {
-          DEFAULT: '#bb88ff',
-          dim: '#9966dd',
-        },
+        // Chart accent palette (12 colors)
+        'accent-1': '#2edba3',
+        'accent-2': '#e8555a',
+        'accent-3': '#68ccf0',
+        'accent-4': '#f2c55c',
+        'accent-5': '#b8a9e8',
+        'accent-6': '#d4883a',
+        'accent-7': '#1fb88a',
+        'accent-8': '#c04048',
+        'accent-9': '#4aa8d0',
+        'accent-10': '#d0a840',
+        'accent-11': '#9888c8',
+        'accent-12': '#b07028',
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
@@ -80,10 +100,15 @@ export default {
         tnum: '"tnum"',
       },
       boxShadow: {
-        glow: '0 0 8px #44ee7720, 0 0 20px #44ee7712',
-        'glow-strong': '0 0 8px #44ee7730, 0 0 20px #44ee7720',
-        'glow-inset': 'inset 0 1px 10px #44ee7710',
-        'interactive-glow': '0 0 10px #44ee7728, 0 0 20px #44ee7714',
+        glow: '0 0 8px #2edba320, 0 0 20px #2edba312',
+        'glow-strong': '0 0 8px #2edba330, 0 0 20px #2edba320',
+        'glow-inset': 'inset 0 1px 10px #2edba310',
+        'glow-jade': '0 0 10px #2edba328, 0 0 20px #2edba314',
+        'glow-rouge': '0 0 10px #e8555a28, 0 0 20px #e8555a14',
+        'glow-aqua': '0 0 10px #68ccf028, 0 0 20px #68ccf014',
+        'glow-gold': '0 0 10px #f2c55c28, 0 0 20px #f2c55c14',
+        'glow-lavender': '0 0 10px #b8a9e828, 0 0 20px #b8a9e814',
+        'glow-amber': '0 0 10px #d4883a28, 0 0 20px #d4883a14',
       },
       animation: {
         'terminal-flicker': 'terminal-flicker 0.15s infinite',
