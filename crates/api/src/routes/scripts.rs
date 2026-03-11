@@ -80,6 +80,8 @@ enum ScriptSortKey {
     Occupied,
     Capacity,
     OccupiedRatio,
+    LiveCells,
+    Cells,
 }
 
 fn default_script_sort_key() -> ScriptSortKey {
@@ -118,6 +120,8 @@ pub struct ScriptResponse {
     pub code_cell_tx_hash: Option<String>,
     pub code_cell_output_index: Option<i32>,
     pub deployed_at: Option<i64>,
+    pub live_cells_count: i64,
+    pub cells_count: i64,
     pub live_capacity_sum: String,
     pub live_occupied_capacity_sum: String,
 }
@@ -369,6 +373,16 @@ fn compare_script_entries(
             occupied_ratio_for_sort(&right.1),
             direction,
         ),
+        ScriptSortKey::LiveCells => apply_direction(
+            (left.1.lock_live_cells_count + left.1.type_live_cells_count)
+                .cmp(&(right.1.lock_live_cells_count + right.1.type_live_cells_count)),
+            direction,
+        ),
+        ScriptSortKey::Cells => apply_direction(
+            (left.1.lock_cells_count + left.1.type_cells_count)
+                .cmp(&(right.1.lock_cells_count + right.1.type_cells_count)),
+            direction,
+        ),
     };
 
     if compared != Ordering::Equal {
@@ -445,6 +459,8 @@ fn script_info_to_response(
         code_cell_tx_hash,
         code_cell_output_index,
         deployed_at,
+        live_cells_count: info.lock_live_cells_count + info.type_live_cells_count,
+        cells_count: info.lock_cells_count + info.type_cells_count,
         live_capacity_sum,
         live_occupied_capacity_sum,
     })
