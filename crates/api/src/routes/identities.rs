@@ -10,11 +10,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::assets::{
-    decode_activity_cursor, decode_nft_item_cursor, list_canonical_nft_collection_activities_page,
-    list_identity_items_inner, normalize_identity_activity_action_filter,
-    normalize_nft_items_search, normalize_nft_items_status, CollectionActivitiesParams,
-    CollectionActivityResponse, CollectionHolderResponse, CollectionItemResponse,
-    ObjectItemsParams,
+    build_nft_item_activities_response, decode_activity_cursor, decode_item_id,
+    decode_nft_item_cursor, list_canonical_nft_collection_activities_page,
+    list_identity_items_inner, normalize_activity_action_filter,
+    normalize_identity_activity_action_filter, normalize_nft_items_search,
+    normalize_nft_items_status, CollectionActivitiesParams, CollectionActivityResponse,
+    CollectionHolderResponse, CollectionItemResponse, MnftItemActivitiesParams,
+    MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
@@ -368,8 +370,200 @@ async fn list_identity_collection_items(
     )
 }
 
+// -- Identity item detail endpoints (moved from assets.rs) --
+
+async fn get_dotbit_item_detail(
+    State(state): State<Arc<AppState>>,
+    Path(identity_id): Path<String>,
+) -> ApiResult<CollectionItemResponse> {
+    let identity_id_bytes = decode_item_id(&identity_id)?;
+    let entry = state
+        .store
+        .get_identity(&identity_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(".bit item not found"))?;
+
+    if !matches!(
+        entry.standard,
+        ckbadger_store::types::IdentityStandard::DotBit
+    ) {
+        return Err(ApiError::bad_request("Item is not a .bit account"));
+    }
+
+    let (expired_at, registered_at, status) = match &entry.extra {
+        ckbadger_store::types::IdentityExtra::DotBit {
+            expired_at,
+            registered_at,
+            status,
+        } => (*expired_at, *registered_at, *status),
+        _ => {
+            return Err(ApiError::internal(format!(
+                "invalid identity entry extra type for .bit account: identity_id=0x{}",
+                hex::encode(&identity_id_bytes)
+            )))
+        }
+    };
+
+    let (tx_hash, output_index) = if entry.is_live {
+        let outpoint_map = state
+            .store
+            .get_live_dotbit_outpoints_by_account_ids(
+                std::slice::from_ref(&identity_id_bytes),
+                &state.append_only_store,
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let (tx_hash, output_index) = outpoint_map.get(&identity_id_bytes).ok_or_else(|| {
+            ApiError::internal(format!(
+                "live dotbit account missing outpoint index: identity_id=0x{}",
+                hex::encode(&identity_id_bytes)
+            ))
+        })?;
+        (
+            Some(format!("0x{}", hex::encode(tx_hash))),
+            Some(*output_index),
+        )
+    } else {
+        (None, None)
+    };
+
+    ok(CollectionItemResponse {
+        nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
+        name: entry.name,
+        standard: entry.standard.asset_standard().to_string(),
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        is_live: entry.is_live,
+        created_at_block: entry.created_at_block,
+        expired_at,
+        registered_at,
+        status,
+        tx_hash,
+        output_index,
+    })
+}
+
+async fn get_did_ckb_item_detail(
+    State(state): State<Arc<AppState>>,
+    Path(identity_id): Path<String>,
+) -> ApiResult<CollectionItemResponse> {
+    let identity_id_bytes = decode_item_id(&identity_id)?;
+    let entry = state
+        .store
+        .get_identity(&identity_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("did:ckb item not found"))?;
+
+    if entry.standard != ckbadger_store::types::IdentityStandard::DidCkb {
+        return Err(ApiError::bad_request("Item is not a did:ckb identity"));
+    }
+
+    ok(CollectionItemResponse {
+        nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
+        name: entry.name,
+        standard: "did_ckb".to_string(),
+        owner_lock_hash: entry
+            .owner_lock_hash
+            .as_ref()
+            .map(|h| format!("0x{}", hex::encode(h))),
+        is_live: entry.is_live,
+        created_at_block: entry.created_at_block,
+        expired_at: None,
+        registered_at: None,
+        status: None,
+        tx_hash: None,
+        output_index: None,
+    })
+}
+
+async fn list_dotbit_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(identity_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let identity_id_bytes = decode_item_id(&identity_id)?;
+    let entry = state
+        .store
+        .get_identity(&identity_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(".bit item not found"))?;
+    if !matches!(
+        entry.standard,
+        ckbadger_store::types::IdentityStandard::DotBit
+    ) {
+        return Err(ApiError::bad_request("Item is not a .bit account"));
+    }
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &identity_id_bytes,
+        NftLifecycleStandard::DotBit,
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
+}
+
+async fn list_did_ckb_item_activities(
+    State(state): State<Arc<AppState>>,
+    Path(identity_id): Path<String>,
+    Query(params): Query<MnftItemActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<MnftItemActivityResponse>> {
+    let limit = params.limit.clamp(1, 100);
+    let action_filter = normalize_activity_action_filter(params.action.as_deref())?;
+    let identity_id_bytes = decode_item_id(&identity_id)?;
+    let entry = state
+        .store
+        .get_identity(&identity_id_bytes)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("did:ckb item not found"))?;
+    if entry.standard != ckbadger_store::types::IdentityStandard::DidCkb {
+        return Err(ApiError::bad_request("Item is not a did:ckb identity"));
+    }
+
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(decode_activity_cursor)
+        .transpose()?;
+    let response = build_nft_item_activities_response(
+        &state,
+        &identity_id_bytes,
+        NftLifecycleStandard::DidCkb,
+        limit,
+        cursor,
+        action_filter.as_deref(),
+    )?;
+    ok(response)
+}
+
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route(
+            "/assets/identities/dotbit/items/{identity_id}",
+            get(get_dotbit_item_detail),
+        )
+        .route(
+            "/assets/identities/dotbit/items/{identity_id}/activities",
+            get(list_dotbit_item_activities),
+        )
+        .route(
+            "/assets/identities/did/items/{identity_id}",
+            get(get_did_ckb_item_detail),
+        )
+        .route(
+            "/assets/identities/did/items/{identity_id}/activities",
+            get(list_did_ckb_item_activities),
+        )
         .route(
             "/assets/identities/{collection_id}",
             get(get_identity_collection),

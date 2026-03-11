@@ -4109,7 +4109,7 @@ async fn test_nft_collection_items_supports_did_ckb_collection_from_spore_data()
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/0x{}/items",
+            "/api/v1/assets/objects/0x{}/items",
             hex::encode(did_collection_id)
         ))
         .body(Body::empty())
@@ -4358,7 +4358,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/{}/charts/occupation",
+            "/api/v1/assets/objects/{}/charts/occupation",
             collection_id_hex
         ))
         .body(Body::empty())
@@ -4376,7 +4376,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            "/api/v1/assets/objects/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
             collection_id_hex
         ))
         .body(Body::empty())
@@ -4391,7 +4391,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     assert_eq!(json["data"][0]["values"]["unoccupied"], "40");
 
     let request = Request::builder()
-        .uri(format!("/api/v1/assets/nfts/{}", collection_id_hex))
+        .uri(format!("/api/v1/assets/objects/{}", collection_id_hex))
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -4437,7 +4437,7 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/charts/occupation")
+        .uri("/api/v1/assets/objects/dotbit/charts/occupation")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4449,7 +4449,7 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     assert_eq!(json["data"][0]["values"]["unoccupied"], "40");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit")
+        .uri("/api/v1/assets/objects/dotbit")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4462,14 +4462,14 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     assert_eq!(json["liveOccupiedCapacity"], "60");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/DOTBIT/charts/occupation")
+        .uri("/api/v1/assets/objects/DOTBIT/charts/occupation")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/%2Ebit")
+        .uri("/api/v1/assets/objects/%2Ebit")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4502,7 +4502,7 @@ async fn test_assets_nft_collection_detail_uses_preaggregated_counts() {
     let config = test_config(store);
     let app = create_router(config).await;
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit")
+        .uri("/api/v1/assets/objects/dotbit")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -4562,7 +4562,7 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/did:ckb")
+        .uri("/api/v1/assets/objects/did:ckb")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4573,7 +4573,7 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     assert_eq!(json["name"], "did:ckb");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/did_ckb/items?limit=20")
+        .uri("/api/v1/assets/objects/did_ckb/items?limit=20")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4585,7 +4585,7 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     assert_eq!(json["data"][0]["standard"], "did_ckb");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/did%3Ackb/charts/occupation")
+        .uri("/api/v1/assets/objects/did%3Ackb/charts/occupation")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -4680,7 +4680,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/did/items/0x{}",
+            "/api/v1/assets/identities/did/items/0x{}",
             hex::encode(did_id)
         ))
         .body(Body::empty())
@@ -4697,7 +4697,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/did/items/0x{}/activities?limit=20",
+            "/api/v1/assets/identities/did/items/0x{}/activities?limit=20",
             hex::encode(did_id)
         ))
         .body(Body::empty())
@@ -4714,7 +4714,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/did/items/0x{}/activities?limit=20&action=transfer",
+            "/api/v1/assets/identities/did/items/0x{}/activities?limit=20&action=transfer",
             hex::encode(did_id)
         ))
         .body(Body::empty())
@@ -4848,7 +4848,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/items?limit=1")
+        .uri("/api/v1/assets/objects/dotbit/items?limit=1")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4870,7 +4870,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items?limit=1&cursor={cursor}"
+            "/api/v1/assets/objects/dotbit/items?limit=1&cursor={cursor}"
         ))
         .body(Body::empty())
         .unwrap();
@@ -4887,7 +4887,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["nextCursor"], serde_json::Value::Null);
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/items?limit=20&search=alice")
+        .uri("/api/v1/assets/objects/dotbit/items?limit=20&search=alice")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4899,7 +4899,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert!(json.get("total").is_none());
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/items?limit=20&status=live")
+        .uri("/api/v1/assets/objects/dotbit/items?limit=20&status=live")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4912,7 +4912,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["data"][0]["isLive"], true);
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/items?limit=20&status=recycled")
+        .uri("/api/v1/assets/objects/dotbit/items?limit=20&status=recycled")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4928,7 +4928,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items/0x{}",
+            "/api/v1/assets/identities/dotbit/items/0x{}",
             hex::encode(nft_a)
         ))
         .body(Body::empty())
@@ -5010,7 +5010,7 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/items?limit=20")
+        .uri("/api/v1/assets/objects/dotbit/items?limit=20")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -5066,7 +5066,7 @@ async fn test_assets_nft_collection_items_dotbit_live_missing_outpoint_fails_fas
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/items?limit=20")
+        .uri("/api/v1/assets/objects/dotbit/items?limit=20")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -5171,7 +5171,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/{}/items?limit=20",
+            "/api/v1/assets/objects/{}/items?limit=20",
             collection_id_hex
         ))
         .body(Body::empty())
@@ -5288,7 +5288,7 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
     let config = test_config(store);
     let app = create_router(config).await;
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/holders?limit=1")
+        .uri("/api/v1/assets/objects/dotbit/holders?limit=1")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -5307,7 +5307,7 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/holders?limit=1&cursor={next_cursor}"
+            "/api/v1/assets/objects/dotbit/holders?limit=1&cursor={next_cursor}"
         ))
         .body(Body::empty())
         .unwrap();
@@ -5526,7 +5526,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/activities?limit=20")
+        .uri("/api/v1/assets/objects/dotbit/activities?limit=20")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -5542,7 +5542,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     assert_eq!(json["data"][2]["actions"][0], "mint");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/activities?limit=20&action=burn")
+        .uri("/api/v1/assets/objects/dotbit/activities?limit=20&action=burn")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -5553,7 +5553,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     assert_eq!(json["data"][0]["actions"][0], "burn");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/nfts/dotbit/activities?action=invalid")
+        .uri("/api/v1/assets/objects/dotbit/activities?action=invalid")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -5656,7 +5656,7 @@ async fn test_assets_nft_item_detail_mnft() {
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/items/0x{}",
+            "/api/v1/assets/objects/items/0x{}",
             hex::encode(token_id)
         ))
         .body(Body::empty())
@@ -5767,7 +5767,7 @@ async fn test_assets_nft_item_activities_mnft() {
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/items/0x{}/activities?limit=20",
+            "/api/v1/assets/objects/items/0x{}/activities?limit=20",
             hex::encode(token_id)
         ))
         .body(Body::empty())
@@ -5786,7 +5786,7 @@ async fn test_assets_nft_item_activities_mnft() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/items/0x{}/activities?limit=1",
+            "/api/v1/assets/objects/items/0x{}/activities?limit=1",
             hex::encode(token_id)
         ))
         .body(Body::empty())
@@ -5804,7 +5804,7 @@ async fn test_assets_nft_item_activities_mnft() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/items/0x{}/activities?limit=1&cursor={}",
+            "/api/v1/assets/objects/items/0x{}/activities?limit=1&cursor={}",
             hex::encode(token_id),
             next_cursor
         ))
@@ -5819,7 +5819,7 @@ async fn test_assets_nft_item_activities_mnft() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/items/0x{}/activities?limit=20&action=transfer",
+            "/api/v1/assets/objects/items/0x{}/activities?limit=20&action=transfer",
             hex::encode(token_id)
         ))
         .body(Body::empty())
@@ -5833,7 +5833,7 @@ async fn test_assets_nft_item_activities_mnft() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/items/0x{}/activities?action=invalid",
+            "/api/v1/assets/objects/items/0x{}/activities?action=invalid",
             hex::encode(token_id)
         ))
         .body(Body::empty())
@@ -5966,7 +5966,7 @@ async fn test_assets_nft_item_activities_dotbit() {
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=20",
+            "/api/v1/assets/identities/dotbit/items/0x{}/activities?limit=20",
             hex::encode(account_id)
         ))
         .body(Body::empty())
@@ -5987,7 +5987,7 @@ async fn test_assets_nft_item_activities_dotbit() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=1",
+            "/api/v1/assets/identities/dotbit/items/0x{}/activities?limit=1",
             hex::encode(account_id)
         ))
         .body(Body::empty())
@@ -6005,7 +6005,7 @@ async fn test_assets_nft_item_activities_dotbit() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=1&cursor={}",
+            "/api/v1/assets/identities/dotbit/items/0x{}/activities?limit=1&cursor={}",
             hex::encode(account_id),
             next_cursor
         ))
@@ -6020,7 +6020,7 @@ async fn test_assets_nft_item_activities_dotbit() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=20&action=transfer",
+            "/api/v1/assets/identities/dotbit/items/0x{}/activities?limit=20&action=transfer",
             hex::encode(account_id)
         ))
         .body(Body::empty())
@@ -6154,7 +6154,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/nfts/dotbit/items/0x{}/activities?limit=20",
+            "/api/v1/assets/identities/dotbit/items/0x{}/activities?limit=20",
             hex::encode(account_id)
         ))
         .body(Body::empty())
