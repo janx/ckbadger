@@ -38,9 +38,9 @@ describe('Header', () => {
     const search = getByTestId('search-bar');
     expect(search).toBeInTheDocument();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'home')).toBeTruthy();
-    expect(search.parentElement?.className).toContain('max-w-[clamp(18rem,40vw,42rem)]');
+    expect(search.parentElement?.className).toContain('max-w-[clamp(18rem,36vw,36rem)]');
     expect(search.parentElement?.parentElement?.className).toContain('flex-1');
-    expect(search.parentElement?.parentElement?.className).toContain('justify-center');
+    expect(search.parentElement?.parentElement?.className).toContain('justify-end');
   });
 
   it('uses compact search variant on non-home pages', () => {
@@ -62,7 +62,7 @@ describe('Header', () => {
 
     expect(labels).toEqual(['DAO', 'Assets', 'Scripts', 'Charts']);
     expect(desktopNav?.querySelector('a')?.getAttribute('href')).toBe('/dao');
-    expect(desktopNav?.className).toContain('justify-end');
+    expect(desktopNav?.className).toContain('shrink-0');
 
     const chartsLink = Array.from(desktopNav?.querySelectorAll('a') ?? []).find(
       (node) => node.textContent?.trim() === 'Charts'
