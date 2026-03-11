@@ -291,7 +291,7 @@ export function CommandPalette() {
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={handleInputKeyDown}
                 placeholder="Type a command, or search block / tx / address"
-                className="focus:border-amber focus:ring-amber border-base-border bg-base-bg text-text-primary w-full rounded-md border px-3 py-2 font-mono text-sm outline-none focus:ring-1"
+                className="focus:border-jade focus:ring-jade border-base-border bg-base-bg text-text-bright w-full rounded-md border px-3 py-2 font-mono text-sm outline-none focus:ring-1"
                 aria-label="Command palette input"
               />
             </div>
@@ -305,8 +305,8 @@ export function CommandPalette() {
                         type="button"
                         className={`w-full rounded-md px-3 py-2 text-left font-mono text-sm transition-colors ${
                           index === selectedIndex
-                            ? 'text-amber bg-base-elevated'
-                            : 'text-text-secondary hover:bg-base-elevated/60'
+                            ? 'text-jade bg-base-elevated'
+                            : 'text-text hover:bg-base-elevated/60'
                         }`}
                         onClick={() => {
                           setSelectedIndex(index);
@@ -320,7 +320,7 @@ export function CommandPalette() {
                   ))}
                 </ul>
               ) : (
-                <div className="text-text-muted rounded-md px-3 py-2 font-mono text-sm">
+                <div className="text-text-dim rounded-md px-3 py-2 font-mono text-sm">
                   No command matched. Press Enter to run search.
                 </div>
               )}
@@ -329,7 +329,7 @@ export function CommandPalette() {
         ) : (
           <>
             <div className="border-base-border border-b px-4 py-3">
-              <h2 className="text-text-primary font-mono text-sm uppercase tracking-wide">
+              <h2 className="text-text-bright font-mono text-sm uppercase tracking-wide">
                 Keyboard Shortcuts
               </h2>
             </div>
@@ -341,8 +341,8 @@ export function CommandPalette() {
                     key={shortcut.keys}
                     className="flex items-center justify-between gap-4 rounded-md px-3 py-2"
                   >
-                    <span className="text-text-secondary">{shortcut.description}</span>
-                    <span className="border-base-border text-text-secondary rounded border px-2 py-0.5 font-mono text-xs">
+                    <span className="text-text">{shortcut.description}</span>
+                    <span className="border-base-border text-text rounded border px-2 py-0.5 font-mono text-xs">
                       {shortcut.keys}
                     </span>
                   </li>

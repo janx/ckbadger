@@ -23,7 +23,12 @@ function walkFiles(dir: string): string[] {
 
 // Files that have been intentionally migrated to the new palette tokens
 // (text-text-dim replaces text-text-muted as the canonical dim text color)
-const migratedFiles = new Set(['components/ui/terminal-panel.tsx', 'components/ui/stat-block.tsx']);
+const migratedFiles = new Set([
+  'components/ui/terminal-panel.tsx',
+  'components/ui/stat-block.tsx',
+  'components/search-bar.tsx',
+  'components/command-palette.tsx',
+]);
 
 function findUnexpectedDimUsages(root: string): string[] {
   const files = walkFiles(root);

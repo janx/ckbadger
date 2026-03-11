@@ -170,9 +170,9 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                   : 'Block, tx hash, address...'
             }
             className={cn(
-              'focus:border-amber focus:ring-amber border-base-border bg-base-surface placeholder-text-muted text-text-primary w-full rounded-lg border font-mono transition-colors focus:outline-none focus:ring-1',
+              'focus:border-jade focus:ring-jade border-base-border bg-base-surface placeholder:text-text-dim text-text-bright w-full rounded-lg border font-mono transition-colors focus:outline-none focus:ring-1',
               isHome
-                ? 'border-amber/50 focus:ring-amber/25 bg-base-surface/95 placeholder:text-text-muted h-10 rounded-xl pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(240,184,102,0.18),0_6px_20px_rgba(200,148,64,0.18)] focus:ring-2 sm:pr-28'
+                ? 'border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim h-10 rounded-xl pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? 'py-1.5 pl-3 pr-3 text-sm'
                   : 'px-3 py-2.5 pr-3 text-sm sm:px-4 sm:py-3 sm:text-base'
@@ -182,22 +182,22 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             <>
               <span
                 data-testid="home-search-focus-glow"
-                className="border-amber/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 rounded-xl border opacity-100"
+                className="border-jade/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 rounded-xl border opacity-100"
               />
               <span
                 data-testid="home-search-focus-border-scan"
                 className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl"
               >
-                <span className="via-amber absolute bottom-0 left-0 h-[2px] w-24 -translate-x-full bg-gradient-to-r from-transparent to-transparent [animation:terminal-border-scan-ltr_2.4s_linear_infinite]" />
+                <span className="via-jade absolute bottom-0 left-0 h-[2px] w-24 -translate-x-full bg-gradient-to-r from-transparent to-transparent [animation:terminal-border-scan-ltr_2.4s_linear_infinite]" />
               </span>
             </>
           )}
           {isHome && (
             <div className="pointer-events-none absolute inset-y-0 right-3 hidden items-center gap-1 sm:flex">
-              <span className="border-base-border/80 bg-base-surface/80 text-text-muted rounded border px-1.5 py-0.5 font-mono text-[10px]">
+              <span className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px]">
                 /
               </span>
-              <span className="border-base-border/80 bg-base-surface/80 text-text-muted rounded border px-1.5 py-0.5 font-mono text-[10px]">
+              <span className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px]">
                 ?
               </span>
             </div>
@@ -206,7 +206,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       </form>
 
       {submitFeedback && (
-        <div className="text-text-muted mt-1 px-1 text-xs" role="status" aria-live="polite">
+        <div className="text-text-dim mt-1 px-1 text-xs" role="status" aria-live="polite">
           {submitFeedback}
         </div>
       )}
@@ -217,7 +217,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           className="border-base-border bg-base-surface absolute z-50 mt-1 w-full rounded-lg border shadow-lg"
         >
           {isLoading ? (
-            <div className="text-text-muted px-4 py-3">Searching...</div>
+            <div className="text-text-dim px-4 py-3">Searching...</div>
           ) : results.length > 0 ? (
             <ul className="max-h-80 overflow-auto py-1">
               {results.map((result, index) => (
@@ -228,16 +228,16 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                     className={cn(
                       'flex w-full items-center gap-3 px-4 py-2 text-left transition-colors',
                       selectedIndex === index
-                        ? 'text-amber bg-base-elevated'
-                        : 'text-text-secondary hover:bg-base-elevated/50'
+                        ? 'text-jade bg-base-elevated'
+                        : 'text-text hover:bg-base-elevated/50'
                     )}
                   >
                     <SearchResultIcon type={result.resultType} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">{result.label}</div>
-                      <div className="text-text-muted truncate font-mono text-xs">{result.id}</div>
+                      <div className="text-text-dim truncate font-mono text-xs">{result.id}</div>
                     </div>
-                    <span className="bg-base-elevated text-text-muted shrink-0 rounded px-2 py-0.5 font-mono text-xs">
+                    <span className="bg-base-elevated text-text-dim shrink-0 rounded px-2 py-0.5 font-mono text-xs">
                       {result.resultType}
                     </span>
                   </button>
@@ -245,7 +245,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               ))}
             </ul>
           ) : (
-            <div className="text-text-muted px-4 py-3">No results found</div>
+            <div className="text-text-dim px-4 py-3">No results found</div>
           )}
         </div>
       )}
@@ -255,16 +255,16 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
 
 function SearchResultIcon({ type }: { type: string }) {
   const classes = {
-    block: 'text-amber',
-    transaction: 'text-warning',
-    address: 'text-text-secondary',
-    cell: 'text-info',
-    script: 'text-info-dim',
-    token: 'text-positive',
-    spore: 'text-warning',
-    cluster: 'text-warning-dim',
-    nft: 'text-warning-dim',
-    default: 'text-text-muted',
+    block: 'text-aqua',
+    transaction: 'text-jade',
+    address: 'text-text-bright',
+    cell: 'text-aqua-dim',
+    script: 'text-lavender',
+    token: 'text-gold',
+    spore: 'text-lavender',
+    cluster: 'text-lavender-dim',
+    nft: 'text-lavender-dim',
+    default: 'text-text-dim',
   };
 
   const iconColor = classes[type as keyof typeof classes] ?? classes.default;
