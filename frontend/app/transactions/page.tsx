@@ -44,33 +44,43 @@ export default function TransactionsPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="active">Transaction List</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-              <div className="flex-1">Transaction</div>
-              <div className="w-24 text-center">In/Out</div>
-              <div className="w-32 text-right">Time</div>
+            <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider sm:flex">
+              <div className="min-w-0 flex-1">Transaction</div>
+              <div className="w-20 shrink-0 text-center">In/Out</div>
+              <div className="w-24 shrink-0 text-right">Time</div>
             </div>
 
             {isLoading
               ? Array.from({ length: 10 }).map((_, i) => (
                   <TerminalRow key={i} hoverable={false}>
-                    <div className="flex animate-pulse items-center">
-                      <div className="flex-1">
+                    <div className="hidden animate-pulse items-center sm:flex">
+                      <div className="min-w-0 flex-1">
                         <div className="bg-base-elevated h-4 w-48 rounded" />
                         <div className="bg-base-elevated mt-1 h-3 w-20 rounded" />
                       </div>
-                      <div className="w-24 text-center">
+                      <div className="w-20 shrink-0 text-center">
                         <div className="bg-base-elevated mx-auto h-4 w-16 rounded" />
                       </div>
-                      <div className="w-32 text-right">
+                      <div className="w-24 shrink-0 text-right">
                         <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
+                      </div>
+                    </div>
+                    <div className="animate-pulse space-y-1 sm:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="bg-base-elevated h-4 w-40 rounded" />
+                        <div className="bg-base-elevated h-4 w-16 shrink-0 rounded" />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="bg-base-elevated h-3 w-20 rounded" />
+                        <div className="bg-base-elevated h-3 w-16 rounded" />
                       </div>
                     </div>
                   </TerminalRow>
                 ))
               : data?.data?.map((tx) => (
                   <TerminalRow key={tx.hash}>
-                    <div className="flex items-center">
-                      <div className="flex-1">
+                    <div className="hidden items-center sm:flex">
+                      <div className="min-w-0 flex-1">
                         <Link href={`/tx/${tx.hash}`} className="hover:underline">
                           <HexDisplay value={tx.hash} startChars={12} endChars={8} />
                         </Link>
@@ -81,13 +91,36 @@ export default function TransactionsPage() {
                           #{formattedNumbers.get(tx.hash)}
                         </Link>
                       </div>
-                      <div className="text-text-muted w-24 text-center font-mono">
+                      <div className="text-text-muted w-20 shrink-0 text-center font-mono">
                         <span className="text-emphasis-dim">{tx.inputsCount}</span>
                         <span className="text-text-muted mx-1">→</span>
                         <span className="text-emphasis-dim">{tx.outputsCount}</span>
                       </div>
-                      <div className="text-text-muted w-32 text-right">
+                      <div className="text-text-muted w-24 shrink-0 text-right">
                         {formatTimeAgo(tx.timestamp)}
+                      </div>
+                    </div>
+                    <div className="space-y-1 sm:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <Link href={`/tx/${tx.hash}`} className="hover:underline">
+                          <HexDisplay value={tx.hash} startChars={10} endChars={6} />
+                        </Link>
+                        <span className="text-text-muted shrink-0 text-xs">
+                          {formatTimeAgo(tx.timestamp)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <Link
+                          href={`/blocks/${tx.blockNumber}`}
+                          className="text-emphasis font-mono text-xs hover:underline"
+                        >
+                          #{formattedNumbers.get(tx.hash)}
+                        </Link>
+                        <span className="text-text-muted font-mono text-xs">
+                          <span className="text-emphasis-dim">{tx.inputsCount}</span>
+                          <span className="mx-1">→</span>
+                          <span className="text-emphasis-dim">{tx.outputsCount}</span>
+                        </span>
                       </div>
                     </div>
                   </TerminalRow>
