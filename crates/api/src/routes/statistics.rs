@@ -152,6 +152,10 @@ pub struct NetworkStats {
     pub transactions_per_day: String,
     pub sync_status: SyncStatus,
     pub deep_fork_status: DeepForkStatus,
+    // Hero metrics from latest DAO daily snapshot
+    pub knowledge_size: Option<String>,
+    pub circulating_supply: Option<String>,
+    pub dao_locked: Option<String>,
 }
 
 async fn get_network_stats(State(state): State<Arc<AppState>>) -> ApiResult<NetworkStats> {
@@ -2519,6 +2523,18 @@ async fn fetch_network_stats_from_db(
         0.0
     };
 
+    // Hero metrics from latest DAO daily snapshot
+    let dao_snapshot = store
+        .get_latest_dao_daily_snapshot()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let knowledge_size = dao_snapshot
+        .as_ref()
+        .map(|s| s.occupied_capacity.to_string());
+    let circulating_supply = dao_snapshot
+        .as_ref()
+        .map(|s| (s.total_issuance - GENESIS_BURNT as i128).to_string());
+    let dao_locked = dao_snapshot.as_ref().map(|s| s.total_deposited.to_string());
+
     Ok(NetworkStats {
         latest_block,
         avg_block_time: format!("{:.2}s", avg_time),
@@ -2531,6 +2547,9 @@ async fn fetch_network_stats_from_db(
         transactions_per_day: tx_count_24h.to_string(),
         sync_status,
         deep_fork_status,
+        knowledge_size,
+        circulating_supply,
+        dao_locked,
     })
 }
 

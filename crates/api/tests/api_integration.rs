@@ -11,11 +11,11 @@ use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DaoDepositCacheEntry, DeepForkInfo, EpochStats, HourlyStats,
-    IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard, LiveCellInfo,
-    MinerStats, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta,
-    ObjectEntry, ObjectExtra, ObjectStandard, ReorgEvent, ScriptDailyDelta, ScriptInfo,
-    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry, DeepForkInfo, EpochStats,
+    HourlyStats, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
+    LiveCellInfo, MinerStats, ObjectCollectionActivityEntry, ObjectCollectionAggregate,
+    ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard, ReorgEvent, ScriptDailyDelta,
+    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -546,6 +546,148 @@ async fn test_network_stats_reads_derived_statistics() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["transactionsPerDay"], "200");
+}
+
+#[tokio::test]
+async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+
+    let now = chrono::Utc::now();
+    let now_ms = now.timestamp_millis();
+    let today = ckbadger_common::block_date(now);
+    let yesterday = today - chrono::Duration::days(1);
+    let today_str = today.format("%Y%m%d").to_string();
+    let yesterday_str = yesterday.format("%Y%m%d").to_string();
+
+    // Minimal block header so fetch_network_stats_from_db succeeds
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x22; 32],
+            timestamp: now_ms,
+            epoch_number: 42,
+            epoch_index: 10,
+            epoch_length: 1800,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.commit().unwrap();
+
+    core_store
+        .put_epoch_stats(
+            42,
+            &EpochStats {
+                epoch_number: 42,
+                start_block: 1,
+                end_block: None,
+                blocks_count: 11,
+                length: 1800,
+                start_timestamp: now - chrono::Duration::seconds(110),
+                end_timestamp: None,
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+    core_store
+        .put_daily_stats(
+            &today_str,
+            &DailyStats {
+                blocks_count: 1,
+                transactions_count: 10,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+                used_capacity_created: 0,
+                used_capacity_consumed: 0,
+                total_live_cells: 0,
+                total_dead_cells: 0,
+                total_all_cells: 0,
+                total_data_size: 0,
+                knowledge_size: None,
+                avg_block_time_ms: None,
+            },
+        )
+        .unwrap();
+    core_store
+        .put_daily_stats(
+            &yesterday_str,
+            &DailyStats {
+                blocks_count: 1,
+                transactions_count: 5,
+                cells_created: 0,
+                cells_consumed: 0,
+                capacity_transferred: 0,
+                used_capacity_created: 0,
+                used_capacity_consumed: 0,
+                total_live_cells: 0,
+                total_dead_cells: 0,
+                total_all_cells: 0,
+                total_data_size: 0,
+                knowledge_size: None,
+                avg_block_time_ms: None,
+            },
+        )
+        .unwrap();
+    core_store
+        .put_daily_block_stats(
+            &today_str,
+            &DailyBlockStats {
+                avg_compact_target: 1_000_000.0,
+                block_count: 100,
+                total_uncles: 5,
+                avg_block_time_ms: Some(10_000),
+            },
+        )
+        .unwrap();
+
+    // Write a DAO daily snapshot with known hero metric values
+    let snapshot = DaoDailySnapshot {
+        date: "2026-03-10".to_string(),
+        total_deposited: 50_000_000_000_000_000,
+        depositors_count: 100,
+        new_deposits: 5,
+        withdrawals: 2,
+        compensation: 100_000_000_000_000,
+        cumulative_deposit_amount: 60_000_000_000_000_000,
+        total_issuance: 3_500_000_000_000_000_000,
+        secondary_pool: 10_000_000_000_000_000,
+        occupied_capacity: 1_000_000_000_000_000_000,
+        cum_miner_secondary: 5_000_000_000_000_000,
+        cum_dao_compensation: 3_000_000_000_000_000,
+        cum_treasury: 2_000_000_000_000_000,
+    };
+    let snapshot_key = ckbadger_store::keys::encode_stats_key(
+        ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+        b"20260310",
+    );
+    let snapshot_value = bincode::serialize(&snapshot).unwrap();
+    core_store
+        .put_cf(core_store.cf_stats_dao(), &snapshot_key, &snapshot_value)
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/network")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // knowledge_size = occupied_capacity
+    assert_eq!(json["knowledgeSize"], "1000000000000000000");
+    // circulating_supply = total_issuance - GENESIS_BURNT (840_000_000_000_000_000)
+    let expected_circulating: i128 = 3_500_000_000_000_000_000 - 840_000_000_000_000_000;
+    assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
+    // dao_locked = total_deposited
+    assert_eq!(json["daoLocked"], "50000000000000000");
 }
 
 #[tokio::test]
