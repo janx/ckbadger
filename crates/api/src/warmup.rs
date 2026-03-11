@@ -743,6 +743,17 @@ struct LiveCellChartData {
 
 fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, String> {
     let transitions = load_block_date_transitions(state.store.as_ref())?;
+
+    // Seed date transitions into mem_cache so refresh_address_cache_sync can
+    // piggyback cohort data on the very first warmup cycle.
+    if !transitions.is_empty() {
+        state.mem_cache.set(
+            crate::routes::statistics::CACHE_KEY_DATE_TRANSITIONS,
+            &transitions,
+            CacheTtl::CHART,
+        );
+    }
+
     let snapshot_date = current_snapshot_date(state.store.as_ref())?;
 
     // Cell age buckets

@@ -1485,7 +1485,7 @@ async fn get_common_knowledge_composition_chart(
     ok(response)
 }
 
-const CACHE_KEY_DATE_TRANSITIONS: &str = "internal:block-date-transitions";
+pub(crate) const CACHE_KEY_DATE_TRANSITIONS: &str = "internal:block-date-transitions";
 
 pub(crate) fn load_block_date_transitions(
     store: &ckbadger_store::CkbadgerStore,
