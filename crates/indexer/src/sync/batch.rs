@@ -16,7 +16,7 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellInfo,
-    ObjectTypeIndex, SporeTypeIndex,
+    ObjectTypeIndex, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -2207,9 +2207,13 @@ impl Indexer {
                                             ts_ms,
                                             true,
                                         );
-                                    } else if let Some(ref cid) = spore.cluster_id {
+                                    } else {
+                                        let cid = spore
+                                            .cluster_id
+                                            .as_deref()
+                                            .unwrap_or(&SOLE_SPORES_SENTINEL_COLLECTION);
                                         spore_activity_acc.record(
-                                            cid.as_slice(),
+                                            cid,
                                             &tx_data.hash,
                                             &spore.spore_id,
                                             &parsed.hash,
