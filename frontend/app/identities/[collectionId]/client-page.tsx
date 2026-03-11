@@ -23,8 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
-const DOTBIT_COLLECTION_ID =
-  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 function isDotbitAlias(assetId: string): boolean {
   const normalized = assetId.toLowerCase();

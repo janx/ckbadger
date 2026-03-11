@@ -730,7 +730,10 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                                       {getContentTypeIcon(contentType)}
                                     </span>
                                     {sporeId ? (
-                                      <Link href={`/objects/${sporeId}`} className="hover:underline">
+                                      <Link
+                                        href={`/objects/${sporeId}`}
+                                        className="hover:underline"
+                                      >
                                         <HexDisplay value={sporeId} size="sm" />
                                       </Link>
                                     ) : (

@@ -27,10 +27,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
-const DOTBIT_COLLECTION_ID =
-  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
-const DID_CKB_COLLECTION_ID =
-  '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 function isDotbitAlias(assetId: string): boolean {
   const normalized = assetId.toLowerCase();
@@ -478,9 +476,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                           <select
                             value={collectionStatusFilter}
                             onChange={(event) =>
-                              setCollectionStatusSelection(
-                                event.target.value as ItemStatusFilter
-                              )
+                              setCollectionStatusSelection(event.target.value as ItemStatusFilter)
                             }
                             aria-label="Status Filter"
                             className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
@@ -695,7 +691,10 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                               )}
                             </div>
                             {item.standard.toLowerCase() === 'm-nft' ? (
-                              <Link href={`/objects/mnft/${item.nftId}`} className="hover:underline">
+                              <Link
+                                href={`/objects/mnft/${item.nftId}`}
+                                className="hover:underline"
+                              >
                                 <HexDisplay value={item.nftId} size="sm" />
                               </Link>
                             ) : item.standard.toLowerCase() === 'did_ckb' ||
