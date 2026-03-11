@@ -278,19 +278,15 @@ function AssetTable({
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
               </div>
               {assetType === 'token' && (
-                <div className="hidden xl:block">
-                  <div className={capacityColumnClass}>
-                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
-                  </div>
+                <div className={`${capacityColumnClass} hidden xl:block`}>
+                  <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
                 </div>
               )}
-              <div className={capacityColumnClass}>
+              <div className={`${capacityColumnClass} hidden xl:block`}>
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
               </div>
-              <div className="hidden xl:block">
-                <div className={capacityColumnClass}>
-                  <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
-                </div>
+              <div className={`${capacityColumnClass} hidden xl:block`}>
+                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
               </div>
               <div className={capacityColumnClass}>
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
@@ -319,7 +315,7 @@ function AssetTable({
   }
   return (
     <>
-      <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
+      <div className="border-base-border bg-base-surface/50 text-text-dim hidden border-b px-3 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
         {renderSortHeader('name', assetType === 'token' ? 'Token' : 'Collection', nameColumnClass)}
         {renderSortHeader('type', 'Standard', typeColumnClass)}
         {assetType !== 'token' &&
@@ -416,41 +412,43 @@ function AssetTable({
               {formatNumber(asset.holdersCount)}
             </div>
             {assetType === 'token' && (
-              <div className="hidden xl:block">
-                <div className={`${capacityColumnClass} text-text-bright font-mono tabular-nums`}>
-                  {(() => {
-                    const formatted = formatTokenSupply(asset.totalSupply, asset.decimals);
-                    return formatted ? (
-                      <span title={`Total Circulation: ${formatted}`}>{formatted}</span>
-                    ) : (
-                      <span className="text-text-dim">-</span>
-                    );
-                  })()}
-                </div>
-              </div>
-            )}
-            <div className="hidden xl:block">
-              <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
+              <div
+                className={`${capacityColumnClass} text-text-bright hidden font-mono tabular-nums xl:block`}
+              >
                 {(() => {
-                  const occupied = asset.liveUsedCapacity;
-                  if (!occupied) {
-                    return <span className="text-text-dim">-</span>;
-                  }
-                  const compact = formatCkbCompact(occupied);
-                  return <span title={`${compact.full} CKB`}>{compact.value}</span>;
+                  const formatted = formatTokenSupply(asset.totalSupply, asset.decimals);
+                  return formatted ? (
+                    <span className="block truncate" title={`Total Circulation: ${formatted}`}>
+                      {formatted}
+                    </span>
+                  ) : (
+                    <span className="text-text-dim">-</span>
+                  );
                 })()}
               </div>
+            )}
+            <div
+              className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
+            >
+              {(() => {
+                const occupied = asset.liveUsedCapacity;
+                if (!occupied) {
+                  return <span className="text-text-dim">-</span>;
+                }
+                const compact = formatCkbCompact(occupied);
+                return <span title={`${compact.full} CKB`}>{compact.value}</span>;
+              })()}
             </div>
-            <div className="hidden xl:block">
-              <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
-                {asset.hMultiplier != null ? (
-                  <span title={`H-Multiplier: capacity / used = ×${asset.hMultiplier.toFixed(2)}`}>
-                    ×{asset.hMultiplier.toFixed(2)}
-                  </span>
-                ) : (
-                  <span className="text-text-dim">-</span>
-                )}
-              </div>
+            <div
+              className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
+            >
+              {asset.hMultiplier != null ? (
+                <span title={`H-Multiplier: capacity / used = ×${asset.hMultiplier.toFixed(2)}`}>
+                  ×{asset.hMultiplier.toFixed(2)}
+                </span>
+              ) : (
+                <span className="text-text-dim">-</span>
+              )}
             </div>
             <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
               {(() => {
