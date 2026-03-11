@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::types::{
     ObjectStandard, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 use serde::Deserialize;
@@ -166,6 +167,10 @@ pub fn resolve_dob_collection_name(
 ) -> Option<String> {
     if let Some(name) = non_empty_name(aggregate_name) {
         return Some(name);
+    }
+
+    if cluster_id == SOLE_SPORES_SENTINEL_COLLECTION {
+        return Some("[Sole Spores]".to_string());
     }
 
     match store.get_spore(cluster_id) {
@@ -362,5 +367,25 @@ mod tests {
         assert!(err
             .to_string()
             .contains("live occupied capacity exceeds live capacity"));
+    }
+
+    #[test]
+    fn resolve_dob_name_returns_sole_spores_for_sentinel() {
+        use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
+        let (_dir, store) = test_store();
+        let resolved = resolve_dob_collection_name(&store, &SOLE_SPORES_SENTINEL_COLLECTION, None);
+        assert_eq!(resolved.as_deref(), Some("[Sole Spores]"));
+    }
+
+    #[test]
+    fn resolve_dob_name_aggregate_name_overrides_sentinel() {
+        use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
+        let (_dir, store) = test_store();
+        let resolved = resolve_dob_collection_name(
+            &store,
+            &SOLE_SPORES_SENTINEL_COLLECTION,
+            Some("Custom Name"),
+        );
+        assert_eq!(resolved.as_deref(), Some("Custom Name"));
     }
 }
