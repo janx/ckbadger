@@ -24,7 +24,14 @@ import {
 import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
 type SortDirection = 'asc' | 'desc';
-type ScriptSortKey = 'name' | 'kind' | 'description' | 'occupied' | 'capacity';
+type ScriptSortKey =
+  | 'name'
+  | 'kind'
+  | 'description'
+  | 'occupied'
+  | 'capacity'
+  | 'liveCells'
+  | 'cells';
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 const UNLABELED_SCRIPT_LABEL = 'Unlabeled';
 
@@ -170,6 +177,17 @@ export default function ScriptsPage() {
                       <div className="min-w-0 flex-1 px-4">
                         <div className="bg-base-elevated h-4 w-48 rounded" />
                       </div>
+                      <div className="hidden xl:contents">
+                        <div className="w-24 shrink-0">
+                          <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
+                        </div>
+                        <div className="w-24 shrink-0">
+                          <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
+                        </div>
+                        <div className="w-24 shrink-0">
+                          <div className="bg-base-elevated ml-auto h-4 w-14 rounded" />
+                        </div>
+                      </div>
                       <div className="w-28 shrink-0">
                         <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
@@ -203,6 +221,11 @@ export default function ScriptsPage() {
                   {renderSortHeader('name', 'Script', 'w-44 shrink-0')}
                   {renderSortHeader('kind', 'Kind', 'w-16 shrink-0')}
                   {renderSortHeader('description', 'Description', 'min-w-0 flex-1 px-4')}
+                  <div className="hidden xl:contents">
+                    {renderSortHeader('liveCells', 'Live Cells', 'w-24 shrink-0', 'right')}
+                    {renderSortHeader('cells', 'Total Cells', 'w-24 shrink-0', 'right')}
+                    <div className="w-24 shrink-0 text-right">Deployed</div>
+                  </div>
                   {renderSortHeader('occupied', 'Occupied (CKB)', 'w-28 shrink-0', 'right')}
                   {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28 shrink-0', 'right')}
                 </div>
@@ -248,6 +271,30 @@ export default function ScriptsPage() {
                             {getScriptRefDisplay(script)}
                           </span>
                         )}
+                      </div>
+                      <div className="hidden xl:contents">
+                        <div className="text-text-secondary w-24 shrink-0 text-right font-mono tabular-nums">
+                          {script.liveCellsCount != null
+                            ? new Intl.NumberFormat().format(script.liveCellsCount)
+                            : '-'}
+                        </div>
+                        <div className="text-text-muted w-24 shrink-0 text-right font-mono tabular-nums">
+                          {script.cellsCount != null
+                            ? new Intl.NumberFormat().format(script.cellsCount)
+                            : '-'}
+                        </div>
+                        <div className="text-text-muted w-24 shrink-0 text-right font-mono tabular-nums">
+                          {script.deployedAt != null ? (
+                            <AppLink
+                              href={`/blocks/${script.deployedAt}`}
+                              className="hover:text-emphasis hover:underline"
+                            >
+                              #{new Intl.NumberFormat().format(script.deployedAt)}
+                            </AppLink>
+                          ) : (
+                            '-'
+                          )}
+                        </div>
                       </div>
                       <div className="text-text-secondary w-28 shrink-0 text-right font-mono">
                         {(() => {

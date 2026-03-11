@@ -649,6 +649,7 @@ interface Asset {
     | 'unknown';
   fullyOnchainRatio?: string | null;
   fullyOnchainCount?: number | null;
+  hMultiplier: number | null;
 }
 
 interface AssetQueryParams {
@@ -666,7 +667,8 @@ interface AssetQueryParams {
     | 'transfers'
     | 'occupied'
     | 'capacity'
-    | 'onchainRatio';
+    | 'onchainRatio'
+    | 'hMultiplier';
   sortDirection?: 'asc' | 'desc';
   storageTier?:
     | 'fully_onchain'
@@ -1053,6 +1055,8 @@ interface KnownScript {
   deployedAt?: number | null;
   liveCapacitySum?: string;
   liveOccupiedCapacitySum?: string;
+  liveCellsCount?: number;
+  cellsCount?: number;
 }
 
 interface DeploymentUsage {
@@ -1083,7 +1087,15 @@ interface ScriptQueryParams {
   network?: string;
   decoderType?: string;
   search?: string;
-  sortKey?: 'name' | 'kind' | 'description' | 'occupied' | 'capacity' | 'occupiedRatio';
+  sortKey?:
+    | 'name'
+    | 'kind'
+    | 'description'
+    | 'occupied'
+    | 'capacity'
+    | 'occupiedRatio'
+    | 'liveCells'
+    | 'cells';
   sortDirection?: 'asc' | 'desc';
 }
 
@@ -1538,6 +1550,8 @@ export const api = {
         query.set('sort_key', 'transfers_24h');
       } else if (params.sortKey === 'onchainRatio') {
         query.set('sort_key', 'onchain_ratio');
+      } else if (params.sortKey === 'hMultiplier') {
+        query.set('sort_key', 'h_multiplier');
       } else {
         query.set('sort_key', params.sortKey);
       }
