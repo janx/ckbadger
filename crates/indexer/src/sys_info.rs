@@ -47,11 +47,16 @@ impl DiskStatsTracker {
             Ok(c) => c,
             Err(_) => return (0.0, 0.0),
         };
-        self.read_delta_from_content(&content)
+        self.compute_delta(&content)
     }
 
     /// Testable variant that takes content string.
+    #[cfg(test)]
     pub fn read_delta_from_content(&mut self, content: &str) -> (f64, f64) {
+        self.compute_delta(content)
+    }
+
+    fn compute_delta(&mut self, content: &str) -> (f64, f64) {
         let Some((read_sectors, write_sectors)) = parse_diskstats(content, &self.device) else {
             return (0.0, 0.0);
         };
@@ -63,8 +68,8 @@ impl DiskStatsTracker {
             return (0.0, 0.0);
         }
 
-        let read_delta = read_sectors.saturating_sub(self.prev_read_sectors);
-        let write_delta = write_sectors.saturating_sub(self.prev_write_sectors);
+        let read_delta = read_sectors - self.prev_read_sectors;
+        let write_delta = write_sectors - self.prev_write_sectors;
 
         self.prev_read_sectors = read_sectors;
         self.prev_write_sectors = write_sectors;
@@ -113,7 +118,7 @@ pub fn parse_mem_available_mb(meminfo: &str) -> u64 {
 
 fn parse_meminfo_field(meminfo: &str, field: &str) -> u64 {
     for line in meminfo.lines() {
-        if line.starts_with(field) {
+        if line.starts_with(field) && line.as_bytes().get(field.len()) == Some(&b':') {
             // Format: "FieldName:    12345 kB"
             if let Some((_, rest)) = line.split_once(':') {
                 let trimmed = rest.trim();
