@@ -88,12 +88,12 @@ describe('BlocksPage', () => {
       expect(api.getBlocks).toHaveBeenCalledWith({ cursor: undefined, limit: 25 });
     });
     await waitFor(() => {
-      expect(screen.getByText('HF · MIRANA')).toBeInTheDocument();
+      expect(screen.getAllByText('HF · MIRANA').length).toBeGreaterThan(0);
     });
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Blocks')).toBeInTheDocument();
-    expect(screen.getByText('#8,775,638')).toBeInTheDocument();
-    expect(screen.getByText('HF · MIRANA')).toBeInTheDocument();
+    expect(screen.getAllByText('#8,775,638').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('HF · MIRANA')[0]).toBeInTheDocument();
   });
 });

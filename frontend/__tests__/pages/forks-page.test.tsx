@@ -54,11 +54,11 @@ describe('ForksPage', () => {
 
     await waitFor(() => {
       expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 25 });
-      expect(screen.getByText('DEEP_FORK')).toBeInTheDocument();
+      expect(screen.getAllByText('DEEP_FORK').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByRole('link', { name: '#98' })).toHaveAttribute('href', '/blocks/98');
-    expect(screen.getByText('2 blocks')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: '#98' })[0]).toHaveAttribute('href', '/blocks/98');
+    expect(screen.getAllByText('2 blocks')[0]).toBeInTheDocument();
     expect(
       document.querySelector(
         '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]'

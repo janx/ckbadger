@@ -81,7 +81,8 @@ describe('detail navigation', () => {
       </MemoryRouter>
     );
 
-    await user.click(await screen.findByRole('link', { name: 'SECP256K1_BLAKE160' }));
+    const links = await screen.findAllByRole('link', { name: 'SECP256K1_BLAKE160' });
+    await user.click(links[0]);
 
     await waitFor(() => {
       expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/SECP256K1_BLAKE160');

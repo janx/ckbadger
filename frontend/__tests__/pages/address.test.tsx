@@ -278,7 +278,7 @@ describe('AddressDetailPage', () => {
 
     const fallbackLabel = `${typeScriptHash.slice(0, 10)}...${typeScriptHash.slice(-8)}`;
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: fallbackLabel })).toHaveAttribute(
+      expect(screen.getAllByRole('link', { name: fallbackLabel })[0]).toHaveAttribute(
         'href',
         `/tokens/${typeScriptHash}`
       );
@@ -319,7 +319,7 @@ describe('AddressDetailPage', () => {
 
     const fallbackLabel = `${typeScriptHash.slice(0, 10)}...${typeScriptHash.slice(-8)}`;
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: fallbackLabel })).toHaveAttribute(
+      expect(screen.getAllByRole('link', { name: fallbackLabel })[0]).toHaveAttribute(
         'href',
         `/tokens/${typeScriptHash}`
       );
@@ -523,7 +523,7 @@ describe('AddressDetailPage', () => {
     render(<AddressDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Mint .bit')).toBeInTheDocument();
+      expect(screen.getAllByText('Mint .bit')[0]).toBeInTheDocument();
     });
   });
 
@@ -559,7 +559,7 @@ describe('AddressDetailPage', () => {
     render(<AddressDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Mint did:ckb')).toBeInTheDocument();
+      expect(screen.getAllByText('Mint did:ckb')[0]).toBeInTheDocument();
     });
   });
 });

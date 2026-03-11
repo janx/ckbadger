@@ -53,7 +53,7 @@ describe('TransactionsPage', () => {
       expect(document.querySelector('a[href="/blocks/123456"]')).toBeTruthy();
     });
     expect(document.querySelector('a[href="/blocks/123456"]')).toHaveClass('text-emphasis');
-    expect(screen.getByText('→')).toHaveClass('text-text-muted');
+    expect(screen.getAllByText('→')[0]).toHaveClass('text-text-muted');
     expect(
       document.querySelector(
         '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-sky-dim'

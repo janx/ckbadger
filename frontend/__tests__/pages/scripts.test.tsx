@@ -86,11 +86,11 @@ describe('ScriptsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Kind')).toBeInTheDocument();
+      expect(screen.getAllByText('Kind').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getByRole('link', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
-    expect(screen.getByText('lock')).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'SECP256K1_BLAKE160' })[0]).toBeInTheDocument();
+    expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
     expect(screen.getByText('Capacity (CKB)')).toBeInTheDocument();
     expect(screen.queryByText('Utilization Ratio')).toBeNull();
     expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
@@ -126,8 +126,9 @@ describe('ScriptsPage', () => {
       const scriptLinks = screen
         .getAllByRole('link')
         .filter((link) => link.getAttribute('href')?.startsWith('/scripts/'));
-      expect(scriptLinks[0]).toHaveTextContent('ALWAYS_SUCCESS');
-      expect(scriptLinks[1]).toHaveTextContent('SECP256K1_BLAKE160');
+      // Dual-render (table + card) means each script appears twice; check first pair order
+      const names = scriptLinks.map((el) => el.textContent);
+      expect(names.indexOf('ALWAYS_SUCCESS')).toBeLessThan(names.indexOf('SECP256K1_BLAKE160'));
     });
   });
 
@@ -173,15 +174,17 @@ describe('ScriptsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: unknownScriptRefLabel })).toBeInTheDocument();
+      expect(screen.getAllByRole('link', { name: unknownScriptRefLabel }).length).toBeGreaterThan(
+        0
+      );
     });
 
-    expect(screen.getByText(unknownScriptRefDisplay)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: unknownScriptRefLabel })).toHaveAttribute(
+    expect(screen.getAllByText(unknownScriptRefDisplay)[0]).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: unknownScriptRefLabel })[0]).toHaveAttribute(
       'href',
       `/script/${encodeURIComponent(unknownCodeHash)}?hashType=type&kind=type`
     );
-    expect(screen.getByRole('link', { name: unknownScriptRefLabel })).toHaveAttribute(
+    expect(screen.getAllByRole('link', { name: unknownScriptRefLabel })[0]).toHaveAttribute(
       'title',
       unknownScriptRefFull
     );
