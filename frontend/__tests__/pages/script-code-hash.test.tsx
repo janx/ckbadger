@@ -8,7 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
-    getScriptOccupationChartByCodeHash: vi.fn(),
+    getScriptCapacityChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
 }));
@@ -53,20 +53,20 @@ describe('ScriptByCodeHashPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
-        liveOccupiedCapacitySum: '14000000000',
+        liveUsedCapacitySum: '14000000000',
       },
     });
     vi.mocked(api.getCodeCell).mockResolvedValue({ txHash: null, outputIndex: null });
-    vi.mocked(api.getScriptOccupationChartByCodeHash).mockResolvedValue({
-      title: 'Occupation',
+    vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue({
+      title: 'Capacity History',
       series: [
-        { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
-        { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+        { key: 'used', label: 'Used', color: '#f59e0b' },
+        { key: 'unused', label: 'Unused', color: '#00c389' },
       ],
       data: [
         {
           date: '2024-01-15',
-          values: { occupied: '1000000000', unoccupied: '1500000000' },
+          values: { used: '1000000000', unused: '1500000000' },
         },
       ],
     });
@@ -78,10 +78,9 @@ describe('ScriptByCodeHashPage', () => {
 
     await waitFor(() => {
       expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
-      expect(screen.getByText('Occupation History')).toBeInTheDocument();
-      expect(screen.getByText('Total Capacity')).toBeInTheDocument();
-      expect(screen.getByText(/\(\d+\.\d% occupied\)/)).toBeInTheDocument();
-      expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
+      expect(screen.getByText('Capacity History')).toBeInTheDocument();
+      expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
+      expect(screen.getByText(/HMul:/)).toBeInTheDocument();
     });
     expect(screen.getByText('Same Deployment References')).toBeInTheDocument();
     expect(screen.getByText('Reference Semantics')).toBeInTheDocument();
@@ -117,7 +116,7 @@ describe('ScriptByCodeHashPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
-        liveOccupiedCapacitySum: '14000000000',
+        liveUsedCapacitySum: '14000000000',
       },
     });
 

@@ -348,8 +348,8 @@ fn test_script_usage_cell_creation() {
     assert_eq!(info.lock_live_cells_count, 1);
     assert_eq!(info.lock_capacity_sum, 100_00000000);
     assert_eq!(info.lock_live_capacity_sum, 100_00000000);
-    assert_eq!(info.lock_occupied_capacity_sum, 61_00000000);
-    assert_eq!(info.lock_live_occupied_capacity_sum, 61_00000000);
+    assert_eq!(info.lock_used_capacity_sum, 61_00000000);
+    assert_eq!(info.lock_live_used_capacity_sum, 61_00000000);
 }
 
 #[test]
@@ -387,8 +387,8 @@ fn test_script_usage_cell_consumption() {
     assert_eq!(info.lock_live_cells_count, 0);
     assert_eq!(info.lock_capacity_sum, 100_00000000);
     assert_eq!(info.lock_live_capacity_sum, 0);
-    assert_eq!(info.lock_occupied_capacity_sum, 61_00000000);
-    assert_eq!(info.lock_live_occupied_capacity_sum, 0);
+    assert_eq!(info.lock_used_capacity_sum, 61_00000000);
+    assert_eq!(info.lock_live_used_capacity_sum, 0);
 }
 
 #[test]
@@ -457,7 +457,7 @@ fn test_address_balance_update_send() {
 }
 
 #[test]
-fn test_address_balance_occupied_delta_applied() {
+fn test_address_balance_used_delta_applied() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xBBu8; 32];
     let tx_hash1 = vec![0x01u8; 32];
@@ -485,7 +485,7 @@ fn test_address_balance_occupied_delta_applied() {
     batch.commit().unwrap();
 
     let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
-    assert_eq!(balance.occupied_capacity, 6100_00000000);
+    assert_eq!(balance.used_capacity, 6100_00000000);
 
     // Consume old cell (-6100) and create new smaller cell (+4100)
     let update: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
@@ -501,16 +501,16 @@ fn test_address_balance_occupied_delta_applied() {
     batch.commit().unwrap();
 
     let balance = store.get_addr_balance(&lock_hash).unwrap().unwrap();
-    assert_eq!(balance.occupied_capacity, 4100_00000000);
+    assert_eq!(balance.used_capacity, 4100_00000000);
 }
 
 #[test]
-fn test_address_balance_occupied_underflow_errors() {
+fn test_address_balance_used_underflow_errors() {
     let (store, writer) = setup_store();
     let lock_hash = vec![0xCCu8; 32];
     let tx_hash = vec![0x01u8; 32];
 
-    // Apply a negative occupied_delta larger than what exists (0)
+    // Apply a negative used_delta larger than what exists (0)
     // Should fail fast instead of silently clamping.
     let changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, &[u8], i128)> = [(
         lock_hash.clone(),

@@ -22,8 +22,8 @@ const mockCellWithDao = {
   txHash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
   outputIndex: 0,
   capacity: '50000000000',
-  occupiedCapacity: 8600000000,
-  occupiedCapacityBreakdown: {
+  usedCapacity: 8600000000,
+  usedCapacityBreakdown: {
     capacityFieldBytes: 8,
     lockScriptBytes: 53,
     typeScriptBytes: 17,
@@ -67,8 +67,8 @@ const mockCellWithoutDao = {
   txHash: '0xdef456789012345678901234567890123456789012345678901234567890abcd',
   outputIndex: 0,
   capacity: '10000000000',
-  occupiedCapacity: 6100000000,
-  occupiedCapacityBreakdown: {
+  usedCapacity: 6100000000,
+  usedCapacityBreakdown: {
     capacityFieldBytes: 8,
     lockScriptBytes: 53,
     typeScriptBytes: 0,
@@ -229,7 +229,7 @@ describe('CellDetailPage', () => {
 
     expect(screen.getByText('Capacity')).toBeInTheDocument();
     expect(screen.getByText('Total Capacity')).toBeInTheDocument();
-    expect(screen.getByText('Occupied Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Used Capacity')).toBeInTheDocument();
     expect(screen.getByText('Utilization Ratio')).toBeInTheDocument();
     expect(screen.getByText('Byte Composition (61 bytes)')).toBeInTheDocument();
     expect(screen.getByText('Capacity Field')).toBeInTheDocument();
@@ -302,8 +302,8 @@ describe('CellDetailPage', () => {
   it('renders inferred bytes segment with dedicated legend color', async () => {
     mockGetCell.mockResolvedValue({
       ...mockCellWithDao,
-      occupiedCapacity: 10200000000,
-      occupiedCapacityBreakdown: {
+      usedCapacity: 10200000000,
+      usedCapacityBreakdown: {
         capacityFieldBytes: 8,
         lockScriptBytes: 53,
         typeScriptBytes: 17,

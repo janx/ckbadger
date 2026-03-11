@@ -36,7 +36,7 @@ describe('MnftItemDetailPage', () => {
       lockScriptHash: '0xlock',
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
       balance: '0',
-      occupiedCapacity: '0',
+      usedCapacity: '0',
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);

@@ -181,7 +181,7 @@ function MostUtilizedScriptsPreview({
 }) {
   return (
     <ChartCard
-      title="Scripts Occupied & Total CKBytes"
+      title="Scripts Used & Total CKBytes"
       href={href}
       isLoading={!data}
       error={data === null}
@@ -189,8 +189,8 @@ function MostUtilizedScriptsPreview({
     >
       {data && (
         <StackedAreaChart
-          data={data.occupiedShare.data}
-          series={data.occupiedShare.series}
+          data={data.usedShare.data}
+          series={data.usedShare.series}
           height={160}
           interactive={false}
           isPercentage
@@ -210,7 +210,7 @@ function MostUtilizedAssetsPreview({
 }) {
   return (
     <ChartCard
-      title="Assets Occupied & Total CKBytes"
+      title="Assets Used & Total CKBytes"
       href={href}
       isLoading={!data}
       error={data === null}
@@ -218,8 +218,8 @@ function MostUtilizedAssetsPreview({
     >
       {data && (
         <StackedAreaChart
-          data={data.occupiedShare.data}
-          series={data.occupiedShare.series}
+          data={data.usedShare.data}
+          series={data.usedShare.series}
           height={160}
           interactive={false}
           isPercentage
@@ -271,9 +271,9 @@ export default function ChartsPage() {
     queryFn: () => api.getCommonKnowledgeCompositionChart(),
   });
 
-  const { data: cellAgeVsOccupiedCapacity } = useQuery({
-    queryKey: ['chart-cell-age-vs-occupied-capacity'],
-    queryFn: () => api.getCellAgeVsOccupiedCapacityChart(),
+  const { data: cellAgeVsUsedCapacity } = useQuery({
+    queryKey: ['chart-cell-age-vs-used-capacity'],
+    queryFn: () => api.getCellAgeVsUsedCapacityChart(),
   });
 
   const { data: capacityTurnoverRatio } = useQuery({
@@ -458,8 +458,8 @@ export default function ChartsPage() {
             href="/charts/common-knowledge-composition"
           />
           <StackedAreaPreview
-            data={cellAgeVsOccupiedCapacity}
-            href="/charts/cell-age-vs-occupied-capacity"
+            data={cellAgeVsUsedCapacity}
+            href="/charts/cell-age-vs-used-capacity"
           />
           <LineChartPreview data={capacityTurnoverRatio} href="/charts/capacity-turnover-ratio" />
           <LineChartPreview

@@ -808,11 +808,11 @@ mod tests {
 
         let d1 = ScriptDailyDelta {
             live_capacity_delta: 1_000_000_000_000,
-            live_occupied_capacity_delta: 700_000_000_000,
+            live_used_capacity_delta: 700_000_000_000,
         };
         let d2 = ScriptDailyDelta {
             live_capacity_delta: -200_000_000_000,
-            live_occupied_capacity_delta: -120_000_000_000,
+            live_used_capacity_delta: -120_000_000_000,
         };
         store
             .put_script_daily_delta(&code_hash, false, 20240115, &d1)
@@ -826,10 +826,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.live_capacity_delta, d1.live_capacity_delta);
-        assert_eq!(
-            loaded.live_occupied_capacity_delta,
-            d1.live_occupied_capacity_delta
-        );
+        assert_eq!(loaded.live_used_capacity_delta, d1.live_used_capacity_delta);
 
         let listed = store.list_script_daily_deltas(&code_hash, false).unwrap();
         assert_eq!(listed.len(), 2);

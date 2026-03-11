@@ -347,8 +347,8 @@ async fn test_tx_stats_reads_from_derived_store() {
                 cells_created: 0,
                 cells_consumed: 0,
                 capacity_transferred: 0,
-                occupied_capacity_created: 0,
-                occupied_capacity_consumed: 0,
+                used_capacity_created: 0,
+                used_capacity_consumed: 0,
                 total_live_cells: 0,
                 total_dead_cells: 0,
                 total_all_cells: 0,
@@ -490,8 +490,8 @@ async fn test_network_stats_reads_derived_statistics() {
                 cells_created: 0,
                 cells_consumed: 0,
                 capacity_transferred: 0,
-                occupied_capacity_created: 0,
-                occupied_capacity_consumed: 0,
+                used_capacity_created: 0,
+                used_capacity_consumed: 0,
                 total_live_cells: 0,
                 total_dead_cells: 0,
                 total_all_cells: 0,
@@ -510,8 +510,8 @@ async fn test_network_stats_reads_derived_statistics() {
                 cells_created: 0,
                 cells_consumed: 0,
                 capacity_transferred: 0,
-                occupied_capacity_created: 0,
-                occupied_capacity_consumed: 0,
+                used_capacity_created: 0,
+                used_capacity_consumed: 0,
                 total_live_cells: 0,
                 total_dead_cells: 0,
                 total_all_cells: 0,
@@ -1567,7 +1567,7 @@ async fn test_new_capacity_charts_empty_db() {
 }
 
 #[tokio::test]
-async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
+async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let store = test_store();
 
     let code_hash_a1 = vec![0x11; 32];
@@ -1584,7 +1584,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
                 lock_cells_count: 10,
                 lock_live_cells_count: 8,
                 lock_live_capacity_sum: 500,
-                lock_live_occupied_capacity_sum: 300,
+                lock_live_used_capacity_sum: 300,
                 ..Default::default()
             },
         )
@@ -1598,7 +1598,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
                 type_cells_count: 6,
                 type_live_cells_count: 5,
                 type_live_capacity_sum: 700,
-                type_live_occupied_capacity_sum: 500,
+                type_live_used_capacity_sum: 500,
                 ..Default::default()
             },
         )
@@ -1612,7 +1612,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
                 lock_cells_count: 9,
                 lock_live_cells_count: 7,
                 lock_live_capacity_sum: 800,
-                lock_live_occupied_capacity_sum: 200,
+                lock_live_used_capacity_sum: 200,
                 ..Default::default()
             },
         )
@@ -1626,7 +1626,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
                 lock_cells_count: 4,
                 lock_live_cells_count: 4,
                 lock_live_capacity_sum: 600,
-                lock_live_occupied_capacity_sum: 550,
+                lock_live_used_capacity_sum: 550,
                 ..Default::default()
             },
         )
@@ -1638,7 +1638,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
             20240101,
             &ScriptDailyDelta {
                 live_capacity_delta: 500,
-                live_occupied_capacity_delta: 300,
+                live_used_capacity_delta: 300,
             },
         )
         .unwrap();
@@ -1649,7 +1649,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
             20240101,
             &ScriptDailyDelta {
                 live_capacity_delta: 700,
-                live_occupied_capacity_delta: 500,
+                live_used_capacity_delta: 500,
             },
         )
         .unwrap();
@@ -1660,7 +1660,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
             20240101,
             &ScriptDailyDelta {
                 live_capacity_delta: 800,
-                live_occupied_capacity_delta: 200,
+                live_used_capacity_delta: 200,
             },
         )
         .unwrap();
@@ -1671,7 +1671,7 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
             20240101,
             &ScriptDailyDelta {
                 live_capacity_delta: 600,
-                live_occupied_capacity_delta: 550,
+                live_used_capacity_delta: 550,
             },
         )
         .unwrap();
@@ -1690,25 +1690,25 @@ async fn test_most_utilized_scripts_chart_ranks_by_occupied_and_capacity() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["title"], "Scripts Occupied & Total CKBytes");
-    let occupied_share = &json["occupiedShare"];
-    let occupied_series = occupied_share["series"].as_array().unwrap();
-    assert_eq!(occupied_series.len(), 4);
-    assert_eq!(occupied_series[0]["label"], "Script A");
+    assert_eq!(json["title"], "Scripts Used & Total CKBytes");
+    let used_share = &json["usedShare"];
+    let used_series = used_share["series"].as_array().unwrap();
+    assert_eq!(used_series.len(), 4);
+    assert_eq!(used_series[0]["label"], "Script A");
     assert_eq!(
-        occupied_series[1]["label"],
+        used_series[1]["label"],
         format!("0x{}", hex::encode(&code_hash_unknown))
     );
-    assert_eq!(occupied_series[2]["label"], "Script B");
-    assert_eq!(occupied_series[3]["label"], "Others");
+    assert_eq!(used_series[2]["label"], "Script B");
+    assert_eq!(used_series[3]["label"], "Others");
 
-    let occupied_data = occupied_share["data"].as_array().unwrap();
-    assert_eq!(occupied_data.len(), 1);
-    assert_eq!(occupied_data[0]["date"], "2024-01-01");
-    assert_eq!(occupied_data[0]["values"]["top0"], "800");
-    assert_eq!(occupied_data[0]["values"]["top1"], "550");
-    assert_eq!(occupied_data[0]["values"]["top2"], "200");
-    assert_eq!(occupied_data[0]["values"]["others"], "0");
+    let used_data = used_share["data"].as_array().unwrap();
+    assert_eq!(used_data.len(), 1);
+    assert_eq!(used_data[0]["date"], "2024-01-01");
+    assert_eq!(used_data[0]["values"]["top0"], "800");
+    assert_eq!(used_data[0]["values"]["top1"], "550");
+    assert_eq!(used_data[0]["values"]["top2"], "200");
+    assert_eq!(used_data[0]["values"]["others"], "0");
 
     let capacity_share = &json["capacityShare"];
     let capacity_series = capacity_share["series"].as_array().unwrap();
@@ -1763,7 +1763,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             20240101,
             &TokenDailyDelta {
                 live_capacity_delta: 300,
-                live_occupied_capacity_delta: 250,
+                live_used_capacity_delta: 250,
             },
         )
         .unwrap();
@@ -1795,7 +1795,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             20240101,
             &TokenDailyDelta {
                 live_capacity_delta: 900,
-                live_occupied_capacity_delta: 100,
+                live_used_capacity_delta: 100,
             },
         )
         .unwrap();
@@ -1831,7 +1831,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             20240101,
             &ClusterDailyDelta {
                 live_capacity_delta: 500,
-                live_occupied_capacity_delta: 400,
+                live_used_capacity_delta: 400,
             },
         )
         .unwrap();
@@ -1841,7 +1841,7 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
             20240101,
             &ObjectDailyDelta {
                 live_capacity_delta: 700,
-                live_occupied_capacity_delta: 600,
+                live_used_capacity_delta: 600,
             },
         )
         .unwrap();
@@ -1860,22 +1860,22 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["title"], "Assets Occupied & Total CKBytes");
-    let occupied_share = &json["occupiedShare"];
-    let occupied_series = occupied_share["series"].as_array().unwrap();
-    assert_eq!(occupied_series[0]["label"], "NFT Collection (nft)");
-    assert_eq!(occupied_series[1]["label"], "DOB Cluster (nft)");
-    assert_eq!(occupied_series[2]["label"], "A (token)");
-    assert_eq!(occupied_series[3]["label"], "B (token)");
-    assert_eq!(occupied_series[4]["label"], "Others");
+    assert_eq!(json["title"], "Assets Used & Total CKBytes");
+    let used_share = &json["usedShare"];
+    let used_series = used_share["series"].as_array().unwrap();
+    assert_eq!(used_series[0]["label"], "NFT Collection (nft)");
+    assert_eq!(used_series[1]["label"], "DOB Cluster (nft)");
+    assert_eq!(used_series[2]["label"], "A (token)");
+    assert_eq!(used_series[3]["label"], "B (token)");
+    assert_eq!(used_series[4]["label"], "Others");
 
-    let occupied_data = occupied_share["data"].as_array().unwrap();
-    assert_eq!(occupied_data[0]["date"], "2024-01-01");
-    assert_eq!(occupied_data[0]["values"]["top0"], "600");
-    assert_eq!(occupied_data[0]["values"]["top1"], "400");
-    assert_eq!(occupied_data[0]["values"]["top2"], "250");
-    assert_eq!(occupied_data[0]["values"]["top3"], "100");
-    assert_eq!(occupied_data[0]["values"]["others"], "0");
+    let used_data = used_share["data"].as_array().unwrap();
+    assert_eq!(used_data[0]["date"], "2024-01-01");
+    assert_eq!(used_data[0]["values"]["top0"], "600");
+    assert_eq!(used_data[0]["values"]["top1"], "400");
+    assert_eq!(used_data[0]["values"]["top2"], "250");
+    assert_eq!(used_data[0]["values"]["top3"], "100");
+    assert_eq!(used_data[0]["values"]["others"], "0");
 
     let capacity_share = &json["capacityShare"];
     let capacity_series = capacity_share["series"].as_array().unwrap();
@@ -2022,7 +2022,7 @@ async fn test_scripts_list_supports_cursor_pagination() {
     assert_eq!(page1[0]["name"], "A_SCRIPT");
     assert_eq!(page1[1]["name"], "B_SCRIPT");
     assert_eq!(page1[0]["liveCapacitySum"], "0");
-    assert_eq!(page1[0]["liveOccupiedCapacitySum"], "0");
+    assert_eq!(page1[0]["liveUsedCapacitySum"], "0");
     assert_eq!(json["total"], 3);
     assert_eq!(json["limit"], 2);
     assert_eq!(json["hasMore"], true);
@@ -2178,7 +2178,7 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
                 hash_type: 0,
                 lock_live_cells_count: 10,
                 lock_live_capacity_sum: 1_000_000_000,
-                lock_live_occupied_capacity_sum: 600_000_000,
+                lock_live_used_capacity_sum: 600_000_000,
                 ..Default::default()
             },
         )
@@ -2617,7 +2617,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
 }
 
 #[tokio::test]
-async fn test_script_occupation_chart_aggregates_deployments() {
+async fn test_script_capacity_chart_aggregates_deployments() {
     let store = test_store();
 
     let code_hash_a = vec![0x11; 32];
@@ -2652,7 +2652,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
             20240115,
             &ScriptDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -2663,7 +2663,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
             20240117,
             &ScriptDailyDelta {
                 live_capacity_delta: -20,
-                live_occupied_capacity_delta: -10,
+                live_used_capacity_delta: -10,
             },
         )
         .unwrap();
@@ -2674,7 +2674,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
             20240115,
             &ScriptDailyDelta {
                 live_capacity_delta: 50,
-                live_occupied_capacity_delta: 30,
+                live_used_capacity_delta: 30,
             },
         )
         .unwrap();
@@ -2685,7 +2685,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
             20240117,
             &ScriptDailyDelta {
                 live_capacity_delta: 10,
-                live_occupied_capacity_delta: 5,
+                live_used_capacity_delta: 5,
             },
         )
         .unwrap();
@@ -2694,7 +2694,7 @@ async fn test_script_occupation_chart_aggregates_deployments() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/occupation")
+        .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/capacity-history")
         .body(Body::empty())
         .unwrap();
 
@@ -2704,20 +2704,20 @@ async fn test_script_occupation_chart_aggregates_deployments() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
-    assert_eq!(json["title"], "SECP256K1_BLAKE160 Capacity Occupation");
+    assert_eq!(json["title"], "SECP256K1_BLAKE160 Capacity History");
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["occupied"], "90");
-    assert_eq!(data[0]["values"]["unoccupied"], "60");
+    assert_eq!(data[0]["values"]["used"], "90");
+    assert_eq!(data[0]["values"]["unused"], "60");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["occupied"], "90");
-    assert_eq!(data[1]["values"]["unoccupied"], "60");
+    assert_eq!(data[1]["values"]["used"], "90");
+    assert_eq!(data[1]["values"]["unused"], "60");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["occupied"], "85");
-    assert_eq!(data[2]["values"]["unoccupied"], "55");
+    assert_eq!(data[2]["values"]["used"], "85");
+    assert_eq!(data[2]["values"]["unused"], "55");
 
     let request = Request::builder()
-        .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/occupation?from=2024-01-16&to=2024-01-16")
+        .uri("/api/v1/scripts/SECP256K1_BLAKE160/charts/capacity-history?from=2024-01-16&to=2024-01-16")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -2727,12 +2727,12 @@ async fn test_script_occupation_chart_aggregates_deployments() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "90");
-    assert_eq!(data[0]["values"]["unoccupied"], "60");
+    assert_eq!(data[0]["values"]["used"], "90");
+    assert_eq!(data[0]["values"]["unused"], "60");
 }
 
 #[tokio::test]
-async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
+async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     let store = test_store();
     let code_hash = vec![0x33; 32];
     let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
@@ -2744,7 +2744,7 @@ async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
             20240115,
             &ScriptDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 40,
+                live_used_capacity_delta: 40,
             },
         )
         .unwrap();
@@ -2755,7 +2755,7 @@ async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
             20240115,
             &ScriptDailyDelta {
                 live_capacity_delta: 80,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -2765,7 +2765,7 @@ async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/scripts/charts/occupation?code_hash={}&script_kind=lock",
+            "/api/v1/scripts/charts/capacity-history?code_hash={}&script_kind=lock",
             code_hash_hex
         ))
         .body(Body::empty())
@@ -2778,8 +2778,8 @@ async fn test_script_occupation_chart_by_code_hash_with_kind_filter() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0]["values"]["occupied"], "40");
-    assert_eq!(data[0]["values"]["unoccupied"], "60");
+    assert_eq!(data[0]["values"]["used"], "40");
+    assert_eq!(data[0]["values"]["unused"], "60");
 }
 
 #[tokio::test]
@@ -2863,7 +2863,7 @@ async fn test_get_token_errors_when_token_cache_unavailable() {
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 120,
+                live_used_capacity_delta: 120,
             },
         )
         .unwrap();
@@ -3019,7 +3019,7 @@ async fn test_get_token_maximum_supply_status_without_cap() {
 }
 
 #[tokio::test]
-async fn test_token_occupation_chart_returns_cumulative_series() {
+async fn test_token_capacity_chart_returns_cumulative_series() {
     let store = test_store();
     let type_hash = vec![0x44; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
@@ -3051,7 +3051,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -3061,7 +3061,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
             20240117,
             &TokenDailyDelta {
                 live_capacity_delta: -20,
-                live_occupied_capacity_delta: -10,
+                live_used_capacity_delta: -10,
             },
         )
         .unwrap();
@@ -3071,7 +3071,7 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/tokens/{}/charts/occupation",
+            "/api/v1/tokens/{}/charts/capacity-history",
             type_hash_hex
         ))
         .body(Body::empty())
@@ -3083,21 +3083,21 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
-    assert_eq!(json["title"], "TEST Capacity Occupation");
+    assert_eq!(json["title"], "TEST Capacity History");
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["occupied"], "60");
-    assert_eq!(data[0]["values"]["unoccupied"], "40");
+    assert_eq!(data[0]["values"]["used"], "60");
+    assert_eq!(data[0]["values"]["unused"], "40");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["occupied"], "60");
-    assert_eq!(data[1]["values"]["unoccupied"], "40");
+    assert_eq!(data[1]["values"]["used"], "60");
+    assert_eq!(data[1]["values"]["unused"], "40");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["occupied"], "50");
-    assert_eq!(data[2]["values"]["unoccupied"], "30");
+    assert_eq!(data[2]["values"]["used"], "50");
+    assert_eq!(data[2]["values"]["unused"], "30");
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/tokens/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            "/api/v1/tokens/{}/charts/capacity-history?from=2024-01-16&to=2024-01-16",
             type_hash_hex
         ))
         .body(Body::empty())
@@ -3109,12 +3109,12 @@ async fn test_token_occupation_chart_returns_cumulative_series() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "60");
-    assert_eq!(data[0]["values"]["unoccupied"], "40");
+    assert_eq!(data[0]["values"]["used"], "60");
+    assert_eq!(data[0]["values"]["unused"], "40");
 }
 
 #[tokio::test]
-async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
+async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let type_hash = vec![0x64; 32];
@@ -3148,7 +3148,7 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -3158,7 +3158,7 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/tokens/{}/charts/occupation",
+            "/api/v1/tokens/{}/charts/capacity-history",
             type_hash_hex
         ))
         .body(Body::empty())
@@ -3171,12 +3171,12 @@ async fn test_token_occupation_chart_reads_daily_deltas_from_derived_store() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["occupied"], "60");
-    assert_eq!(data[0]["values"]["unoccupied"], "40");
+    assert_eq!(data[0]["values"]["used"], "60");
+    assert_eq!(data[0]["values"]["unused"], "40");
 }
 
 #[tokio::test]
-async fn test_token_occupation_chart_rejects_invalid_date_range() {
+async fn test_token_capacity_chart_rejects_invalid_date_range() {
     let store = test_store();
     let type_hash = vec![0x45; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
@@ -3208,7 +3208,7 @@ async fn test_token_occupation_chart_rejects_invalid_date_range() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/tokens/{}/charts/occupation?from=2024-01-31&to=2024-01-01",
+            "/api/v1/tokens/{}/charts/capacity-history?from=2024-01-31&to=2024-01-01",
             type_hash_hex
         ))
         .body(Body::empty())
@@ -3234,7 +3234,7 @@ async fn test_spore_list_empty_db() {
 }
 
 #[tokio::test]
-async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
+async fn test_cluster_capacity_chart_and_cluster_capacity_fields() {
     let store = test_store();
     let cluster_id = [0x42u8; 32];
     let cluster_id_hex = format!("0x{}", hex::encode(cluster_id));
@@ -3258,7 +3258,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
             20240115,
             &ClusterDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -3268,7 +3268,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
             20240117,
             &ClusterDailyDelta {
                 live_capacity_delta: -20,
-                live_occupied_capacity_delta: -10,
+                live_used_capacity_delta: -10,
             },
         )
         .unwrap();
@@ -3278,7 +3278,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/spore/clusters/{}/charts/occupation",
+            "/api/v1/spore/clusters/{}/charts/capacity-history",
             cluster_id_hex
         ))
         .body(Body::empty())
@@ -3288,19 +3288,19 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["title"], "Test Cluster Capacity Occupation");
+    assert_eq!(json["title"], "Test Cluster Capacity History");
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[0]["values"]["occupied"], "60");
-    assert_eq!(data[0]["values"]["unoccupied"], "40");
-    assert_eq!(data[1]["values"]["occupied"], "60");
-    assert_eq!(data[1]["values"]["unoccupied"], "40");
-    assert_eq!(data[2]["values"]["occupied"], "50");
-    assert_eq!(data[2]["values"]["unoccupied"], "30");
+    assert_eq!(data[0]["values"]["used"], "60");
+    assert_eq!(data[0]["values"]["unused"], "40");
+    assert_eq!(data[1]["values"]["used"], "60");
+    assert_eq!(data[1]["values"]["unused"], "40");
+    assert_eq!(data[2]["values"]["used"], "50");
+    assert_eq!(data[2]["values"]["unused"], "30");
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/spore/clusters/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            "/api/v1/spore/clusters/{}/charts/capacity-history?from=2024-01-16&to=2024-01-16",
             cluster_id_hex
         ))
         .body(Body::empty())
@@ -3312,8 +3312,8 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "60");
-    assert_eq!(data[0]["values"]["unoccupied"], "40");
+    assert_eq!(data[0]["values"]["used"], "60");
+    assert_eq!(data[0]["values"]["unused"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/clusters/{}", cluster_id_hex))
@@ -3324,7 +3324,7 @@ async fn test_cluster_occupation_chart_and_cluster_capacity_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveOccupiedCapacity"], "50");
+    assert_eq!(json["liveUsedCapacity"], "50");
     assert_eq!(json["storageProfile"]["tier"], "unknown");
 }
 
@@ -3597,7 +3597,7 @@ async fn test_spore_cluster_activities_supports_action_filter() {
 }
 
 #[tokio::test]
-async fn test_spore_occupation_chart_and_spore_capacity_fields() {
+async fn test_spore_capacity_chart_and_spore_capacity_fields() {
     let store = test_store();
     let spore_id = [0x77u8; 32];
     let spore_id_hex = format!("0x{}", hex::encode(spore_id));
@@ -3625,7 +3625,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
             20240115,
             &SporeDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 61,
+                live_used_capacity_delta: 61,
             },
         )
         .unwrap();
@@ -3635,7 +3635,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
             20240117,
             &SporeDailyDelta {
                 live_capacity_delta: -20,
-                live_occupied_capacity_delta: -11,
+                live_used_capacity_delta: -11,
             },
         )
         .unwrap();
@@ -3645,7 +3645,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/spore/objects/{}/charts/occupation",
+            "/api/v1/spore/objects/{}/charts/capacity-history",
             spore_id_hex
         ))
         .body(Body::empty())
@@ -3655,17 +3655,17 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["title"], "Spore Capacity Occupation");
+    assert_eq!(json["title"], "Spore Capacity History");
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(data[1]["values"]["occupied"], "61");
-    assert_eq!(data[1]["values"]["unoccupied"], "39");
-    assert_eq!(data[2]["values"]["occupied"], "50");
-    assert_eq!(data[2]["values"]["unoccupied"], "30");
+    assert_eq!(data[1]["values"]["used"], "61");
+    assert_eq!(data[1]["values"]["unused"], "39");
+    assert_eq!(data[2]["values"]["used"], "50");
+    assert_eq!(data[2]["values"]["unused"], "30");
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/spore/objects/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            "/api/v1/spore/objects/{}/charts/capacity-history?from=2024-01-16&to=2024-01-16",
             spore_id_hex
         ))
         .body(Body::empty())
@@ -3677,8 +3677,8 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["occupied"], "61");
-    assert_eq!(data[0]["values"]["unoccupied"], "39");
+    assert_eq!(data[0]["values"]["used"], "61");
+    assert_eq!(data[0]["values"]["unused"], "39");
 
     let request = Request::builder()
         .uri(format!("/api/v1/spore/objects/{}", spore_id_hex))
@@ -3689,7 +3689,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveOccupiedCapacity"], "50");
+    assert_eq!(json["liveUsedCapacity"], "50");
 }
 
 #[tokio::test]
@@ -3871,7 +3871,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                 20240115,
                 &TokenDailyDelta {
                     live_capacity_delta: 100,
-                    live_occupied_capacity_delta: 50,
+                    live_used_capacity_delta: 50,
                 },
             )
             .unwrap();
@@ -4181,7 +4181,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -4191,7 +4191,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 300,
-                live_occupied_capacity_delta: 120,
+                live_used_capacity_delta: 120,
             },
         )
         .unwrap();
@@ -4210,7 +4210,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"][0]["id"], format!("0x{}", hex::encode(token_b)));
     assert_eq!(json["data"][0]["liveCapacity"], "300");
-    assert_eq!(json["data"][0]["liveOccupiedCapacity"], "120");
+    assert_eq!(json["data"][0]["liveUsedCapacity"], "120");
 
     let next_cursor = json["nextCursor"].as_str().unwrap();
     let request = Request::builder()
@@ -4278,19 +4278,19 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 200,
-                live_occupied_capacity_delta: 100,
+                live_used_capacity_delta: 100,
             },
         )
         .unwrap();
 
-    // Broken history: occupied exceeds capacity; API must fail fast instead of masking.
+    // Broken history: used exceeds capacity; API must fail fast instead of masking.
     store
         .put_token_daily_delta(
             &broken_token,
             20240115,
             &TokenDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 120,
+                live_used_capacity_delta: 120,
             },
         )
         .unwrap();
@@ -4313,7 +4313,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
 }
 
 #[tokio::test]
-async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
+async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let store = test_store();
     let collection_id = [0x24u8; 24];
     let collection_id_hex = format!("0x{}", hex::encode(collection_id));
@@ -4338,7 +4338,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
             20240115,
             &ObjectDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -4348,7 +4348,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
             20240117,
             &ObjectDailyDelta {
                 live_capacity_delta: -20,
-                live_occupied_capacity_delta: -10,
+                live_used_capacity_delta: -10,
             },
         )
         .unwrap();
@@ -4358,7 +4358,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/objects/{}/charts/occupation",
+            "/api/v1/assets/objects/{}/charts/capacity-history",
             collection_id_hex
         ))
         .body(Body::empty())
@@ -4367,16 +4367,16 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["title"], "Test NFT Collection Capacity Occupation");
+    assert_eq!(json["title"], "Test NFT Collection Capacity History");
     assert_eq!(json["data"].as_array().unwrap().len(), 3);
-    assert_eq!(json["data"][1]["values"]["occupied"], "60");
-    assert_eq!(json["data"][1]["values"]["unoccupied"], "40");
-    assert_eq!(json["data"][2]["values"]["occupied"], "50");
-    assert_eq!(json["data"][2]["values"]["unoccupied"], "30");
+    assert_eq!(json["data"][1]["values"]["used"], "60");
+    assert_eq!(json["data"][1]["values"]["unused"], "40");
+    assert_eq!(json["data"][2]["values"]["used"], "50");
+    assert_eq!(json["data"][2]["values"]["unused"], "30");
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/assets/objects/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            "/api/v1/assets/objects/{}/charts/capacity-history?from=2024-01-16&to=2024-01-16",
             collection_id_hex
         ))
         .body(Body::empty())
@@ -4387,8 +4387,8 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["date"], "2024-01-16");
-    assert_eq!(json["data"][0]["values"]["occupied"], "60");
-    assert_eq!(json["data"][0]["values"]["unoccupied"], "40");
+    assert_eq!(json["data"][0]["values"]["used"], "60");
+    assert_eq!(json["data"][0]["values"]["unused"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/assets/objects/{}", collection_id_hex))
@@ -4400,7 +4400,7 @@ async fn test_assets_nft_collection_occupation_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["standard"], "m-nft");
     assert_eq!(json["liveCapacity"], "80");
-    assert_eq!(json["liveOccupiedCapacity"], "50");
+    assert_eq!(json["liveUsedCapacity"], "50");
 }
 
 #[tokio::test]
@@ -4428,7 +4428,7 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
             20240115,
             &ObjectDailyDelta {
                 live_capacity_delta: 100,
-                live_occupied_capacity_delta: 60,
+                live_used_capacity_delta: 60,
             },
         )
         .unwrap();
@@ -4437,16 +4437,16 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/assets/objects/dotbit/charts/occupation")
+        .uri("/api/v1/assets/objects/dotbit/charts/capacity-history")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["title"], ".bit Capacity Occupation");
-    assert_eq!(json["data"][0]["values"]["occupied"], "60");
-    assert_eq!(json["data"][0]["values"]["unoccupied"], "40");
+    assert_eq!(json["title"], ".bit Capacity History");
+    assert_eq!(json["data"][0]["values"]["used"], "60");
+    assert_eq!(json["data"][0]["values"]["unused"], "40");
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/dotbit")
@@ -4459,10 +4459,10 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     assert_eq!(json["standard"], "dotbit");
     assert_eq!(json["name"], ".bit");
     assert_eq!(json["liveCapacity"], "100");
-    assert_eq!(json["liveOccupiedCapacity"], "60");
+    assert_eq!(json["liveUsedCapacity"], "60");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/objects/DOTBIT/charts/occupation")
+        .uri("/api/v1/assets/objects/DOTBIT/charts/capacity-history")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -4553,7 +4553,7 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
             20240115,
             &ObjectDailyDelta {
                 live_capacity_delta: 120,
-                live_occupied_capacity_delta: 70,
+                live_used_capacity_delta: 70,
             },
         )
         .unwrap();
@@ -4585,16 +4585,16 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     assert_eq!(json["data"][0]["standard"], "did_ckb");
 
     let request = Request::builder()
-        .uri("/api/v1/assets/objects/did%3Ackb/charts/occupation")
+        .uri("/api/v1/assets/objects/did%3Ackb/charts/capacity-history")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["title"], "did:ckb Capacity Occupation");
-    assert_eq!(json["data"][0]["values"]["occupied"], "70");
-    assert_eq!(json["data"][0]["values"]["unoccupied"], "50");
+    assert_eq!(json["title"], "did:ckb Capacity History");
+    assert_eq!(json["data"][0]["values"]["used"], "70");
+    assert_eq!(json["data"][0]["values"]["unused"], "50");
 }
 
 #[tokio::test]
@@ -6253,7 +6253,7 @@ async fn test_address_activities_reads_from_derived_store() {
         tx_index: 0,
         timestamp: 1_700_000_000_000,
         ckb_delta: 100,
-        occupied_delta: 50,
+        used_delta: 50,
         is_cellbase: false,
         has_type_script: false,
         asset_changes: vec![],

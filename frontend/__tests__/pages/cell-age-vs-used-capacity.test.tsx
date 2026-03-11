@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import CellAgeVsOccupiedCapacityPage from '@/app/charts/cell-age-vs-occupied-capacity/page';
+import CellAgeVsUsedCapacityPage from '@/app/charts/cell-age-vs-used-capacity/page';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
-    getCellAgeVsOccupiedCapacityChart: vi.fn(),
+    getCellAgeVsUsedCapacityChart: vi.fn(),
   },
 }));
 
@@ -18,11 +18,11 @@ vi.mock('@/components/ui/stacked-area-chart', () => ({
   StackedAreaChart: () => <div data-testid="stacked-area-chart" />,
 }));
 
-describe('CellAgeVsOccupiedCapacityPage', () => {
+describe('CellAgeVsUsedCapacityPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.getCellAgeVsOccupiedCapacityChart).mockResolvedValue({
-      title: 'Cell Age vs Occupied Capacity',
+    vi.mocked(api.getCellAgeVsUsedCapacityChart).mockResolvedValue({
+      title: 'Cell Age vs Used Capacity',
       data: [
         {
           date: '2026-02-19',
@@ -43,10 +43,10 @@ describe('CellAgeVsOccupiedCapacityPage', () => {
   });
 
   it('renders title and stacked chart', async () => {
-    render(<CellAgeVsOccupiedCapacityPage />);
+    render(<CellAgeVsUsedCapacityPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Cell Age vs Occupied Capacity')).toBeInTheDocument();
+    expect(screen.getByText('Cell Age vs Used Capacity')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByTestId('stacked-area-chart')).toBeInTheDocument();

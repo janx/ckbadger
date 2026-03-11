@@ -612,8 +612,8 @@ impl BatchWriter {
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        for ((collection_id, date), (capacity_delta, occupied_delta)) in changes {
-            if *capacity_delta == 0 && *occupied_delta == 0 {
+        for ((collection_id, date), (capacity_delta, used_delta)) in changes {
+            if *capacity_delta == 0 && *used_delta == 0 {
                 continue;
             }
             let mut current = self
@@ -632,19 +632,19 @@ impl BatchWriter {
                         capacity_delta
                     )
                 })?;
-            current.live_occupied_capacity_delta = current
-                .live_occupied_capacity_delta
-                .checked_add(*occupied_delta)
+            current.live_used_capacity_delta = current
+                .live_used_capacity_delta
+                .checked_add(*used_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "object daily occupied delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
+                        "object daily used delta overflow: collection_id=0x{}, date={}, current={}, delta={}",
                         hex::encode(collection_id),
                         date,
-                        current.live_occupied_capacity_delta,
-                        occupied_delta
+                        current.live_used_capacity_delta,
+                        used_delta
                     )
                 })?;
-            if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
+            if current.live_capacity_delta == 0 && current.live_used_capacity_delta == 0 {
                 let key = keys::encode_nft_daily_key(collection_id, *date);
                 batch.delete_stats(&key);
             } else {
@@ -733,7 +733,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(daily.live_capacity_delta, 100);
-        assert_eq!(daily.live_occupied_capacity_delta, 61);
+        assert_eq!(daily.live_used_capacity_delta, 61);
 
         let mut batch = StoreBatch::new(writer.store());
         let mut daily_changes = HashMap::new();

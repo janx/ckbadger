@@ -50,7 +50,7 @@ const mockTokenAssets = {
       clusterId: null,
       clusterName: null,
       liveCapacity: '2000000000',
-      liveOccupiedCapacity: '1000000000',
+      liveUsedCapacity: '1000000000',
       hMultiplier: 2.0,
     },
   ],
@@ -82,7 +82,7 @@ const mockClusterAssets = {
       clusterId: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
       clusterName: 'Test Collection',
       liveCapacity: '9000000000',
-      liveOccupiedCapacity: '5000000000',
+      liveUsedCapacity: '5000000000',
       storageTier: 'fully_onchain' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 50,
@@ -117,7 +117,7 @@ const mockDotbitIdentityAssets = {
       clusterId: null,
       clusterName: null,
       liveCapacity: '7000000000',
-      liveOccupiedCapacity: '3000000000',
+      liveUsedCapacity: '3000000000',
       hMultiplier: 2.33,
     },
   ],
@@ -149,7 +149,7 @@ const mockDidCkbIdentityAssets = {
       clusterId: null,
       clusterName: null,
       liveCapacity: '8000000000',
-      liveOccupiedCapacity: '5000000000',
+      liveUsedCapacity: '5000000000',
       hMultiplier: 1.6,
     },
   ],
@@ -181,7 +181,7 @@ const mockMixedObjectAssets = {
       clusterId: '0x1111111111111111111111111111111111111111111111111111111111111111',
       clusterName: 'Spore With Icon',
       liveCapacity: '3000000000',
-      liveOccupiedCapacity: '1000000000',
+      liveUsedCapacity: '1000000000',
       storageTier: 'fully_onchain' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 10,
@@ -207,7 +207,7 @@ const mockMixedObjectAssets = {
       clusterId: null,
       clusterName: null,
       liveCapacity: '2000000000',
-      liveOccupiedCapacity: '900000000',
+      liveUsedCapacity: '900000000',
       storageTier: 'centralized_dependent' as const,
       fullyOnchainRatio: '0.0000',
       fullyOnchainCount: 0,
@@ -250,7 +250,7 @@ const sortableTokenAssets = {
       clusterId: null,
       clusterName: null,
       liveCapacity: '2000000000',
-      liveOccupiedCapacity: '1000000000',
+      liveUsedCapacity: '1000000000',
       hMultiplier: 2.0,
     },
     {
@@ -273,7 +273,7 @@ const sortableTokenAssets = {
       clusterId: null,
       clusterName: null,
       liveCapacity: '9000000000',
-      liveOccupiedCapacity: '5000000000',
+      liveUsedCapacity: '5000000000',
       hMultiplier: 1.8,
     },
   ],
@@ -660,15 +660,15 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Used (CKB)' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
-        expect.objectContaining({ sortKey: 'occupied', sortDirection: 'desc' })
+        expect.objectContaining({ sortKey: 'used', sortDirection: 'desc' })
       );
       const tokenLinks = screen
         .getAllByRole('link')
@@ -783,7 +783,7 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sort by Standard' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Sort by Transfers' })).not.toBeInTheDocument();
     });

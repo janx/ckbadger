@@ -26,8 +26,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/spore/clusters", get(list_clusters))
         .route("/spore/clusters/{cluster_id}", get(get_cluster))
         .route(
-            "/spore/clusters/{cluster_id}/charts/occupation",
-            get(get_cluster_occupation_chart),
+            "/spore/clusters/{cluster_id}/charts/capacity-history",
+            get(get_cluster_capacity_chart),
         )
         .route(
             "/spore/clusters/{cluster_id}/holders",
@@ -45,8 +45,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/spore/objects/{spore_id}", get(get_spore))
         .route("/spore/objects/{spore_id}/decode", get(decode_spore))
         .route(
-            "/spore/objects/{spore_id}/charts/occupation",
-            get(get_spore_occupation_chart),
+            "/spore/objects/{spore_id}/charts/capacity-history",
+            get(get_spore_capacity_chart),
         )
         .route("/spore/owner/{lock_hash}", get(get_spores_by_owner))
 }
@@ -200,7 +200,7 @@ pub struct ClusterResponse {
     pub activities_count: i64,
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
-    pub live_occupied_capacity: Option<String>,
+    pub live_used_capacity: Option<String>,
     pub storage_profile: ClusterStorageProfileResponse,
 }
 
@@ -236,7 +236,7 @@ pub struct SporeResponse {
     pub is_live: bool,
     pub created_at_block: i64,
     pub live_capacity: Option<String>,
-    pub live_occupied_capacity: Option<String>,
+    pub live_used_capacity: Option<String>,
     pub media_profile: Option<SporeMediaProfileResponse>,
 }
 
@@ -281,7 +281,7 @@ fn spore_to_response(
     spore_id: &[u8],
     entry: &ckbadger_store::ObjectEntry,
     live_capacity: Option<i128>,
-    live_occupied_capacity: Option<i128>,
+    live_used_capacity: Option<i128>,
 ) -> SporeResponse {
     let (content_type, content_size, media_profile) = match &entry.extra {
         ckbadger_store::ObjectExtra::Spore {
@@ -329,7 +329,7 @@ fn spore_to_response(
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         live_capacity: live_capacity.map(|v| v.to_string()),
-        live_occupied_capacity: live_occupied_capacity.map(|v| v.to_string()),
+        live_used_capacity: live_used_capacity.map(|v| v.to_string()),
         media_profile,
     }
 }
@@ -897,18 +897,18 @@ fn format_yyyymmdd_for_chart(date: u32) -> String {
     format!("{}-{}-{}", &s[0..4], &s[4..6], &s[6..8])
 }
 
-fn build_capacity_occupation_chart(
+fn build_capacity_history_chart(
     deltas: Vec<(u32, i128, i128)>,
     title: String,
 ) -> anyhow::Result<StackedAreaChartResponse> {
-    build_capacity_occupation_chart_with_initial(deltas, title, 0, 0, None, None)
+    build_capacity_history_chart_with_initial(deltas, title, 0, 0, None, None)
 }
 
-fn build_capacity_occupation_chart_with_initial(
+fn build_capacity_history_chart_with_initial(
     deltas: Vec<(u32, i128, i128)>,
     title: String,
     initial_capacity: i128,
-    initial_occupied: i128,
+    initial_used: i128,
     from_date: Option<u32>,
     to_date: Option<u32>,
 ) -> anyhow::Result<StackedAreaChartResponse> {
@@ -918,31 +918,31 @@ fn build_capacity_occupation_chart_with_initial(
             initial_capacity
         );
     }
-    if initial_occupied < 0 {
+    if initial_used < 0 {
         anyhow::bail!(
-            "invalid initial occupied capacity for spore chart: {}",
-            initial_occupied
+            "invalid initial used capacity for spore chart: {}",
+            initial_used
         );
     }
-    if initial_occupied > initial_capacity {
+    if initial_used > initial_capacity {
         anyhow::bail!(
-            "invalid initial occupied/capacity for spore chart: occupied={}, capacity={}",
-            initial_occupied,
+            "invalid initial used/capacity for spore chart: used={}, capacity={}",
+            initial_used,
             initial_capacity
         );
     }
     let mut daily_deltas: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
-    for (date, capacity_delta, occupied_delta) in deltas {
+    for (date, capacity_delta, used_delta) in deltas {
         let entry = daily_deltas.entry(date).or_insert((0, 0));
         entry.0 = entry.0.checked_add(capacity_delta).ok_or_else(|| {
             anyhow::anyhow!(
-                "capacity delta overflow while building spore occupation chart: date={}",
+                "capacity delta overflow while building spore capacity history chart: date={}",
                 date
             )
         })?;
-        entry.1 = entry.1.checked_add(occupied_delta).ok_or_else(|| {
+        entry.1 = entry.1.checked_add(used_delta).ok_or_else(|| {
             anyhow::anyhow!(
-                "occupied delta overflow while building spore occupation chart: date={}",
+                "used delta overflow while building spore capacity history chart: date={}",
                 date
             )
         })?;
@@ -969,22 +969,22 @@ fn build_capacity_occupation_chart_with_initial(
     };
 
     let mut running_capacity = initial_capacity;
-    let mut running_occupied = initial_occupied;
+    let mut running_used = initial_used;
     let mut data = Vec::with_capacity(dates.len());
 
     for date in dates {
-        let (capacity_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (running_capacity, running_occupied) = apply_live_capacity_delta(
+        let (capacity_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
+        (running_capacity, running_used) = apply_live_capacity_delta(
             running_capacity,
-            running_occupied,
+            running_used,
             capacity_delta,
-            occupied_delta,
-            &format!("building spore occupation chart at date {}", date),
+            used_delta,
+            &format!("building spore capacity history chart at date {}", date),
         )?;
-        let unoccupied = running_capacity - running_occupied;
+        let unused = running_capacity - running_used;
         let mut values = std::collections::HashMap::new();
-        values.insert("occupied".to_string(), running_occupied.to_string());
-        values.insert("unoccupied".to_string(), unoccupied.to_string());
+        values.insert("used".to_string(), running_used.to_string());
+        values.insert("unused".to_string(), unused.to_string());
 
         data.push(StackedAreaDataPoint {
             date: format_yyyymmdd_for_chart(date),
@@ -996,13 +996,13 @@ fn build_capacity_occupation_chart_with_initial(
         data,
         series: vec![
             StackedAreaSeries {
-                key: "occupied".to_string(),
-                label: "Occupied".to_string(),
+                key: "used".to_string(),
+                label: "Used".to_string(),
                 color: "#f59e0b".to_string(),
             },
             StackedAreaSeries {
-                key: "unoccupied".to_string(),
-                label: "Unoccupied".to_string(),
+                key: "unused".to_string(),
+                label: "Unused".to_string(),
                 color: "#06b6d4".to_string(),
             },
         ],
@@ -1014,16 +1014,16 @@ fn latest_capacity_from_chart(
     chart: &StackedAreaChartResponse,
 ) -> (Option<String>, Option<String>) {
     if let Some(last) = chart.data.last() {
-        let occupied = last.values.get("occupied").cloned();
-        let unoccupied = last.values.get("unoccupied").cloned();
-        let capacity = match (&occupied, &unoccupied) {
+        let used = last.values.get("used").cloned();
+        let unused = last.values.get("unused").cloned();
+        let capacity = match (&used, &unused) {
             (Some(o), Some(u)) => {
                 let total = o.parse::<i128>().unwrap_or(0) + u.parse::<i128>().unwrap_or(0);
                 Some(total.to_string())
             }
             _ => None,
         };
-        return (capacity, occupied);
+        return (capacity, used);
     }
     (Some("0".to_string()), Some("0".to_string()))
 }
@@ -1218,7 +1218,7 @@ fn build_cluster_responses_from_cached_entries(
             activities_count: 0,
             created_at_block,
             live_capacity: None,
-            live_occupied_capacity: None,
+            live_used_capacity: None,
             storage_profile: cluster_storage_profile_from_aggregate(
                 cluster_aggregate,
                 entry.transfers_count,
@@ -1514,24 +1514,24 @@ async fn get_cluster(
         .store
         .list_cluster_daily_deltas(&id)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let chart = build_capacity_occupation_chart(
+    let chart = build_capacity_history_chart(
         daily
             .into_iter()
             .map(|(date, delta)| {
                 (
                     date,
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 )
             })
             .collect(),
         format!(
-            "{} Capacity Occupation",
+            "{} Capacity History",
             name.clone().unwrap_or_else(|| "Spore Cluster".to_string())
         ),
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
+    let (live_capacity, live_used_capacity) = latest_capacity_from_chart(&chart);
 
     ok(ClusterResponse {
         cluster_id: format!("0x{}", hex::encode(&id)),
@@ -1547,7 +1547,7 @@ async fn get_cluster(
         activities_count,
         created_at_block,
         live_capacity,
-        live_occupied_capacity,
+        live_used_capacity,
         storage_profile: cluster_storage_profile_from_aggregate(
             cluster_aggregate.as_ref(),
             spores_count,
@@ -1606,23 +1606,23 @@ async fn get_spore(
                 .store
                 .list_spore_daily_deltas(&id)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
-            let chart = build_capacity_occupation_chart(
+            let chart = build_capacity_history_chart(
                 daily
                     .into_iter()
                     .map(|(date, delta)| {
                         (
                             date,
                             delta.live_capacity_delta,
-                            delta.live_occupied_capacity_delta,
+                            delta.live_used_capacity_delta,
                         )
                     })
                     .collect(),
-                "Spore Capacity Occupation".to_string(),
+                "Spore Capacity History".to_string(),
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
-            let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
+            let (live_capacity, live_used_capacity) = latest_capacity_from_chart(&chart);
             let cap = live_capacity.and_then(|v| v.parse::<i128>().ok());
-            let occ = live_occupied_capacity.and_then(|v| v.parse::<i128>().ok());
+            let occ = live_used_capacity.and_then(|v| v.parse::<i128>().ok());
             ok(spore_to_response(&id, &entry, cap, occ))
         }
         None => Err(ApiError::not_found("Spore not found")),
@@ -1695,7 +1695,7 @@ async fn decode_spore(
     })
 }
 
-async fn get_cluster_occupation_chart(
+async fn get_cluster_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
@@ -1729,49 +1729,49 @@ async fn get_cluster_occupation_chart(
         .store
         .list_cluster_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
+    let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
-        let mut base_occupied: i128 = 0;
+        let mut base_used: i128 = 0;
         let baseline = state
             .store
             .list_cluster_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (base_capacity, base_occupied) = apply_live_capacity_delta(
+            (base_capacity, base_used) = apply_live_capacity_delta(
                 base_capacity,
-                base_occupied,
+                base_used,
                 delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
-                "building cluster baseline occupation chart",
+                delta.live_used_capacity_delta,
+                "building cluster baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         }
-        (base_capacity, base_occupied)
+        (base_capacity, base_used)
     } else {
         (0, 0)
     };
 
-    ok(build_capacity_occupation_chart_with_initial(
+    ok(build_capacity_history_chart_with_initial(
         daily
             .into_iter()
             .map(|(date, delta)| {
                 (
                     date,
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 )
             })
             .collect(),
-        format!("{name} Capacity Occupation"),
+        format!("{name} Capacity History"),
         initial_capacity,
-        initial_occupied,
+        initial_used,
         from_date,
         to_date,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?)
 }
 
-async fn get_spore_occupation_chart(
+async fn get_spore_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(spore_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
@@ -1794,42 +1794,42 @@ async fn get_spore_occupation_chart(
         .store
         .list_spore_daily_deltas_in_range(&id, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
+    let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
-        let mut base_occupied: i128 = 0;
+        let mut base_used: i128 = 0;
         let baseline = state
             .store
             .list_spore_daily_deltas_in_range(&id, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (base_capacity, base_occupied) = apply_live_capacity_delta(
+            (base_capacity, base_used) = apply_live_capacity_delta(
                 base_capacity,
-                base_occupied,
+                base_used,
                 delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
-                "building spore baseline occupation chart",
+                delta.live_used_capacity_delta,
+                "building spore baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         }
-        (base_capacity, base_occupied)
+        (base_capacity, base_used)
     } else {
         (0, 0)
     };
 
-    ok(build_capacity_occupation_chart_with_initial(
+    ok(build_capacity_history_chart_with_initial(
         daily
             .into_iter()
             .map(|(date, delta)| {
                 (
                     date,
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 )
             })
             .collect(),
-        "Spore Capacity Occupation".to_string(),
+        "Spore Capacity History".to_string(),
         initial_capacity,
-        initial_occupied,
+        initial_used,
         from_date,
         to_date,
     )
@@ -1988,7 +1988,7 @@ mod tests {
                 cluster_id: None,
                 cluster_name: None,
                 live_capacity: None,
-                live_occupied_capacity: None,
+                live_used_capacity: None,
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -2015,7 +2015,7 @@ mod tests {
                 cluster_id: None,
                 cluster_name: None,
                 live_capacity: None,
-                live_occupied_capacity: None,
+                live_used_capacity: None,
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,

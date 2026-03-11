@@ -45,7 +45,7 @@ const mockScriptsResponse = {
       codeCellTxHash: null,
       codeCellOutputIndex: null,
       liveCapacitySum: '2000000000',
-      liveOccupiedCapacitySum: '1000000000',
+      liveUsedCapacitySum: '1000000000',
     } satisfies KnownScript,
   ],
   total: 1,

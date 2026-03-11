@@ -14,7 +14,7 @@ vi.mock('@/lib/api', () => ({
     getCellCountChart: vi.fn(),
     getKnowledgeSizeChart: vi.fn(),
     getCommonKnowledgeCompositionChart: vi.fn(),
-    getCellAgeVsOccupiedCapacityChart: vi.fn(),
+    getCellAgeVsUsedCapacityChart: vi.fn(),
     getCapacityTurnoverRatioChart: vi.fn(),
     getCellSizeDistributionChart: vi.fn(),
     getAddressCohortRetentionChart: vi.fn(),
@@ -132,9 +132,9 @@ const mockCellCountResponse = {
 };
 
 const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
-  title: 'Scripts Occupied & Total CKBytes',
-  occupiedShare: {
-    title: 'Top Scripts Occupied Share',
+  title: 'Scripts Used & Total CKBytes',
+  usedShare: {
+    title: 'Top Scripts Used Share',
     data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
     series: [
       { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
@@ -152,9 +152,9 @@ const mockMostUtilizedScriptsResponse: MostUtilizedScriptsChartResponse = {
 };
 
 const mockMostUtilizedAssetsResponse: MostUtilizedAssetsChartResponse = {
-  title: 'Assets Occupied & Total CKBytes',
-  occupiedShare: {
-    title: 'Top Assets Occupied Share',
+  title: 'Assets Used & Total CKBytes',
+  usedShare: {
+    title: 'Top Assets Used Share',
     data: [{ date: '2024-01-01', values: { top0: '120', others: '40' } }],
     series: [
       { key: 'top0', label: 'CKBTEST (token)', color: '#00c389' },
@@ -213,7 +213,7 @@ describe('ChartsPage', () => {
     vi.mocked(api.getCellCountChart).mockResolvedValue(mockCellCountResponse);
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue(mockStackedAreaResponse);
-    vi.mocked(api.getCellAgeVsOccupiedCapacityChart).mockResolvedValue(mockStackedAreaResponse);
+    vi.mocked(api.getCellAgeVsUsedCapacityChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getCapacityTurnoverRatioChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);
@@ -267,8 +267,8 @@ describe('ChartsPage', () => {
     expect(screen.getByText('Activities')).toBeInTheDocument();
     expect(screen.getByText('Common Knowledge Bytes')).toBeInTheDocument();
     expect(screen.getByText('Economics')).toBeInTheDocument();
-    expect(screen.getByText('Scripts Occupied & Total CKBytes')).toBeInTheDocument();
-    expect(screen.getByText('Assets Occupied & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByText('Scripts Used & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByText('Assets Used & Total CKBytes')).toBeInTheDocument();
 
     expect(screen.queryByText('Hardfork Markers on Epoch Time Length')).not.toBeInTheDocument();
   });

@@ -35,7 +35,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
       {
         label: yAxisLabel ?? 'Total Deposit',
         description:
-          'For each day: sum occupied capacity of all live DAO deposit cells as of end-of-day state.',
+          'For each day: sum used capacity of all live DAO deposit cells as of end-of-day state.',
       },
     ],
   }),
@@ -85,16 +85,16 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-knowledge-size': ({ yAxisLabel, y2AxisLabel }) => ({
     overview:
-      'Shows protocol common knowledge size and its utilization trend, plus day-over-day net occupied capacity flow.',
+      'Shows protocol common knowledge size and its utilization trend, plus day-over-day net used capacity flow.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Common Knowledge Size',
         description:
-          'For each day: total occupied capacity from indexed chain snapshots (common knowledge size).',
+          'For each day: total used capacity from indexed chain snapshots (common knowledge size).',
       },
       {
         label: y2AxisLabel ?? 'Utilization (%)',
-        description: 'For each day: (occupied capacity / total capacity base) × 100%.',
+        description: 'For each day: (used capacity / total capacity base) × 100%.',
       },
       {
         label: 'Net Flow (CKB/day)',
@@ -109,15 +109,15 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     legendItems: bySeriesLabels(
       seriesLabels,
       (label) =>
-        `For each day: sum occupied capacity of live cells classified into "${label}" category.`
+        `For each day: sum used capacity of live cells classified into "${label}" category.`
     ),
   }),
-  'chart-cell-age-vs-occupied-capacity': ({ seriesLabels }) => ({
-    overview: 'Shows how occupied capacity is distributed across different cell age buckets.',
+  'chart-cell-age-vs-used-capacity': ({ seriesLabels }) => ({
+    overview: 'Shows how used capacity is distributed across different cell age buckets.',
     legendItems: bySeriesLabels(
       seriesLabels,
       (label) =>
-        `For each day: sum occupied capacity of live cells whose age falls in "${label}" bucket.`
+        `For each day: sum used capacity of live cells whose age falls in "${label}" bucket.`
     ),
   }),
   'chart-capacity-turnover-ratio': ({ yAxisLabel }) => ({
@@ -125,8 +125,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     legendItems: [
       {
         label: yAxisLabel ?? 'Capacity Turnover Ratio',
-        description:
-          'For each day: daily consumed capacity / daily average live occupied capacity.',
+        description: 'For each day: daily consumed capacity / daily average live used capacity.',
       },
     ],
   }),
@@ -142,23 +141,22 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-address-cohort-retention': ({ yAxisLabel }) => ({
     overview:
-      'Groups addresses by first-seen month, then shows how much of each cohort’s balance is currently occupied (locked) versus total balance.',
+      'Groups addresses by first-seen month, then shows how much of each cohort’s balance is currently used (locked) versus total balance.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Retention Rate',
         description:
-          'For each cohort month: (sum of occupied_capacity for addresses first seen in that month / sum of balance for the same addresses) × 100%.',
+          'For each cohort month: (sum of used_capacity for addresses first seen in that month / sum of balance for the same addresses) × 100%.',
       },
     ],
   }),
   'chart-most-utilized-scripts': () => ({
-    overview:
-      'Ranks scripts by utilization in live state: occupied capacity and total cells capacity.',
+    overview: 'Ranks scripts by utilization in live state: used capacity and total cells capacity.',
     legendItems: [
       {
-        label: 'Occupied CKB',
+        label: 'Used CKB',
         description:
-          'For each script: sum live occupied capacity across deployments; ranked descending (top 20).',
+          'For each script: sum live used capacity across deployments; ranked descending (top 20).',
       },
       {
         label: 'Total Cells Capacity',
@@ -171,9 +169,9 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview: 'Ranks token and Object collection assets by utilization in live state.',
     legendItems: [
       {
-        label: 'Occupied CKB',
+        label: 'Used CKB',
         description:
-          'For each asset: cumulative live occupied capacity derived from exact daily deltas; ranked descending (top 20).',
+          'For each asset: cumulative live used capacity derived from exact daily deltas; ranked descending (top 20).',
       },
       {
         label: 'Total Cells Capacity',

@@ -22,9 +22,9 @@ describe('MostUtilizedScriptsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
-      title: 'Scripts Occupied & Total CKBytes',
-      occupiedShare: {
-        title: 'Top Scripts Occupied Share',
+      title: 'Scripts Used & Total CKBytes',
+      usedShare: {
+        title: 'Top Scripts Used Share',
         data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
         series: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
@@ -46,10 +46,10 @@ describe('MostUtilizedScriptsPage', () => {
     render(<MostUtilizedScriptsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Scripts Occupied & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByText('Scripts Used & Total CKBytes')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Occupied Share (%) - Top 20 + Others')).toBeInTheDocument();
+      expect(screen.getByText('Used Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(
         screen.getByText('Total Cells Capacity Share (%) - Top 20 + Others')
       ).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe('MostUtilizedScriptsPage', () => {
       expect(screen.getByText('Description')).toBeInTheDocument();
       expect(
         screen.getByText(
-          'Ranks scripts by utilization in live state: occupied capacity and total cells capacity.'
+          'Ranks scripts by utilization in live state: used capacity and total cells capacity.'
         )
       ).toBeInTheDocument();
     });

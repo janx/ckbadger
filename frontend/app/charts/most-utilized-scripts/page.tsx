@@ -52,9 +52,7 @@ export default function MostUtilizedScriptsPage() {
         </div>
 
         <TerminalPanel>
-          <TerminalPanelHeader indicator="active">
-            Scripts Occupied & Total CKBytes
-          </TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">Scripts Used & Total CKBytes</TerminalPanelHeader>
           <TerminalPanelContent className="space-y-8 p-6">
             {isLoading && (
               <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
@@ -68,16 +66,16 @@ export default function MostUtilizedScriptsPage() {
               <>
                 <section>
                   <h3 className="text-text mb-3 font-mono text-sm uppercase tracking-wider">
-                    Occupied Share (%) - Top 20 + Others
+                    Used Share (%) - Top 20 + Others
                   </h3>
                   <StackedAreaChart
-                    data={data.occupiedShare.data}
-                    series={data.occupiedShare.series}
+                    data={data.usedShare.data}
+                    series={data.usedShare.series}
                     height={360}
                     isPercentage
                     valueUnit="shannon"
                   />
-                  <SeriesLegend series={data.occupiedShare.series} />
+                  <SeriesLegend series={data.usedShare.series} />
                 </section>
 
                 <section className="border-base-border border-t pt-6">
@@ -102,7 +100,7 @@ export default function MostUtilizedScriptsPage() {
                   description={
                     getChartDescription('chart-most-utilized-scripts') ?? {
                       overview:
-                        'Ranks scripts by occupied capacity and total live capacity share over time.',
+                        'Ranks scripts by used capacity and total live capacity share over time.',
                       legendItems: [],
                     }
                   }

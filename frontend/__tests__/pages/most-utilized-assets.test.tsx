@@ -22,9 +22,9 @@ describe('MostUtilizedAssetsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue({
-      title: 'Assets Occupied & Total CKBytes',
-      occupiedShare: {
-        title: 'Top Assets Occupied Share',
+      title: 'Assets Used & Total CKBytes',
+      usedShare: {
+        title: 'Top Assets Used Share',
         data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
         series: [
           { key: 'top0', label: 'Token A (token)', color: '#00c389' },
@@ -46,10 +46,10 @@ describe('MostUtilizedAssetsPage', () => {
     render(<MostUtilizedAssetsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Assets Occupied & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByText('Assets Used & Total CKBytes')).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText('Occupied CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
+      expect(screen.getByText('Used CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(screen.getByText('Total CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
       expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');

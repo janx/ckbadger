@@ -27,14 +27,14 @@ describe('CommonKnowledgeCompositionPage', () => {
         {
           date: '2026-02-23',
           values: {
-            occupied: '100',
-            unoccupied: '50',
+            used: '100',
+            unused: '50',
           },
         },
       ],
       series: [
-        { key: 'occupied', label: 'Occupied', color: '#00c389' },
-        { key: 'unoccupied', label: 'Unoccupied', color: '#64748b' },
+        { key: 'used', label: 'Used', color: '#00c389' },
+        { key: 'unused', label: 'Unused', color: '#64748b' },
       ],
     });
   });
@@ -47,8 +47,8 @@ describe('CommonKnowledgeCompositionPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('stacked-area-chart')).toBeInTheDocument();
-      expect(screen.getByText('Occupied')).toBeInTheDocument();
-      expect(screen.getByText('Unoccupied')).toBeInTheDocument();
+      expect(screen.getByText('Used')).toBeInTheDocument();
+      expect(screen.getByText('Unused')).toBeInTheDocument();
       expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');
     });
   });

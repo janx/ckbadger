@@ -1,18 +1,18 @@
 'use client';
 
-import { OCCUPATION_RANGE_OPTIONS, OccupationRangeKey } from '@/lib/occupation-range';
+import { CAPACITY_RANGE_OPTIONS, CapacityRangeKey } from '@/lib/capacity-range';
 
-interface OccupationRangeSelectorProps {
-  value: OccupationRangeKey;
-  onChange: (range: OccupationRangeKey) => void;
+interface CapacityRangeSelectorProps {
+  value: CapacityRangeKey;
+  onChange: (range: CapacityRangeKey) => void;
 }
 
-export function OccupationRangeSelector({ value, onChange }: OccupationRangeSelectorProps) {
+export function CapacityRangeSelector({ value, onChange }: CapacityRangeSelectorProps) {
   return (
     <div className="mb-3 flex items-center gap-2">
       <span className="text-text-dim font-mono text-xs uppercase tracking-wider">Range</span>
       <div className="border-base-border bg-base-surface/50 flex items-center gap-1 rounded border p-1">
-        {OCCUPATION_RANGE_OPTIONS.map((option) => {
+        {CAPACITY_RANGE_OPTIONS.map((option) => {
           const active = value === option.key;
           return (
             <button

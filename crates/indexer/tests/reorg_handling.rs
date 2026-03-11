@@ -123,7 +123,7 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
 
     let addr_bal = AddressBalance {
         balance: block_count as i128 * cap_per_cell,
-        occupied_capacity: 0, // make_cell sets occupied_capacity = 0
+        used_capacity: 0, // make_cell sets occupied_capacity = 0
         live_cells_count: block_count as i32,
         total_cells_count: block_count,
         txs_count: block_count,
@@ -344,7 +344,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             tx_index: 0,
             timestamp: 1_700_000_000 + block,
             ckb_delta: block as i128 * 100_000_000,
-            occupied_delta: 0,
+            used_delta: 0,
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
@@ -457,7 +457,7 @@ fn test_rollback_updates_derived_cfs_inline() {
     // addr_balance: 4 regular cells + 2 UDT cells = 6 live cells
     let addr_bal = AddressBalance {
         balance: 4 * reg_cap + 2 * udt_cap,
-        occupied_capacity: 2 * udt_cap, // only UDT cells have occupied_capacity set
+        used_capacity: 2 * udt_cap, // only UDT cells have occupied_capacity set
         live_cells_count: 6,
         total_cells_count: 6,
         txs_count: 4,
@@ -474,7 +474,7 @@ fn test_rollback_updates_derived_cfs_inline() {
         hash_type: 1,
         lock_live_cells_count: 6,
         lock_live_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-        lock_live_occupied_capacity_sum: 2 * udt_cap,
+        lock_live_used_capacity_sum: 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
@@ -485,7 +485,7 @@ fn test_rollback_updates_derived_cfs_inline() {
         hash_type: 1,
         type_live_cells_count: 2,
         type_live_capacity_sum: 2 * udt_cap,
-        type_live_occupied_capacity_sum: 2 * udt_cap,
+        type_live_used_capacity_sum: 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&type_code_hash, &type_si);
@@ -537,8 +537,8 @@ fn test_rollback_updates_derived_cfs_inline() {
         "addr_balance balance: only 2 regular cells remain"
     );
     assert_eq!(
-        ab.occupied_capacity, 0,
-        "addr_balance occupied_capacity: UDT cells removed"
+        ab.used_capacity, 0,
+        "addr_balance used_capacity: UDT cells removed"
     );
     // txs_count is not tracked by inline rollback deltas; the rebuild path
     // recomputes it from addr_txs which is not populated in this test.

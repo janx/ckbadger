@@ -121,7 +121,7 @@ impl BatchWriter {
 
         for (
             lock_hash,
-            (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, occupied_delta),
+            (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, used_delta),
         ) in changes
         {
             let prev = existing.get(lock_hash).and_then(|o| o.as_ref());
@@ -138,13 +138,13 @@ impl BatchWriter {
                             balance_delta
                         );
                     }
-                    let next_occupied = bal.occupied_capacity + *occupied_delta;
-                    if next_occupied < 0 {
+                    let next_used = bal.used_capacity + *used_delta;
+                    if next_used < 0 {
                         bail!(
-                            "address occupied capacity underflow: lock_hash=0x{}, occupied_capacity={}, delta={}",
+                            "address used capacity underflow: lock_hash=0x{}, used_capacity={}, delta={}",
                             hex::encode(lock_hash),
-                            bal.occupied_capacity,
-                            occupied_delta
+                            bal.used_capacity,
+                            used_delta
                         );
                     }
                     let next_live_cells = bal.live_cells_count + *live_delta;
@@ -175,7 +175,7 @@ impl BatchWriter {
                         );
                     }
                     bal.balance = next_balance;
-                    bal.occupied_capacity = next_occupied;
+                    bal.used_capacity = next_used;
                     bal.live_cells_count = next_live_cells;
                     bal.total_cells_count = next_total_cells;
                     bal.txs_count = next_txs_count;
@@ -185,16 +185,16 @@ impl BatchWriter {
                 }
                 None => {
                     if *balance_delta < 0
-                        || *occupied_delta < 0
+                        || *used_delta < 0
                         || *live_delta < 0
                         || *total_delta < 0
                         || *tx_delta < 0
                     {
                         bail!(
-                            "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, occupied_delta={}, live_delta={}, total_delta={}, tx_delta={}",
+                            "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, used_delta={}, live_delta={}, total_delta={}, tx_delta={}",
                             hex::encode(lock_hash),
                             balance_delta,
-                            occupied_delta,
+                            used_delta,
                             live_delta,
                             total_delta,
                             tx_delta
@@ -202,7 +202,7 @@ impl BatchWriter {
                     }
                     AddressBalance {
                         balance: *balance_delta,
-                        occupied_capacity: *occupied_delta,
+                        used_capacity: *used_delta,
                         live_cells_count: *live_delta,
                         total_cells_count: *total_delta as i64,
                         txs_count: *tx_delta,
@@ -288,14 +288,7 @@ impl BatchWriter {
 
         for (
             (code_hash, is_type),
-            (
-                cells_delta,
-                live_delta,
-                cap_delta,
-                live_cap_delta,
-                occupied_delta,
-                live_occupied_delta,
-            ),
+            (cells_delta, live_delta, cap_delta, live_cap_delta, used_delta, live_used_delta),
         ) in changes
         {
             let existing_info = existing.get(code_hash).and_then(|o| o.clone());
@@ -304,19 +297,19 @@ impl BatchWriter {
                     || *live_delta < 0
                     || *cap_delta < 0
                     || *live_cap_delta < 0
-                    || *occupied_delta < 0
-                    || *live_occupied_delta < 0)
+                    || *used_delta < 0
+                    || *live_used_delta < 0)
             {
                 bail!(
-                    "script delta underflow for unseen code_hash: code_hash=0x{}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, live_capacity_delta={}, occupied_delta={}, live_occupied_delta={}",
+                    "script delta underflow for unseen code_hash: code_hash=0x{}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, live_capacity_delta={}, used_delta={}, live_used_delta={}",
                     hex::encode(code_hash),
                     is_type,
                     cells_delta,
                     live_delta,
                     cap_delta,
                     live_cap_delta,
-                    occupied_delta,
-                    live_occupied_delta
+                    used_delta,
+                    live_used_delta
                 );
             }
 
@@ -356,34 +349,34 @@ impl BatchWriter {
                     info.type_live_capacity_sum,
                     *live_cap_delta,
                 )?;
-                let next_type_occupied_capacity_sum = checked_next_script_metric_i128(
+                let next_type_used_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "type",
-                    "occupied_capacity_sum",
-                    info.type_occupied_capacity_sum,
-                    *occupied_delta,
+                    "used_capacity_sum",
+                    info.type_used_capacity_sum,
+                    *used_delta,
                 )?;
-                let next_type_live_occupied_capacity_sum = checked_next_script_metric_i128(
+                let next_type_live_used_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "type",
-                    "live_occupied_capacity_sum",
-                    info.type_live_occupied_capacity_sum,
-                    *live_occupied_delta,
+                    "live_used_capacity_sum",
+                    info.type_live_used_capacity_sum,
+                    *live_used_delta,
                 )?;
 
-                if next_type_occupied_capacity_sum > next_type_capacity_sum {
+                if next_type_used_capacity_sum > next_type_capacity_sum {
                     bail!(
-                        "script type occupied capacity exceeds total: code_hash=0x{}, occupied_capacity_sum={}, capacity_sum={}",
+                        "script type used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
                         hex::encode(code_hash),
-                        next_type_occupied_capacity_sum,
+                        next_type_used_capacity_sum,
                         next_type_capacity_sum
                     );
                 }
-                if next_type_live_occupied_capacity_sum > next_type_live_capacity_sum {
+                if next_type_live_used_capacity_sum > next_type_live_capacity_sum {
                     bail!(
-                        "script type live occupied capacity exceeds total: code_hash=0x{}, live_occupied_capacity_sum={}, live_capacity_sum={}",
+                        "script type live used capacity exceeds total: code_hash=0x{}, live_used_capacity_sum={}, live_capacity_sum={}",
                         hex::encode(code_hash),
-                        next_type_live_occupied_capacity_sum,
+                        next_type_live_used_capacity_sum,
                         next_type_live_capacity_sum
                     );
                 }
@@ -392,8 +385,8 @@ impl BatchWriter {
                 info.type_live_cells_count = next_type_live_cells_count;
                 info.type_capacity_sum = next_type_capacity_sum;
                 info.type_live_capacity_sum = next_type_live_capacity_sum;
-                info.type_occupied_capacity_sum = next_type_occupied_capacity_sum;
-                info.type_live_occupied_capacity_sum = next_type_live_occupied_capacity_sum;
+                info.type_used_capacity_sum = next_type_used_capacity_sum;
+                info.type_live_used_capacity_sum = next_type_live_used_capacity_sum;
             } else {
                 let next_lock_cells_count = checked_next_script_metric_i64(
                     code_hash,
@@ -423,34 +416,34 @@ impl BatchWriter {
                     info.lock_live_capacity_sum,
                     *live_cap_delta,
                 )?;
-                let next_lock_occupied_capacity_sum = checked_next_script_metric_i128(
+                let next_lock_used_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "lock",
-                    "occupied_capacity_sum",
-                    info.lock_occupied_capacity_sum,
-                    *occupied_delta,
+                    "used_capacity_sum",
+                    info.lock_used_capacity_sum,
+                    *used_delta,
                 )?;
-                let next_lock_live_occupied_capacity_sum = checked_next_script_metric_i128(
+                let next_lock_live_used_capacity_sum = checked_next_script_metric_i128(
                     code_hash,
                     "lock",
-                    "live_occupied_capacity_sum",
-                    info.lock_live_occupied_capacity_sum,
-                    *live_occupied_delta,
+                    "live_used_capacity_sum",
+                    info.lock_live_used_capacity_sum,
+                    *live_used_delta,
                 )?;
 
-                if next_lock_occupied_capacity_sum > next_lock_capacity_sum {
+                if next_lock_used_capacity_sum > next_lock_capacity_sum {
                     bail!(
-                        "script lock occupied capacity exceeds total: code_hash=0x{}, occupied_capacity_sum={}, capacity_sum={}",
+                        "script lock used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
                         hex::encode(code_hash),
-                        next_lock_occupied_capacity_sum,
+                        next_lock_used_capacity_sum,
                         next_lock_capacity_sum
                     );
                 }
-                if next_lock_live_occupied_capacity_sum > next_lock_live_capacity_sum {
+                if next_lock_live_used_capacity_sum > next_lock_live_capacity_sum {
                     bail!(
-                        "script lock live occupied capacity exceeds total: code_hash=0x{}, live_occupied_capacity_sum={}, live_capacity_sum={}",
+                        "script lock live used capacity exceeds total: code_hash=0x{}, live_used_capacity_sum={}, live_capacity_sum={}",
                         hex::encode(code_hash),
-                        next_lock_live_occupied_capacity_sum,
+                        next_lock_live_used_capacity_sum,
                         next_lock_live_capacity_sum
                     );
                 }
@@ -459,8 +452,8 @@ impl BatchWriter {
                 info.lock_live_cells_count = next_lock_live_cells_count;
                 info.lock_capacity_sum = next_lock_capacity_sum;
                 info.lock_live_capacity_sum = next_lock_live_capacity_sum;
-                info.lock_occupied_capacity_sum = next_lock_occupied_capacity_sum;
-                info.lock_live_occupied_capacity_sum = next_lock_live_occupied_capacity_sum;
+                info.lock_used_capacity_sum = next_lock_used_capacity_sum;
+                info.lock_live_used_capacity_sum = next_lock_live_used_capacity_sum;
             }
         }
 
@@ -509,15 +502,14 @@ impl BatchWriter {
         }
 
         let mut keyed_changes: Vec<(Vec<u8>, i128, i128)> = Vec::with_capacity(changes.len());
-        for ((code_hash, is_type, date_yyyymmdd), (live_cap_delta, live_occupied_delta)) in changes
-        {
-            if *live_cap_delta == 0 && *live_occupied_delta == 0 {
+        for ((code_hash, is_type, date_yyyymmdd), (live_cap_delta, live_used_delta)) in changes {
+            if *live_cap_delta == 0 && *live_used_delta == 0 {
                 continue;
             }
             keyed_changes.push((
                 keys::encode_script_daily_key(code_hash, *is_type, *date_yyyymmdd).to_vec(),
                 *live_cap_delta,
-                *live_occupied_delta,
+                *live_used_delta,
             ));
         }
 
@@ -534,7 +526,7 @@ impl BatchWriter {
             .collect::<Result<Vec<_>>>()?;
         let existing_results = self.store.multi_get_cf(cf_keys);
 
-        for ((key, live_cap_delta, live_occupied_delta), existing_res) in
+        for ((key, live_cap_delta, live_used_delta), existing_res) in
             keyed_changes.into_iter().zip(existing_results.into_iter())
         {
             let mut existing: ScriptDailyDelta = match existing_res {
@@ -565,18 +557,18 @@ impl BatchWriter {
                         live_cap_delta
                     )
                 })?;
-            existing.live_occupied_capacity_delta = existing
-                .live_occupied_capacity_delta
-                .checked_add(live_occupied_delta)
+            existing.live_used_capacity_delta = existing
+                .live_used_capacity_delta
+                .checked_add(live_used_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "script daily occupied delta overflow: key=0x{}, current={}, delta={}",
+                        "script daily used delta overflow: key=0x{}, current={}, delta={}",
                         hex::encode(&key),
-                        existing.live_occupied_capacity_delta,
-                        live_occupied_delta
+                        existing.live_used_capacity_delta,
+                        live_used_delta
                     )
                 })?;
-            if existing.live_capacity_delta == 0 && existing.live_occupied_capacity_delta == 0 {
+            if existing.live_capacity_delta == 0 && existing.live_used_capacity_delta == 0 {
                 batch.delete_stats(&key);
             } else {
                 let value = bincode::serialize(&existing)?;
@@ -624,7 +616,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(delta.live_capacity_delta, 80);
-        assert_eq!(delta.live_occupied_capacity_delta, 50);
+        assert_eq!(delta.live_used_capacity_delta, 50);
 
         let mut third = HashMap::new();
         third.insert((code_hash.clone(), false, date), (-80i128, -50i128));
@@ -653,8 +645,8 @@ mod tests {
             lock_live_cells_count: 1,
             lock_capacity_sum: 100,
             lock_live_capacity_sum: 100,
-            lock_occupied_capacity_sum: 60,
-            lock_live_occupied_capacity_sum: 60,
+            lock_used_capacity_sum: 60,
+            lock_live_used_capacity_sum: 60,
             ..Default::default()
         };
 
@@ -674,7 +666,7 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_script_usage_deltas_rejects_live_occupied_over_capacity() {
+    fn test_apply_script_usage_deltas_rejects_live_used_over_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -686,8 +678,8 @@ mod tests {
             type_live_cells_count: 1,
             type_capacity_sum: 200,
             type_live_capacity_sum: 200,
-            type_occupied_capacity_sum: 100,
-            type_live_occupied_capacity_sum: 100,
+            type_used_capacity_sum: 100,
+            type_live_used_capacity_sum: 100,
             ..Default::default()
         };
 
@@ -703,7 +695,7 @@ mod tests {
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("script type live occupied capacity exceeds total"));
+            .contains("script type live used capacity exceeds total"));
     }
 
     #[test]
@@ -719,8 +711,8 @@ mod tests {
             lock_live_cells_count: 1,
             lock_capacity_sum: i64::MAX as i128,
             lock_live_capacity_sum: i64::MAX as i128,
-            lock_occupied_capacity_sum: i64::MAX as i128 - 100,
-            lock_live_occupied_capacity_sum: i64::MAX as i128 - 100,
+            lock_used_capacity_sum: i64::MAX as i128 - 100,
+            lock_live_used_capacity_sum: i64::MAX as i128 - 100,
             ..Default::default()
         };
 
@@ -739,11 +731,8 @@ mod tests {
         let updated = store.get_script_info(&code_hash).unwrap().unwrap();
         assert_eq!(updated.lock_capacity_sum, i64::MAX as i128 + 500);
         assert_eq!(updated.lock_live_capacity_sum, i64::MAX as i128 + 500);
-        assert_eq!(updated.lock_occupied_capacity_sum, i64::MAX as i128 + 300);
-        assert_eq!(
-            updated.lock_live_occupied_capacity_sum,
-            i64::MAX as i128 + 300
-        );
+        assert_eq!(updated.lock_used_capacity_sum, i64::MAX as i128 + 300);
+        assert_eq!(updated.lock_live_used_capacity_sum, i64::MAX as i128 + 300);
     }
 
     #[test]
@@ -759,8 +748,8 @@ mod tests {
             lock_live_cells_count: 1,
             lock_capacity_sum: 0,
             lock_live_capacity_sum: 0,
-            lock_occupied_capacity_sum: 0,
-            lock_live_occupied_capacity_sum: 0,
+            lock_used_capacity_sum: 0,
+            lock_live_used_capacity_sum: 0,
             ..Default::default()
         };
 

@@ -120,8 +120,8 @@ impl BatchWriter {
         cells_created: i32,
         cells_consumed: i32,
         capacity_transferred: i128,
-        occupied_capacity_created: i128,
-        occupied_capacity_consumed: i128,
+        used_capacity_created: i128,
+        used_capacity_consumed: i128,
         data_size_added: i64,
         data_size_consumed: i64,
         dao_field: Option<&[u8]>,
@@ -174,15 +174,15 @@ impl BatchWriter {
                     capacity_transferred,
                     "daily.capacity_transferred",
                 )?;
-                s.occupied_capacity_created = checked_add_i128(
-                    s.occupied_capacity_created,
-                    occupied_capacity_created,
-                    "daily.occupied_capacity_created",
+                s.used_capacity_created = checked_add_i128(
+                    s.used_capacity_created,
+                    used_capacity_created,
+                    "daily.used_capacity_created",
                 )?;
-                s.occupied_capacity_consumed = checked_add_i128(
-                    s.occupied_capacity_consumed,
-                    occupied_capacity_consumed,
-                    "daily.occupied_capacity_consumed",
+                s.used_capacity_consumed = checked_add_i128(
+                    s.used_capacity_consumed,
+                    used_capacity_consumed,
+                    "daily.used_capacity_consumed",
                 )?;
                 s.total_live_cells += (cells_created - cells_consumed) as i64;
                 s.total_dead_cells += cells_consumed as i64;
@@ -271,8 +271,8 @@ impl BatchWriter {
                     cells_created,
                     cells_consumed,
                     capacity_transferred,
-                    occupied_capacity_created,
-                    occupied_capacity_consumed,
+                    used_capacity_created,
+                    used_capacity_consumed,
                     total_live_cells: prev_live + (cells_created - cells_consumed) as i64,
                     total_dead_cells: prev_dead + cells_consumed as i64,
                     total_all_cells: prev_all + cells_created as i64,
@@ -1562,7 +1562,7 @@ mod activity_stats_tests {
             tx_index: 0,
             timestamp: 1700000000000,
             ckb_delta,
-            occupied_delta: 0,
+            used_delta: 0,
             is_cellbase,
             has_type_script,
             asset_changes: changes,

@@ -18,9 +18,9 @@ import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
+import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { api, TokenHolder, TokenActivity, TokenTransferDetail } from '@/lib/api';
-import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
+import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { formatTimeAgo, formatNumber } from '@/lib/utils';
 function actionBadgeVariant(action: string): 'green' | 'red' | 'neutral' {
   if (action === 'mint') return 'green';
@@ -32,10 +32,10 @@ export interface TokenDetailPageProps {
 }
 export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
   const [activeTab, setActiveTab] = useState('activities');
-  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const holdersPagination = useCursorPagination();
   const activitiesPagination = useCursorPagination();
-  const occupationRangeParams = getOccupationRangeParams(occupationRange);
+  const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
     data: token,
     isLoading,
@@ -57,12 +57,12 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
     enabled: !!token && activeTab === 'activities',
     placeholderData: keepPreviousData,
   });
-  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['token-occupation-chart', typeHash, occupationRange],
+  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
+    queryKey: ['token-capacity-chart', typeHash, capacityRange],
     queryFn: () =>
-      occupationRangeParams
-        ? api.getTokenOccupationChart(typeHash, occupationRangeParams)
-        : api.getTokenOccupationChart(typeHash),
+      capacityRangeParams
+        ? api.getTokenCapacityChart(typeHash, capacityRangeParams)
+        : api.getTokenCapacityChart(typeHash),
     enabled: !!token,
   });
   const formatTokenAmount = (amount: string, decimals: number) => {
@@ -257,15 +257,15 @@ export default function TokenDetailPage({ typeHash }: TokenDetailPageProps) {
             </TerminalPanel>
           )}
         </div>
-        <CapacityOccupationSection
+        <CapacityStatisticsSection
           className="mb-6"
-          description="Daily cumulative live CKB occupation for token cells."
-          occupationRange={occupationRange}
-          onOccupationRangeChange={setOccupationRange}
-          occupationChart={occupationChart}
-          isOccupationChartLoading={isOccupationChartLoading}
+          description="Daily cumulative live CKB capacity usage for token cells."
+          capacityRange={capacityRange}
+          onCapacityRangeChange={setCapacityRange}
+          capacityChart={capacityChart}
+          isCapacityChartLoading={isCapacityChartLoading}
           totalCapacity={token.totalCapacity}
-          occupiedCapacity={token.totalOccupiedCapacity}
+          usedCapacity={token.totalUsedCapacity}
           totalCapacityLabel="Cells Capacity"
         />
         <TerminalPanel>

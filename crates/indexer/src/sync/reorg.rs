@@ -81,7 +81,7 @@ impl Indexer {
         }
 
         // Phase 2: Update holder count from address balance changes
-        // Each entry: (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, occupied_delta)
+        // Each entry: (balance_delta, live_delta, total_delta, tx_delta, block_num, tx_hash, used_delta)
         // Batch-read all address balances in a single multi_get_cf call
         let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
         let balance_map = if lock_hash_refs.is_empty() {
@@ -98,7 +98,7 @@ impl Indexer {
                 _tx_delta,
                 _block_num,
                 _tx_hash,
-                _occupied_delta,
+                _used_delta,
             ),
         ) in address_balance_changes
         {

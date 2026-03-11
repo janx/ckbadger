@@ -615,7 +615,7 @@ mod tests {
                 20260219,
                 &ClusterDailyDelta {
                     live_capacity_delta: 1000,
-                    live_occupied_capacity_delta: 600,
+                    live_used_capacity_delta: 600,
                 },
             )
             .unwrap();
@@ -625,7 +625,7 @@ mod tests {
                 20260219,
                 &SporeDailyDelta {
                     live_capacity_delta: 100,
-                    live_occupied_capacity_delta: 61,
+                    live_used_capacity_delta: 61,
                 },
             )
             .unwrap();
@@ -635,14 +635,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(cluster.live_capacity_delta, 1000);
-        assert_eq!(cluster.live_occupied_capacity_delta, 600);
+        assert_eq!(cluster.live_used_capacity_delta, 600);
 
         let spore = store
             .get_spore_daily_delta(&spore_id, 20260219)
             .unwrap()
             .unwrap();
         assert_eq!(spore.live_capacity_delta, 100);
-        assert_eq!(spore.live_occupied_capacity_delta, 61);
+        assert_eq!(spore.live_used_capacity_delta, 61);
 
         let cluster_list = store.list_cluster_daily_deltas(&cluster_id).unwrap();
         assert_eq!(cluster_list.len(), 1);

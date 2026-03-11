@@ -13,10 +13,10 @@ import { getChartDescription } from '@/components/charts/chart-calculation-descr
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { api } from '@/lib/api';
 
-export default function CellAgeVsOccupiedCapacityPage() {
+export default function CellAgeVsUsedCapacityPage() {
   const { data, isLoading, error } = useQuery({
-    queryKey: ['chart-cell-age-vs-occupied-capacity'],
-    queryFn: api.getCellAgeVsOccupiedCapacityChart,
+    queryKey: ['chart-cell-age-vs-used-capacity'],
+    queryFn: api.getCellAgeVsUsedCapacityChart,
   });
 
   return (
@@ -33,9 +33,7 @@ export default function CellAgeVsOccupiedCapacityPage() {
         </div>
 
         <TerminalPanel>
-          <TerminalPanelHeader indicator="active">
-            Cell Age vs Occupied Capacity
-          </TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">Cell Age vs Used Capacity</TerminalPanelHeader>
           <TerminalPanelContent className="p-6">
             {isLoading && (
               <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
@@ -62,10 +60,10 @@ export default function CellAgeVsOccupiedCapacityPage() {
                 </div>
                 <ChartCalculationNote
                   description={
-                    getChartDescription('chart-cell-age-vs-occupied-capacity', {
+                    getChartDescription('chart-cell-age-vs-used-capacity', {
                       seriesLabels: data.series.map((s) => s.label),
                     }) ?? {
-                      overview: 'Shows occupied capacity split by cell age buckets.',
+                      overview: 'Shows used capacity split by cell age buckets.',
                       legendItems: [],
                     }
                   }

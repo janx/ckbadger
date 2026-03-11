@@ -63,8 +63,8 @@ const EpochTimeLengthPage = lazyPage(() => import('@/app/charts/epoch-time-lengt
 const CapacityTurnoverRatioPage = lazyPage(
   () => import('@/app/charts/capacity-turnover-ratio/page')
 );
-const CellAgeVsOccupiedCapacityPage = lazyPage(
-  () => import('@/app/charts/cell-age-vs-occupied-capacity/page')
+const CellAgeVsUsedCapacityPage = lazyPage(
+  () => import('@/app/charts/cell-age-vs-used-capacity/page')
 );
 const CommonKnowledgeCompositionPage = lazyPage(
   () => import('@/app/charts/common-knowledge-composition/page')
@@ -243,8 +243,8 @@ export function createAppRouter(): RouteObject[] {
           element: <CapacityTurnoverRatioPage />,
         },
         {
-          path: 'charts/cell-age-vs-occupied-capacity',
-          element: <CellAgeVsOccupiedCapacityPage />,
+          path: 'charts/cell-age-vs-used-capacity',
+          element: <CellAgeVsUsedCapacityPage />,
         },
         {
           path: 'charts/common-knowledge-composition',

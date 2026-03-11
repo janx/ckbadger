@@ -2032,7 +2032,7 @@ async fn get_address(
     let (balance, occupied_capacity, live_cells_count, transactions_count) = match &addr_balance {
         Some(ab) => (
             ab.balance.to_string(),
-            ab.occupied_capacity.to_string(),
+            ab.used_capacity.to_string(),
             ab.live_cells_count as i64,
             ab.txs_count,
         ),

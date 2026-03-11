@@ -269,7 +269,7 @@ fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager
                         "txIndex": item.entry.tx_index,
                         "timestamp": item.entry.timestamp.to_string(),
                         "ckbDelta": item.entry.ckb_delta.to_string(),
-                        "occupiedDelta": item.entry.occupied_delta.to_string(),
+                        "usedDelta": item.entry.used_delta.to_string(),
                         "isCellbase": item.entry.is_cellbase,
                         "assetChanges": item.entry.asset_changes.iter().map(|c| {
                             match c {

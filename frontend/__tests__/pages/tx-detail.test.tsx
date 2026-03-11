@@ -69,8 +69,8 @@ describe('TransactionDetailPage', () => {
       confirmations: 4,
       inputsCapacity: '55500000000',
       outputsCapacity: '55499941197',
-      inputsOccupiedCapacity: '6100000000',
-      outputsOccupiedCapacity: '6100000650',
+      inputsUsedCapacity: '6100000000',
+      outputsUsedCapacity: '6100000650',
       inputs: [
         {
           previousOutput: {
@@ -94,7 +94,7 @@ describe('TransactionDetailPage', () => {
       outputs: [
         {
           capacity: '55499941197',
-          occupiedCapacity: 61,
+          usedCapacity: 61,
           lock: {
             codeHash: LOCK_CODE_HASH,
             hashType: 'type',
@@ -123,7 +123,7 @@ describe('TransactionDetailPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 10,
         liveCapacitySum: '100000000000',
-        liveOccupiedCapacitySum: '60000000000',
+        liveUsedCapacitySum: '60000000000',
       },
       [TYPE_CODE_HASH]: {
         codeHash: TYPE_CODE_HASH,
@@ -135,7 +135,7 @@ describe('TransactionDetailPage', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 1,
         liveCapacitySum: '10000000000',
-        liveOccupiedCapacitySum: '6000000000',
+        liveUsedCapacitySum: '6000000000',
       },
     });
 

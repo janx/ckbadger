@@ -79,7 +79,7 @@ function parseChartValue(value: string | undefined, valueUnit: 'raw' | 'shannon'
 }
 
 function formatTooltipLabel(label: string): string {
-  // Script hash labels are common on occupation charts; keep both head and tail.
+  // Script hash labels are common on capacity charts; keep both head and tail.
   if (label.startsWith('0x') && label.length > 20) {
     return `${label.slice(0, 10)}...${label.slice(-8)}`;
   }

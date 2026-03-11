@@ -22,7 +22,7 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
+import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
@@ -49,7 +49,7 @@ function normalizeObjectAssetId(assetId: string): string {
 }
 import { formatNumber, truncateHash } from '@/lib/utils';
 import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
-import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
+import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';
 type CollectionSectionTab = 'activities' | 'objects' | 'holders';
@@ -68,7 +68,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const searchParams = useSearchParams();
   const rawAssetId = sporeId;
   const tabFromQuery = searchParams.get('tab');
-  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [collectionStatusSelection, setCollectionStatusSelection] =
@@ -83,7 +83,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const { reset: resetCollectionItemsPagination } = collectionItemsPagination;
   const { reset: resetCollectionHoldersPagination } = collectionHoldersPagination;
   const { reset: resetCollectionActivitiesPagination } = collectionActivitiesPagination;
-  const occupationRangeParams = getOccupationRangeParams(occupationRange);
+  const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const isDotbitCollection = isDotbitAlias(rawAssetId);
   const isDidCkbCollection = isDidCkbAlias(rawAssetId);
   const assetId = normalizeObjectAssetId(rawAssetId);
@@ -183,23 +183,22 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     enabled: !!spore?.txHash && resolvedSporeOutputIndex !== null && resolvedSporeOutputIndex >= 0,
     retry: false,
   });
-  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['spore-occupation-chart', assetId, occupationRange],
+  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
+    queryKey: ['spore-capacity-chart', assetId, capacityRange],
     queryFn: () =>
-      occupationRangeParams
-        ? api.getSporeObjectOccupationChart(assetId, occupationRangeParams)
-        : api.getSporeObjectOccupationChart(assetId),
+      capacityRangeParams
+        ? api.getSporeObjectCapacityChart(assetId, capacityRangeParams)
+        : api.getSporeObjectCapacityChart(assetId),
     enabled: !!spore,
   });
-  const { data: collectionOccupationChart, isLoading: isCollectionOccupationChartLoading } =
-    useQuery({
-      queryKey: ['object-collection-occupation-chart', collectionAssetId, occupationRange],
-      queryFn: () =>
-        occupationRangeParams
-          ? api.getObjectCollectionOccupationChart(collectionAssetId, occupationRangeParams)
-          : api.getObjectCollectionOccupationChart(collectionAssetId),
-      enabled: !!collection,
-    });
+  const { data: collectionCapacityChart, isLoading: isCollectionCapacityChartLoading } = useQuery({
+    queryKey: ['object-collection-capacity-chart', collectionAssetId, capacityRange],
+    queryFn: () =>
+      capacityRangeParams
+        ? api.getObjectCollectionCapacityChart(collectionAssetId, capacityRangeParams)
+        : api.getObjectCollectionCapacityChart(collectionAssetId),
+    enabled: !!collection,
+  });
   const {
     data: collectionItems,
     isLoading: isCollectionItemsLoading,
@@ -434,7 +433,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             totalCount={collection.totalCount}
             liveCount={collection.liveCount}
             liveCapacity={collection.liveCapacity}
-            liveOccupiedCapacity={collection.liveOccupiedCapacity}
+            liveUsedCapacity={collection.liveUsedCapacity}
             storageTier={collection.storageProfile?.tier}
             storageOnchainRatio={collection.storageProfile?.fullyOnchainRatio}
           />
@@ -445,14 +444,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 <HexDisplay value={collection.collectionId} truncate={false} />
               </TerminalPanelContent>
             </TerminalPanel>
-            <CapacityOccupationSection
-              description="Daily cumulative live CKB occupation for this Object collection."
-              occupationRange={occupationRange}
-              onOccupationRangeChange={setOccupationRange}
-              occupationChart={collectionOccupationChart}
-              isOccupationChartLoading={isCollectionOccupationChartLoading}
+            <CapacityStatisticsSection
+              description="Daily cumulative live CKB capacity usage for this Object collection."
+              capacityRange={capacityRange}
+              onCapacityRangeChange={setCapacityRange}
+              capacityChart={collectionCapacityChart}
+              isCapacityChartLoading={isCollectionCapacityChartLoading}
               totalCapacity={collection.liveCapacity}
-              occupiedCapacity={collection.liveOccupiedCapacity}
+              usedCapacity={collection.liveUsedCapacity}
             />
             <TerminalPanel>
               <Tabs value={activeCollectionTab} onValueChange={handleCollectionTabChange}>
@@ -1203,14 +1202,14 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                 </TerminalPanelContent>
               </TerminalPanel>
             )}
-            <CapacityOccupationSection
-              description="Daily cumulative live CKB occupation for this Object."
-              occupationRange={occupationRange}
-              onOccupationRangeChange={setOccupationRange}
-              occupationChart={occupationChart}
-              isOccupationChartLoading={isOccupationChartLoading}
+            <CapacityStatisticsSection
+              description="Daily cumulative live CKB capacity usage for this Object."
+              capacityRange={capacityRange}
+              onCapacityRangeChange={setCapacityRange}
+              capacityChart={capacityChart}
+              isCapacityChartLoading={isCapacityChartLoading}
               totalCapacity={spore.liveCapacity}
-              occupiedCapacity={spore.liveOccupiedCapacity}
+              usedCapacity={spore.liveUsedCapacity}
             />
             {cluster && (
               <TerminalPanel>

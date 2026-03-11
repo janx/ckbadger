@@ -91,12 +91,12 @@ pub fn resolve_nft_collection_storage_tier_override(standard: &str) -> Option<&'
         .map(String::as_str)
 }
 
-/// Apply one daily delta to live/occupied capacity with strict invariant checks.
+/// Apply one daily delta to live/used capacity with strict invariant checks.
 pub fn apply_live_capacity_delta(
     live_capacity: i128,
-    live_occupied: i128,
+    live_used: i128,
     capacity_delta: i128,
-    occupied_delta: i128,
+    used_delta: i128,
     context: &str,
 ) -> Result<(i128, i128)> {
     let next_capacity = live_capacity + capacity_delta;
@@ -110,49 +110,49 @@ pub fn apply_live_capacity_delta(
         );
     }
 
-    let next_occupied = live_occupied + occupied_delta;
-    if next_occupied < 0 {
+    let next_used = live_used + used_delta;
+    if next_used < 0 {
         bail!(
-            "live occupied capacity underflow while {}: prev={}, delta={}, next={}",
+            "live used capacity underflow while {}: prev={}, delta={}, next={}",
             context,
-            live_occupied,
-            occupied_delta,
-            next_occupied
+            live_used,
+            used_delta,
+            next_used
         );
     }
 
-    if next_occupied > next_capacity {
+    if next_used > next_capacity {
         bail!(
-            "live occupied capacity exceeds live capacity while {}: occupied={}, capacity={}",
+            "live used capacity exceeds live capacity while {}: used={}, capacity={}",
             context,
-            next_occupied,
+            next_used,
             next_capacity
         );
     }
 
-    Ok((next_capacity, next_occupied))
+    Ok((next_capacity, next_used))
 }
 
-/// Accumulate live capacity/occupied capacity from ordered daily deltas.
+/// Accumulate live capacity/used capacity from ordered daily deltas.
 pub fn accumulate_live_capacity<I>(deltas: I) -> Result<(i128, i128)>
 where
     I: IntoIterator<Item = (i128, i128)>,
 {
     let mut live_capacity: i128 = 0;
-    let mut live_occupied: i128 = 0;
+    let mut live_used: i128 = 0;
 
-    for (idx, (capacity_delta, occupied_delta)) in deltas.into_iter().enumerate() {
-        (live_capacity, live_occupied) = apply_live_capacity_delta(
+    for (idx, (capacity_delta, used_delta)) in deltas.into_iter().enumerate() {
+        (live_capacity, live_used) = apply_live_capacity_delta(
             live_capacity,
-            live_occupied,
+            live_used,
             capacity_delta,
-            occupied_delta,
+            used_delta,
             "accumulating live capacity",
         )
         .map_err(|e| anyhow!("delta #{} invalid: {}", idx + 1, e))?;
     }
 
-    Ok((live_capacity, live_occupied))
+    Ok((live_capacity, live_used))
 }
 
 /// Resolve a DOB collection display name.
@@ -341,9 +341,9 @@ mod tests {
     #[test]
     fn accumulate_live_capacity_sums_valid_deltas() {
         let deltas = vec![(100, 60), (-30, -10), (20, 5)];
-        let (capacity, occupied) = accumulate_live_capacity(deltas).unwrap();
+        let (capacity, used) = accumulate_live_capacity(deltas).unwrap();
         assert_eq!(capacity, 90);
-        assert_eq!(occupied, 55);
+        assert_eq!(used, 55);
     }
 
     #[test]
@@ -354,19 +354,19 @@ mod tests {
     }
 
     #[test]
-    fn accumulate_live_capacity_errors_on_negative_occupied() {
+    fn accumulate_live_capacity_errors_on_negative_used() {
         let deltas = vec![(100, 60), (0, -80)];
         let err = accumulate_live_capacity(deltas).unwrap_err();
-        assert!(err.to_string().contains("live occupied capacity underflow"));
+        assert!(err.to_string().contains("live used capacity underflow"));
     }
 
     #[test]
-    fn accumulate_live_capacity_errors_when_occupied_exceeds_capacity() {
+    fn accumulate_live_capacity_errors_when_used_exceeds_capacity() {
         let deltas = vec![(100, 60), (-30, -10), (0, 50)];
         let err = accumulate_live_capacity(deltas).unwrap_err();
         assert!(err
             .to_string()
-            .contains("live occupied capacity exceeds live capacity"));
+            .contains("live used capacity exceeds live capacity"));
     }
 
     #[test]

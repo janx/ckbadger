@@ -9,7 +9,7 @@ interface ObjectCollectionStatCardsProps {
   totalLabel?: string;
   liveCount?: number;
   liveCapacity: string | null | undefined;
-  liveOccupiedCapacity: string | null | undefined;
+  liveUsedCapacity: string | null | undefined;
   createdAtBlock?: number;
   storageTier?: string;
   storageOnchainRatio?: string;
@@ -29,19 +29,19 @@ export function ObjectCollectionStatCards({
   totalLabel = 'Total Objects',
   liveCount,
   liveCapacity,
-  liveOccupiedCapacity,
+  liveUsedCapacity,
   createdAtBlock,
   storageTier,
   storageOnchainRatio,
 }: ObjectCollectionStatCardsProps) {
   const capacity = parseShannons(liveCapacity);
-  const occupied = parseShannons(liveOccupiedCapacity);
-  const occupationPercent =
-    capacity && occupied && capacity > BigInt(0)
-      ? (Number((occupied * BigInt(10000)) / capacity) / 100).toFixed(2)
+  const used = parseShannons(liveUsedCapacity);
+  const usedPercent =
+    capacity && used && capacity > BigInt(0)
+      ? (Number((used * BigInt(10000)) / capacity) / 100).toFixed(2)
       : null;
   const compactCapacity = capacity ? `${formatCkbCompact(capacity).value} CKB` : '--';
-  const compactOccupied = occupied ? `${formatCkbCompact(occupied).value} CKB` : '--';
+  const compactUsed = used ? `${formatCkbCompact(used).value} CKB` : '--';
   const showLiveCount = liveCount !== undefined && liveCount !== totalCount;
 
   return (
@@ -103,11 +103,11 @@ export function ObjectCollectionStatCards({
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
           <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-            Occupied Capacity
+            Used Capacity
           </div>
-          <div className="text-text-bright font-mono text-lg">{compactOccupied}</div>
+          <div className="text-text-bright font-mono text-lg">{compactUsed}</div>
           <div className="text-text-dim font-mono text-xs">
-            Occupied Ratio: {occupationPercent ? `${occupationPercent}%` : '--'}
+            Used Ratio: {usedPercent ? `${usedPercent}%` : '--'}
           </div>
         </TerminalPanelContent>
       </TerminalPanel>

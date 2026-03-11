@@ -16,7 +16,7 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
-import { CapacityUtilization } from '@/components/ui/capacity-utilization';
+import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import {
@@ -150,9 +150,9 @@ export default function ScriptByCodeHashPage({
     enabled: isCodeHashIdentifier,
     placeholderData: keepPreviousData,
   });
-  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['script-occupation-by-code-hash', codeHash, scriptKind],
-    queryFn: () => api.getScriptOccupationChartByCodeHash(codeHash, scriptKind),
+  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
+    queryKey: ['script-capacity-by-code-hash', codeHash, scriptKind],
+    queryFn: () => api.getScriptCapacityChartByCodeHash(codeHash, scriptKind),
     enabled: isCodeHashIdentifier,
   });
   if (!isCodeHashIdentifier || (knownScript && hasKnownScriptName(knownScript.name))) {
@@ -319,30 +319,30 @@ export default function ScriptByCodeHashPage({
             </div>
             {knownScript && (
               <div className="border-base-border border-t px-4 py-4">
-                <CapacityUtilization
+                <HMultiplier
                   totalCapacity={knownScript.liveCapacitySum}
-                  occupiedCapacity={knownScript.liveOccupiedCapacitySum}
+                  usedCapacity={knownScript.liveUsedCapacitySum}
                 />
               </div>
             )}
           </TerminalPanelContent>
         </TerminalPanel>
         <TerminalPanel className="mb-6">
-          <TerminalPanelHeader indicator="active">Occupation History</TerminalPanelHeader>
+          <TerminalPanelHeader indicator="active">Capacity History</TerminalPanelHeader>
           <TerminalPanelContent>
             <div className="text-text-dim mb-3 text-xs">
-              Daily cumulative live CKB occupation for this deployment.
+              Daily cumulative live CKB capacity usage for this deployment.
             </div>
-            {isOccupationChartLoading ? (
-              <div className="text-text-dim py-8 text-center">Loading occupation history...</div>
-            ) : occupationChart && occupationChart.data.length > 0 ? (
+            {isCapacityChartLoading ? (
+              <div className="text-text-dim py-8 text-center">Loading capacity history...</div>
+            ) : capacityChart && capacityChart.data.length > 0 ? (
               <StackedAreaChart
-                data={occupationChart.data}
-                series={occupationChart.series}
+                data={capacityChart.data}
+                series={capacityChart.series}
                 valueUnit="shannon"
               />
             ) : (
-              <div className="text-text-dim py-8 text-center">No occupation history yet</div>
+              <div className="text-text-dim py-8 text-center">No capacity history yet</div>
             )}
           </TerminalPanelContent>
         </TerminalPanel>

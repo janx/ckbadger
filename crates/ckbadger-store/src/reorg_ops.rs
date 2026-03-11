@@ -197,7 +197,7 @@ fn accumulate_cell_deltas(
     let occ = cell.occupied_capacity as i128 * sign;
     let live_d = sign as i32;
 
-    // addr_balance: (balance_delta, occupied_delta, live_cells_delta)
+    // addr_balance: (balance_delta, used_delta, live_cells_delta)
     let e = addr_deltas
         .entry(cell.lock_script_hash.clone())
         .or_insert((0, 0, 0));
@@ -205,7 +205,7 @@ fn accumulate_cell_deltas(
     e.1 += occ;
     e.2 += live_d;
 
-    // script_info — lock side: (live_cells_delta, live_cap_delta, live_occupied_delta)
+    // script_info — lock side: (live_cells_delta, live_cap_delta, live_used_delta)
     let e = script_deltas
         .entry((cell.lock_code_hash.clone(), false))
         .or_insert((0, 0, 0));
@@ -689,7 +689,7 @@ impl CkbadgerStore {
         // Fallback to full scans when tx-context coverage is missing or partial.
 
         // Delta accumulators for derived CFs, populated during cell rollback.
-        // addr_deltas: lock_hash -> (balance_delta, occupied_delta, live_cells_delta)
+        // addr_deltas: lock_hash -> (balance_delta, used_delta, live_cells_delta)
         let mut addr_balance_deltas: HashMap<Vec<u8>, (i128, i128, i32)> = HashMap::new();
         // script_deltas: (code_hash, is_type) -> (live_cells_delta, live_cap_delta, live_occ_delta)
         let mut script_info_deltas: HashMap<(Vec<u8>, bool), (i64, i128, i128)> = HashMap::new();
@@ -1271,8 +1271,8 @@ impl CkbadgerStore {
         let mut tokens_updated = 0u64;
 
         // 9a. addr_balance
-        for (lock_hash, (balance_delta, occupied_delta, live_delta)) in &addr_balance_deltas {
-            if *balance_delta == 0 && *occupied_delta == 0 && *live_delta == 0 {
+        for (lock_hash, (balance_delta, used_delta, live_delta)) in &addr_balance_deltas {
+            if *balance_delta == 0 && *used_delta == 0 && *live_delta == 0 {
                 continue;
             }
             let mut ab = self.get_addr_balance(lock_hash)?.ok_or_else(|| {
@@ -1282,14 +1282,14 @@ impl CkbadgerStore {
                 )
             })?;
             ab.balance += balance_delta;
-            ab.occupied_capacity += occupied_delta;
+            ab.used_capacity += used_delta;
             ab.live_cells_count += live_delta;
-            if ab.balance < 0 || ab.occupied_capacity < 0 || ab.live_cells_count < 0 {
+            if ab.balance < 0 || ab.used_capacity < 0 || ab.live_cells_count < 0 {
                 anyhow::bail!(
-                    "addr_balance underflow during rollback: lock_hash=0x{}, balance={}, occupied={}, live_cells={}",
+                    "addr_balance underflow during rollback: lock_hash=0x{}, balance={}, used={}, live_cells={}",
                     bytes_to_hex(lock_hash),
                     ab.balance,
-                    ab.occupied_capacity,
+                    ab.used_capacity,
                     ab.live_cells_count
                 );
             }
@@ -1318,33 +1318,33 @@ impl CkbadgerStore {
             if *is_type {
                 si.type_live_cells_count += live_delta;
                 si.type_live_capacity_sum += live_cap_delta;
-                si.type_live_occupied_capacity_sum += live_occ_delta;
+                si.type_live_used_capacity_sum += live_occ_delta;
                 if si.type_live_cells_count < 0
                     || si.type_live_capacity_sum < 0
-                    || si.type_live_occupied_capacity_sum < 0
+                    || si.type_live_used_capacity_sum < 0
                 {
                     anyhow::bail!(
                         "script_info type underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
                         bytes_to_hex(code_hash),
                         si.type_live_cells_count,
                         si.type_live_capacity_sum,
-                        si.type_live_occupied_capacity_sum
+                        si.type_live_used_capacity_sum
                     );
                 }
             } else {
                 si.lock_live_cells_count += live_delta;
                 si.lock_live_capacity_sum += live_cap_delta;
-                si.lock_live_occupied_capacity_sum += live_occ_delta;
+                si.lock_live_used_capacity_sum += live_occ_delta;
                 if si.lock_live_cells_count < 0
                     || si.lock_live_capacity_sum < 0
-                    || si.lock_live_occupied_capacity_sum < 0
+                    || si.lock_live_used_capacity_sum < 0
                 {
                     anyhow::bail!(
                         "script_info lock underflow during rollback: code_hash=0x{}, live={}, cap={}, occ={}",
                         bytes_to_hex(code_hash),
                         si.lock_live_cells_count,
                         si.lock_live_capacity_sum,
-                        si.lock_live_occupied_capacity_sum
+                        si.lock_live_used_capacity_sum
                     );
                 }
             }
@@ -2603,7 +2603,7 @@ mod tests {
             &[0xBB; 32],
             &AddressBalance {
                 balance: 200,
-                occupied_capacity: 200,
+                used_capacity: 200,
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -2614,7 +2614,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_live_capacity_sum: 200,
-                lock_live_occupied_capacity_sum: 200,
+                lock_live_used_capacity_sum: 200,
                 ..Default::default()
             },
         );
@@ -2750,7 +2750,7 @@ mod tests {
             &[0xBB; 32],
             &AddressBalance {
                 balance: 200,
-                occupied_capacity: 200,
+                used_capacity: 200,
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -2759,7 +2759,7 @@ mod tests {
             &[0xCC; 32],
             &AddressBalance {
                 balance: 180,
-                occupied_capacity: 180,
+                used_capacity: 180,
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -2770,7 +2770,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
                 lock_live_capacity_sum: 380,
-                lock_live_occupied_capacity_sum: 380,
+                lock_live_used_capacity_sum: 380,
                 ..Default::default()
             },
         );
@@ -2996,7 +2996,7 @@ mod tests {
             &[0xAA; 32],
             &AddressBalance {
                 balance: 100,
-                occupied_capacity: 100,
+                used_capacity: 100,
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -3007,7 +3007,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_live_capacity_sum: 100,
-                lock_live_occupied_capacity_sum: 100,
+                lock_live_used_capacity_sum: 100,
                 ..Default::default()
             },
         );
@@ -3104,7 +3104,7 @@ mod tests {
             &[0xAA; 32],
             &AddressBalance {
                 balance: 100,
-                occupied_capacity: 100,
+                used_capacity: 100,
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -3113,7 +3113,7 @@ mod tests {
             &[0xBB; 32],
             &AddressBalance {
                 balance: 200,
-                occupied_capacity: 200,
+                used_capacity: 200,
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -3125,7 +3125,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
                 lock_live_capacity_sum: 300,
-                lock_live_occupied_capacity_sum: 300,
+                lock_live_used_capacity_sum: 300,
                 ..Default::default()
             },
         );

@@ -21,8 +21,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/tokens/{type_hash}/transfers", get(get_token_transfers))
         .route("/tokens/{type_hash}/activities", get(get_token_activities))
         .route(
-            "/tokens/{type_hash}/charts/occupation",
-            get(get_token_occupation_chart),
+            "/tokens/{type_hash}/charts/capacity-history",
+            get(get_token_capacity_chart),
         )
 }
 
@@ -88,7 +88,7 @@ pub struct TokenResponse {
     pub transfers_24h: i64,
     pub cells_count: Option<i64>,
     pub total_capacity: Option<String>,
-    pub total_occupied_capacity: Option<String>,
+    pub total_used_capacity: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,7 +121,7 @@ fn token_info_to_response(
     transfers_count: i64,
     transfers_24h: i64,
     live_capacity: Option<i128>,
-    live_occupied_capacity: Option<i128>,
+    live_used_capacity: Option<i128>,
 ) -> TokenResponse {
     let maximum_supply = info.max_supply.map(|s| s.to_string());
     TokenResponse {
@@ -158,7 +158,7 @@ fn token_info_to_response(
         transfers_24h,
         cells_count: None,
         total_capacity: live_capacity.map(|c| c.to_string()),
-        total_occupied_capacity: live_occupied_capacity.map(|c| c.to_string()),
+        total_used_capacity: live_used_capacity.map(|c| c.to_string()),
     }
 }
 
@@ -328,7 +328,7 @@ fn serve_tokens_from_cache(
                 transfers_24h: entry.transfers_24h,
                 cells_count: None,
                 total_capacity: None,
-                total_occupied_capacity: None,
+                total_used_capacity: None,
             }
         })
         .collect();
@@ -373,8 +373,8 @@ async fn get_token(
                 .live_capacity
                 .as_ref()
                 .and_then(|s| s.parse::<i128>().ok());
-            let live_occupied_capacity = entry
-                .live_occupied_capacity
+            let live_used_capacity = entry
+                .live_used_capacity
                 .as_ref()
                 .and_then(|s| s.parse::<i128>().ok());
 
@@ -384,7 +384,7 @@ async fn get_token(
                 transfers_count,
                 transfers_24h,
                 live_capacity,
-                live_occupied_capacity,
+                live_used_capacity,
             ))
         }
         None => Err(ApiError::not_found("Token not found")),
@@ -680,7 +680,7 @@ fn format_yyyymmdd_for_chart(date_yyyymmdd: u32) -> String {
     format!("{}-{}-{}", &date[0..4], &date[4..6], &date[6..8])
 }
 
-async fn get_token_occupation_chart(
+async fn get_token_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(type_hash): Path<String>,
     Query(params): Query<ChartRangeParams>,
@@ -701,19 +701,19 @@ async fn get_token_occupation_chart(
         .map_err(|msg| ApiError::bad_request(&msg))?;
 
     let mut cumulative_capacity: i128 = 0;
-    let mut cumulative_occupied: i128 = 0;
+    let mut cumulative_used: i128 = 0;
     if let Some(from) = from_date {
         let baseline = state
             .store
             .list_token_daily_deltas_in_range(&hash, None, Some(from.saturating_sub(1)))
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
+            (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
                 cumulative_capacity,
-                cumulative_occupied,
+                cumulative_used,
                 delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
-                "building token baseline occupation chart",
+                delta.live_used_capacity_delta,
+                "building token baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         }
@@ -732,16 +732,16 @@ async fn get_token_occupation_chart(
             .checked_add(delta.live_capacity_delta)
             .ok_or_else(|| {
                 ApiError::internal(format!(
-                    "capacity delta overflow while building token occupation chart: date={}",
+                    "capacity delta overflow while building token capacity history chart: date={}",
                     date
                 ))
             })?;
         entry.1 = entry
             .1
-            .checked_add(delta.live_occupied_capacity_delta)
+            .checked_add(delta.live_used_capacity_delta)
             .ok_or_else(|| {
                 ApiError::internal(format!(
-                    "occupied delta overflow while building token occupation chart: date={}",
+                    "used delta overflow while building token capacity history chart: date={}",
                     date
                 ))
             })?;
@@ -770,22 +770,22 @@ async fn get_token_occupation_chart(
 
     let mut data = Vec::with_capacity(dates.len());
     for date in dates {
-        let (capacity_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
+        let (capacity_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
+        (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
             cumulative_capacity,
-            cumulative_occupied,
+            cumulative_used,
             capacity_delta,
-            occupied_delta,
-            &format!("building token occupation chart at date {}", date),
+            used_delta,
+            &format!("building token capacity history chart at date {}", date),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
-        let unoccupied = cumulative_capacity - cumulative_occupied;
+        let unused = cumulative_capacity - cumulative_used;
 
         data.push(StackedAreaDataPoint {
             date: format_yyyymmdd_for_chart(date),
             values: HashMap::from([
-                ("occupied".to_string(), cumulative_occupied.to_string()),
-                ("unoccupied".to_string(), unoccupied.to_string()),
+                ("used".to_string(), cumulative_used.to_string()),
+                ("unused".to_string(), unused.to_string()),
             ]),
         });
     }
@@ -799,17 +799,17 @@ async fn get_token_occupation_chart(
         data,
         series: vec![
             StackedAreaSeries {
-                key: "occupied".to_string(),
-                label: "Occupied".to_string(),
+                key: "used".to_string(),
+                label: "Used".to_string(),
                 color: "#f59e0b".to_string(),
             },
             StackedAreaSeries {
-                key: "unoccupied".to_string(),
-                label: "Unoccupied".to_string(),
+                key: "unused".to_string(),
+                label: "Unused".to_string(),
                 color: "#00c389".to_string(),
             },
         ],
-        title: format!("{title} Capacity Occupation"),
+        title: format!("{title} Capacity History"),
     })
 }
 
@@ -894,7 +894,7 @@ mod tests {
                 cluster_id: None,
                 cluster_name: None,
                 live_capacity: Some("1".to_string()),
-                live_occupied_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -921,7 +921,7 @@ mod tests {
                 cluster_id: None,
                 cluster_name: None,
                 live_capacity: Some("1".to_string()),
-                live_occupied_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -948,7 +948,7 @@ mod tests {
                 cluster_id: None,
                 cluster_name: None,
                 live_capacity: Some("1".to_string()),
-                live_occupied_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,
@@ -975,7 +975,7 @@ mod tests {
                 cluster_id: None,
                 cluster_name: None,
                 live_capacity: Some("1".to_string()),
-                live_occupied_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
                 storage_tier: None,
                 fully_onchain_ratio: None,
                 fully_onchain_count: None,

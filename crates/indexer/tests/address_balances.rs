@@ -27,7 +27,7 @@ fn make_balance(
 ) -> AddressBalance {
     AddressBalance {
         balance,
-        occupied_capacity: 0,
+        used_capacity: 0,
         live_cells_count: live_cells,
         total_cells_count: total_cells,
         txs_count: txs,
@@ -128,13 +128,13 @@ fn test_multiple_operations_cumulative() {
 }
 
 #[test]
-fn test_occupied_capacity_stored_and_retrieved() {
+fn test_used_capacity_stored_and_retrieved() {
     let store = setup_store();
     let lock_hash = vec![0xDDu8; 32];
 
     let balance = AddressBalance {
         balance: 200_00000000,
-        occupied_capacity: 6100_00000000,
+        used_capacity: 6100_00000000,
         live_cells_count: 2,
         total_cells_count: 2,
         txs_count: 1,
@@ -150,16 +150,16 @@ fn test_occupied_capacity_stored_and_retrieved() {
 
     let retrieved = store.get_addr_balance(&lock_hash).unwrap().unwrap();
     assert_eq!(retrieved.balance, 200_00000000);
-    assert_eq!(retrieved.occupied_capacity, 6100_00000000);
+    assert_eq!(retrieved.used_capacity, 6100_00000000);
     assert_eq!(retrieved.live_cells_count, 2);
 }
 
 #[test]
-fn test_occupied_capacity_zero_by_default() {
+fn test_used_capacity_zero_by_default() {
     let store = setup_store();
     let lock_hash = vec![0xEEu8; 32];
 
-    // Simulate pre-existing data that was created before occupied_capacity was added:
+    // Simulate pre-existing data that was created before used_capacity was added:
     // just use the Default-derived zero value.
     let balance = make_balance(100_00000000, 1, 1, 1, 100, 0x01, 100, 0x01);
 
@@ -169,7 +169,7 @@ fn test_occupied_capacity_zero_by_default() {
 
     let retrieved = store.get_addr_balance(&lock_hash).unwrap().unwrap();
     assert_eq!(
-        retrieved.occupied_capacity, 0,
-        "occupied_capacity should default to 0"
+        retrieved.used_capacity, 0,
+        "used_capacity should default to 0"
     );
 }

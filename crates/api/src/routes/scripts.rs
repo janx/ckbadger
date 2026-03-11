@@ -40,14 +40,14 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/scripts/lookup", post(lookup_scripts))
         .route("/scripts/code-cell", get(get_code_cell))
         .route(
-            "/scripts/charts/occupation",
-            get(get_script_occupation_chart_by_code_hash),
+            "/scripts/charts/capacity-history",
+            get(get_script_capacity_history_chart_by_code_hash),
         )
         .route("/scripts/{name}", get(get_script))
         .route("/scripts/{name}/usage", get(get_script_usage))
         .route(
-            "/scripts/{name}/charts/occupation",
-            get(get_script_occupation_chart),
+            "/scripts/{name}/charts/capacity-history",
+            get(get_script_capacity_history_chart),
         )
 }
 
@@ -77,9 +77,9 @@ enum ScriptSortKey {
     Name,
     Kind,
     Description,
-    Occupied,
+    Used,
     Capacity,
-    OccupiedRatio,
+    UsedRatio,
     LiveCells,
     Cells,
 }
@@ -123,7 +123,7 @@ pub struct ScriptResponse {
     pub live_cells_count: i64,
     pub cells_count: i64,
     pub live_capacity_sum: String,
-    pub live_occupied_capacity_sum: String,
+    pub live_used_capacity_sum: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,8 +134,8 @@ pub struct ScriptUsageResponse {
     pub live_cells_count: i64,
     pub capacity_sum: String,
     pub live_capacity_sum: String,
-    pub occupied_capacity_sum: String,
-    pub live_occupied_capacity_sum: String,
+    pub used_capacity_sum: String,
+    pub live_used_capacity_sum: String,
     pub by_deployment: Vec<DeploymentUsage>,
 }
 
@@ -148,8 +148,8 @@ pub struct DeploymentUsage {
     pub live_cells_count: i64,
     pub capacity_sum: String,
     pub live_capacity_sum: String,
-    pub occupied_capacity_sum: String,
-    pub live_occupied_capacity_sum: String,
+    pub used_capacity_sum: String,
+    pub live_used_capacity_sum: String,
 }
 
 /// Request body for bulk script lookup by code_hash
@@ -175,7 +175,7 @@ pub struct ScriptLookupInfo {
     pub code_cell_output_index: Option<i32>,
     pub live_cells_count: i64,
     pub live_capacity_sum: String,
-    pub live_occupied_capacity_sum: String,
+    pub live_used_capacity_sum: String,
 }
 
 /// Resolve the deployment code cell outpoint for a script.
@@ -267,7 +267,7 @@ fn checked_capacity_totals(
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
     let capacity = info.lock_live_capacity_sum + info.type_live_capacity_sum;
-    let occupied = info.lock_live_occupied_capacity_sum + info.type_live_occupied_capacity_sum;
+    let used = info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum;
     if capacity < 0 {
         return Err(ApiError::internal(format!(
             "negative live capacity in {}: code_hash=0x{}, capacity={}",
@@ -276,40 +276,40 @@ fn checked_capacity_totals(
             capacity
         )));
     }
-    if occupied < 0 {
+    if used < 0 {
         return Err(ApiError::internal(format!(
-            "negative live occupied capacity in {}: code_hash=0x{}, occupied={}",
+            "negative live used capacity in {}: code_hash=0x{}, used={}",
             context,
             hex::encode(&info.code_hash),
-            occupied
+            used
         )));
     }
-    if occupied > capacity {
+    if used > capacity {
         return Err(ApiError::internal(format!(
-            "live occupied capacity exceeds total in {}: code_hash=0x{}, occupied={}, capacity={}",
+            "live used capacity exceeds total in {}: code_hash=0x{}, used={}, capacity={}",
             context,
             hex::encode(&info.code_hash),
-            occupied,
+            used,
             capacity
         )));
     }
-    Ok((capacity, occupied))
+    Ok((capacity, used))
 }
 
 fn live_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
     info.lock_live_capacity_sum + info.type_live_capacity_sum
 }
 
-fn live_occupied_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
-    info.lock_live_occupied_capacity_sum + info.type_live_occupied_capacity_sum
+fn live_used_capacity_sum_for_sort(info: &ckbadger_store::ScriptInfo) -> i128 {
+    info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum
 }
 
-fn occupied_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
+fn used_ratio_for_sort(info: &ckbadger_store::ScriptInfo) -> Option<(i128, i128)> {
     let capacity = live_capacity_sum_for_sort(info);
     if capacity <= 0 {
         return None;
     }
-    Some((live_occupied_capacity_sum_for_sort(info), capacity))
+    Some((live_used_capacity_sum_for_sort(info), capacity))
 }
 
 fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
@@ -319,7 +319,7 @@ fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
     }
 }
 
-fn compare_occupied_ratio(
+fn compare_used_ratio(
     left: Option<(i128, i128)>,
     right: Option<(i128, i128)>,
     direction: SortDirection,
@@ -328,9 +328,9 @@ fn compare_occupied_ratio(
         (None, None) => Ordering::Equal,
         (None, Some(_)) => Ordering::Greater,
         (Some(_), None) => Ordering::Less,
-        (Some((left_occupied, left_capacity)), Some((right_occupied, right_capacity))) => {
-            let left_side = left_occupied * right_capacity;
-            let right_side = right_occupied * left_capacity;
+        (Some((left_used, left_capacity)), Some((right_used, right_capacity))) => {
+            let left_side = left_used * right_capacity;
+            let right_side = right_used * left_capacity;
             apply_direction(left_side.cmp(&right_side), direction)
         }
     }
@@ -359,18 +359,18 @@ fn compare_script_entries(
                 .cmp(right.1.description.as_deref().unwrap_or("")),
             direction,
         ),
-        ScriptSortKey::Occupied => apply_direction(
-            live_occupied_capacity_sum_for_sort(&left.1)
-                .cmp(&live_occupied_capacity_sum_for_sort(&right.1)),
+        ScriptSortKey::Used => apply_direction(
+            live_used_capacity_sum_for_sort(&left.1)
+                .cmp(&live_used_capacity_sum_for_sort(&right.1)),
             direction,
         ),
         ScriptSortKey::Capacity => apply_direction(
             live_capacity_sum_for_sort(&left.1).cmp(&live_capacity_sum_for_sort(&right.1)),
             direction,
         ),
-        ScriptSortKey::OccupiedRatio => compare_occupied_ratio(
-            occupied_ratio_for_sort(&left.1),
-            occupied_ratio_for_sort(&right.1),
+        ScriptSortKey::UsedRatio => compare_used_ratio(
+            used_ratio_for_sort(&left.1),
+            used_ratio_for_sort(&right.1),
             direction,
         ),
         ScriptSortKey::LiveCells => apply_direction(
@@ -431,8 +431,8 @@ fn script_info_to_response(
         code_cell_tx_hash.as_deref(),
         code_cell_output_index,
     );
-    let (live_capacity, live_occupied) = checked_capacity_totals(info, "script response")?;
-    let live_occupied_capacity_sum = live_occupied.to_string();
+    let (live_capacity, live_used) = checked_capacity_totals(info, "script response")?;
+    let live_used_capacity_sum = live_used.to_string();
     let live_capacity_sum = live_capacity.to_string();
     let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(info);
 
@@ -462,7 +462,7 @@ fn script_info_to_response(
         live_cells_count: info.lock_live_cells_count + info.type_live_cells_count,
         cells_count: info.lock_cells_count + info.type_cells_count,
         live_capacity_sum,
-        live_occupied_capacity_sum,
+        live_used_capacity_sum,
     })
 }
 
@@ -521,9 +521,8 @@ async fn lookup_scripts(
             let live_cells_count = info.lock_live_cells_count + info.type_live_cells_count;
             let live_capacity_sum =
                 (info.lock_live_capacity_sum + info.type_live_capacity_sum).to_string();
-            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum
-                + info.type_live_occupied_capacity_sum)
-                .to_string();
+            let live_used_capacity_sum =
+                (info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum).to_string();
 
             let (code_cell_tx_hash, code_cell_output_index) =
                 resolve_code_cell(&info, &state.store, &state.append_only_store);
@@ -547,7 +546,7 @@ async fn lookup_scripts(
                     code_cell_output_index,
                     live_cells_count,
                     live_capacity_sum,
-                    live_occupied_capacity_sum,
+                    live_used_capacity_sum,
                 },
             );
         }
@@ -563,7 +562,7 @@ pub struct CodeCellQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ScriptOccupationQuery {
+pub struct ScriptCapacityHistoryQuery {
     code_hash: Option<String>,
     script_kind: Option<String>,
     from: Option<String>,
@@ -571,7 +570,7 @@ pub struct ScriptOccupationQuery {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ScriptOccupationByCodeHashQuery {
+pub struct ScriptCapacityHistoryByCodeHashQuery {
     code_hash: String,
     script_kind: Option<String>,
     from: Option<String>,
@@ -800,8 +799,8 @@ async fn get_script_usage(
             live_cells_count: 0,
             capacity_sum: "0".to_string(),
             live_capacity_sum: "0".to_string(),
-            occupied_capacity_sum: "0".to_string(),
-            live_occupied_capacity_sum: "0".to_string(),
+            used_capacity_sum: "0".to_string(),
+            live_used_capacity_sum: "0".to_string(),
             by_deployment: vec![],
         });
     }
@@ -810,8 +809,8 @@ async fn get_script_usage(
     let mut total_live: i64 = 0;
     let mut total_cap: u128 = 0;
     let mut total_live_cap: u128 = 0;
-    let mut total_occupied_cap: u128 = 0;
-    let mut total_live_occupied_cap: u128 = 0;
+    let mut total_used_cap: u128 = 0;
+    let mut total_live_used_cap: u128 = 0;
 
     let by_deployment: Vec<DeploymentUsage> = matching
         .into_iter()
@@ -821,18 +820,17 @@ async fn get_script_usage(
             let capacity_sum = (info.lock_capacity_sum + info.type_capacity_sum) as u128;
             let live_capacity_sum =
                 (info.lock_live_capacity_sum + info.type_live_capacity_sum) as u128;
-            let occupied_capacity_sum =
-                (info.lock_occupied_capacity_sum + info.type_occupied_capacity_sum) as u128;
-            let live_occupied_capacity_sum = (info.lock_live_occupied_capacity_sum
-                + info.type_live_occupied_capacity_sum)
-                as u128;
+            let used_capacity_sum =
+                (info.lock_used_capacity_sum + info.type_used_capacity_sum) as u128;
+            let live_used_capacity_sum =
+                (info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum) as u128;
 
             total_cells += cells_count;
             total_live += live_cells_count;
             total_cap += capacity_sum;
             total_live_cap += live_capacity_sum;
-            total_occupied_cap += occupied_capacity_sum;
-            total_live_occupied_cap += live_occupied_capacity_sum;
+            total_used_cap += used_capacity_sum;
+            total_live_used_cap += live_used_capacity_sum;
 
             let script_kind = if info.lock_cells_count > 0 && info.type_cells_count > 0 {
                 Some("lock+type".to_string())
@@ -851,8 +849,8 @@ async fn get_script_usage(
                 live_cells_count,
                 capacity_sum: capacity_sum.to_string(),
                 live_capacity_sum: live_capacity_sum.to_string(),
-                occupied_capacity_sum: occupied_capacity_sum.to_string(),
-                live_occupied_capacity_sum: live_occupied_capacity_sum.to_string(),
+                used_capacity_sum: used_capacity_sum.to_string(),
+                live_used_capacity_sum: live_used_capacity_sum.to_string(),
             }
         })
         .collect();
@@ -863,8 +861,8 @@ async fn get_script_usage(
         live_cells_count: total_live,
         capacity_sum: total_cap.to_string(),
         live_capacity_sum: total_live_cap.to_string(),
-        occupied_capacity_sum: total_occupied_cap.to_string(),
-        live_occupied_capacity_sum: total_live_occupied_cap.to_string(),
+        used_capacity_sum: total_used_cap.to_string(),
+        live_used_capacity_sum: total_live_used_cap.to_string(),
         by_deployment,
     })
 }
@@ -897,22 +895,22 @@ fn parse_code_hash_hex(code_hash: &str) -> Result<Vec<u8>, ApiRouteError> {
 
 fn apply_script_chart_delta(
     cumulative_capacity: i128,
-    cumulative_occupied: i128,
+    cumulative_used: i128,
     cap_delta: i128,
-    occupied_delta: i128,
+    used_delta: i128,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
     apply_live_capacity_delta(
         cumulative_capacity,
-        cumulative_occupied,
+        cumulative_used,
         cap_delta,
-        occupied_delta,
+        used_delta,
         context,
     )
     .map_err(|e| ApiError::internal(e.to_string()))
 }
 
-fn build_script_occupation_chart(
+fn build_script_capacity_history_chart(
     state: &AppState,
     targets: Vec<(Vec<u8>, bool)>,
     title: String,
@@ -921,13 +919,13 @@ fn build_script_occupation_chart(
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let series = vec![
         StackedAreaSeries {
-            key: "occupied".to_string(),
-            label: "Occupied".to_string(),
+            key: "used".to_string(),
+            label: "Used".to_string(),
             color: "#f59e0b".to_string(),
         },
         StackedAreaSeries {
-            key: "unoccupied".to_string(),
-            label: "Unoccupied".to_string(),
+            key: "unused".to_string(),
+            label: "Unused".to_string(),
             color: "#00c389".to_string(),
         },
     ];
@@ -947,7 +945,7 @@ fn build_script_occupation_chart(
         .collect();
 
     let mut cumulative_capacity: i128 = 0;
-    let mut cumulative_occupied: i128 = 0;
+    let mut cumulative_used: i128 = 0;
     if let Some(from) = from_date {
         let mut baseline_daily: BTreeMap<u32, (i128, i128)> = BTreeMap::new();
         for (code_hash, is_type) in &unique_targets {
@@ -963,16 +961,16 @@ fn build_script_occupation_chart(
             for (date, delta) in baseline {
                 let entry = baseline_daily.entry(date).or_insert((0, 0));
                 entry.0 += delta.live_capacity_delta;
-                entry.1 += delta.live_occupied_capacity_delta;
+                entry.1 += delta.live_used_capacity_delta;
             }
         }
-        for (_, (cap_delta, occupied_delta)) in baseline_daily {
-            (cumulative_capacity, cumulative_occupied) = apply_script_chart_delta(
+        for (_, (cap_delta, used_delta)) in baseline_daily {
+            (cumulative_capacity, cumulative_used) = apply_script_chart_delta(
                 cumulative_capacity,
-                cumulative_occupied,
+                cumulative_used,
                 cap_delta,
-                occupied_delta,
-                "building script baseline occupation chart",
+                used_delta,
+                "building script baseline capacity history chart",
             )?;
         }
     }
@@ -986,7 +984,7 @@ fn build_script_occupation_chart(
         for (date, delta) in deltas {
             let entry = daily_deltas.entry(date).or_insert((0, 0));
             entry.0 += delta.live_capacity_delta;
-            entry.1 += delta.live_occupied_capacity_delta;
+            entry.1 += delta.live_used_capacity_delta;
         }
     }
 
@@ -1012,20 +1010,20 @@ fn build_script_occupation_chart(
 
     let mut data = Vec::with_capacity(dates.len());
     for date in dates {
-        let (cap_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (cumulative_capacity, cumulative_occupied) = apply_script_chart_delta(
+        let (cap_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
+        (cumulative_capacity, cumulative_used) = apply_script_chart_delta(
             cumulative_capacity,
-            cumulative_occupied,
+            cumulative_used,
             cap_delta,
-            occupied_delta,
-            &format!("building script occupation chart at date {}", date),
+            used_delta,
+            &format!("building script capacity history chart at date {}", date),
         )?;
-        let unoccupied = cumulative_capacity - cumulative_occupied;
+        let unused = cumulative_capacity - cumulative_used;
         data.push(StackedAreaDataPoint {
             date: format_yyyymmdd_for_chart(date),
             values: HashMap::from([
-                ("occupied".to_string(), cumulative_occupied.to_string()),
-                ("unoccupied".to_string(), unoccupied.to_string()),
+                ("used".to_string(), cumulative_used.to_string()),
+                ("unused".to_string(), unused.to_string()),
             ]),
         });
     }
@@ -1037,10 +1035,10 @@ fn build_script_occupation_chart(
     })
 }
 
-async fn get_script_occupation_chart(
+async fn get_script_capacity_history_chart(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-    Query(params): Query<ScriptOccupationQuery>,
+    Query(params): Query<ScriptCapacityHistoryQuery>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
@@ -1072,18 +1070,18 @@ async fn get_script_occupation_chart(
         }
     }
 
-    ok(build_script_occupation_chart(
+    ok(build_script_capacity_history_chart(
         &state,
         targets,
-        format!("{name} Capacity Occupation"),
+        format!("{name} Capacity History"),
         from_date,
         to_date,
     )?)
 }
 
-async fn get_script_occupation_chart_by_code_hash(
+async fn get_script_capacity_history_chart_by_code_hash(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<ScriptOccupationByCodeHashQuery>,
+    Query(params): Query<ScriptCapacityHistoryByCodeHashQuery>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let (from_date, to_date) = parse_chart_date_range(params.from.as_deref(), params.to.as_deref())
         .map_err(|msg| ApiError::bad_request(&msg))?;
@@ -1107,10 +1105,10 @@ async fn get_script_occupation_chart_by_code_hash(
         }
     }
 
-    ok(build_script_occupation_chart(
+    ok(build_script_capacity_history_chart(
         &state,
         targets,
-        format!("0x{} Capacity Occupation", hex::encode(&code_hash)),
+        format!("0x{} Capacity History", hex::encode(&code_hash)),
         from_date,
         to_date,
     )?)
@@ -1125,9 +1123,9 @@ mod tests {
     #[test]
     fn apply_script_chart_delta_accepts_delta_beyond_i64() {
         let huge = i128::from(i64::MAX) + 1;
-        let (capacity, occupied) = apply_script_chart_delta(0, 0, huge, 0, "script chart").unwrap();
+        let (capacity, used) = apply_script_chart_delta(0, 0, huge, 0, "script chart").unwrap();
         assert_eq!(capacity, huge);
-        assert_eq!(occupied, 0);
+        assert_eq!(used, 0);
     }
 
     #[test]
@@ -1138,7 +1136,7 @@ mod tests {
             .1
              .0
             .message
-            .contains("live occupied capacity exceeds live capacity"));
+            .contains("live used capacity exceeds live capacity"));
     }
 
     #[test]
@@ -1158,7 +1156,7 @@ mod tests {
         let info = ScriptInfo {
             code_hash: vec![0xBB; 32],
             lock_live_capacity_sum: 100,
-            lock_live_occupied_capacity_sum: 101,
+            lock_live_used_capacity_sum: 101,
             ..Default::default()
         };
         let err = checked_capacity_totals(&info, "test").unwrap_err();
@@ -1167,6 +1165,6 @@ mod tests {
             .1
              .0
             .message
-            .contains("live occupied capacity exceeds total"));
+            .contains("live used capacity exceeds total"));
     }
 }

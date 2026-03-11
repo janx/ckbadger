@@ -35,7 +35,7 @@ const mockScriptsResponse = {
       codeCellTxHash: null,
       codeCellOutputIndex: null,
       liveCapacitySum: '2000000000',
-      liveOccupiedCapacitySum: '1000000000',
+      liveUsedCapacitySum: '1000000000',
       liveCellsCount: 4200,
       cellsCount: 8500,
       deployedAt: 0,
@@ -59,7 +59,7 @@ const mockScriptsResponse = {
       codeCellTxHash: null,
       codeCellOutputIndex: null,
       liveCapacitySum: '10000000000',
-      liveOccupiedCapacitySum: '5000000000',
+      liveUsedCapacitySum: '5000000000',
       liveCellsCount: 1500,
       cellsCount: 3200,
       deployedAt: 100,
@@ -99,7 +99,7 @@ describe('ScriptsPage', () => {
     expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
     expect(screen.getByText('Capacity (CKB)')).toBeInTheDocument();
     expect(screen.queryByText('Utilization Ratio')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
   });
 
   it('supports sorting by occupied capacity', async () => {
@@ -113,16 +113,16 @@ describe('ScriptsPage', () => {
     render(<ScriptsPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Occupied (CKB)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Used (CKB)' }));
 
     await waitFor(() => {
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({
           limit: 20,
-          sortKey: 'occupied',
+          sortKey: 'used',
           sortDirection: 'desc',
         })
       );
@@ -164,7 +164,7 @@ describe('ScriptsPage', () => {
           codeCellTxHash: null,
           codeCellOutputIndex: null,
           liveCapacitySum: '2000000000',
-          liveOccupiedCapacitySum: '1000000000',
+          liveUsedCapacitySum: '1000000000',
         } satisfies KnownScript,
       ],
       total: 1,

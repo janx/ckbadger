@@ -477,11 +477,11 @@ export default function TransactionDetailPage() {
                   className="text-text-bright"
                 />
               </DataField>
-              <DataField label="Occupied Capacity Change">
+              <DataField label="Used Capacity Change">
                 {(() => {
-                  const inputOccupied = BigInt(tx.inputsOccupiedCapacity || '0');
-                  const outputOccupied = BigInt(tx.outputsOccupiedCapacity || '0');
-                  const change = outputOccupied - inputOccupied;
+                  const inputUsed = BigInt(tx.inputsUsedCapacity || '0');
+                  const outputUsed = BigInt(tx.outputsUsedCapacity || '0');
+                  const change = outputUsed - inputUsed;
                   const zero = BigInt(0);
                   const isIncrease = change > zero;
                   const isDecrease = change < zero;

@@ -126,8 +126,8 @@ pub fn build_activities_for_block(
 struct OwnerAccum {
     input_capacity: i128,
     output_capacity: i128,
-    input_occupied: i64,
-    output_occupied: i64,
+    input_used: i64,
+    output_used: i64,
     /// UDT: type_script_hash -> (input_amount, output_amount)
     udt_deltas: HashMap<Vec<u8>, (i128, i128)>,
     /// DAO deposits (output cells with DAO type and data == 0x00..00)
@@ -178,7 +178,7 @@ fn build_tx_activities(
         let accum = owners.entry(input.lock_script_hash.clone()).or_default();
         accum.involved_scripts.insert(input.lock_code_hash.clone());
         accum.input_capacity += input.capacity as i128;
-        accum.input_occupied += input.occupied_capacity;
+        accum.input_used += input.occupied_capacity;
 
         if let Some(ref type_code_hash) = input.type_code_hash {
             accum.involved_scripts.insert(type_code_hash.clone());
@@ -211,7 +211,7 @@ fn build_tx_activities(
             .unwrap_or(0);
         let occupied =
             (8 + lock_script_size + type_script_size + cell.data_size as i64) * 100_000_000;
-        accum.output_occupied += occupied;
+        accum.output_used += occupied;
 
         if let Some(ref type_code_hash) = cell.type_code_hash {
             accum.involved_scripts.insert(type_code_hash.clone());
@@ -231,7 +231,7 @@ fn build_tx_activities(
 
     for (lock_hash, accum) in &owners {
         let ckb_delta = accum.output_capacity - accum.input_capacity;
-        let occupied_delta = accum.output_occupied - accum.input_occupied;
+        let used_delta = accum.output_used - accum.input_used;
 
         // Peers = all other lock_hashes in this tx
         let peers: Vec<Vec<u8>> = owners
@@ -329,7 +329,7 @@ fn build_tx_activities(
             tx_index: tx.tx_index,
             timestamp: tx.timestamp,
             ckb_delta,
-            occupied_delta,
+            used_delta,
             is_cellbase: tx.is_cellbase,
             has_type_script: accum.has_type_script,
             asset_changes,
@@ -681,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn test_occupied_delta_computed() {
+    fn test_used_delta_computed() {
         let alice = 0xAA;
         let outputs = vec![make_output(
             alice,
@@ -708,8 +708,8 @@ mod tests {
         let (_, _, entry) = &activities[0];
         assert_eq!(entry.ckb_delta, 0);
         // Output occupied = (8 + (32+1+20) + 0 + 100) * 100_000_000 = 16_100_000_000
-        // occupied_delta = 16_100_000_000 - 6_100_000_000 = 10_000_000_000
-        assert_eq!(entry.occupied_delta, 100_00000000);
+        // used_delta = 16_100_000_000 - 6_100_000_000 = 10_000_000_000
+        assert_eq!(entry.used_delta, 100_00000000);
     }
 
     #[test]

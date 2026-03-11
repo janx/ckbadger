@@ -217,7 +217,7 @@ function renderMostUtilizedScripts(chart: MostUtilizedScriptsChartResponse): str
   return [
     `## ${chart.title}`,
     '',
-    renderStackedChartData(chart.occupiedShare),
+    renderStackedChartData(chart.usedShare),
     '',
     renderStackedChartData(chart.capacityShare),
   ].join('\n');
@@ -227,7 +227,7 @@ function renderMostUtilizedAssets(chart: MostUtilizedAssetsChartResponse): strin
   return [
     `## ${chart.title}`,
     '',
-    renderStackedChartData(chart.occupiedShare),
+    renderStackedChartData(chart.usedShare),
     '',
     renderStackedChartData(chart.capacityShare),
   ].join('\n');
@@ -285,8 +285,8 @@ function selectChartFetcher(slug: string): (() => Promise<MarkdownChartPayload>)
       return () => api.getBlockTimeDistributionChart();
     case 'capacity-turnover-ratio':
       return () => api.getCapacityTurnoverRatioChart();
-    case 'cell-age-vs-occupied-capacity':
-      return () => api.getCellAgeVsOccupiedCapacityChart();
+    case 'cell-age-vs-used-capacity':
+      return () => api.getCellAgeVsUsedCapacityChart();
     case 'cell-count':
       return () => api.getCellCountChart();
     case 'cell-size-distribution':
@@ -341,7 +341,7 @@ function renderAddressSummary(address: Address) {
       ['address', address.address ?? '-'],
       ['lockScriptHash', address.lockScriptHash],
       ['balance', address.balance],
-      ['occupiedCapacity', address.occupiedCapacity],
+      ['usedCapacity', address.usedCapacity],
       ['liveCellsCount', address.liveCellsCount],
       ['transactionsCount', address.transactionsCount],
     ]
@@ -356,7 +356,7 @@ function renderCellSummary(cell: Cell) {
       ['outputIndex', cell.outputIndex],
       ['status', cell.status ?? '-'],
       ['capacity', cell.capacity],
-      ['occupiedCapacity', cell.occupiedCapacity ?? '-'],
+      ['usedCapacity', cell.usedCapacity ?? '-'],
       ['lockScriptHash', cell.lockScriptHash],
       ['typeScriptHash', cell.typeScriptHash ?? '-'],
       ['createdAtBlock', cell.createdAtBlock],
@@ -767,11 +767,11 @@ export async function renderMarkdownPage(
         '## Outputs',
         '',
         markdownTable(
-          ['index', 'capacity', 'occupiedCapacity', 'address', 'cellType'],
+          ['index', 'capacity', 'usedCapacity', 'address', 'cellType'],
           (tx.outputs ?? []).map((output, index) => [
             index,
             output.capacity,
-            output.occupiedCapacity,
+            output.usedCapacity,
             output.address ?? '-',
             output.cellType ?? '-',
           ])
@@ -990,7 +990,7 @@ export async function renderMarkdownPage(
             ['isLive', obj.isLive],
             ['createdAtBlock', obj.createdAtBlock],
             ['liveCapacity', obj.liveCapacity ?? '-'],
-            ['liveOccupiedCapacity', obj.liveOccupiedCapacity ?? '-'],
+            ['liveUsedCapacity', obj.liveUsedCapacity ?? '-'],
           ]
         ),
       ]);
@@ -1209,7 +1209,7 @@ export async function renderMarkdownPage(
             ['sporesCount', cluster.sporesCount],
             ['createdAtBlock', cluster.createdAtBlock],
             ['liveCapacity', cluster.liveCapacity ?? '-'],
-            ['liveOccupiedCapacity', cluster.liveOccupiedCapacity ?? '-'],
+            ['liveUsedCapacity', cluster.liveUsedCapacity ?? '-'],
           ]
         ),
         '',
@@ -1272,21 +1272,21 @@ export async function renderMarkdownPage(
             ['liveCellsCount', usage.liveCellsCount],
             ['capacitySum', usage.capacitySum],
             ['liveCapacitySum', usage.liveCapacitySum],
-            ['occupiedCapacitySum', usage.occupiedCapacitySum],
-            ['liveOccupiedCapacitySum', usage.liveOccupiedCapacitySum],
+            ['usedCapacitySum', usage.usedCapacitySum],
+            ['liveUsedCapacitySum', usage.liveUsedCapacitySum],
           ]
         ),
         '',
         '## Deployments',
         '',
         markdownTable(
-          ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'liveOccupiedCapacitySum'],
+          ['codeHash', 'scriptKind', 'cellsCount', 'liveCellsCount', 'liveUsedCapacitySum'],
           usage.byDeployment.map((deployment) => [
             hashShort(deployment.codeHash),
             deployment.scriptKind ?? '-',
             deployment.cellsCount,
             deployment.liveCellsCount,
-            deployment.liveOccupiedCapacitySum,
+            deployment.liveUsedCapacitySum,
           ])
         ),
         '',
@@ -1326,7 +1326,7 @@ export async function renderMarkdownPage(
             ['knownHashType', matched?.hashType ?? '-'],
             ['knownLiveCellsCount', matched?.liveCellsCount ?? '-'],
             ['knownLiveCapacitySum', matched?.liveCapacitySum ?? '-'],
-            ['knownLiveOccupiedCapacitySum', matched?.liveOccupiedCapacitySum ?? '-'],
+            ['knownLiveUsedCapacitySum', matched?.liveUsedCapacitySum ?? '-'],
             ['codeCellTxHash', codeCell.txHash],
             ['codeCellOutputIndex', codeCell.outputIndex],
           ]

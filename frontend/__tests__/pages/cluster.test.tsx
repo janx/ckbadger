@@ -8,7 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getSporeCluster: vi.fn(),
     getSporesByCluster: vi.fn(),
-    getSporeClusterOccupationChart: vi.fn(),
+    getSporeClusterCapacityChart: vi.fn(),
     getSporeClusterHolders: vi.fn(),
     getSporeClusterActivities: vi.fn(),
     getAddress: vi.fn(),
@@ -41,7 +41,7 @@ const mockCluster = {
   activitiesCount: 10,
   createdAtBlock: 1000000,
   liveCapacity: '100000000000',
-  liveOccupiedCapacity: '61000000000',
+  liveUsedCapacity: '61000000000',
 };
 
 const mockSpores = {
@@ -89,8 +89,8 @@ describe('ClusterDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSearchParamsString = '';
-    vi.mocked(api.getSporeClusterOccupationChart).mockResolvedValue({
-      title: 'Test Collection Capacity Occupation',
+    vi.mocked(api.getSporeClusterCapacityChart).mockResolvedValue({
+      title: 'Test Collection Capacity History',
       data: [],
       series: [],
     });
@@ -98,7 +98,7 @@ describe('ClusterDetailPage', () => {
       lockScriptHash: mockCluster.ownerLockHash,
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
       balance: '0',
-      occupiedCapacity: '0',
+      usedCapacity: '0',
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
@@ -159,14 +159,14 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('renders occupation history panel', async () => {
+  it('renders capacity statistics panel', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+      expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     });
   });
 
@@ -362,7 +362,7 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Live Capacity')).toBeInTheDocument();
-      expect(screen.getByText('Occupied Capacity')).toBeInTheDocument();
+      expect(screen.getByText('Used Capacity')).toBeInTheDocument();
       expect(screen.getByText('Content Snapshot (Filtered View)')).toBeInTheDocument();
       expect(screen.getByText('Average Payload Size')).toBeInTheDocument();
       expect(screen.getByText('image')).toBeInTheDocument();
@@ -667,7 +667,7 @@ describe('ClusterDetailPage', () => {
           lockScriptHash: addr,
           address: resolvedSporeOwnerAddress,
           balance: '0',
-          occupiedCapacity: '0',
+          usedCapacity: '0',
           liveCellsCount: 0,
           transactionsCount: 0,
         } as any;
@@ -676,7 +676,7 @@ describe('ClusterDetailPage', () => {
         lockScriptHash: addr,
         address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
         balance: '0',
-        occupiedCapacity: '0',
+        usedCapacity: '0',
         liveCellsCount: 0,
         transactionsCount: 0,
       } as any;

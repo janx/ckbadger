@@ -66,7 +66,7 @@ pub(super) fn collect_missing_input_outpoints<T>(
         .collect()
 }
 
-/// Resolve consumed data_size and occupied_capacity from input cell info maps.
+/// Resolve consumed data_size and used_capacity from input cell info maps.
 /// Fails fast if any input is unresolved — at this point all inputs should be resolved.
 fn resolve_consumed_stats(
     tx_slice: &[TxData],
@@ -75,7 +75,7 @@ fn resolve_consumed_stats(
     block_number: i64,
 ) -> Result<(i64, i128)> {
     let mut data_size_consumed: i64 = 0;
-    let mut occupied_capacity_consumed: i128 = 0;
+    let mut used_capacity_consumed: i128 = 0;
     for tx in tx_slice.iter().filter(|tx| !tx.is_cellbase) {
         for input in &tx.inputs {
             let key = (
@@ -94,10 +94,10 @@ fn resolve_consumed_stats(
                     )
                 })?;
             data_size_consumed += info.data_size as i64;
-            occupied_capacity_consumed += i128::from(info.occupied_capacity);
+            used_capacity_consumed += i128::from(info.occupied_capacity);
         }
     }
-    Ok((data_size_consumed, occupied_capacity_consumed))
+    Ok((data_size_consumed, used_capacity_consumed))
 }
 
 fn build_activity_input_views(
@@ -2472,24 +2472,25 @@ impl Indexer {
                     // RocksDB supports concurrent reads. All other stats computation is
                     // purely CPU-bound on immutable all_parsed_blocks + all_tx_data.
                     let h7 = s.spawn(|| -> Result<(BatchStats, f64)> {
-                    let t = Instant::now();
-                    let mut stats = BatchStats::default();
-                    let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
-                        if let Some(first_block) = all_parsed_blocks.first() {
-                            writer.get_previous_block_timestamp(first_block.number)?
-                        } else {
-                            None
-                        };
-                    let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
-                        if let Some(first_block) = all_parsed_blocks.first() {
-                            writer
-                                .get_last_epoch_start(first_block.number)?
-                                .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
-                        } else {
-                            None
-                        };
-                    let mut prev_dao_cs: Option<(i128, i128)> =
-                        if let Some(first_block) = all_parsed_blocks.first() {
+                        let t = Instant::now();
+                        let mut stats = BatchStats::default();
+                        let mut prev_timestamp: Option<chrono::DateTime<Utc>> =
+                            if let Some(first_block) = all_parsed_blocks.first() {
+                                writer.get_previous_block_timestamp(first_block.number)?
+                            } else {
+                                None
+                            };
+                        let mut prev_epoch: Option<(i64, chrono::DateTime<Utc>, f64)> =
+                            if let Some(first_block) = all_parsed_blocks.first() {
+                                writer
+                                    .get_last_epoch_start(first_block.number)?
+                                    .map(|(epoch_num, ts)| (epoch_num, ts, 0.0))
+                            } else {
+                                None
+                            };
+                        let mut prev_dao_cs: Option<(i128, i128)> = if let Some(first_block) =
+                            all_parsed_blocks.first()
+                        {
                             if first_block.number > 0 {
                                 writer
                                     .store()
@@ -2501,194 +2502,203 @@ impl Indexer {
                         } else {
                             None
                         };
-                    let mut same_batch_dao_deposits: HashMap<(Vec<u8>, i16), i64> = HashMap::new();
+                        let mut same_batch_dao_deposits: HashMap<(Vec<u8>, i16), i64> =
+                            HashMap::new();
 
-                    let mut block_tx_idx = 0usize;
-                    for parsed in all_parsed_blocks {
-                        let block_date = ckbadger_common::block_date(parsed.timestamp);
-                        accumulate_secondary_issuance_deltas(
-                            &mut stats,
-                            parsed,
-                            block_date,
-                            &mut prev_dao_cs,
-                        )?;
-                        let tx_count_for_block = parsed.transactions_count as usize;
-                        let tx_slice =
-                            &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
-                        block_tx_idx += tx_count_for_block;
+                        let mut block_tx_idx = 0usize;
+                        for parsed in all_parsed_blocks {
+                            let block_date = ckbadger_common::block_date(parsed.timestamp);
+                            accumulate_secondary_issuance_deltas(
+                                &mut stats,
+                                parsed,
+                                block_date,
+                                &mut prev_dao_cs,
+                            )?;
+                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let tx_slice =
+                                &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
+                            block_tx_idx += tx_count_for_block;
 
-                        // Exact DAO per-day deltas for snapshot accumulation in bulk mode.
-                        accumulate_dao_snapshot_deltas_for_txs(
-                            tx_slice,
-                            block_date,
-                            &dao_code_hash,
-                            &consumed_dao_map,
-                            &mut same_batch_dao_deposits,
-                            &mut stats.dao_daily_active_delta,
-                            &mut stats.dao_daily_gross_deposit_delta,
-                            &mut stats.dao_daily_new_deposits_delta,
-                            &mut stats.dao_daily_withdrawals_delta,
-                        )?;
+                            // Exact DAO per-day deltas for snapshot accumulation in bulk mode.
+                            accumulate_dao_snapshot_deltas_for_txs(
+                                tx_slice,
+                                block_date,
+                                &dao_code_hash,
+                                &consumed_dao_map,
+                                &mut same_batch_dao_deposits,
+                                &mut stats.dao_daily_active_delta,
+                                &mut stats.dao_daily_gross_deposit_delta,
+                                &mut stats.dao_daily_new_deposits_delta,
+                                &mut stats.dao_daily_withdrawals_delta,
+                            )?;
 
-                        let cells_created: i32 =
-                            tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
-                        let cells_consumed: i32 = tx_slice
-                            .iter()
-                            .filter(|tx| !tx.is_cellbase)
-                            .map(|tx| tx.inputs.len() as i32)
-                            .sum();
-                        let capacity_transferred: i128 = tx_slice
-                            .iter()
-                            .filter(|tx| !tx.is_cellbase)
-                            .map(|tx| i128::from(tx.total_output_capacity))
-                            .sum();
-                        let data_size_added: i64 = tx_slice
-                            .iter()
-                            .flat_map(|tx| tx.cells.iter())
-                            .map(|cell| cell.data_size as i64)
-                            .sum();
-                        let occupied_capacity_created: i128 = tx_slice
-                            .iter()
-                            .flat_map(|tx| tx.cells.iter())
-                            .map(|cell| {
-                                occupied_capacity_shannons_i128(
-                                    cell.lock_args.len(),
-                                    cell.type_args.as_ref().map(|args| args.len()),
-                                    cell.data_size,
-                                )
-                            })
-                            .sum();
-                        let (data_size_consumed, occupied_capacity_consumed) =
-                            resolve_consumed_stats(tx_slice, &input_cell_info, &batch_cell_infos, parsed.number)?;
+                            let cells_created: i32 =
+                                tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
+                            let cells_consumed: i32 = tx_slice
+                                .iter()
+                                .filter(|tx| !tx.is_cellbase)
+                                .map(|tx| tx.inputs.len() as i32)
+                                .sum();
+                            let capacity_transferred: i128 = tx_slice
+                                .iter()
+                                .filter(|tx| !tx.is_cellbase)
+                                .map(|tx| i128::from(tx.total_output_capacity))
+                                .sum();
+                            let data_size_added: i64 = tx_slice
+                                .iter()
+                                .flat_map(|tx| tx.cells.iter())
+                                .map(|cell| cell.data_size as i64)
+                                .sum();
+                            let used_capacity_created: i128 = tx_slice
+                                .iter()
+                                .flat_map(|tx| tx.cells.iter())
+                                .map(|cell| {
+                                    occupied_capacity_shannons_i128(
+                                        cell.lock_args.len(),
+                                        cell.type_args.as_ref().map(|args| args.len()),
+                                        cell.data_size,
+                                    )
+                                })
+                                .sum();
+                            let (data_size_consumed, used_capacity_consumed) =
+                                resolve_consumed_stats(
+                                    tx_slice,
+                                    &input_cell_info,
+                                    &batch_cell_infos,
+                                    parsed.number,
+                                )?;
 
-                        stats.sync_totals.0 += parsed.transactions_count as i64;
-                        stats.sync_totals.1 += cells_created as i64;
-                        stats.sync_totals.2 += cells_consumed as i64;
-                        stats.last_block = Some((parsed.number, parsed.hash.clone()));
+                            stats.sync_totals.0 += parsed.transactions_count as i64;
+                            stats.sync_totals.1 += cells_created as i64;
+                            stats.sync_totals.2 += cells_consumed as i64;
+                            stats.last_block = Some((parsed.number, parsed.hash.clone()));
 
-                        {
-                            let entry = stats.daily_stats.entry(block_date).or_default();
-                            entry.0 += 1;
-                            entry.1 += parsed.transactions_count;
-                            entry.2 += cells_created;
-                            entry.3 += cells_consumed;
-                            entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
-                                anyhow!(
-                                    "daily capacity_transferred overflow: date={} block={}",
-                                    block_date,
-                                    parsed.number
-                                )
-                            })?;
-                            entry.5 = entry
-                                .5
-                                .checked_add(occupied_capacity_created)
-                                .ok_or_else(|| {
-                                    anyhow!(
-                                        "daily occupied_capacity_created overflow: date={} block={}",
+                            {
+                                let entry = stats.daily_stats.entry(block_date).or_default();
+                                entry.0 += 1;
+                                entry.1 += parsed.transactions_count;
+                                entry.2 += cells_created;
+                                entry.3 += cells_consumed;
+                                entry.4 =
+                                    entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                                        anyhow!(
+                                            "daily capacity_transferred overflow: date={} block={}",
+                                            block_date,
+                                            parsed.number
+                                        )
+                                    })?;
+                                entry.5 = entry.5.checked_add(used_capacity_created).ok_or_else(
+                                    || {
+                                        anyhow!(
+                                        "daily used_capacity_created overflow: date={} block={}",
                                         block_date,
                                         parsed.number
                                     )
-                                })?;
-                            entry.6 = entry
-                                .6
-                                .checked_add(occupied_capacity_consumed)
-                                .ok_or_else(|| {
-                                    anyhow!(
-                                        "daily occupied_capacity_consumed overflow: date={} block={}",
+                                    },
+                                )?;
+                                entry.6 = entry.6.checked_add(used_capacity_consumed).ok_or_else(
+                                    || {
+                                        anyhow!(
+                                        "daily used_capacity_consumed overflow: date={} block={}",
                                         block_date,
                                         parsed.number
                                     )
-                                })?;
-                            entry.7 += data_size_added;
-                            entry.8 += data_size_consumed;
-                        }
-                        stats
-                            .daily_dao_fields
-                            .insert(block_date, parsed.dao.clone());
-                        {
-                            let block_hour = truncate_to_hour(parsed.timestamp);
-                            let entry = stats.hourly_stats.entry(block_hour).or_default();
-                            entry.0 += 1;
-                            entry.1 += parsed.transactions_count;
-                            entry.2 += cells_created;
-                            entry.3 += cells_consumed;
-                            entry.4 = entry.4.checked_add(capacity_transferred).ok_or_else(|| {
-                                anyhow!(
+                                    },
+                                )?;
+                                entry.7 += data_size_added;
+                                entry.8 += data_size_consumed;
+                            }
+                            stats
+                                .daily_dao_fields
+                                .insert(block_date, parsed.dao.clone());
+                            {
+                                let block_hour = truncate_to_hour(parsed.timestamp);
+                                let entry = stats.hourly_stats.entry(block_hour).or_default();
+                                entry.0 += 1;
+                                entry.1 += parsed.transactions_count;
+                                entry.2 += cells_created;
+                                entry.3 += cells_consumed;
+                                entry.4 =
+                                    entry.4.checked_add(capacity_transferred).ok_or_else(|| {
+                                        anyhow!(
                                     "hourly capacity_transferred overflow: hour={} block={}",
                                     block_hour,
                                     parsed.number
                                 )
-                            })?;
-                        }
-                        {
-                            let entry = stats.daily_block_stats.entry(block_date).or_default();
-                            entry.0 += parsed.compact_target as i128;
-                            entry.1 += 1;
-                            entry.2 += parsed.uncles_count;
-                        }
-                        if let Some(first_tx) = tx_slice.first() {
-                            if first_tx.is_cellbase {
-                                if let Some(first_cell) = first_tx.cells.first() {
-                                    let key = (block_date, first_cell.lock_script_hash.clone());
-                                    let entry = stats.miner_stats.entry(key).or_insert((0, 0));
-                                    entry.0 += 1;
-                                    entry.1 = parsed.number;
-                                }
+                                    })?;
                             }
-                        }
-                        {
-                            let entry = stats
-                                .epoch_stats
-                                .entry(parsed.epoch_number)
-                                .or_insert_with(|| EpochAccum {
-                                    start_block: parsed.number,
-                                    end_block: parsed.number,
-                                    length: parsed.epoch_length,
-                                    start_ts: parsed.timestamp,
-                                    end_ts: parsed.timestamp,
-                                    tx_count: 0,
-                                    is_new: parsed.epoch_index == 0,
-                                });
-                            entry.end_block = parsed.number;
-                            entry.end_ts = parsed.timestamp;
-                            entry.tx_count += parsed.transactions_count;
-                        }
-
-                        if let Some(prev_ts) = prev_timestamp {
-                            let block_time_seconds = (parsed.timestamp - prev_ts).num_seconds();
-                            if block_time_seconds >= 0 {
-                                *stats
-                                    .block_time_dist
-                                    .entry(block_time_to_bucket(block_time_seconds))
-                                    .or_default() += 1;
-                                let block_time_ms = block_time_seconds * 1000;
-                                let entry =
-                                    stats.daily_block_times.entry(block_date).or_insert((0, 0));
-                                entry.0 += block_time_ms;
+                            {
+                                let entry = stats.daily_block_stats.entry(block_date).or_default();
+                                entry.0 += parsed.compact_target as i128;
                                 entry.1 += 1;
+                                entry.2 += parsed.uncles_count;
                             }
-                        }
-                        prev_timestamp = Some(parsed.timestamp);
-
-                        if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
-                            if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
-                                if prev_epoch_num == parsed.epoch_number - 1 {
-                                    let epoch_duration_minutes =
-                                        (parsed.timestamp - prev_start_ts).num_seconds() as f64
-                                            / 60.0;
-                                    let bucket_minutes = epoch_duration_minutes.round() as i32;
-                                    *stats.epoch_time_dist.entry(bucket_minutes).or_default() += 1;
+                            if let Some(first_tx) = tx_slice.first() {
+                                if first_tx.is_cellbase {
+                                    if let Some(first_cell) = first_tx.cells.first() {
+                                        let key = (block_date, first_cell.lock_script_hash.clone());
+                                        let entry = stats.miner_stats.entry(key).or_insert((0, 0));
+                                        entry.0 += 1;
+                                        entry.1 = parsed.number;
+                                    }
                                 }
                             }
+                            {
+                                let entry = stats
+                                    .epoch_stats
+                                    .entry(parsed.epoch_number)
+                                    .or_insert_with(|| EpochAccum {
+                                        start_block: parsed.number,
+                                        end_block: parsed.number,
+                                        length: parsed.epoch_length,
+                                        start_ts: parsed.timestamp,
+                                        end_ts: parsed.timestamp,
+                                        tx_count: 0,
+                                        is_new: parsed.epoch_index == 0,
+                                    });
+                                entry.end_block = parsed.number;
+                                entry.end_ts = parsed.timestamp;
+                                entry.tx_count += parsed.transactions_count;
+                            }
+
+                            if let Some(prev_ts) = prev_timestamp {
+                                let block_time_seconds = (parsed.timestamp - prev_ts).num_seconds();
+                                if block_time_seconds >= 0 {
+                                    *stats
+                                        .block_time_dist
+                                        .entry(block_time_to_bucket(block_time_seconds))
+                                        .or_default() += 1;
+                                    let block_time_ms = block_time_seconds * 1000;
+                                    let entry =
+                                        stats.daily_block_times.entry(block_date).or_insert((0, 0));
+                                    entry.0 += block_time_ms;
+                                    entry.1 += 1;
+                                }
+                            }
+                            prev_timestamp = Some(parsed.timestamp);
+
+                            if parsed.epoch_index == 0 && parsed.epoch_number > 0 {
+                                if let Some((prev_epoch_num, prev_start_ts, _)) = prev_epoch {
+                                    if prev_epoch_num == parsed.epoch_number - 1 {
+                                        let epoch_duration_minutes =
+                                            (parsed.timestamp - prev_start_ts).num_seconds() as f64
+                                                / 60.0;
+                                        let bucket_minutes = epoch_duration_minutes.round() as i32;
+                                        *stats
+                                            .epoch_time_dist
+                                            .entry(bucket_minutes)
+                                            .or_default() += 1;
+                                    }
+                                }
+                            }
+                            if parsed.epoch_index == 0 {
+                                prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
+                            }
+                            stats.dao_snapshot_dates.insert(block_date);
                         }
-                        if parsed.epoch_index == 0 {
-                            prev_epoch = Some((parsed.epoch_number, parsed.timestamp, 0.0));
-                        }
-                        stats.dao_snapshot_dates.insert(block_date);
-                    }
-                    stats.dao_deltas_computed = true;
-                    Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
-                });
+                        stats.dao_deltas_computed = true;
+                        Ok((stats, t.elapsed().as_secs_f64() * 1000.0))
+                    });
 
                     // T_ACT: Activity builder + daily activity stats accumulation
                     // CFs: ACTIVITIES
@@ -4174,7 +4184,7 @@ impl Indexer {
                     .flat_map(|tx| tx.cells.iter())
                     .map(|cell| cell.data_size as i64)
                     .sum();
-                let occupied_capacity_created: i128 = tx_slice
+                let used_capacity_created: i128 = tx_slice
                     .iter()
                     .flat_map(|tx| tx.cells.iter())
                     .map(|cell| {
@@ -4185,7 +4195,7 @@ impl Indexer {
                         )
                     })
                     .sum();
-                let (data_size_consumed, occupied_capacity_consumed) = resolve_consumed_stats(
+                let (data_size_consumed, used_capacity_consumed) = resolve_consumed_stats(
                     tx_slice,
                     &input_cell_info,
                     &batch_cell_infos,
@@ -4210,26 +4220,20 @@ impl Indexer {
                             parsed.number
                         )
                     })?;
-                    entry.5 = entry
-                        .5
-                        .checked_add(occupied_capacity_created)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "daily occupied_capacity_created overflow: date={} block={}",
-                                block_date,
-                                parsed.number
-                            )
-                        })?;
-                    entry.6 = entry
-                        .6
-                        .checked_add(occupied_capacity_consumed)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "daily occupied_capacity_consumed overflow: date={} block={}",
-                                block_date,
-                                parsed.number
-                            )
-                        })?;
+                    entry.5 = entry.5.checked_add(used_capacity_created).ok_or_else(|| {
+                        anyhow!(
+                            "daily used_capacity_created overflow: date={} block={}",
+                            block_date,
+                            parsed.number
+                        )
+                    })?;
+                    entry.6 = entry.6.checked_add(used_capacity_consumed).ok_or_else(|| {
+                        anyhow!(
+                            "daily used_capacity_consumed overflow: date={} block={}",
+                            block_date,
+                            parsed.number
+                        )
+                    })?;
                     entry.7 += data_size_added;
                     entry.8 += data_size_consumed;
                 }

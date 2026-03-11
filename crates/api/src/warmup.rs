@@ -52,7 +52,7 @@ pub struct CachedAssetEntry {
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
     pub live_capacity: Option<String>,
-    pub live_occupied_capacity: Option<String>,
+    pub live_used_capacity: Option<String>,
     pub storage_tier: Option<String>,
     pub fully_onchain_ratio: Option<String>,
     pub fully_onchain_count: Option<i64>,
@@ -145,12 +145,12 @@ impl CachedAssetEntry {
             cluster_id: self.cluster_id.clone(),
             cluster_name: self.cluster_name.clone(),
             live_capacity: self.live_capacity.clone(),
-            live_occupied_capacity: self.live_occupied_capacity.clone(),
+            live_used_capacity: self.live_used_capacity.clone(),
             storage_tier: self.storage_tier.clone(),
             fully_onchain_ratio: self.fully_onchain_ratio.clone(),
             fully_onchain_count: self.fully_onchain_count,
             h_multiplier: {
-                match (&self.live_capacity, &self.live_occupied_capacity) {
+                match (&self.live_capacity, &self.live_used_capacity) {
                     (Some(cap_str), Some(occ_str)) => {
                         let cap: f64 = cap_str.parse().unwrap_or(0.0);
                         let occ: f64 = occ_str.parse().unwrap_or(0.0);
@@ -328,7 +328,7 @@ fn refresh_address_cache_sync(state: &AppState) -> anyhow::Result<()> {
             {
                 let cohort = first_seen_date.format("%Y-%m").to_string();
                 let entry = cohorts.entry(cohort).or_insert((0, 0));
-                entry.0 += balance.occupied_capacity;
+                entry.0 += balance.used_capacity;
                 entry.1 += balance.balance;
             }
         }
@@ -455,20 +455,18 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
 
         let transfers_24h = transfers_24h_map.get(hash.as_slice()).copied().unwrap_or(0);
         let token_daily = state.store.list_token_daily_deltas(hash)?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(token_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "invalid token daily deltas during warmup for type_hash=0x{}: {}",
-                    hex::encode(hash),
-                    err
-                )
-            })?;
+        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+            token_daily
+                .into_iter()
+                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+        )
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "invalid token daily deltas during warmup for type_hash=0x{}: {}",
+                hex::encode(hash),
+                err
+            )
+        })?;
 
         token_assets.push(CachedAssetEntry {
             id: format!("0x{}", hex::encode(hash)),
@@ -488,7 +486,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_id: None,
             cluster_name: None,
             live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            live_used_capacity: Some(live_used_capacity.to_string()),
             storage_tier: None,
             fully_onchain_ratio: None,
             fully_onchain_count: None,
@@ -532,20 +530,18 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             .copied()
             .unwrap_or(0);
         let cluster_daily = state.store.list_cluster_daily_deltas(cluster_id_bytes)?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(cluster_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "invalid cluster daily capacity deltas for cluster_id=0x{}: {}",
-                    hex::encode(cluster_id_bytes),
-                    e
-                )
-            })?;
+        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+            cluster_daily
+                .into_iter()
+                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "invalid cluster daily capacity deltas for cluster_id=0x{}: {}",
+                hex::encode(cluster_id_bytes),
+                e
+            )
+        })?;
         let fully_onchain_ratio = format_ratio_4(agg.fully_onchain_count, agg.live_count);
         let storage_tier = resolve_storage_tier(
             agg.fully_onchain_count,
@@ -572,7 +568,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_id: Some(cluster_hex),
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            live_used_capacity: Some(live_used_capacity.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
             fully_onchain_count: Some(agg.fully_onchain_count),
@@ -615,20 +611,18 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let nft_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(nft_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "invalid NFT daily capacity deltas for collection_id=0x{}: {}",
-                    hex::encode(collection_id_bytes),
-                    e
-                )
-            })?;
+        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+            nft_daily
+                .into_iter()
+                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "invalid NFT daily capacity deltas for collection_id=0x{}: {}",
+                hex::encode(collection_id_bytes),
+                e
+            )
+        })?;
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
@@ -648,7 +642,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_id: Some(collection_hex.clone()),
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            live_used_capacity: Some(live_used_capacity.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
             fully_onchain_count: Some(fully_onchain_count),
@@ -685,20 +679,18 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
         };
         let fully_onchain_ratio = format_ratio_4(fully_onchain_count, agg.live_count);
         let id_daily = state.store.list_object_daily_deltas(collection_id_bytes)?;
-        let (live_capacity, live_occupied_capacity) =
-            accumulate_live_capacity(id_daily.into_iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "invalid identity daily capacity deltas for collection_id=0x{}: {}",
-                    hex::encode(collection_id_bytes),
-                    e
-                )
-            })?;
+        let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+            id_daily
+                .into_iter()
+                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "invalid identity daily capacity deltas for collection_id=0x{}: {}",
+                hex::encode(collection_id_bytes),
+                e
+            )
+        })?;
 
         nft_assets.push(CachedAssetEntry {
             id: collection_hex.clone(),
@@ -718,7 +710,7 @@ fn refresh_assets_cache_sync(state: &AppState) -> anyhow::Result<()> {
             cluster_id: Some(collection_hex.clone()),
             cluster_name: display_name,
             live_capacity: Some(live_capacity.to_string()),
-            live_occupied_capacity: Some(live_occupied_capacity.to_string()),
+            live_used_capacity: Some(live_used_capacity.to_string()),
             storage_tier: Some(storage_tier),
             fully_onchain_ratio: Some(fully_onchain_ratio),
             fully_onchain_count: Some(fully_onchain_count),
@@ -787,17 +779,17 @@ fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, Strin
         ">=1m CKB",
     ];
     let mut bucket_counts = vec![0_i128; bucket_labels.len()];
-    let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
+    let mut bucket_used = vec![0_i128; bucket_labels.len()];
 
     visit_live_cells_in_batches(
         state.store.as_ref(),
         state.append_only_store.as_ref(),
         |cell| {
-            let occupied = cell.occupied_capacity as i128;
-            if occupied < 0 {
+            let used_cap = cell.occupied_capacity as i128;
+            if used_cap < 0 {
                 return Err(format!(
                 "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, occupied
+                cell.created_at_block, used_cap
             ));
             }
 
@@ -811,18 +803,18 @@ fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, Strin
                 ));
                 }
                 match age_days_raw {
-                    0 => lt_1d += occupied,
-                    1..=6 => d1_7d += occupied,
-                    7..=29 => d7_30d += occupied,
-                    30..=179 => d30_180d += occupied,
-                    _ => gt_180d += occupied,
+                    0 => lt_1d += used_cap,
+                    1..=6 => d1_7d += used_cap,
+                    7..=29 => d7_30d += used_cap,
+                    30..=179 => d30_180d += used_cap,
+                    _ => gt_180d += used_cap,
                 }
             }
 
             // Cell size accumulation
-            let idx = occupied_capacity_bucket_index(occupied);
+            let idx = occupied_capacity_bucket_index(used_cap);
             bucket_counts[idx] += 1;
-            bucket_occupied[idx] += occupied;
+            bucket_used[idx] += used_cap;
 
             Ok(())
         },
@@ -880,7 +872,7 @@ fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, Strin
                 color: "#ef4444".to_string(),
             },
         ],
-        title: "Cell Age vs Occupied Capacity".to_string(),
+        title: "Cell Age vs Used Capacity".to_string(),
     };
 
     // Build cell-size response
@@ -890,7 +882,7 @@ fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, Strin
         .map(|(idx, label)| ChartDataPoint {
             date: (*label).to_string(),
             value: bucket_counts[idx].to_string(),
-            value2: Some(shannon_to_ckb_string(bucket_occupied[idx])),
+            value2: Some(shannon_to_ckb_string(bucket_used[idx])),
         })
         .collect();
 
@@ -898,7 +890,7 @@ fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, Strin
         data: cell_size_data,
         title: "Cell Size Distribution".to_string(),
         y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
     };
 
     Ok(LiveCellChartData {

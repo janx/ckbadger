@@ -459,7 +459,7 @@ const MOST_UTILIZED_LIMIT: usize = 20;
 #[serde(rename_all = "camelCase")]
 pub struct MostUtilizedScriptsChartResponse {
     pub title: String,
-    pub occupied_share: StackedAreaChartResponse,
+    pub used_share: StackedAreaChartResponse,
     pub capacity_share: StackedAreaChartResponse,
 }
 
@@ -467,34 +467,34 @@ pub struct MostUtilizedScriptsChartResponse {
 #[serde(rename_all = "camelCase")]
 pub struct MostUtilizedAssetsChartResponse {
     pub title: String,
-    pub occupied_share: StackedAreaChartResponse,
+    pub used_share: StackedAreaChartResponse,
     pub capacity_share: StackedAreaChartResponse,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum UtilizationMetric {
-    Occupied,
+    Used,
     Capacity,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EntityState {
     total_cells_capacity: i128,
-    occupied_capacity: i128,
+    used_capacity: i128,
 }
 
 #[derive(Debug, Clone)]
 struct ScriptEntity {
     key: String,
     final_total_cells_capacity: i128,
-    final_occupied_capacity: i128,
+    final_used_capacity: i128,
 }
 
 #[derive(Debug, Clone)]
 struct AssetEntity {
     key: String,
     final_total_cells_capacity: i128,
-    final_occupied_capacity: i128,
+    final_used_capacity: i128,
 }
 
 fn is_known_script_name(name: &str) -> bool {
@@ -508,7 +508,7 @@ fn format_asset_label(name: &str, asset_type: &str) -> String {
 
 fn metric_value(state: &EntityState, metric: UtilizationMetric) -> i128 {
     match metric {
-        UtilizationMetric::Occupied => state.occupied_capacity,
+        UtilizationMetric::Used => state.used_capacity,
         UtilizationMetric::Capacity => state.total_cells_capacity,
     }
 }
@@ -526,26 +526,26 @@ fn top_keys_by_metric<T>(
     entities: &[T],
     metric: UtilizationMetric,
     key_of: impl Fn(&T) -> &str,
-    occupied_of: impl Fn(&T) -> i128,
+    used_of: impl Fn(&T) -> i128,
     capacity_of: impl Fn(&T) -> i128,
 ) -> Vec<String> {
     let mut keys: Vec<&T> = entities.iter().collect();
     keys.sort_by(|a, b| {
         let a_metric = match metric {
-            UtilizationMetric::Occupied => occupied_of(a),
+            UtilizationMetric::Used => used_of(a),
             UtilizationMetric::Capacity => capacity_of(a),
         };
         let b_metric = match metric {
-            UtilizationMetric::Occupied => occupied_of(b),
+            UtilizationMetric::Used => used_of(b),
             UtilizationMetric::Capacity => capacity_of(b),
         };
         let a_secondary = match metric {
-            UtilizationMetric::Occupied => capacity_of(a),
-            UtilizationMetric::Capacity => occupied_of(a),
+            UtilizationMetric::Used => capacity_of(a),
+            UtilizationMetric::Capacity => used_of(a),
         };
         let b_secondary = match metric {
-            UtilizationMetric::Occupied => capacity_of(b),
-            UtilizationMetric::Capacity => occupied_of(b),
+            UtilizationMetric::Used => capacity_of(b),
+            UtilizationMetric::Capacity => used_of(b),
         };
         b_metric
             .cmp(&a_metric)
@@ -561,16 +561,16 @@ fn top_keys_by_metric<T>(
 
 fn apply_capacity_delta_i128(
     total_cells_capacity: i128,
-    occupied_capacity: i128,
+    used_capacity: i128,
     capacity_delta: i128,
-    occupied_delta: i128,
+    used_delta: i128,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
     apply_live_capacity_delta(
         total_cells_capacity,
-        occupied_capacity,
+        used_capacity,
         capacity_delta,
-        occupied_delta,
+        used_delta,
         context,
     )
     .map_err(|e| ApiError::internal(e.to_string()))
@@ -581,20 +581,20 @@ where
     I: IntoIterator<Item = (i128, i128)>,
 {
     let mut total_cells_capacity: i128 = 0;
-    let mut occupied_capacity: i128 = 0;
+    let mut used_capacity: i128 = 0;
 
-    for (idx, (capacity_delta, occupied_delta)) in deltas.into_iter().enumerate() {
-        (total_cells_capacity, occupied_capacity) = apply_live_capacity_delta(
+    for (idx, (capacity_delta, used_delta)) in deltas.into_iter().enumerate() {
+        (total_cells_capacity, used_capacity) = apply_live_capacity_delta(
             total_cells_capacity,
-            occupied_capacity,
+            used_capacity,
             capacity_delta,
-            occupied_delta,
+            used_delta,
             &format!("accumulating capacity deltas at step {}", idx + 1),
         )
         .map_err(|e| ApiError::internal(e.to_string()))?;
     }
 
-    Ok((total_cells_capacity, occupied_capacity))
+    Ok((total_cells_capacity, used_capacity))
 }
 
 fn build_most_utilized_share_chart(
@@ -607,7 +607,7 @@ fn build_most_utilized_share_chart(
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
     let mut states: HashMap<String, EntityState> = HashMap::new();
     let mut total_cells_capacity: i128 = 0;
-    let mut total_occupied_capacity: i128 = 0;
+    let mut total_used_capacity: i128 = 0;
 
     let mut series: Vec<StackedAreaSeries> = top_keys
         .iter()
@@ -630,20 +630,20 @@ fn build_most_utilized_share_chart(
     let mut data: Vec<StackedAreaDataPoint> = Vec::with_capacity(dates.len());
     for date in dates {
         if let Some(deltas) = deltas_by_date.get(date) {
-            for (entity_key, capacity_delta, occupied_delta) in deltas {
+            for (entity_key, capacity_delta, used_delta) in deltas {
                 let state = states.entry(entity_key.clone()).or_insert(EntityState {
                     total_cells_capacity: 0,
-                    occupied_capacity: 0,
+                    used_capacity: 0,
                 });
 
                 let old_capacity = state.total_cells_capacity;
-                let old_occupied = state.occupied_capacity;
+                let old_used = state.used_capacity;
 
-                let (new_capacity, new_occupied) = apply_live_capacity_delta(
+                let (new_capacity, new_used) = apply_live_capacity_delta(
                     old_capacity,
-                    old_occupied,
+                    old_used,
                     *capacity_delta,
-                    *occupied_delta,
+                    *used_delta,
                     &format!(
                         "building most-utilized share chart for {} on date {}",
                         entity_key, date
@@ -652,10 +652,10 @@ fn build_most_utilized_share_chart(
                 .map_err(|e| ApiError::internal(e.to_string()))?;
 
                 state.total_cells_capacity = new_capacity;
-                state.occupied_capacity = new_occupied;
+                state.used_capacity = new_used;
 
                 total_cells_capacity += new_capacity - old_capacity;
-                total_occupied_capacity += new_occupied - old_occupied;
+                total_used_capacity += new_used - old_used;
             }
         }
 
@@ -677,7 +677,7 @@ fn build_most_utilized_share_chart(
         }
 
         let total = match metric {
-            UtilizationMetric::Occupied => total_occupied_capacity,
+            UtilizationMetric::Used => total_used_capacity,
             UtilizationMetric::Capacity => total_cells_capacity,
         };
         if total < 0 {
@@ -744,29 +744,29 @@ async fn get_most_utilized_scripts_chart(
         labels_by_key.insert(key.clone(), label);
 
         let final_total_cells_capacity = info.lock_live_capacity_sum + info.type_live_capacity_sum;
-        let final_occupied_capacity =
-            info.lock_live_occupied_capacity_sum + info.type_live_occupied_capacity_sum;
+        let final_used_capacity =
+            info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum;
         if final_total_cells_capacity < 0 {
             return Err(ApiError::internal(format!(
                 "negative script total capacity for key {}: {}",
                 key, final_total_cells_capacity
             )));
         }
-        if final_occupied_capacity < 0 {
+        if final_used_capacity < 0 {
             return Err(ApiError::internal(format!(
-                "negative script occupied capacity for key {}: {}",
-                key, final_occupied_capacity
+                "negative script used capacity for key {}: {}",
+                key, final_used_capacity
             )));
         }
-        if final_occupied_capacity > final_total_cells_capacity {
+        if final_used_capacity > final_total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "script occupied capacity exceeds total for key {}: occupied={}, total={}",
-                key, final_occupied_capacity, final_total_cells_capacity
+                "script used capacity exceeds total for key {}: used={}, total={}",
+                key, final_used_capacity, final_total_cells_capacity
             )));
         }
         let entry = final_by_key.entry(key.clone()).or_insert((0, 0));
         entry.0 += final_total_cells_capacity;
-        entry.1 += final_occupied_capacity;
+        entry.1 += final_used_capacity;
 
         for is_type in [false, true] {
             let deltas = state
@@ -777,7 +777,7 @@ async fn get_most_utilized_scripts_chart(
                 deltas_by_date.entry(date).or_default().push((
                     key.clone(),
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 ));
             }
         }
@@ -785,59 +785,59 @@ async fn get_most_utilized_scripts_chart(
 
     let entities_unfiltered: Vec<ScriptEntity> = final_by_key
         .iter()
-        .map(|(key, (capacity, occupied))| -> Result<ScriptEntity, ApiRouteError> {
-            if *capacity < 0 {
-                return Err(ApiError::internal(format!(
-                    "negative aggregated script total capacity for key {}: {}",
-                    key, capacity
+        .map(
+            |(key, (capacity, used))| -> Result<ScriptEntity, ApiRouteError> {
+                if *capacity < 0 {
+                    return Err(ApiError::internal(format!(
+                        "negative aggregated script total capacity for key {}: {}",
+                        key, capacity
+                    )));
+                }
+                if *used < 0 {
+                    return Err(ApiError::internal(format!(
+                        "negative aggregated script used capacity for key {}: {}",
+                        key, used
+                    )));
+                }
+                if *used > *capacity {
+                    return Err(ApiError::internal(format!(
+                    "aggregated script used capacity exceeds total for key {}: used={}, total={}",
+                    key, used, capacity
                 )));
-            }
-            if *occupied < 0 {
-                return Err(ApiError::internal(format!(
-                    "negative aggregated script occupied capacity for key {}: {}",
-                    key, occupied
-                )));
-            }
-            if *occupied > *capacity {
-                return Err(ApiError::internal(format!(
-                    "aggregated script occupied capacity exceeds total for key {}: occupied={}, total={}",
-                    key, occupied, capacity
-                )));
-            }
-            Ok(ScriptEntity {
-                key: key.clone(),
-                final_total_cells_capacity: *capacity,
-                final_occupied_capacity: *occupied,
-            })
-        })
+                }
+                Ok(ScriptEntity {
+                    key: key.clone(),
+                    final_total_cells_capacity: *capacity,
+                    final_used_capacity: *used,
+                })
+            },
+        )
         .collect::<Result<Vec<_>, _>>()?;
     let entities: Vec<ScriptEntity> = entities_unfiltered
         .into_iter()
-        .filter(|entity| {
-            entity.final_total_cells_capacity > 0 || entity.final_occupied_capacity > 0
-        })
+        .filter(|entity| entity.final_total_cells_capacity > 0 || entity.final_used_capacity > 0)
         .collect();
 
-    let top_occupied_keys = top_keys_by_metric(
+    let top_used_keys = top_keys_by_metric(
         &entities,
-        UtilizationMetric::Occupied,
+        UtilizationMetric::Used,
         |entity| &entity.key,
-        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_used_capacity,
         |entity| entity.final_total_cells_capacity,
     );
     let top_capacity_keys = top_keys_by_metric(
         &entities,
         UtilizationMetric::Capacity,
         |entity| &entity.key,
-        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_used_capacity,
         |entity| entity.final_total_cells_capacity,
     );
 
     let dates: Vec<u32> = deltas_by_date.keys().copied().collect();
-    let occupied_share = build_most_utilized_share_chart(
-        "Top Scripts Occupied Share".to_string(),
-        UtilizationMetric::Occupied,
-        &top_occupied_keys,
+    let used_share = build_most_utilized_share_chart(
+        "Top Scripts Used Share".to_string(),
+        UtilizationMetric::Used,
+        &top_used_keys,
         &labels_by_key,
         &dates,
         &deltas_by_date,
@@ -852,8 +852,8 @@ async fn get_most_utilized_scripts_chart(
     )?;
 
     let response = MostUtilizedScriptsChartResponse {
-        title: "Scripts Occupied & Total CKBytes".to_string(),
-        occupied_share,
+        title: "Scripts Used & Total CKBytes".to_string(),
+        used_share,
         capacity_share,
     };
 
@@ -893,14 +893,12 @@ async fn get_most_utilized_assets_chart(
             .store
             .list_token_daily_deltas(&type_hash)
             .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (total_cells_capacity, occupied_capacity) =
-            accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))?;
-        if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+        let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
+            deltas
+                .iter()
+                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+        )?;
+        if total_cells_capacity <= 0 && used_cap <= 0 {
             continue;
         }
         let id = token.id;
@@ -911,22 +909,22 @@ async fn get_most_utilized_assets_chart(
             .unwrap_or_else(|| id.clone());
         let entity_key = format!("token:{id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "token"));
-        if occupied_capacity > total_cells_capacity {
+        if used_cap > total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "token occupied capacity exceeds total for {}: occupied={}, total={}",
-                entity_key, occupied_capacity, total_cells_capacity
+                "token used capacity exceeds total for {}: used={}, total={}",
+                entity_key, used_cap, total_cells_capacity
             )));
         }
         entities.push(AssetEntity {
             key: entity_key.clone(),
             final_total_cells_capacity: total_cells_capacity,
-            final_occupied_capacity: occupied_capacity,
+            final_used_capacity: used_cap,
         });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
                 entity_key.clone(),
                 delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
+                delta.live_used_capacity_delta,
             ));
         }
     }
@@ -949,35 +947,32 @@ async fn get_most_utilized_assets_chart(
                 .store
                 .list_cluster_daily_deltas(&cluster_bytes)
                 .map_err(|e| ApiError::internal(e.to_string()))?;
-            let (total_cells_capacity, occupied_capacity) =
+            let (total_cells_capacity, used_cap) =
                 accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
-                    (
-                        delta.live_capacity_delta,
-                        delta.live_occupied_capacity_delta,
-                    )
+                    (delta.live_capacity_delta, delta.live_used_capacity_delta)
                 }))?;
-            if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+            if total_cells_capacity <= 0 && used_cap <= 0 {
                 continue;
             }
             let name = nft.name.clone().unwrap_or_else(|| cluster_id.clone());
             let entity_key = format!("dob:{cluster_id}");
             labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
-            if occupied_capacity > total_cells_capacity {
+            if used_cap > total_cells_capacity {
                 return Err(ApiError::internal(format!(
-                    "DOB occupied capacity exceeds total for {}: occupied={}, total={}",
-                    entity_key, occupied_capacity, total_cells_capacity
+                    "DOB used capacity exceeds total for {}: used={}, total={}",
+                    entity_key, used_cap, total_cells_capacity
                 )));
             }
             entities.push(AssetEntity {
                 key: entity_key.clone(),
                 final_total_cells_capacity: total_cells_capacity,
-                final_occupied_capacity: occupied_capacity,
+                final_used_capacity: used_cap,
             });
             for (date, delta) in deltas {
                 deltas_by_date.entry(date).or_default().push((
                     entity_key.clone(),
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 ));
             }
             continue;
@@ -997,59 +992,57 @@ async fn get_most_utilized_assets_chart(
             .store
             .list_object_daily_deltas(&collection_bytes)
             .map_err(|e| ApiError::internal(e.to_string()))?;
-        let (total_cells_capacity, occupied_capacity) =
-            accumulate_capacity_deltas(deltas.iter().map(|(_, delta)| {
-                (
-                    delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
-                )
-            }))?;
-        if total_cells_capacity <= 0 && occupied_capacity <= 0 {
+        let (total_cells_capacity, used_cap) = accumulate_capacity_deltas(
+            deltas
+                .iter()
+                .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+        )?;
+        if total_cells_capacity <= 0 && used_cap <= 0 {
             continue;
         }
         let name = nft.name.clone().unwrap_or_else(|| collection_id.clone());
         let entity_key = format!("nft:{collection_id}");
         labels_by_key.insert(entity_key.clone(), format_asset_label(&name, "nft"));
-        if occupied_capacity > total_cells_capacity {
+        if used_cap > total_cells_capacity {
             return Err(ApiError::internal(format!(
-                "NFT occupied capacity exceeds total for {}: occupied={}, total={}",
-                entity_key, occupied_capacity, total_cells_capacity
+                "NFT used capacity exceeds total for {}: used={}, total={}",
+                entity_key, used_cap, total_cells_capacity
             )));
         }
         entities.push(AssetEntity {
             key: entity_key.clone(),
             final_total_cells_capacity: total_cells_capacity,
-            final_occupied_capacity: occupied_capacity,
+            final_used_capacity: used_cap,
         });
         for (date, delta) in deltas {
             deltas_by_date.entry(date).or_default().push((
                 entity_key.clone(),
                 delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
+                delta.live_used_capacity_delta,
             ));
         }
     }
 
-    let top_occupied_keys = top_keys_by_metric(
+    let top_used_keys = top_keys_by_metric(
         &entities,
-        UtilizationMetric::Occupied,
+        UtilizationMetric::Used,
         |entity| &entity.key,
-        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_used_capacity,
         |entity| entity.final_total_cells_capacity,
     );
     let top_capacity_keys = top_keys_by_metric(
         &entities,
         UtilizationMetric::Capacity,
         |entity| &entity.key,
-        |entity| entity.final_occupied_capacity,
+        |entity| entity.final_used_capacity,
         |entity| entity.final_total_cells_capacity,
     );
 
     let dates: Vec<u32> = deltas_by_date.keys().copied().collect();
-    let occupied_share = build_most_utilized_share_chart(
-        "Top Assets Occupied Share".to_string(),
-        UtilizationMetric::Occupied,
-        &top_occupied_keys,
+    let used_share = build_most_utilized_share_chart(
+        "Top Assets Used Share".to_string(),
+        UtilizationMetric::Used,
+        &top_used_keys,
         &labels_by_key,
         &dates,
         &deltas_by_date,
@@ -1064,8 +1057,8 @@ async fn get_most_utilized_assets_chart(
     )?;
 
     let response = MostUtilizedAssetsChartResponse {
-        title: "Assets Occupied & Total CKBytes".to_string(),
-        occupied_share,
+        title: "Assets Used & Total CKBytes".to_string(),
+        used_share,
         capacity_share,
     };
 
@@ -1360,15 +1353,15 @@ async fn get_common_knowledge_composition_chart(
             .list_script_daily_deltas_in_range(&code_hash, true, None, None)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (date, delta) in deltas {
-            let occupied_delta = delta.live_occupied_capacity_delta;
-            *type_daily_delta.entry(date).or_insert(0) += occupied_delta;
+            let used_delta = delta.live_used_capacity_delta;
+            *type_daily_delta.entry(date).or_insert(0) += used_delta;
 
             if dao_hashes.contains(&code_hash) {
-                *dao_daily_delta.entry(date).or_insert(0) += occupied_delta;
+                *dao_daily_delta.entry(date).or_insert(0) += used_delta;
             } else if udt_hashes.contains(&code_hash) {
-                *udt_daily_delta.entry(date).or_insert(0) += occupied_delta;
+                *udt_daily_delta.entry(date).or_insert(0) += used_delta;
             } else if nft_spore_hashes.contains(&code_hash) {
-                *nft_spore_daily_delta.entry(date).or_insert(0) += occupied_delta;
+                *nft_spore_daily_delta.entry(date).or_insert(0) += used_delta;
             }
         }
     }
@@ -1673,19 +1666,19 @@ async fn get_cell_age_vs_occupied_capacity_chart(
             ));
         }
         let age_days = age_days_raw;
-        let occupied = cell.occupied_capacity as i128;
-        if occupied < 0 {
+        let used_cap = cell.occupied_capacity as i128;
+        if used_cap < 0 {
             return Err(format!(
                 "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, occupied
+                cell.created_at_block, used_cap
             ));
         }
         match age_days {
-            0 => lt_1d += occupied,
-            1..=6 => d1_7d += occupied,
-            7..=29 => d7_30d += occupied,
-            30..=179 => d30_180d += occupied,
-            _ => gt_180d += occupied,
+            0 => lt_1d += used_cap,
+            1..=6 => d1_7d += used_cap,
+            7..=29 => d7_30d += used_cap,
+            30..=179 => d30_180d += used_cap,
+            _ => gt_180d += used_cap,
         }
         Ok(())
     })
@@ -1742,7 +1735,7 @@ async fn get_cell_age_vs_occupied_capacity_chart(
                 color: "#ef4444".to_string(),
             },
         ],
-        title: "Cell Age vs Occupied Capacity".to_string(),
+        title: "Cell Age vs Used Capacity".to_string(),
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -1776,10 +1769,10 @@ async fn get_capacity_turnover_ratio_chart(
                 date, live
             )));
         }
-        let consumed = stats.occupied_capacity_consumed;
+        let consumed = stats.used_capacity_consumed;
         if consumed < 0 {
             return Err(ApiError::internal(format!(
-                "negative occupied_capacity_consumed in daily_stats for {}: {}",
+                "negative used_capacity_consumed in daily_stats for {}: {}",
                 date, consumed
             )));
         }
@@ -1840,19 +1833,19 @@ async fn get_cell_size_distribution_chart(
         ">=1m CKB",
     ];
     let mut bucket_counts = vec![0_i128; bucket_labels.len()];
-    let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
+    let mut bucket_used = vec![0_i128; bucket_labels.len()];
 
     visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
-        let occupied = cell.occupied_capacity as i128;
-        if occupied < 0 {
+        let used_cap = cell.occupied_capacity as i128;
+        if used_cap < 0 {
             return Err(format!(
                 "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, occupied
+                cell.created_at_block, used_cap
             ));
         }
-        let idx = occupied_capacity_bucket_index(occupied);
+        let idx = occupied_capacity_bucket_index(used_cap);
         bucket_counts[idx] += 1;
-        bucket_occupied[idx] += occupied;
+        bucket_used[idx] += used_cap;
         Ok(())
     })
     .map_err(ApiError::internal)?;
@@ -1863,7 +1856,7 @@ async fn get_cell_size_distribution_chart(
         .map(|(idx, label)| ChartDataPoint {
             date: (*label).to_string(),
             value: bucket_counts[idx].to_string(),
-            value2: Some(shannon_to_ckb_string(bucket_occupied[idx])),
+            value2: Some(shannon_to_ckb_string(bucket_used[idx])),
         })
         .collect();
 
@@ -1871,7 +1864,7 @@ async fn get_cell_size_distribution_chart(
         data,
         title: "Cell Size Distribution".to_string(),
         y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -1894,16 +1887,16 @@ async fn get_address_cohort_retention_chart(
         if !cohorts.is_empty() {
             let data = cohorts
                 .into_iter()
-                .map(|(cohort, (occupied, total_balance))| {
+                .map(|(cohort, (used_ckb, total_balance))| {
                     let retention = if total_balance > 0 {
-                        occupied as f64 * 100.0 / total_balance as f64
+                        used_ckb as f64 * 100.0 / total_balance as f64
                     } else {
                         0.0
                     };
                     ChartDataPoint {
                         date: cohort,
                         value: format!("{retention:.6}"),
-                        value2: Some(shannon_to_ckb_string(occupied)),
+                        value2: Some(shannon_to_ckb_string(used_ckb)),
                     }
                 })
                 .collect();
@@ -1911,8 +1904,8 @@ async fn get_address_cohort_retention_chart(
             let response = ChartResponse {
                 data,
                 title: "Address Cohort Retention".to_string(),
-                y_axis_label: "Occupied / Balance (%)".to_string(),
-                y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+                y_axis_label: "Used / Balance (%)".to_string(),
+                y2_axis_label: Some("Used Capacity (CKB)".to_string()),
             };
 
             state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -1938,12 +1931,12 @@ async fn get_address_cohort_retention_chart(
         };
 
         let cohort = first_seen_date.format("%Y-%m").to_string();
-        let occupied = balance.occupied_capacity;
+        let used_cap_addr = balance.used_capacity;
         let total_balance = balance.balance;
-        if occupied < 0 {
+        if used_cap_addr < 0 {
             return Err(ApiError::internal(format!(
-                "negative address occupied_capacity: first_seen_block={}, occupied_capacity={}",
-                balance.first_seen_block, occupied
+                "negative address used_capacity: first_seen_block={}, used_capacity={}",
+                balance.first_seen_block, used_cap_addr
             )));
         }
         if total_balance < 0 {
@@ -1952,29 +1945,29 @@ async fn get_address_cohort_retention_chart(
                 balance.first_seen_block, total_balance
             )));
         }
-        if occupied > total_balance {
+        if used_cap_addr > total_balance {
             return Err(ApiError::internal(format!(
-                "address occupied capacity exceeds balance: first_seen_block={}, occupied_capacity={}, balance={}",
-                balance.first_seen_block, occupied, total_balance
+                "address used capacity exceeds balance: first_seen_block={}, used_capacity={}, balance={}",
+                balance.first_seen_block, used_cap_addr, total_balance
             )));
         }
         let entry = cohorts.entry(cohort).or_insert((0, 0));
-        entry.0 += occupied;
+        entry.0 += used_cap_addr;
         entry.1 += total_balance;
     }
 
     let data = cohorts
         .into_iter()
-        .map(|(cohort, (occupied, total_balance))| {
+        .map(|(cohort, (used_ckb, total_balance))| {
             let retention = if total_balance > 0 {
-                occupied as f64 * 100.0 / total_balance as f64
+                used_ckb as f64 * 100.0 / total_balance as f64
             } else {
                 0.0
             };
             ChartDataPoint {
                 date: cohort,
                 value: format!("{retention:.6}"),
-                value2: Some(shannon_to_ckb_string(occupied)),
+                value2: Some(shannon_to_ckb_string(used_ckb)),
             }
         })
         .collect();
@@ -1982,8 +1975,8 @@ async fn get_address_cohort_retention_chart(
     let response = ChartResponse {
         data,
         title: "Address Cohort Retention".to_string(),
-        y_axis_label: "Occupied / Balance (%)".to_string(),
-        y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+        y_axis_label: "Used / Balance (%)".to_string(),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;

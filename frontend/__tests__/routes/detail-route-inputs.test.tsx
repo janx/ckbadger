@@ -7,7 +7,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
-    getScriptOccupationChartByCodeHash: vi.fn(),
+    getScriptCapacityChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
   },
 }));
@@ -41,20 +41,20 @@ describe('detail route inputs', () => {
         codeCellOutputIndex: null,
         liveCellsCount: 15,
         liveCapacitySum: '25000000000',
-        liveOccupiedCapacitySum: '14000000000',
+        liveUsedCapacitySum: '14000000000',
       },
     });
     vi.mocked(api.getCodeCell).mockResolvedValue({ txHash: null, outputIndex: null });
-    vi.mocked(api.getScriptOccupationChartByCodeHash).mockResolvedValue({
-      title: 'Occupation',
+    vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue({
+      title: 'Capacity History',
       series: [
-        { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
-        { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+        { key: 'used', label: 'Used', color: '#f59e0b' },
+        { key: 'unused', label: 'Unused', color: '#00c389' },
       ],
       data: [
         {
           date: '2024-01-15',
-          values: { occupied: '1000000000', unoccupied: '1500000000' },
+          values: { used: '1000000000', unused: '1500000000' },
         },
       ],
     });
@@ -71,7 +71,7 @@ describe('detail route inputs', () => {
     render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Occupation History')).toBeInTheDocument();
+      expect(screen.getByText('Capacity History')).toBeInTheDocument();
     });
   });
 });

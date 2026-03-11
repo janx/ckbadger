@@ -24,14 +24,7 @@ import {
 import { formatCkbCompact, truncateHash } from '@/lib/utils';
 
 type SortDirection = 'asc' | 'desc';
-type ScriptSortKey =
-  | 'name'
-  | 'kind'
-  | 'description'
-  | 'occupied'
-  | 'capacity'
-  | 'liveCells'
-  | 'cells';
+type ScriptSortKey = 'name' | 'kind' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 const UNLABELED_SCRIPT_LABEL = 'Unlabeled';
 
@@ -226,7 +219,7 @@ export default function ScriptsPage() {
                     {renderSortHeader('cells', 'Total Cells', 'w-24 shrink-0', 'right')}
                     <div className="w-24 shrink-0 text-right">Deployed</div>
                   </div>
-                  {renderSortHeader('occupied', 'Occupied (CKB)', 'w-28 shrink-0', 'right')}
+                  {renderSortHeader('used', 'Used (CKB)', 'w-28 shrink-0', 'right')}
                   {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28 shrink-0', 'right')}
                 </div>
                 {scripts.map((script: KnownScript) => (
@@ -298,7 +291,7 @@ export default function ScriptsPage() {
                       </div>
                       <div className="text-text w-28 shrink-0 text-right font-mono">
                         {(() => {
-                          const occupied = script.liveOccupiedCapacitySum;
+                          const occupied = script.liveUsedCapacitySum;
                           if (!occupied) {
                             return <span className="text-text-dim">-</span>;
                           }
@@ -349,9 +342,9 @@ export default function ScriptsPage() {
                       )}
                       <div className="text-text flex items-center gap-4 font-mono text-xs">
                         <span>
-                          Occupied:{' '}
+                          Used:{' '}
                           {(() => {
-                            const o = script.liveOccupiedCapacitySum;
+                            const o = script.liveUsedCapacitySum;
                             return o ? formatCkbCompact(o).value : '-';
                           })()}
                         </span>

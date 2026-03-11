@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 vi.mock('@/lib/api', () => ({
   api: {
     getToken: vi.fn(),
-    getTokenOccupationChart: vi.fn(),
+    getTokenCapacityChart: vi.fn(),
     getTokenHolders: vi.fn(),
     getTokenActivities: vi.fn(),
   },
@@ -51,7 +51,7 @@ const mockToken = {
   transfers24h: 10,
   cellsCount: 150,
   totalCapacity: '50000000000000',
-  totalOccupiedCapacity: '15300000000000',
+  totalUsedCapacity: '15300000000000',
 };
 
 const mockHolders = {
@@ -72,16 +72,16 @@ const mockActivities = {
 describe('TokenDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.getTokenOccupationChart).mockResolvedValue({
-      title: 'TEST Capacity Occupation',
+    vi.mocked(api.getTokenCapacityChart).mockResolvedValue({
+      title: 'TEST Capacity History',
       series: [
-        { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
-        { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+        { key: 'used', label: 'Used', color: '#f59e0b' },
+        { key: 'unused', label: 'Unused', color: '#00c389' },
       ],
       data: [
         {
           date: '2024-01-15',
-          values: { occupied: '15300000000000', unoccupied: '34700000000000' },
+          values: { used: '15300000000000', unused: '34700000000000' },
         },
       ],
     });
@@ -124,12 +124,12 @@ describe('TokenDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
-      expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
-      expect(screen.getByText(/\(\d+\.\d% occupied\)/)).toBeInTheDocument();
+      expect(screen.getByText(/^Used:/)).toBeInTheDocument();
+      expect(screen.getByText(/\(\d+\.\d% used\)/)).toBeInTheDocument();
     });
   });
 
-  it('renders occupied and unoccupied breakdown', async () => {
+  it('renders used and unused breakdown', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
     render(
@@ -137,8 +137,8 @@ describe('TokenDetailPage', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
-      expect(screen.getByText(/^Unoccupied:/)).toBeInTheDocument();
+      expect(screen.getByText(/^Used:/)).toBeInTheDocument();
+      expect(screen.getByText(/^Unused:/)).toBeInTheDocument();
     });
   });
 
@@ -186,7 +186,7 @@ describe('TokenDetailPage', () => {
     });
   });
 
-  it('renders occupation history panel', async () => {
+  it('renders capacity statistics panel', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
     render(
@@ -194,7 +194,7 @@ describe('TokenDetailPage', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+      expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     });
   });
 

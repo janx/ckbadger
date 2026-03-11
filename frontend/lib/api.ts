@@ -216,8 +216,8 @@ interface TransactionDetail extends Transaction {
   confirmations: number;
   inputsCapacity: string;
   outputsCapacity: string;
-  inputsOccupiedCapacity: string;
-  outputsOccupiedCapacity: string;
+  inputsUsedCapacity: string;
+  outputsUsedCapacity: string;
   inputs?: Array<{
     previousOutput?: {
       txHash: string;
@@ -231,8 +231,8 @@ interface TransactionDetail extends Transaction {
   }>;
   outputs?: Array<{
     capacity: string;
-    occupiedCapacity: number;
-    virtualOccupiedCapacity?: string;
+    usedCapacity: number;
+    virtualUsedCapacity?: string;
     cellType?: string;
     lock?: Script;
     type?: Script;
@@ -269,7 +269,7 @@ interface CellDaoInfo {
   estimatedApc?: string;
 }
 
-interface OccupiedCapacityBreakdown {
+interface UsedCapacityBreakdown {
   capacityFieldBytes: number;
   lockScriptBytes: number;
   typeScriptBytes: number;
@@ -308,8 +308,8 @@ interface Cell {
   txHash: string;
   outputIndex: number;
   capacity: string;
-  occupiedCapacity?: number;
-  occupiedCapacityBreakdown?: OccupiedCapacityBreakdown;
+  usedCapacity?: number;
+  usedCapacityBreakdown?: UsedCapacityBreakdown;
   lockScriptHash: string;
   address?: string;
   typeScriptHash?: string;
@@ -327,7 +327,7 @@ interface Cell {
   depGroupItems?: DepGroupItem[];
   codeCellOf?: CodeCellScript[];
   cellType?: string;
-  virtualOccupiedCapacity?: string;
+  virtualUsedCapacity?: string;
   udtAmount?: string;
   daoInfo?: CellDaoInfo;
 }
@@ -349,7 +349,7 @@ interface Address {
   lockScriptHash: string;
   address?: string;
   balance: string;
-  occupiedCapacity: string;
+  usedCapacity: string;
   liveCellsCount: number;
   transactionsCount: number;
   lockScript?: Script;
@@ -434,7 +434,7 @@ interface Activity {
   txIndex: number;
   timestamp: string;
   ckbDelta: string;
-  occupiedDelta: string;
+  usedDelta: string;
   isCellbase: boolean;
   assetChanges: ActivityAssetChange[];
   peers: string[];
@@ -447,7 +447,7 @@ interface GlobalActivity {
   txIndex: number;
   timestamp: string;
   ckbDelta: string;
-  occupiedDelta: string;
+  usedDelta: string;
   isCellbase: boolean;
   assetChanges: ActivityAssetChange[];
   peers: string[];
@@ -590,7 +590,7 @@ interface Token {
   transfers24h: number;
   cellsCount: number | null;
   totalCapacity: string | null;
-  totalOccupiedCapacity: string | null;
+  totalUsedCapacity: string | null;
 }
 
 interface TokenHolder {
@@ -639,7 +639,7 @@ interface Asset {
   clusterId: string | null;
   clusterName: string | null;
   liveCapacity: string | null;
-  liveOccupiedCapacity: string | null;
+  liveUsedCapacity: string | null;
   storageTier?:
     | 'fully_onchain'
     | 'offchain_dependent'
@@ -664,7 +664,7 @@ interface AssetQueryParams {
     | 'transfers24h'
     | 'holders'
     | 'transfers'
-    | 'occupied'
+    | 'used'
     | 'capacity'
     | 'onchainRatio'
     | 'hMultiplier';
@@ -794,7 +794,7 @@ interface SporeCluster {
   activitiesCount: number;
   createdAtBlock: number;
   liveCapacity?: string | null;
-  liveOccupiedCapacity?: string | null;
+  liveUsedCapacity?: string | null;
   storageProfile?: {
     tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
     fullyOnchainCount: number;
@@ -817,7 +817,7 @@ interface SporeNft {
   isLive: boolean;
   createdAtBlock: number;
   liveCapacity?: string | null;
-  liveOccupiedCapacity?: string | null;
+  liveUsedCapacity?: string | null;
   mediaProfile?: {
     tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
     sources: Array<{
@@ -858,7 +858,7 @@ interface ObjectCollection {
   holdersCount: number;
   activitiesCount: number;
   liveCapacity: string;
-  liveOccupiedCapacity: string;
+  liveUsedCapacity: string;
   storageProfile?: {
     tier: 'fully_onchain' | 'decentralized_external' | 'centralized_dependent' | 'unknown';
     fullyOnchainCount: number;
@@ -1023,13 +1023,13 @@ interface StackedAreaChartResponse {
 
 interface MostUtilizedScriptsChartResponse {
   title: string;
-  occupiedShare: StackedAreaChartResponse;
+  usedShare: StackedAreaChartResponse;
   capacityShare: StackedAreaChartResponse;
 }
 
 interface MostUtilizedAssetsChartResponse {
   title: string;
-  occupiedShare: StackedAreaChartResponse;
+  usedShare: StackedAreaChartResponse;
   capacityShare: StackedAreaChartResponse;
 }
 
@@ -1053,7 +1053,7 @@ interface KnownScript {
   codeCellOutputIndex: number | null;
   deployedAt?: number | null;
   liveCapacitySum?: string;
-  liveOccupiedCapacitySum?: string;
+  liveUsedCapacitySum?: string;
   liveCellsCount?: number;
   cellsCount?: number;
 }
@@ -1065,8 +1065,8 @@ interface DeploymentUsage {
   liveCellsCount: number;
   capacitySum: string;
   liveCapacitySum: string;
-  occupiedCapacitySum: string;
-  liveOccupiedCapacitySum: string;
+  usedCapacitySum: string;
+  liveUsedCapacitySum: string;
 }
 
 interface ScriptUsage {
@@ -1075,8 +1075,8 @@ interface ScriptUsage {
   liveCellsCount: number;
   capacitySum: string;
   liveCapacitySum: string;
-  occupiedCapacitySum: string;
-  liveOccupiedCapacitySum: string;
+  usedCapacitySum: string;
+  liveUsedCapacitySum: string;
   byDeployment: DeploymentUsage[];
 }
 
@@ -1090,15 +1090,15 @@ interface ScriptQueryParams {
     | 'name'
     | 'kind'
     | 'description'
-    | 'occupied'
+    | 'used'
     | 'capacity'
-    | 'occupiedRatio'
+    | 'usedRatio'
     | 'liveCells'
     | 'cells';
   sortDirection?: 'asc' | 'desc';
 }
 
-interface OccupationChartRangeParams {
+interface CapacityChartRangeParams {
   from?: string;
   to?: string;
 }
@@ -1115,7 +1115,7 @@ interface ScriptLookupInfo {
   codeCellOutputIndex: number | null;
   liveCellsCount: number;
   liveCapacitySum: string;
-  liveOccupiedCapacitySum: string;
+  liveUsedCapacitySum: string;
 }
 
 type ScriptLookupResponse = Record<string, ScriptLookupInfo>;
@@ -1246,7 +1246,7 @@ export type {
   CellDeterministicDecode,
   CellDataSegment,
   CellDataGuess,
-  OccupiedCapacityBreakdown,
+  UsedCapacityBreakdown,
   CellDaoInfo,
   CellDep,
   CodeCellScript,
@@ -1573,15 +1573,15 @@ export const api = {
     return fetchApi(`/tokens/${typeHash}`);
   },
 
-  getTokenOccupationChart: (
+  getTokenCapacityChart: (
     typeHash: string,
-    range: OccupationChartRangeParams = {}
+    range: CapacityChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
     const suffix = query.toString();
-    return fetchApi(`/tokens/${typeHash}/charts/occupation${suffix ? `?${suffix}` : ''}`);
+    return fetchApi(`/tokens/${typeHash}/charts/capacity-history${suffix ? `?${suffix}` : ''}`);
   },
 
   getTokenHolders: (
@@ -1688,15 +1688,17 @@ export const api = {
     return fetchApi(`/spore/clusters/${clusterId}/activities${suffix ? `?${suffix}` : ''}`);
   },
 
-  getSporeClusterOccupationChart: (
+  getSporeClusterCapacityChart: (
     clusterId: string,
-    range: OccupationChartRangeParams = {}
+    range: CapacityChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
     const suffix = query.toString();
-    return fetchApi(`/spore/clusters/${clusterId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
+    return fetchApi(
+      `/spore/clusters/${clusterId}/charts/capacity-history${suffix ? `?${suffix}` : ''}`
+    );
   },
 
   getSporeObjects: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<SporeNft>> => {
@@ -1714,31 +1716,33 @@ export const api = {
     return fetchApi(`/spore/objects/${sporeId}/decode`);
   },
 
-  getSporeObjectOccupationChart: (
+  getSporeObjectCapacityChart: (
     sporeId: string,
-    range: OccupationChartRangeParams = {}
-  ): Promise<StackedAreaChartResponse> => {
-    const query = new URLSearchParams();
-    if (range.from) query.set('from', range.from);
-    if (range.to) query.set('to', range.to);
-    const suffix = query.toString();
-    return fetchApi(`/spore/objects/${sporeId}/charts/occupation${suffix ? `?${suffix}` : ''}`);
-  },
-
-  getObjectCollection: (collectionId: string): Promise<ObjectCollection> => {
-    return fetchApi(`/assets/objects/${collectionId}`);
-  },
-
-  getObjectCollectionOccupationChart: (
-    collectionId: string,
-    range: OccupationChartRangeParams = {}
+    range: CapacityChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
     const suffix = query.toString();
     return fetchApi(
-      `/assets/objects/${collectionId}/charts/occupation${suffix ? `?${suffix}` : ''}`
+      `/spore/objects/${sporeId}/charts/capacity-history${suffix ? `?${suffix}` : ''}`
+    );
+  },
+
+  getObjectCollection: (collectionId: string): Promise<ObjectCollection> => {
+    return fetchApi(`/assets/objects/${collectionId}`);
+  },
+
+  getObjectCollectionCapacityChart: (
+    collectionId: string,
+    range: CapacityChartRangeParams = {}
+  ): Promise<StackedAreaChartResponse> => {
+    const query = new URLSearchParams();
+    if (range.from) query.set('from', range.from);
+    if (range.to) query.set('to', range.to);
+    const suffix = query.toString();
+    return fetchApi(
+      `/assets/objects/${collectionId}/charts/capacity-history${suffix ? `?${suffix}` : ''}`
     );
   },
 
@@ -1921,8 +1925,8 @@ export const api = {
     return fetchApi('/charts/common-knowledge-composition');
   },
 
-  getCellAgeVsOccupiedCapacityChart: (): Promise<StackedAreaChartResponse> => {
-    return fetchApi('/charts/cell-age-vs-occupied-capacity');
+  getCellAgeVsUsedCapacityChart: (): Promise<StackedAreaChartResponse> => {
+    return fetchApi('/charts/cell-age-vs-used-capacity');
   },
 
   getCapacityTurnoverRatioChart: (): Promise<ChartResponse> => {
@@ -2021,7 +2025,7 @@ export const api = {
     if (params.decoderType) query.set('decoder_type', params.decoderType);
     if (params.search) query.set('search', params.search);
     if (params.sortKey) {
-      query.set('sort_key', params.sortKey === 'occupiedRatio' ? 'occupied_ratio' : params.sortKey);
+      query.set('sort_key', params.sortKey === 'usedRatio' ? 'used_ratio' : params.sortKey);
     }
     if (params.sortDirection) query.set('sort_direction', params.sortDirection);
     return fetchApi(`/scripts?${query}`);
@@ -2035,30 +2039,30 @@ export const api = {
     return fetchApi(`/scripts/${encodeURIComponent(name)}/usage`);
   },
 
-  getScriptOccupationChart: (
+  getScriptCapacityChart: (
     name: string,
-    range: OccupationChartRangeParams = {}
+    range: CapacityChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
     const query = new URLSearchParams();
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
     const suffix = query.toString();
     return fetchApi(
-      `/scripts/${encodeURIComponent(name)}/charts/occupation${suffix ? `?${suffix}` : ''}`
+      `/scripts/${encodeURIComponent(name)}/charts/capacity-history${suffix ? `?${suffix}` : ''}`
     );
   },
 
-  getScriptOccupationChartByCodeHash: (
+  getScriptCapacityChartByCodeHash: (
     codeHash: string,
     scriptKind?: 'lock' | 'type' | 'both',
-    range: OccupationChartRangeParams = {}
+    range: CapacityChartRangeParams = {}
   ): Promise<StackedAreaChartResponse> => {
     const query = new URLSearchParams();
     query.set('code_hash', codeHash);
     if (scriptKind && scriptKind !== 'both') query.set('script_kind', scriptKind);
     if (range.from) query.set('from', range.from);
     if (range.to) query.set('to', range.to);
-    return fetchApi(`/scripts/charts/occupation?${query}`);
+    return fetchApi(`/scripts/charts/capacity-history?${query}`);
   },
 
   lookupScripts: async (codeHashes: string[]): Promise<ScriptLookupResponse> => {

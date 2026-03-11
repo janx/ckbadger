@@ -43,7 +43,7 @@ pub struct ActivityResponse {
     pub tx_index: i32,
     pub timestamp: String,
     pub ckb_delta: String,
-    pub occupied_delta: String,
+    pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
     pub peers: Vec<String>,
@@ -96,7 +96,7 @@ pub struct GlobalActivityResponse {
     pub tx_index: i32,
     pub timestamp: String,
     pub ckb_delta: String,
-    pub occupied_delta: String,
+    pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
     pub peers: Vec<String>,
@@ -324,7 +324,7 @@ async fn get_address_activities(
             tx_index: entry.tx_index,
             timestamp: entry.timestamp.to_string(),
             ckb_delta: entry.ckb_delta.to_string(),
-            occupied_delta: entry.occupied_delta.to_string(),
+            used_delta: entry.used_delta.to_string(),
             is_cellbase: entry.is_cellbase,
             asset_changes: entry
                 .asset_changes
@@ -380,7 +380,7 @@ async fn get_latest_activities(
                 tx_index: item.entry.tx_index,
                 timestamp: item.entry.timestamp.to_string(),
                 ckb_delta: item.entry.ckb_delta.to_string(),
-                occupied_delta: item.entry.occupied_delta.to_string(),
+                used_delta: item.entry.used_delta.to_string(),
                 is_cellbase: item.entry.is_cellbase,
                 asset_changes: item
                     .entry
@@ -432,7 +432,7 @@ mod tests {
             tx_index,
             timestamp: 1_700_000_000 + block_number,
             ckb_delta: 0,
-            occupied_delta: 0,
+            used_delta: 0,
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],

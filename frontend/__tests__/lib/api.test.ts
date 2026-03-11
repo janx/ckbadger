@@ -235,130 +235,130 @@ describe('api', () => {
       await api.getAssets({ type: 'object', standard: 'spore' });
     });
 
-    it('fetches script occupation chart by script name', async () => {
+    it('fetches script capacity chart by script name', async () => {
       server.use(
-        http.get('*/api/v1/scripts/:name/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/scripts/:name/charts/capacity-history', ({ params }) => {
           expect(params.name).toBe('SECP256K1_BLAKE160');
           return HttpResponse.json({
-            title: 'SECP256K1_BLAKE160 Capacity Occupation',
+            title: 'SECP256K1_BLAKE160 Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getScriptOccupationChart('SECP256K1_BLAKE160');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getScriptCapacityChart('SECP256K1_BLAKE160');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('builds date range query params for script occupation chart by name', async () => {
+    it('builds date range query params for script capacity chart by name', async () => {
       server.use(
-        http.get('*/api/v1/scripts/:name/charts/occupation', ({ request, params }) => {
+        http.get('*/api/v1/scripts/:name/charts/capacity-history', ({ request, params }) => {
           expect(params.name).toBe('SECP256K1_BLAKE160');
           const url = new URL(request.url);
           expect(url.searchParams.get('from')).toBe('2024-01-01');
           expect(url.searchParams.get('to')).toBe('2024-01-31');
           return HttpResponse.json({
-            title: 'SECP256K1_BLAKE160 Capacity Occupation',
+            title: 'SECP256K1_BLAKE160 Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getScriptOccupationChart('SECP256K1_BLAKE160', {
+      const chart = await api.getScriptCapacityChart('SECP256K1_BLAKE160', {
         from: '2024-01-01',
         to: '2024-01-31',
       });
-      expect(chart.title).toContain('Capacity Occupation');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('builds query params for script occupation chart by code hash', async () => {
+    it('builds query params for script capacity chart by code hash', async () => {
       server.use(
-        http.get('*/api/v1/scripts/charts/occupation', ({ request }) => {
+        http.get('*/api/v1/scripts/charts/capacity-history', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('code_hash')).toBe('0x1234');
           expect(url.searchParams.get('script_kind')).toBe('type');
           return HttpResponse.json({
-            title: '0x1234 Capacity Occupation',
+            title: '0x1234 Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getScriptOccupationChartByCodeHash('0x1234', 'type');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getScriptCapacityChartByCodeHash('0x1234', 'type');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('fetches token occupation chart by type hash', async () => {
+    it('fetches token capacity chart by type hash', async () => {
       server.use(
-        http.get('*/api/v1/tokens/:typeHash/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/tokens/:typeHash/charts/capacity-history', ({ params }) => {
           expect(params.typeHash).toBe('0x1234');
           return HttpResponse.json({
-            title: 'TEST Capacity Occupation',
+            title: 'TEST Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getTokenOccupationChart('0x1234');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getTokenCapacityChart('0x1234');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('builds date range query params for token occupation chart', async () => {
+    it('builds date range query params for token capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/tokens/:typeHash/charts/occupation', ({ request, params }) => {
+        http.get('*/api/v1/tokens/:typeHash/charts/capacity-history', ({ request, params }) => {
           expect(params.typeHash).toBe('0x1234');
           const url = new URL(request.url);
           expect(url.searchParams.get('from')).toBe('2024-01-10');
           expect(url.searchParams.get('to')).toBe('2024-01-20');
           return HttpResponse.json({
-            title: 'TEST Capacity Occupation',
+            title: 'TEST Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getTokenOccupationChart('0x1234', {
+      const chart = await api.getTokenCapacityChart('0x1234', {
         from: '2024-01-10',
         to: '2024-01-20',
       });
-      expect(chart.title).toContain('Capacity Occupation');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('fetches spore cluster occupation chart', async () => {
+    it('fetches spore cluster capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/spore/clusters/:clusterId/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/spore/clusters/:clusterId/charts/capacity-history', ({ params }) => {
           expect(params.clusterId).toBe('0xabcd');
           return HttpResponse.json({
-            title: 'My Cluster Capacity Occupation',
+            title: 'My Cluster Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getSporeClusterOccupationChart('0xabcd');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getSporeClusterCapacityChart('0xabcd');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('fetches spore object occupation chart', async () => {
+    it('fetches spore object capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/spore/objects/:sporeId/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/spore/objects/:sporeId/charts/capacity-history', ({ params }) => {
           expect(params.sporeId).toBe('0x9999');
           return HttpResponse.json({
-            title: 'Spore Capacity Occupation',
+            title: 'Spore Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getSporeObjectOccupationChart('0x9999');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getSporeObjectCapacityChart('0x9999');
+      expect(chart.title).toContain('Capacity History');
     });
 
     it('fetches spore dob decoded result', async () => {
@@ -394,14 +394,14 @@ describe('api', () => {
             holdersCount: 5,
             activitiesCount: 20,
             liveCapacity: '1000',
-            liveOccupiedCapacity: '600',
+            liveUsedCapacity: '600',
           });
         })
       );
 
       const collection = await api.getObjectCollection('0xcollection');
       expect(collection.collectionId).toBe('0xcollection');
-      expect(collection.liveOccupiedCapacity).toBe('600');
+      expect(collection.liveUsedCapacity).toBe('600');
     });
 
     it('fetches dotbit identity collection detail', async () => {
@@ -444,36 +444,36 @@ describe('api', () => {
       expect(collection.standard).toBe('did_ckb');
     });
 
-    it('fetches object collection occupation chart', async () => {
+    it('fetches object collection capacity chart', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/:collectionId/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/assets/objects/:collectionId/charts/capacity-history', ({ params }) => {
           expect(params.collectionId).toBe('0xcollection');
           return HttpResponse.json({
-            title: 'Test Collection Capacity Occupation',
+            title: 'Test Collection Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getObjectCollectionOccupationChart('0xcollection');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getObjectCollectionCapacityChart('0xcollection');
+      expect(chart.title).toContain('Capacity History');
     });
 
-    it('fetches object collection occupation chart by collection id', async () => {
+    it('fetches object collection capacity chart by collection id', async () => {
       server.use(
-        http.get('*/api/v1/assets/objects/:collectionId/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/assets/objects/:collectionId/charts/capacity-history', ({ params }) => {
           expect(params.collectionId).toBe('0xcollection2');
           return HttpResponse.json({
-            title: 'Collection Capacity Occupation',
+            title: 'Collection Capacity History',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getObjectCollectionOccupationChart('0xcollection2');
-      expect(chart.title).toContain('Capacity Occupation');
+      const chart = await api.getObjectCollectionCapacityChart('0xcollection2');
+      expect(chart.title).toContain('Capacity History');
     });
 
     it('builds query params for identity collection items search', async () => {

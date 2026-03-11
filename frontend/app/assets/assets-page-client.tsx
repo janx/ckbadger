@@ -35,7 +35,7 @@ type AssetSortKey =
   | 'transfers24h'
   | 'holders'
   | 'transfers'
-  | 'occupied'
+  | 'used'
   | 'capacity'
   | 'onchainRatio'
   | 'hMultiplier';
@@ -329,7 +329,7 @@ function AssetTable({
         <div className="hidden xl:contents">
           {assetType === 'token' &&
             renderSortHeader('supply', 'Circulation', capacityColumnClass, 'right')}
-          {renderSortHeader('occupied', 'Occupied (CKB)', capacityColumnClass, 'right')}
+          {renderSortHeader('used', 'Used (CKB)', capacityColumnClass, 'right')}
           {renderSortHeader('hMultiplier', 'HM', capacityColumnClass, 'right')}
         </div>
         {renderSortHeader('capacity', 'Capacity (CKB)', capacityColumnClass, 'right')}
@@ -432,7 +432,7 @@ function AssetTable({
             <div className="hidden xl:block">
               <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
                 {(() => {
-                  const occupied = asset.liveOccupiedCapacity;
+                  const occupied = asset.liveUsedCapacity;
                   if (!occupied) {
                     return <span className="text-text-dim">-</span>;
                   }
@@ -444,9 +444,7 @@ function AssetTable({
             <div className="hidden xl:block">
               <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
                 {asset.hMultiplier != null ? (
-                  <span
-                    title={`H-Multiplier: capacity / occupied = ×${asset.hMultiplier.toFixed(2)}`}
-                  >
+                  <span title={`H-Multiplier: capacity / used = ×${asset.hMultiplier.toFixed(2)}`}>
                     ×{asset.hMultiplier.toFixed(2)}
                   </span>
                 ) : (

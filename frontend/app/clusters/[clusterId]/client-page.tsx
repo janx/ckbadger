@@ -17,11 +17,11 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
+import { CapacityStatisticsSection } from '@/components/ui/capacity-statistics-section';
 import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
+import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { ClusterDescription } from '@/components/spore/cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
@@ -65,7 +65,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tabFromQuery = searchParams.get('tab');
-  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>
     isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
@@ -78,7 +78,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     return isListSort(value) ? value : 'createdDesc';
   });
   const [listQuery, setListQuery] = useState(() => searchParams.get('q') ?? '');
-  const occupationRangeParams = getOccupationRangeParams(occupationRange);
+  const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const sporesPagination = useCursorPagination();
   const clusterHoldersPagination = useCursorPagination();
   const clusterActivitiesPagination = useCursorPagination();
@@ -127,12 +127,12 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
     enabled: !!clusterId && activeCollectionTab === 'activities',
     placeholderData: keepPreviousData,
   });
-  const { data: occupationChart, isLoading: isOccupationChartLoading } = useQuery({
-    queryKey: ['cluster-occupation-chart', clusterId, occupationRange],
+  const { data: capacityChart, isLoading: isCapacityChartLoading } = useQuery({
+    queryKey: ['cluster-capacity-chart', clusterId, capacityRange],
     queryFn: () =>
-      occupationRangeParams
-        ? api.getSporeClusterOccupationChart(clusterId, occupationRangeParams)
-        : api.getSporeClusterOccupationChart(clusterId),
+      capacityRangeParams
+        ? api.getSporeClusterCapacityChart(clusterId, capacityRangeParams)
+        : api.getSporeClusterCapacityChart(clusterId),
     enabled: !!clusterId,
   });
   const { data: creatorAddressRecord } = useQuery({
@@ -401,7 +401,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           totalCount={cluster.sporesCount}
           totalLabel="Total Spores"
           liveCapacity={cluster.liveCapacity}
-          liveOccupiedCapacity={cluster.liveOccupiedCapacity}
+          liveUsedCapacity={cluster.liveUsedCapacity}
           createdAtBlock={cluster.createdAtBlock}
           storageTier={cluster.storageProfile?.tier}
           storageOnchainRatio={cluster.storageProfile?.fullyOnchainRatio}
@@ -483,14 +483,14 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             </TerminalPanel>
           </div>
           <div className="space-y-6 xl:col-span-3">
-            <CapacityOccupationSection
-              description="Daily cumulative live CKB occupation for this Spore collection."
-              occupationRange={occupationRange}
-              onOccupationRangeChange={setOccupationRange}
-              occupationChart={occupationChart}
-              isOccupationChartLoading={isOccupationChartLoading}
+            <CapacityStatisticsSection
+              description="Daily cumulative live CKB capacity usage for this Spore collection."
+              capacityRange={capacityRange}
+              onCapacityRangeChange={setCapacityRange}
+              capacityChart={capacityChart}
+              isCapacityChartLoading={isCapacityChartLoading}
               totalCapacity={cluster.liveCapacity}
-              occupiedCapacity={cluster.liveOccupiedCapacity}
+              usedCapacity={cluster.liveUsedCapacity}
             />
             <TerminalPanel>
               <Tabs

@@ -55,14 +55,14 @@ describe('StackedAreaChart', () => {
           {
             date: '2026-02-19',
             values: {
-              occupied: '5940000000000000',
-              unoccupied: '4503000000000000000',
+              used: '5940000000000000',
+              unused: '4503000000000000000',
             },
           },
         ]}
         series={[
-          { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
-          { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+          { key: 'used', label: 'Used', color: '#f59e0b' },
+          { key: 'unused', label: 'Unused', color: '#00c389' },
         ]}
         valueUnit="shannon"
       />

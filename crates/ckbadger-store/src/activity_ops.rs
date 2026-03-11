@@ -149,7 +149,7 @@ mod tests {
             tx_index: tx_idx,
             timestamp: 1_700_000_000 + block_num,
             ckb_delta: 0,
-            occupied_delta: 0,
+            used_delta: 0,
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],

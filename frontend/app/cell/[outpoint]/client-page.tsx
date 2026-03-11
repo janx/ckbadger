@@ -215,16 +215,15 @@ export default function CellDetailPage() {
     }
     const SHANNONS_PER_CKB = BigInt(100000000);
     const totalCapacity = BigInt(cell.capacity);
-    const occupied = cell.occupiedCapacity !== undefined ? BigInt(cell.occupiedCapacity) : null;
+    const used = cell.usedCapacity !== undefined ? BigInt(cell.usedCapacity) : null;
     const ZERO = BigInt(0);
     const BASIS_POINTS = BigInt(10000);
-    const occupiedBytes =
-      occupied !== null && occupied >= ZERO ? Number(occupied / SHANNONS_PER_CKB) : null;
-    const occupiedRatioPercent =
-      occupied !== null && totalCapacity > ZERO
-        ? Number((occupied * BASIS_POINTS) / totalCapacity) / 100
+    const usedBytes = used !== null && used >= ZERO ? Number(used / SHANNONS_PER_CKB) : null;
+    const usedRatioPercent =
+      used !== null && totalCapacity > ZERO
+        ? Number((used * BASIS_POINTS) / totalCapacity) / 100
         : null;
-    const breakdown = cell.occupiedCapacityBreakdown;
+    const breakdown = cell.usedCapacityBreakdown;
     const segments = breakdown && [
       {
         key: 'capacityFieldBytes',
@@ -262,8 +261,8 @@ export default function CellDetailPage() {
     const knownBytes = segments?.reduce((acc, seg) => acc + seg.bytes, 0) ?? 0;
     const breakdownTotalBytes = Math.max(0, breakdown?.totalBytes ?? 0);
     const canonicalTotalBytes =
-      occupiedBytes !== null
-        ? Math.max(occupiedBytes, knownBytes)
+      usedBytes !== null
+        ? Math.max(usedBytes, knownBytes)
         : Math.max(knownBytes, breakdownTotalBytes);
     const inferredBytes = Math.max(0, canonicalTotalBytes - knownBytes);
     const segmentsWithInference =
@@ -281,10 +280,10 @@ export default function CellDetailPage() {
           ]
         : (segments ?? []);
     return {
-      occupied,
+      used,
       totalCapacity,
       totalBytes: canonicalTotalBytes,
-      occupiedRatioPercent,
+      usedRatioPercent,
       segments: segmentsWithInference.map((seg) => ({
         ...seg,
         percent: canonicalTotalBytes > 0 ? (seg.bytes / canonicalTotalBytes) * 100 : 0,
@@ -487,11 +486,11 @@ export default function CellDetailPage() {
                 </div>
                 <div className="border-base-border/70 bg-base-surface/60 rounded border p-3">
                   <div className="text-text-dim mb-1 text-xs uppercase tracking-wide">
-                    Occupied Capacity
+                    Used Capacity
                   </div>
-                  {capacityView.occupied !== null ? (
+                  {capacityView.used !== null ? (
                     <Capacity
-                      value={capacityView.occupied}
+                      value={capacityView.used}
                       className="text-emphasis text-lg"
                       animate={false}
                     />
@@ -504,8 +503,8 @@ export default function CellDetailPage() {
                     Utilization Ratio
                   </div>
                   <div className="text-text-bright font-mono text-xl">
-                    {capacityView.occupiedRatioPercent !== null
-                      ? `${Math.max(0, capacityView.occupiedRatioPercent).toFixed(2)}%`
+                    {capacityView.usedRatioPercent !== null
+                      ? `${Math.max(0, capacityView.usedRatioPercent).toFixed(2)}%`
                       : 'N/A'}
                   </div>
                 </div>
@@ -589,7 +588,7 @@ export default function CellDetailPage() {
                 </>
               ) : (
                 <div className="text-text-dim mt-4 text-sm">
-                  Occupied capacity breakdown is unavailable for this cell.
+                  Used capacity breakdown is unavailable for this cell.
                 </div>
               )}
             </TerminalPanelContent>
@@ -786,10 +785,10 @@ export default function CellDetailPage() {
                       This cell contains 8.4B CKB burnt at genesis (25% of 33.6B initial issuance).
                       For secondary issuance calculation,{' '}
                       <strong className="text-warning">5.04B CKB (60%)</strong> is treated as
-                      &ldquo;occupied&rdquo; capacity, ensuring miners receive secondary rewards.
+                      &ldquo;used&rdquo; capacity, ensuring miners receive secondary rewards.
                     </p>
                     <p className="mt-2">
-                      <span className="text-text-dim">Virtual Occupied Capacity: </span>
+                      <span className="text-text-dim">Virtual Used Capacity: </span>
                       <span className="text-warning font-mono">5,040,000,000 CKB</span>
                     </p>
                   </div>

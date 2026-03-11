@@ -8,8 +8,8 @@ vi.mock('@/lib/api', () => ({
   api: {
     getScript: vi.fn(),
     getScriptUsage: vi.fn(),
-    getScriptOccupationChart: vi.fn(),
-    getScriptOccupationChartByCodeHash: vi.fn(),
+    getScriptCapacityChart: vi.fn(),
+    getScriptCapacityChartByCodeHash: vi.fn(),
     getCellsByScriptRef: vi.fn(),
     lookupScripts: vi.fn(),
   },
@@ -82,8 +82,8 @@ const mockUsage = {
   liveCellsCount: 8,
   capacitySum: '10000000000',
   liveCapacitySum: '10000000000',
-  occupiedCapacitySum: '6100000000',
-  liveOccupiedCapacitySum: '6100000000',
+  usedCapacitySum: '6100000000',
+  liveUsedCapacitySum: '6100000000',
   byDeployment: [
     {
       codeHash: olderCodeHash,
@@ -92,8 +92,8 @@ const mockUsage = {
       liveCellsCount: 1,
       capacitySum: '2000000000',
       liveCapacitySum: '1000000000',
-      occupiedCapacitySum: '1200000000',
-      liveOccupiedCapacitySum: '610000000',
+      usedCapacitySum: '1200000000',
+      liveUsedCapacitySum: '610000000',
     },
     {
       codeHash: newerCodeHash,
@@ -102,22 +102,22 @@ const mockUsage = {
       liveCellsCount: 7,
       capacitySum: '8000000000',
       liveCapacitySum: '9000000000',
-      occupiedCapacitySum: '4900000000',
-      liveOccupiedCapacitySum: '5490000000',
+      usedCapacitySum: '4900000000',
+      liveUsedCapacitySum: '5490000000',
     },
   ],
 };
 
-const mockOccupationChart = {
-  title: 'SECP256K1_BLAKE160 Capacity Occupation',
+const mockCapacityChart = {
+  title: 'SECP256K1_BLAKE160 Capacity History',
   series: [
-    { key: 'occupied', label: 'Occupied', color: '#f59e0b' },
-    { key: 'unoccupied', label: 'Unoccupied', color: '#00c389' },
+    { key: 'used', label: 'Used', color: '#f59e0b' },
+    { key: 'unused', label: 'Unused', color: '#00c389' },
   ],
   data: [
     {
       date: '2024-01-15',
-      values: { occupied: '6000000000', unoccupied: '4000000000' },
+      values: { used: '6000000000', unused: '4000000000' },
     },
   ],
 };
@@ -135,8 +135,8 @@ describe('ScriptDetailPage', () => {
     vi.clearAllMocks();
     vi.mocked(api.getScript).mockResolvedValue(mockDeployments);
     vi.mocked(api.getScriptUsage).mockResolvedValue(mockUsage);
-    vi.mocked(api.getScriptOccupationChart).mockResolvedValue(mockOccupationChart);
-    vi.mocked(api.getScriptOccupationChartByCodeHash).mockResolvedValue(mockOccupationChart);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(mockCapacityChart);
+    vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue(mockCapacityChart);
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [olderCodeHash]: {
@@ -151,7 +151,7 @@ describe('ScriptDetailPage', () => {
         codeCellOutputIndex: 0,
         liveCellsCount: 1,
         liveCapacitySum: '1000000000',
-        liveOccupiedCapacitySum: '610000000',
+        liveUsedCapacitySum: '610000000',
       },
       [newerCodeHash]: {
         codeHash: newerCodeHash,
@@ -165,22 +165,22 @@ describe('ScriptDetailPage', () => {
         codeCellOutputIndex: 1,
         liveCellsCount: 7,
         liveCapacitySum: '9000000000',
-        liveOccupiedCapacitySum: '5490000000',
+        liveUsedCapacitySum: '5490000000',
       },
     });
   });
 
-  it('renders separate capacity and cells sections without occupation history section', async () => {
+  it('renders separate capacity and cells sections without capacity history section', async () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
-      expect(screen.getAllByText('Capacity & Occupation').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Capacity Statistics').length).toBeGreaterThan(0);
     });
 
     expect(screen.getByText('Deployed At')).toBeInTheDocument();
     expect(screen.queryByText('Status')).not.toBeInTheDocument();
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
-    expect(screen.queryByText('Occupation History')).not.toBeInTheDocument();
+    expect(screen.queryByText('Capacity History')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();
     const refSemantics = screen.getByTestId('script-ref-semantics');
     expect(refSemantics).toBeInTheDocument();
@@ -188,8 +188,8 @@ describe('ScriptDetailPage', () => {
       within(refSemantics).getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
     ).toHaveAttribute('href', 'https://docs.nervos.org/docs/tech-explanation/data-type-diff');
     expect(screen.getAllByText('Script Ref').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/^Occupied:/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/^Unoccupied:/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^Used:/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/HMul:/).length).toBeGreaterThan(0);
     expect(screen.getAllByText('bytecode(data)').length).toBeGreaterThan(0);
     expect(document.querySelector(`[title="Click to copy: ${newerDataHash}"]`)).toBeTruthy();
     const capacityRefs = screen.getByTestId('capacity-selected-refs');

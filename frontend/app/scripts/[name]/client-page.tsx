@@ -14,12 +14,12 @@ import { PageHeader, Badge } from '@/components/ui/page-header';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Capacity } from '@/components/ui/capacity';
-import { CapacityUtilization } from '@/components/ui/capacity-utilization';
+import { HMultiplier } from '@/components/ui/h-multiplier';
 import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
-import { OccupationRangeSelector } from '@/components/ui/occupation-range-selector';
+import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api } from '@/lib/api';
-import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
+import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import {
   getScriptRefBadgeLabel,
   getScriptRefQueryHashType,
@@ -90,10 +90,10 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
       ? `0x${selectedRefParam.trim().slice(2).toLowerCase()}`
       : null;
   const selectedRefHashType = normalizeScriptRefHashType(searchParams.get('hashType'));
-  const [occupationRange, setOccupationRange] = useState<OccupationRangeKey>('all');
+  const [capacityRange, setCapacityRange] = useState<CapacityRangeKey>('all');
   const [selectedDeployment, setSelectedDeployment] = useState<SelectedDeployment | null>(null);
   const cellsPagination = useCursorPagination();
-  const occupationRangeParams = getOccupationRangeParams(occupationRange);
+  const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const {
     data: deployments,
     isLoading: isDeploymentsLoading,
@@ -123,22 +123,22 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
     selectedDeployment?.scriptKind === 'lock' || selectedDeployment?.scriptKind === 'type'
       ? selectedDeployment.scriptKind
       : undefined;
-  const { data: selectedOccupationChart, isLoading: isSelectedOccupationChartLoading } = useQuery({
+  const { data: selectedCapacityChart, isLoading: isSelectedCapacityChartLoading } = useQuery({
     queryKey: [
-      'script-occupation-chart',
+      'script-capacity-chart',
       'deployment',
       selectedDeployment?.codeHash,
       selectedScriptKindForChart,
-      occupationRange,
+      capacityRange,
     ],
     queryFn: () =>
-      occupationRangeParams
-        ? api.getScriptOccupationChartByCodeHash(
+      capacityRangeParams
+        ? api.getScriptCapacityChartByCodeHash(
             selectedDeployment!.codeHash,
             selectedScriptKindForChart,
-            occupationRangeParams
+            capacityRangeParams
           )
-        : api.getScriptOccupationChartByCodeHash(
+        : api.getScriptCapacityChartByCodeHash(
             selectedDeployment!.codeHash,
             selectedScriptKindForChart
           ),
@@ -536,7 +536,7 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
             <TerminalPanel className="mb-6">
               <TerminalPanelHeader indicator="none">
                 <div className="flex items-center gap-2">
-                  <span>Capacity &amp; Occupation</span>
+                  <span>Capacity Statistics</span>
                   <span className="text-text-dim">|</span>
                   <div
                     data-testid="capacity-selected-refs"
@@ -572,25 +572,25 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
               <TerminalPanelContent padding="none">
                 {selectedDeploymentUsage && (
                   <div className="border-base-border border-b px-4 py-4">
-                    <CapacityUtilization
+                    <HMultiplier
                       totalCapacity={selectedDeploymentUsage.liveCapacitySum}
-                      occupiedCapacity={selectedDeploymentUsage.liveOccupiedCapacitySum}
+                      usedCapacity={selectedDeploymentUsage.liveUsedCapacitySum}
                     />
                   </div>
                 )}
                 <div className="px-4 py-4">
                   <div className="text-text-dim mb-3 text-xs">
-                    Historical occupied/unoccupied live capacity for the selected deployment.
+                    Historical used/unused live capacity for the selected deployment.
                   </div>
-                  <OccupationRangeSelector value={occupationRange} onChange={setOccupationRange} />
-                  {isSelectedOccupationChartLoading ? (
+                  <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
+                  {isSelectedCapacityChartLoading ? (
                     <div className="text-text-dim py-6 text-center">
                       Loading deployment history...
                     </div>
-                  ) : selectedOccupationChart && selectedOccupationChart.data.length > 0 ? (
+                  ) : selectedCapacityChart && selectedCapacityChart.data.length > 0 ? (
                     <StackedAreaChart
-                      data={selectedOccupationChart.data}
-                      series={selectedOccupationChart.series}
+                      data={selectedCapacityChart.data}
+                      series={selectedCapacityChart.series}
                       height={220}
                       valueUnit="shannon"
                     />
@@ -665,9 +665,9 @@ export default function ScriptDetailPage({ name: routeName }: ScriptDetailPagePr
                             {cell.cellType === 'genesis_special_burn' ? (
                               <span
                                 className="border-base-border cursor-help border-b border-dashed"
-                                title="Virtual occupied capacity: 5.04B CKB"
+                                title="Virtual used capacity: 5.04B CKB"
                               >
-                                <Capacity value={cell.virtualOccupiedCapacity || '0'} />
+                                <Capacity value={cell.virtualUsedCapacity || '0'} />
                               </span>
                             ) : (
                               <>{cell.dataSize.toLocaleString()} bytes</>

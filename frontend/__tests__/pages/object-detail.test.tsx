@@ -9,12 +9,12 @@ vi.mock('@/lib/api', () => ({
     getSporeObject: vi.fn(),
     getSporeCluster: vi.fn(),
     getSporeObjectDecoded: vi.fn(),
-    getSporeObjectOccupationChart: vi.fn(),
+    getSporeObjectCapacityChart: vi.fn(),
     getAddress: vi.fn(),
     getTransactionDetail: vi.fn(),
     getCell: vi.fn(),
     getObjectCollection: vi.fn(),
-    getObjectCollectionOccupationChart: vi.fn(),
+    getObjectCollectionCapacityChart: vi.fn(),
     getObjectCollectionItems: vi.fn(),
     getObjectCollectionHolders: vi.fn(),
     getObjectCollectionActivities: vi.fn(),
@@ -49,7 +49,7 @@ const mockSpore = {
   isLive: true,
   createdAtBlock: 123456,
   liveCapacity: '100000000000',
-  liveOccupiedCapacity: '61000000000',
+  liveUsedCapacity: '61000000000',
 };
 
 const mockCollection = {
@@ -61,7 +61,7 @@ const mockCollection = {
   holdersCount: 42,
   activitiesCount: 150,
   liveCapacity: '800000000000',
-  liveOccupiedCapacity: '510000000000',
+  liveUsedCapacity: '510000000000',
 };
 
 function encodeMoleculeBytes(value: Uint8Array): Uint8Array {
@@ -110,8 +110,8 @@ describe('SporeDetailPage', () => {
       sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     };
     mockSearchParamsString = '';
-    vi.mocked(api.getSporeObjectOccupationChart).mockResolvedValue({
-      title: 'Spore Capacity Occupation',
+    vi.mocked(api.getSporeObjectCapacityChart).mockResolvedValue({
+      title: 'Spore Capacity History',
       data: [],
       series: [],
     });
@@ -119,7 +119,7 @@ describe('SporeDetailPage', () => {
       lockScriptHash: mockSpore.ownerLockHash,
       address: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
       balance: '0',
-      occupiedCapacity: '0',
+      usedCapacity: '0',
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
@@ -137,12 +137,12 @@ describe('SporeDetailPage', () => {
       confirmations: 10,
       inputsCapacity: '100000000000',
       outputsCapacity: '99999999000',
-      inputsOccupiedCapacity: '0',
-      outputsOccupiedCapacity: '0',
+      inputsUsedCapacity: '0',
+      outputsUsedCapacity: '0',
       outputs: [
         {
           capacity: '100000000000',
-          occupiedCapacity: 61,
+          usedCapacity: 61,
           type: {
             codeHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
             hashType: 'type',
@@ -164,8 +164,8 @@ describe('SporeDetailPage', () => {
       dataSize: 0,
       createdAtBlock: mockSpore.createdAtBlock,
     } as any);
-    vi.mocked(api.getObjectCollectionOccupationChart).mockResolvedValue({
-      title: 'Test Collection Capacity Occupation',
+    vi.mocked(api.getObjectCollectionCapacityChart).mockResolvedValue({
+      title: 'Test Collection Capacity History',
       data: [],
       series: [],
     });
@@ -203,13 +203,13 @@ describe('SporeDetailPage', () => {
     });
   });
 
-  it('renders occupation history panel', async () => {
+  it('renders capacity statistics panel', async () => {
     vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+      expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     });
   });
 
@@ -372,7 +372,7 @@ describe('SporeDetailPage', () => {
       sporesCount: 42,
       createdAtBlock: 123,
       liveCapacity: '0',
-      liveOccupiedCapacity: '0',
+      liveUsedCapacity: '0',
     } as any);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
@@ -424,8 +424,8 @@ describe('SporeDetailPage', () => {
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
     expect(screen.getByText('Total Objects')).toBeInTheDocument();
     expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
-    expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
-    expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
+    expect(screen.getByText(/^Used:/)).toBeInTheDocument();
+    expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Holders \(42\)$/ })).toBeInTheDocument();

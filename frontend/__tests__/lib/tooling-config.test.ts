@@ -67,7 +67,7 @@ describe('tooling config', () => {
       'app/charts/miner-address-distribution/page.tsx',
       'app/charts/hodl-wave/page.tsx',
       'app/charts/common-knowledge-composition/page.tsx',
-      'app/charts/cell-age-vs-occupied-capacity/page.tsx',
+      'app/charts/cell-age-vs-used-capacity/page.tsx',
       'app/charts/secondary-issuance/page.tsx',
       'app/charts/most-utilized-assets/page.tsx',
       'app/charts/most-utilized-scripts/page.tsx',

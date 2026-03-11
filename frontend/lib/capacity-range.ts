@@ -1,6 +1,6 @@
-export type OccupationRangeKey = '30d' | '90d' | '1y' | 'all';
+export type CapacityRangeKey = '30d' | '90d' | '1y' | 'all';
 
-export const OCCUPATION_RANGE_OPTIONS: ReadonlyArray<{ key: OccupationRangeKey; label: string }> = [
+export const CAPACITY_RANGE_OPTIONS: ReadonlyArray<{ key: CapacityRangeKey; label: string }> = [
   { key: '30d', label: '30D' },
   { key: '90d', label: '90D' },
   { key: '1y', label: '1Y' },
@@ -14,8 +14,8 @@ function formatUtcDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export function getOccupationRangeParams(
-  range: OccupationRangeKey
+export function getCapacityRangeParams(
+  range: CapacityRangeKey
 ): { from: string; to: string } | undefined {
   if (range === 'all') return undefined;
 

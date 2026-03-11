@@ -87,7 +87,7 @@ export default function KnowledgeSizePage() {
 
                 <div className="border-base-border border-t pt-6">
                   <h3 className="text-text mb-4 font-mono text-sm uppercase tracking-wider">
-                    Net Occupied Capacity Flow
+                    Net Used Capacity Flow
                   </h3>
                   <LineChart
                     data={netFlowData}

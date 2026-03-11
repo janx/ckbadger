@@ -94,8 +94,8 @@ pub fn routes() -> Router<Arc<AppState>> {
             get(list_object_collection_activities),
         )
         .route(
-            "/assets/objects/{collection_id}/charts/occupation",
-            get(get_object_collection_occupation_chart),
+            "/assets/objects/{collection_id}/charts/capacity-history",
+            get(get_object_collection_capacity_chart),
         )
 }
 
@@ -175,7 +175,7 @@ enum AssetSortKey {
     Transfers24h,
     Holders,
     Transfers,
-    Occupied,
+    Used,
     Capacity,
     OnchainRatio,
     HMultiplier,
@@ -225,7 +225,7 @@ pub struct AssetResponse {
     pub cluster_id: Option<String>,
     pub cluster_name: Option<String>,
     pub live_capacity: Option<String>,
-    pub live_occupied_capacity: Option<String>,
+    pub live_used_capacity: Option<String>,
     pub storage_tier: Option<String>,
     pub fully_onchain_ratio: Option<String>,
     pub fully_onchain_count: Option<i64>,
@@ -254,7 +254,7 @@ pub struct NftCollectionDetailResponse {
     pub holders_count: i64,
     pub activities_count: i64,
     pub live_capacity: String,
-    pub live_occupied_capacity: String,
+    pub live_used_capacity: String,
     pub storage_profile: CollectionStorageProfileResponse,
 }
 
@@ -705,7 +705,7 @@ fn asset_display_name(entry: &CachedAssetEntry) -> String {
 }
 
 fn compute_h_multiplier(entry: &CachedAssetEntry) -> f64 {
-    match (&entry.live_capacity, &entry.live_occupied_capacity) {
+    match (&entry.live_capacity, &entry.live_used_capacity) {
         (Some(cap_str), Some(occ_str)) => {
             let cap: f64 = cap_str.parse().unwrap_or(0.0);
             let occ: f64 = occ_str.parse().unwrap_or(0.0);
@@ -745,9 +745,9 @@ fn compare_asset_entries(
         AssetSortKey::Transfers => {
             apply_direction(left.transfers_count.cmp(&right.transfers_count), direction)
         }
-        AssetSortKey::Occupied => compare_optional_i128(
-            parse_i128_opt(left.live_occupied_capacity.as_deref()),
-            parse_i128_opt(right.live_occupied_capacity.as_deref()),
+        AssetSortKey::Used => compare_optional_i128(
+            parse_i128_opt(left.live_used_capacity.as_deref()),
+            parse_i128_opt(right.live_used_capacity.as_deref()),
             direction,
         ),
         AssetSortKey::Capacity => compare_optional_i128(
@@ -1139,53 +1139,53 @@ fn nft_entry_matches_collection(
         .unwrap_or(false)
 }
 
-fn build_capacity_occupation_chart(
+fn build_capacity_history_chart(
     deltas: Vec<(u32, i128, i128)>,
     title: String,
 ) -> anyhow::Result<StackedAreaChartResponse> {
-    build_capacity_occupation_chart_with_initial(deltas, title, 0, 0, None, None)
+    build_capacity_history_chart_with_initial(deltas, title, 0, 0, None, None)
 }
 
-fn build_capacity_occupation_chart_with_initial(
+fn build_capacity_history_chart_with_initial(
     deltas: Vec<(u32, i128, i128)>,
     title: String,
     initial_capacity: i128,
-    initial_occupied: i128,
+    initial_used: i128,
     from_date: Option<u32>,
     to_date: Option<u32>,
 ) -> anyhow::Result<StackedAreaChartResponse> {
     if initial_capacity < 0 {
         anyhow::bail!(
-            "invalid initial capacity for occupation chart: {}",
+            "invalid initial capacity for capacity history chart: {}",
             initial_capacity
         );
     }
-    if initial_occupied < 0 {
+    if initial_used < 0 {
         anyhow::bail!(
-            "invalid initial occupied capacity for occupation chart: {}",
-            initial_occupied
+            "invalid initial used capacity for capacity history chart: {}",
+            initial_used
         );
     }
-    if initial_occupied > initial_capacity {
+    if initial_used > initial_capacity {
         anyhow::bail!(
-            "invalid initial occupied/capacity for occupation chart: occupied={}, capacity={}",
-            initial_occupied,
+            "invalid initial used/capacity for capacity history chart: used={}, capacity={}",
+            initial_used,
             initial_capacity
         );
     }
     let mut daily_deltas: std::collections::BTreeMap<u32, (i128, i128)> =
         std::collections::BTreeMap::new();
-    for (date, cap_delta, occupied_delta) in deltas {
+    for (date, cap_delta, used_delta) in deltas {
         let entry = daily_deltas.entry(date).or_insert((0, 0));
         entry.0 = entry.0.checked_add(cap_delta).ok_or_else(|| {
             anyhow::anyhow!(
-                "capacity delta overflow while building occupation chart: date={}",
+                "capacity delta overflow while building capacity history chart: date={}",
                 date
             )
         })?;
-        entry.1 = entry.1.checked_add(occupied_delta).ok_or_else(|| {
+        entry.1 = entry.1.checked_add(used_delta).ok_or_else(|| {
             anyhow::anyhow!(
-                "occupied delta overflow while building occupation chart: date={}",
+                "used delta overflow while building capacity history chart: date={}",
                 date
             )
         })?;
@@ -1212,25 +1212,25 @@ fn build_capacity_occupation_chart_with_initial(
     };
 
     let mut cumulative_capacity = initial_capacity;
-    let mut cumulative_occupied = initial_occupied;
+    let mut cumulative_used = initial_used;
     let mut data = Vec::with_capacity(dates.len());
 
     for date in dates {
-        let (cap_delta, occupied_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
-        (cumulative_capacity, cumulative_occupied) = apply_live_capacity_delta(
+        let (cap_delta, used_delta) = daily_deltas.get(&date).copied().unwrap_or((0, 0));
+        (cumulative_capacity, cumulative_used) = apply_live_capacity_delta(
             cumulative_capacity,
-            cumulative_occupied,
+            cumulative_used,
             cap_delta,
-            occupied_delta,
-            &format!("building occupation chart at date {}", date),
+            used_delta,
+            &format!("building capacity history chart at date {}", date),
         )?;
-        let unoccupied = cumulative_capacity - cumulative_occupied;
+        let unused = cumulative_capacity - cumulative_used;
 
         data.push(StackedAreaDataPoint {
             date: format_yyyymmdd_for_chart(date),
             values: HashMap::from([
-                ("occupied".to_string(), cumulative_occupied.to_string()),
-                ("unoccupied".to_string(), unoccupied.to_string()),
+                ("used".to_string(), cumulative_used.to_string()),
+                ("unused".to_string(), unused.to_string()),
             ]),
         });
     }
@@ -1239,13 +1239,13 @@ fn build_capacity_occupation_chart_with_initial(
         data,
         series: vec![
             StackedAreaSeries {
-                key: "occupied".to_string(),
-                label: "Occupied".to_string(),
+                key: "used".to_string(),
+                label: "Used".to_string(),
                 color: "#f59e0b".to_string(),
             },
             StackedAreaSeries {
-                key: "unoccupied".to_string(),
-                label: "Unoccupied".to_string(),
+                key: "unused".to_string(),
+                label: "Unused".to_string(),
                 color: "#00c389".to_string(),
             },
         ],
@@ -1255,18 +1255,18 @@ fn build_capacity_occupation_chart_with_initial(
 
 fn latest_capacity_from_chart(chart: &StackedAreaChartResponse) -> (String, String) {
     if let Some(last) = chart.data.last() {
-        let occupied = last
+        let used = last
             .values
-            .get("occupied")
+            .get("used")
             .cloned()
             .unwrap_or_else(|| "0".to_string());
-        let unoccupied = last
+        let unused = last
             .values
-            .get("unoccupied")
+            .get("unused")
             .cloned()
             .unwrap_or_else(|| "0".to_string());
-        let total = occupied.parse::<i128>().unwrap_or(0) + unoccupied.parse::<i128>().unwrap_or(0);
-        return (total.to_string(), occupied);
+        let total = used.parse::<i128>().unwrap_or(0) + unused.parse::<i128>().unwrap_or(0);
+        return (total.to_string(), used);
     }
     ("0".to_string(), "0".to_string())
 }
@@ -1684,21 +1684,21 @@ async fn get_object_collection(
         .store
         .list_object_daily_deltas(&collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let chart = build_capacity_occupation_chart(
+    let chart = build_capacity_history_chart(
         daily
             .into_iter()
             .map(|(date, delta)| {
                 (
                     date,
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 )
             })
             .collect(),
-        "NFT Collection Capacity Occupation".to_string(),
+        "NFT Collection Capacity History".to_string(),
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (live_capacity, live_occupied_capacity) = latest_capacity_from_chart(&chart);
+    let (live_capacity, live_used_capacity) = latest_capacity_from_chart(&chart);
 
     let raw_standard = agg.standard.asset_standard().to_string();
     let standard = resolve_collection_standard(&collection_id_bytes, &raw_standard);
@@ -1738,7 +1738,7 @@ async fn get_object_collection(
         holders_count,
         activities_count,
         live_capacity,
-        live_occupied_capacity,
+        live_used_capacity,
         storage_profile,
     })
 }
@@ -2467,7 +2467,7 @@ async fn list_object_collection_activities(
     ))
 }
 
-async fn get_object_collection_occupation_chart(
+async fn get_object_collection_capacity_chart(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<ChartRangeParams>,
@@ -2485,9 +2485,9 @@ async fn get_object_collection_occupation_chart(
         .store
         .list_object_daily_deltas_in_range(&collection_id_bytes, from_date, to_date)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (initial_capacity, initial_occupied) = if let Some(from) = from_date {
+    let (initial_capacity, initial_used) = if let Some(from) = from_date {
         let mut base_capacity: i128 = 0;
-        let mut base_occupied: i128 = 0;
+        let mut base_used: i128 = 0;
         let baseline = state
             .store
             .list_object_daily_deltas_in_range(
@@ -2497,16 +2497,16 @@ async fn get_object_collection_occupation_chart(
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         for (_, delta) in baseline {
-            (base_capacity, base_occupied) = apply_live_capacity_delta(
+            (base_capacity, base_used) = apply_live_capacity_delta(
                 base_capacity,
-                base_occupied,
+                base_used,
                 delta.live_capacity_delta,
-                delta.live_occupied_capacity_delta,
-                "building NFT baseline occupation chart",
+                delta.live_used_capacity_delta,
+                "building NFT baseline capacity history chart",
             )
             .map_err(|e| ApiError::internal(e.to_string()))?;
         }
-        (base_capacity, base_occupied)
+        (base_capacity, base_used)
     } else {
         (0, 0)
     };
@@ -2515,20 +2515,20 @@ async fn get_object_collection_occupation_chart(
     let title = resolve_nft_collection_name(&standard, agg.name.as_deref())
         .unwrap_or_else(|| format!("0x{}", hex::encode(&collection_id_bytes)));
 
-    ok(build_capacity_occupation_chart_with_initial(
+    ok(build_capacity_history_chart_with_initial(
         daily
             .into_iter()
             .map(|(date, delta)| {
                 (
                     date,
                     delta.live_capacity_delta,
-                    delta.live_occupied_capacity_delta,
+                    delta.live_used_capacity_delta,
                 )
             })
             .collect(),
-        format!("{title} Capacity Occupation"),
+        format!("{title} Capacity History"),
         initial_capacity,
-        initial_occupied,
+        initial_used,
         from_date,
         to_date,
     )

@@ -21,7 +21,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 pub struct TokenCellStats {
     pub cells_count: i64,
     pub total_capacity: i128,
-    pub total_occupied_capacity: i128,
+    pub total_used_capacity: i128,
 }
 
 impl CkbadgerStore {
@@ -509,7 +509,7 @@ impl CkbadgerStore {
     }
 
     /// Aggregate cell stats for a token (by type script hash).
-    /// Prefix-scans `cell_by_type` and multi-gets each cell's capacity/occupied_capacity.
+    /// Prefix-scans `cell_by_type` and multi-gets each cell's capacity/used_capacity.
     pub fn aggregate_token_cell_stats(
         &self,
         type_hash: &[u8],
@@ -518,7 +518,7 @@ impl CkbadgerStore {
         let mut stats = TokenCellStats {
             cells_count: 0,
             total_capacity: 0,
-            total_occupied_capacity: 0,
+            total_used_capacity: 0,
         };
 
         let cf = self.cf_cell_by_type();
@@ -572,7 +572,7 @@ impl CkbadgerStore {
         for cell in cells.values() {
             stats.cells_count += 1;
             stats.total_capacity += cell.capacity as i128;
-            stats.total_occupied_capacity += cell.occupied_capacity as i128;
+            stats.total_used_capacity += cell.occupied_capacity as i128;
         }
         Ok(())
     }
@@ -643,7 +643,7 @@ mod tests {
             .unwrap();
         assert_eq!(stats.cells_count, 0);
         assert_eq!(stats.total_capacity, 0);
-        assert_eq!(stats.total_occupied_capacity, 0);
+        assert_eq!(stats.total_used_capacity, 0);
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
             .unwrap();
         assert_eq!(stats.cells_count, 1);
         assert_eq!(stats.total_capacity, 200_00000000);
-        assert_eq!(stats.total_occupied_capacity, 61_00000000);
+        assert_eq!(stats.total_used_capacity, 61_00000000);
     }
 
     #[test]
@@ -684,7 +684,7 @@ mod tests {
             .unwrap();
         assert_eq!(stats.cells_count, 3);
         assert_eq!(stats.total_capacity, 650_00000000);
-        assert_eq!(stats.total_occupied_capacity, 202_00000000);
+        assert_eq!(stats.total_used_capacity, 202_00000000);
     }
 
     #[test]

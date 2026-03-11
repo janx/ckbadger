@@ -853,8 +853,8 @@ impl BatchWriter {
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        for ((spore_id, date), (capacity_delta, occupied_delta)) in changes {
-            if *capacity_delta == 0 && *occupied_delta == 0 {
+        for ((spore_id, date), (capacity_delta, used_delta)) in changes {
+            if *capacity_delta == 0 && *used_delta == 0 {
                 continue;
             }
             let mut current = self
@@ -873,19 +873,19 @@ impl BatchWriter {
                         capacity_delta
                     )
                 })?;
-            current.live_occupied_capacity_delta = current
-                .live_occupied_capacity_delta
-                .checked_add(*occupied_delta)
+            current.live_used_capacity_delta = current
+                .live_used_capacity_delta
+                .checked_add(*used_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "spore daily occupied delta overflow: spore_id=0x{}, date={}, current={}, delta={}",
+                        "spore daily used delta overflow: spore_id=0x{}, date={}, current={}, delta={}",
                         hex::encode(spore_id),
                         date,
-                        current.live_occupied_capacity_delta,
-                        occupied_delta
+                        current.live_used_capacity_delta,
+                        used_delta
                     )
                 })?;
-            if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
+            if current.live_capacity_delta == 0 && current.live_used_capacity_delta == 0 {
                 let key = keys::encode_spore_daily_key(spore_id, *date);
                 batch.delete_stats(&key);
             } else {
@@ -900,8 +900,8 @@ impl BatchWriter {
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        for ((cluster_id, date), (capacity_delta, occupied_delta)) in changes {
-            if *capacity_delta == 0 && *occupied_delta == 0 {
+        for ((cluster_id, date), (capacity_delta, used_delta)) in changes {
+            if *capacity_delta == 0 && *used_delta == 0 {
                 continue;
             }
             let mut current = self
@@ -920,19 +920,19 @@ impl BatchWriter {
                         capacity_delta
                     )
                 })?;
-            current.live_occupied_capacity_delta = current
-                .live_occupied_capacity_delta
-                .checked_add(*occupied_delta)
+            current.live_used_capacity_delta = current
+                .live_used_capacity_delta
+                .checked_add(*used_delta)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "cluster daily occupied delta overflow: cluster_id=0x{}, date={}, current={}, delta={}",
+                        "cluster daily used delta overflow: cluster_id=0x{}, date={}, current={}, delta={}",
                         hex::encode(cluster_id),
                         date,
-                        current.live_occupied_capacity_delta,
-                        occupied_delta
+                        current.live_used_capacity_delta,
+                        used_delta
                     )
                 })?;
-            if current.live_capacity_delta == 0 && current.live_occupied_capacity_delta == 0 {
+            if current.live_capacity_delta == 0 && current.live_used_capacity_delta == 0 {
                 let key = keys::encode_cluster_daily_key(cluster_id, *date);
                 batch.delete_stats(&key);
             } else {
@@ -1084,7 +1084,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(spore.live_capacity_delta, 80);
-        assert_eq!(spore.live_occupied_capacity_delta, 50);
+        assert_eq!(spore.live_used_capacity_delta, 50);
 
         let cluster = writer
             .store()
@@ -1092,7 +1092,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(cluster.live_capacity_delta, 800);
-        assert_eq!(cluster.live_occupied_capacity_delta, 500);
+        assert_eq!(cluster.live_used_capacity_delta, 500);
 
         {
             let mut batch = StoreBatch::new(writer.store());

@@ -332,19 +332,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             </div>
             {(() => {
               const balanceBig = BigInt(address.balance);
-              const occupiedBig = BigInt(address.occupiedCapacity);
-              if (balanceBig <= BigInt(0) || occupiedBig <= BigInt(0)) return null;
-              const freeBig = balanceBig - occupiedBig;
-              const ratio = Number((occupiedBig * BigInt(10000)) / balanceBig) / 100;
+              const usedBig = BigInt(address.usedCapacity);
+              if (balanceBig <= BigInt(0) || usedBig <= BigInt(0)) return null;
+              const freeBig = balanceBig - usedBig;
+              const ratio = Number((usedBig * BigInt(10000)) / balanceBig) / 100;
               return (
                 <div className="mt-6">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
                       Capacity Utilization
                     </span>
-                    <span className="text-text font-mono text-xs">
-                      {ratio.toFixed(1)}% occupied
-                    </span>
+                    <span className="text-text font-mono text-xs">{ratio.toFixed(1)}% used</span>
                   </div>
                   <div className="bg-base-elevated flex h-3 w-full overflow-hidden rounded-sm">
                     <div
@@ -356,15 +354,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="mt-1.5 flex items-center justify-between">
                     <span
                       className="text-warning font-mono text-xs"
-                      title={formatCkbAmount(address.occupiedCapacity).full + ' CKB'}
+                      title={formatCkbAmount(address.usedCapacity).full + ' CKB'}
                     >
-                      Occupied: {formatCkbCompact(address.occupiedCapacity).value} CKB
+                      Used: {formatCkbCompact(address.usedCapacity).value} CKB
                     </span>
                     <span
                       className="text-emphasis font-mono text-xs"
                       title={formatCkbAmount(freeBig.toString()).full + ' CKB'}
                     >
-                      Unoccupied: {formatCkbCompact(freeBig.toString()).value} CKB
+                      Unused: {formatCkbCompact(freeBig.toString()).value} CKB
                     </span>
                   </div>
                 </div>

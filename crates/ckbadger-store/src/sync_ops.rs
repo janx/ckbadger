@@ -527,7 +527,7 @@ mod tests {
                 tx_index: 1,
                 timestamp: 1_700_000_000,
                 ckb_delta: 500_00000000,
-                occupied_delta: 0,
+                used_delta: 0,
                 is_cellbase: false,
                 has_type_script: false,
                 asset_changes: vec![],
