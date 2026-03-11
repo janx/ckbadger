@@ -4455,8 +4455,9 @@ impl Indexer {
                     }
 
                     // Phase 2: Consume DotBit accounts from pre-identified events
-                    // (zero DB reads — all identification done in parser via
-                    // input_cell_info type_code_hash + type_args).
+                    // (identification done in parser via input_cell_info
+                    // type_code_hash + type_args, with DB outpoint fallback for
+                    // historical cells with empty type_args).
                     for event in &pre_parsed_nft_data.consumed_dotbit {
                         if writer.consume_dotbit_account_with_state(
                             &event.account_id,

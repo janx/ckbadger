@@ -142,6 +142,7 @@ fn run_nft_precompute(
     all_tx_data: &[TxData],
     input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
     batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    dotbit_outpoint_fallback: &HashMap<(Vec<u8>, i16), Vec<u8>>,
 ) -> Result<PreParsedNftData> {
     let mut mnft_issuers: Vec<(usize, ParsedMnftIssuer)> = Vec::new();
     let mut mnft_classes: Vec<(usize, usize, ParsedMnftClass)> = Vec::new();
@@ -259,7 +260,8 @@ fn run_nft_precompute(
                 let account_id = cell_info
                     .and_then(|info| info.type_args.as_ref())
                     .filter(|args| args.len() == 20 && !args.iter().all(|&b| b == 0))
-                    .cloned();
+                    .cloned()
+                    .or_else(|| dotbit_outpoint_fallback.get(&key).cloned());
                 if let Some(account_id) = account_id {
                     let latest_create_order =
                         batch_dotbit_latest_create_order.get(&account_id).copied();
@@ -1662,13 +1664,84 @@ impl Indexer {
                 // mNFT/DotBit precompute: parse all mNFT issuers/classes/tokens and DotBit
                 // accounts in the parser stage to offload t6b writer thread.
                 // Also pre-identify consumed DotBit inputs using input_cell_info
-                // type_code_hash (zero DB reads).
+                // type_code_hash + type_args, with DB fallback for historical cells
+                // whose type_args is empty (account_id stored only in cell data).
                 let nft_precompute_started = Instant::now();
+                let dotbit_outpoint_fallback = {
+                    let dotbit_code_hash = crate::rpc::parse_hex_to_bytes(
+                        crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID,
+                    );
+                    let mut needs_resolution: Vec<(Vec<u8>, i16)> = Vec::new();
+                    for ((tx_hash, idx), info) in &input_cell_info {
+                        let is_dotbit = info
+                            .type_code_hash
+                            .as_ref()
+                            .map(|tc| tc.as_slice() == dotbit_code_hash.as_slice())
+                            .unwrap_or(false);
+                        if !is_dotbit {
+                            continue;
+                        }
+                        let has_valid_type_args = info
+                            .type_args
+                            .as_ref()
+                            .filter(|args| args.len() == 20 && !args.iter().all(|&b| b == 0))
+                            .is_some();
+                        if !has_valid_type_args {
+                            needs_resolution.push((tx_hash.clone(), *idx));
+                        }
+                    }
+                    if needs_resolution.is_empty() {
+                        HashMap::new()
+                    } else {
+                        let wr = writer_for_parser.clone();
+                        let nr = needs_resolution;
+                        let db_query = tokio::task::spawn_blocking(move || {
+                            let refs: Vec<(&[u8], i16)> =
+                                nr.iter().map(|(h, i)| (h.as_slice(), *i)).collect();
+                            wr.store().get_dotbit_account_ids_by_outpoints_batch(&refs)
+                        });
+                        match tokio::time::timeout(Duration::from_secs(10), db_query).await {
+                            Ok(Ok(Ok(resolved))) => {
+                                let mut map = HashMap::with_capacity(resolved.len());
+                                for (tx_hash, idx, account_id) in resolved {
+                                    map.insert((tx_hash, idx), account_id);
+                                }
+                                map
+                            }
+                            Ok(Ok(Err(e))) => {
+                                warn!(
+                                    start_block,
+                                    end_block,
+                                    "Parser: dotbit outpoint fallback DB query failed: {}",
+                                    e
+                                );
+                                HashMap::new()
+                            }
+                            Ok(Err(e)) => {
+                                warn!(
+                                    start_block,
+                                    end_block,
+                                    "Parser: dotbit outpoint fallback task failed: {}",
+                                    e
+                                );
+                                HashMap::new()
+                            }
+                            Err(_) => {
+                                warn!(
+                                    start_block,
+                                    end_block, "Parser: dotbit outpoint fallback timed out"
+                                );
+                                HashMap::new()
+                            }
+                        }
+                    }
+                };
                 let pre_parsed_nft_data: PreParsedNftData = match run_nft_precompute(
                     &all_parsed_blocks[..blocks.len()],
                     &all_tx_data,
                     &input_cell_info,
                     &batch_cell_infos,
+                    &dotbit_outpoint_fallback,
                 ) {
                     Ok(data) => data,
                     Err(e) => {
@@ -2777,6 +2850,7 @@ mod tests {
             &all_tx_data,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         )
         .expect("precompute");
 
@@ -2789,6 +2863,90 @@ mod tests {
                 .get(&0)
                 .map(std::string::String::as_str),
             Some("transfer_account")
+        );
+    }
+
+    /// Regression test: cross-batch consume of a .bit cell whose input_cell_info
+    /// has empty type_args (historical DAS cells stored account_id only in cell
+    /// data, not in type_args).  The consume must still be detected.
+    #[test]
+    fn test_run_nft_precompute_cross_batch_dotbit_consume_empty_type_args() {
+        let dotbit_account_id = [0x11u8; 20];
+        let dotbit_code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+
+        // TX that consumes a dotbit cell created in a previous batch.
+        // The consuming TX has no dotbit outputs (pure recycle).
+        let prev_tx_hash_hex = "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let prev_tx_hash = crate::rpc::parse_hex_to_bytes(prev_tx_hash_hex);
+        let consume_tx = TransactionView {
+            hash: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+            version: "0x0".to_string(),
+            cell_deps: Vec::<CellDep>::new(),
+            header_deps: Vec::new(),
+            inputs: vec![CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: prev_tx_hash_hex.to_string(),
+                    index: "0x0".to_string(),
+                },
+            }],
+            outputs: vec![CellOutput {
+                capacity: "0x174876e800".to_string(),
+                lock: create_lock_script(),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![],
+        };
+        let all_tx_data = vec![create_test_tx_data(&consume_tx)];
+        let parsed_blocks = vec![create_test_parsed_block(14_000_100, 1, 0)];
+
+        // Simulate cross-batch input_cell_info: the consumed cell IS a dotbit
+        // cell (type_code_hash matches) but has EMPTY type_args (historical cell).
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
+        input_cell_info.insert(
+            (prev_tx_hash.clone(), 0),
+            LiveCellInfo {
+                capacity: 100_00000000,
+                created_at_block: 14_000_000,
+                lock_script_hash: vec![0xAA; 32],
+                lock_code_hash: vec![0xBB; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0xCC; 20],
+                type_script_hash: Some(vec![0xDD; 32]),
+                type_code_hash: Some(dotbit_code_hash),
+                type_hash_type: Some(1),
+                type_args: Some(vec![]), // EMPTY — historical cell
+                data_size: 80,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+            },
+        );
+
+        // Simulate the DB fallback: the outpoint → account_id mapping that
+        // was written when the cell was first indexed as an output.
+        let mut dotbit_outpoint_fallback: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
+        dotbit_outpoint_fallback.insert((prev_tx_hash.clone(), 0), dotbit_account_id.to_vec());
+
+        let output = run_nft_precompute(
+            &parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &HashMap::new(),
+            &dotbit_outpoint_fallback,
+        )
+        .expect("precompute");
+
+        // The consume should be detected even though type_args is empty.
+        // The account_id should be resolved via the fallback map.
+        assert_eq!(
+            output.consumed_dotbit.len(),
+            1,
+            "cross-batch dotbit consume with empty type_args must be detected"
+        );
+        assert_eq!(
+            output.consumed_dotbit[0].account_id,
+            dotbit_account_id.to_vec()
         );
     }
 }

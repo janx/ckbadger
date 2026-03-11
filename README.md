@@ -570,7 +570,7 @@ ckbadger/
 │   │       ├── parser/     # Block, cell, script, spore, .bit, mNFT, RGB++ parsers
 │   │       ├── db/         # RocksDB write operations
 │   │       ├── sync/       # Synchronization logic
-│   │       └── verify/     # Data integrity verification (54 checks via API)
+│   │       └── verify/     # Data integrity verification (56 checks via API)
 │   ├── api/                # REST API server (library)
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)

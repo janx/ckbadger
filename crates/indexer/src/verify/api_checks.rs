@@ -25,6 +25,7 @@ const NFT_COLLECTION_SAMPLE_MAX: usize = 20;
 const SECONDARY_ISSUANCE_MAX_DRIFT_CKB: i128 = 10_000;
 const TOP_ASSET_LIMIT: usize = 10;
 const TOP_HOLDER_LIMIT: usize = 10;
+const IDENTITY_HOLDER_SPOT_CHECK_LIMIT: usize = 10;
 const ADDRESS_COUNT_PAGE_LIMIT: usize = 100;
 const ADDRESS_TOKENS_LIMIT: usize = 100;
 
@@ -3152,6 +3153,126 @@ impl Check for AssetTopHoldersAddressConsistency {
     }
 }
 
+/// S23: Identity collection holder counts match aggregate, and top holders'
+/// identity counts do not exceed their live cell counts (each identity = 1 cell).
+pub struct IdentityCollectionHolderConsistency;
+
+impl Check for IdentityCollectionHolderConsistency {
+    fn name(&self) -> &'static str {
+        "identity_collection_holder_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Identity holder counts match aggregate and do not exceed live cell counts"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn estimated_total(&self, _ctx: &CheckContext) -> Option<u64> {
+        Some(2) // dotbit + did:ckb
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let identity_collections = ["dotbit", "did_ckb"];
+        let mut findings = vec![];
+        let mut checked = 0u64;
+
+        for collection_slug in &identity_collections {
+            // 1. Fetch the collection aggregate.
+            let detail: NftCollectionDetailApiRecord =
+                match api_get(ctx, &format!("assets/identities/{}", collection_slug)) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        progress.inc(1);
+                        continue; // Collection may not exist yet
+                    }
+                };
+
+            // 2. Fetch top holders (already sorted by count desc).
+            let holders: CursorPageWithTotal<NftHolderApiRecord> = api_get(
+                ctx,
+                &format!(
+                    "assets/identities/{}/holders?limit={}",
+                    collection_slug, IDENTITY_HOLDER_SPOT_CHECK_LIMIT
+                ),
+            )?;
+
+            // 3. Check holders_count consistency with aggregate.
+            match holders.total {
+                Some(total) if total == detail.holders_count => {}
+                Some(total) => findings.push(Finding {
+                    entity: format!("identity_collection={}", collection_slug),
+                    details: vec![format!(
+                        "holders total={} != aggregate holders_count={}",
+                        total, detail.holders_count
+                    )],
+                }),
+                None => findings.push(Finding {
+                    entity: format!("identity_collection={}", collection_slug),
+                    details: vec!["holders response missing total".to_string()],
+                }),
+            }
+
+            // 4. For each top holder, verify identity count <= live cell count.
+            // Each identity (dotbit/.bit account, did:ckb) is stored in a cell
+            // locked by the owner's lock script, so the address must have at
+            // least as many live cells as identity items.
+            for holder in holders.data.iter().take(IDENTITY_HOLDER_SPOT_CHECK_LIMIT) {
+                if holder.item_count <= 0 {
+                    findings.push(Finding {
+                        entity: format!(
+                            "identity_collection={} holder={}",
+                            collection_slug, holder.lock_script_hash
+                        ),
+                        details: vec![format!(
+                            "holder item_count={} expected > 0",
+                            holder.item_count
+                        )],
+                    });
+                    continue;
+                }
+
+                let addr: AddressDetailApiRecord =
+                    match api_get(ctx, &format!("addresses/{}", holder.lock_script_hash)) {
+                        Ok(a) => a,
+                        Err(_) => continue, // address may not be resolvable
+                    };
+
+                if holder.item_count > addr.live_cells_count {
+                    findings.push(Finding {
+                        entity: format!(
+                            "identity_collection={} holder={}",
+                            collection_slug, holder.lock_script_hash
+                        ),
+                        details: vec![format!(
+                            "identity count={} > live_cells_count={} \
+                             (each identity is a cell, indicates over-counting)",
+                            holder.item_count, addr.live_cells_count
+                        )],
+                    });
+                }
+            }
+
+            checked += 1;
+            progress.inc(1);
+        }
+
+        if checked == 0 {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no identity collections found".to_string(),
+            ));
+        }
+
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!("{} identity collections validated", checked),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CKB RPC helpers (blocking, used only by S18)
 // ---------------------------------------------------------------------------
@@ -3261,6 +3382,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(SporeOwnerRoundtrip),
         Box::new(NftAssetCollectionConsistency),
         Box::new(AssetTopHoldersAddressConsistency),
+        Box::new(IdentityCollectionHolderConsistency),
     ]
 }
 
@@ -3284,7 +3406,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 28);
+        assert_eq!(checks.len(), 29);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -3304,6 +3426,7 @@ mod tests {
         assert!(names.contains(&"spore_owner_roundtrip"));
         assert!(names.contains(&"nft_asset_collection_consistency"));
         assert!(names.contains(&"asset_top_holders_address_consistency"));
+        assert!(names.contains(&"identity_collection_holder_consistency"));
     }
 
     #[test]
@@ -3318,7 +3441,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 6);
-        assert_eq!(sampling_count, 22);
+        assert_eq!(sampling_count, 23);
     }
 
     #[test]

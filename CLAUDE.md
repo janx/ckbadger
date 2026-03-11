@@ -196,7 +196,7 @@ Memory: ~22GB peak (>=32GB RAM), ~8GB peak (<32GB RAM).
 
 ## Data Integrity Verification
 
-54 checks across 3 tiers: Fast (6, seconds), Sampling (21, minutes), Explorer (27, minutes). See `docs/VERIFY.md` for full details.
+56 checks across 3 tiers: Fast (6, seconds), Sampling (23, minutes), Explorer (27, minutes). See `docs/VERIFY.md` for full details.
 
 ```bash
 ckbadger verify --depth fast              # Quick sanity
