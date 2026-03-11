@@ -190,10 +190,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
@@ -224,10 +224,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Unknown spore ID').length).toBeGreaterThan(0);
@@ -243,7 +243,7 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
       expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
     });
@@ -281,10 +281,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
@@ -310,24 +310,24 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByText('No spores in this collection')).toBeInTheDocument();
     });
   });
 
-  it('displays back to NFTs link', async () => {
+  it('displays back to Objects link', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      const backLink = screen.getByText('← Back to NFTs');
+      const backLink = screen.getByText('← Back to Objects');
       expect(backLink).toBeInTheDocument();
       expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=nft');
     });
@@ -377,10 +377,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByText('2 shown / 5 total')).toBeInTheDocument();
@@ -403,10 +403,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
@@ -424,10 +424,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
@@ -450,10 +450,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
@@ -491,10 +491,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.queryByLabelText('Sort spores')).not.toBeInTheDocument();
@@ -510,10 +510,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByTestId('spore-list-controls')).toBeInTheDocument();
@@ -534,10 +534,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
@@ -570,10 +570,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=nfts'))).toBe(true);
@@ -683,10 +683,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(api.getAddress).toHaveBeenCalledWith(mockSpores.data[1].ownerLockHash);
@@ -718,10 +718,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByText('Showing 1-2 of 5 Spores, 20 per page')).toBeInTheDocument();
@@ -736,10 +736,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
@@ -753,10 +753,10 @@ describe('ClusterDetailPage', () => {
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();

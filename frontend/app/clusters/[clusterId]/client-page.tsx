@@ -377,7 +377,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
             href="/assets?type=nft"
             className="hover:text-emphasis text-text-dim text-sm transition-colors"
           >
-            ← Back to NFTs
+            ← Back to Objects
           </Link>
         </div>
         <PageHeader
