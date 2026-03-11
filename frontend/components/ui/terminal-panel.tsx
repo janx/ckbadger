@@ -1,15 +1,26 @@
 'use client';
 
-import { type HTMLAttributes, type ReactNode } from 'react';
+import { type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type IndicatorStatus = 'active' | 'warning' | 'inactive' | 'none';
+type AccentColor = 'jade' | 'aqua' | 'gold' | 'rouge' | 'lavender' | 'amber';
+
+const accentColorValues: Record<AccentColor, string> = {
+  jade: 'rgba(46, 219, 163, 0.4)',
+  aqua: 'rgba(104, 204, 240, 0.4)',
+  gold: 'rgba(242, 197, 92, 0.4)',
+  rouge: 'rgba(232, 85, 90, 0.4)',
+  lavender: 'rgba(184, 169, 232, 0.4)',
+  amber: 'rgba(212, 136, 58, 0.4)',
+};
 
 interface TerminalPanelProps {
   children: ReactNode;
   className?: string;
   variant?: 'default' | 'elevated' | 'inset';
   glow?: boolean;
+  accentColor?: AccentColor;
 }
 
 export function TerminalPanel({
@@ -17,6 +28,7 @@ export function TerminalPanel({
   className,
   variant = 'default',
   glow = false,
+  accentColor = 'jade',
 }: TerminalPanelProps) {
   const variantClasses = {
     default: 'bg-base-surface border-base-border',
@@ -27,11 +39,12 @@ export function TerminalPanel({
   return (
     <div
       className={cn(
-        'relative overflow-hidden rounded-lg border transition-shadow duration-300',
+        'neon-edge-top relative overflow-hidden rounded-lg border transition-shadow duration-300',
         variantClasses[variant],
         glow && 'hover:shadow-glow',
         className
       )}
+      style={{ '--neon-color': accentColorValues[accentColor] } as CSSProperties}
     >
       <div className="pointer-events-none absolute inset-0">
         <div
@@ -61,11 +74,17 @@ export function TerminalPanelHeader({
   indicator = 'none',
   actions,
 }: TerminalPanelHeaderProps) {
-  const indicatorClasses: Record<IndicatorStatus, string> = {
-    active: 'indicator-light',
-    warning: 'indicator-light indicator-light-amber',
-    inactive: 'indicator-light indicator-light-static opacity-30',
-    none: 'hidden',
+  const renderIndicator = () => {
+    switch (indicator) {
+      case 'active':
+        return <span className="live-dot" />;
+      case 'warning':
+        return <div className="indicator-light indicator-light-amber" />;
+      case 'inactive':
+        return <div className="indicator-light indicator-light-static opacity-30" />;
+      case 'none':
+        return null;
+    }
   };
 
   return (
@@ -78,8 +97,8 @@ export function TerminalPanelHeader({
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <div className={indicatorClasses[indicator]} />
-        <div className="text-text-muted min-w-0 break-words font-mono text-sm uppercase tracking-wider">
+        {renderIndicator()}
+        <div className="text-text-dim min-w-0 break-words font-mono text-sm uppercase tracking-wider">
           {children}
         </div>
       </div>
@@ -141,7 +160,7 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
     return (
       <div className={cn('flex items-center gap-3 py-2', className)}>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="text-text-muted font-mono text-xs uppercase tracking-widest">{label}</span>
+        <span className="text-text-dim font-mono text-xs uppercase tracking-widest">{label}</span>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
       </div>
     );
