@@ -159,21 +159,34 @@ export default function ScriptsPage() {
               <div className="space-y-2 py-4">
                 {Array.from({ length: 5 }).map((_, i) => (
                   <TerminalRow key={i} hoverable={false}>
-                    <div className="flex animate-pulse items-center">
-                      <div className="flex-1">
+                    {/* Table skeleton (md+) */}
+                    <div className="hidden animate-pulse items-center md:flex">
+                      <div className="w-44 shrink-0">
                         <div className="bg-base-elevated h-4 w-32 rounded" />
                       </div>
-                      <div className="w-20">
+                      <div className="w-16 shrink-0">
                         <div className="bg-base-elevated h-4 w-12 rounded" />
                       </div>
-                      <div className="flex-1">
+                      <div className="min-w-0 flex-1 px-4">
                         <div className="bg-base-elevated h-4 w-48 rounded" />
                       </div>
-                      <div className="w-28">
+                      <div className="w-28 shrink-0">
                         <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
-                      <div className="w-28">
+                      <div className="w-28 shrink-0">
                         <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
+                      </div>
+                    </div>
+                    {/* Card skeleton (<md) */}
+                    <div className="animate-pulse space-y-1.5 md:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="bg-base-elevated h-4 w-28 rounded" />
+                        <div className="bg-base-elevated h-4 w-10 rounded" />
+                      </div>
+                      <div className="bg-base-elevated h-3 w-3/4 rounded" />
+                      <div className="flex items-center gap-4">
+                        <div className="bg-base-elevated h-3 w-24 rounded" />
+                        <div className="bg-base-elevated h-3 w-24 rounded" />
                       </div>
                     </div>
                   </TerminalRow>
@@ -186,17 +199,18 @@ export default function ScriptsPage() {
               </div>
             ) : data?.data?.length ? (
               <>
-                <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-                  {renderSortHeader('name', 'Script', 'w-44')}
-                  {renderSortHeader('kind', 'Kind', 'w-16')}
-                  {renderSortHeader('description', 'Description', 'flex-1 px-4')}
-                  {renderSortHeader('occupied', 'Occupied (CKB)', 'w-28', 'right')}
-                  {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28', 'right')}
+                <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
+                  {renderSortHeader('name', 'Script', 'w-44 shrink-0')}
+                  {renderSortHeader('kind', 'Kind', 'w-16 shrink-0')}
+                  {renderSortHeader('description', 'Description', 'min-w-0 flex-1 px-4')}
+                  {renderSortHeader('occupied', 'Occupied (CKB)', 'w-28 shrink-0', 'right')}
+                  {renderSortHeader('capacity', 'Capacity (CKB)', 'w-28 shrink-0', 'right')}
                 </div>
                 {scripts.map((script: KnownScript) => (
                   <TerminalRow key={script.codeHash}>
-                    <div className="flex items-center">
-                      <div className="w-44">
+                    {/* Table layout (md+) */}
+                    <div className="hidden items-center md:flex">
+                      <div className="w-44 shrink-0">
                         {hasKnownScriptName(script.name) ? (
                           <AppLink
                             href={getScriptHref(script)}
@@ -214,7 +228,7 @@ export default function ScriptsPage() {
                           </AppLink>
                         )}
                       </div>
-                      <div className="w-16">
+                      <div className="w-16 shrink-0">
                         {script.scriptKind ? (
                           <Badge variant={script.scriptKind === 'lock' ? 'blue' : 'purple'}>
                             {script.scriptKind}
@@ -223,7 +237,7 @@ export default function ScriptsPage() {
                           <span className="text-text-muted">-</span>
                         )}
                       </div>
-                      <div className="text-text-muted flex-1 truncate px-4 text-sm">
+                      <div className="text-text-muted min-w-0 flex-1 truncate px-4 text-sm">
                         {hasKnownScriptName(script.name) ? (
                           script.description
                         ) : (
@@ -235,7 +249,7 @@ export default function ScriptsPage() {
                           </span>
                         )}
                       </div>
-                      <div className="text-text-secondary w-28 text-right font-mono">
+                      <div className="text-text-secondary w-28 shrink-0 text-right font-mono">
                         {(() => {
                           const occupied = script.liveOccupiedCapacitySum;
                           if (!occupied) {
@@ -245,7 +259,7 @@ export default function ScriptsPage() {
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                         })()}
                       </div>
-                      <div className="text-text-secondary w-28 text-right font-mono">
+                      <div className="text-text-secondary w-28 shrink-0 text-right font-mono">
                         {(() => {
                           const capacity = script.liveCapacitySum;
                           if (!capacity) {
@@ -254,6 +268,53 @@ export default function ScriptsPage() {
                           const compact = formatCkbCompact(capacity);
                           return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                         })()}
+                      </div>
+                    </div>
+                    {/* Card layout (<md) */}
+                    <div className="space-y-1.5 md:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <AppLink
+                          href={getScriptHref(script)}
+                          className="text-emphasis font-medium hover:underline"
+                        >
+                          {hasKnownScriptName(script.name)
+                            ? script.name!.trim()
+                            : UNLABELED_SCRIPT_LABEL}
+                        </AppLink>
+                        {script.scriptKind && (
+                          <Badge variant={script.scriptKind === 'lock' ? 'blue' : 'purple'}>
+                            {script.scriptKind}
+                          </Badge>
+                        )}
+                      </div>
+                      {hasKnownScriptName(script.name) && script.description && (
+                        <div className="text-text-muted line-clamp-2 text-xs">
+                          {script.description}
+                        </div>
+                      )}
+                      {!hasKnownScriptName(script.name) && (
+                        <div
+                          className="text-text-muted font-mono text-xs"
+                          title={getScriptRefFull(script)}
+                        >
+                          {getScriptRefDisplay(script)}
+                        </div>
+                      )}
+                      <div className="text-text-secondary flex items-center gap-4 font-mono text-xs">
+                        <span>
+                          Occupied:{' '}
+                          {(() => {
+                            const o = script.liveOccupiedCapacitySum;
+                            return o ? formatCkbCompact(o).value : '-';
+                          })()}
+                        </span>
+                        <span>
+                          Capacity:{' '}
+                          {(() => {
+                            const c = script.liveCapacitySum;
+                            return c ? formatCkbCompact(c).value : '-';
+                          })()}
+                        </span>
                       </div>
                     </div>
                   </TerminalRow>
