@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 use ckbadger_store::types::HodlTrackerState;
 use ckbadger_store::CkbadgerStore;
 
-use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
+use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
 use crate::db::writer::hodl_wave::HodlWaveTracker;
@@ -537,13 +537,13 @@ impl Indexer {
         if let Some(run) = guard.as_mut() {
             let env = crate::sys_info::capture_environment(&self.config.domain_data_path);
             let profile = self.writer.store().memory_profile();
-            let rocksdb_config = crate::bulk_sync_perf::RocksDbConfig {
+            let rocksdb_config = RocksDbConfig {
                 rocksdb_budget_gb: profile.rocksdb_budget_bytes as u64 / (1024 * 1024 * 1024),
                 block_cache_bulk_mb: profile.block_cache_bulk_sync_bytes as u64 / (1024 * 1024),
                 wbm_bulk_mb: profile.wbm_bulk_sync_bytes as u64 / (1024 * 1024),
                 write_buffer_mega_mb: profile.write_buffer_mega_bytes as u64 / (1024 * 1024),
-                l0_slowdown_bulk: 64,
-                l0_stop_bulk: 128,
+                l0_slowdown_bulk: 96,
+                l0_stop_bulk: 192,
                 max_background_jobs: profile.max_background_jobs,
                 max_subcompactions: profile.max_subcompactions,
                 unordered_write: true,
