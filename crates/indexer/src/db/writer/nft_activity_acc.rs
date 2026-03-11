@@ -433,6 +433,46 @@ mod tests {
         assert_eq!(object_results.len(), 0);
     }
 
+    /// Regression test: verifies that flush_identity return value can be used
+    /// to compute activity count deltas for the collection aggregate.
+    /// This pattern is used in the pipeline bulk-sync path (T6a) where
+    /// activities are committed separately from aggregates.
+    #[test]
+    fn test_flush_identity_returns_deltas_for_aggregate_update() {
+        let (_dir, store) = test_store();
+        let mut acc = ObjectCollectionActivityAccumulator::new();
+        let coll = *b"did_ckb_collection______________";
+        let tx1 = [10u8; 32];
+        let tx2 = [11u8; 32];
+        let block_hash = [0xC1u8; 32];
+        let nft_a = [3u8; 32];
+        let nft_b = [4u8; 32];
+
+        // Two mint events across two transactions
+        acc.record(&coll, &tx1, &nft_a, &block_hash, 100, 1, 1000, true);
+        acc.record(&coll, &tx2, &nft_b, &block_hash, 100, 2, 1000, true);
+
+        let mut batch = StoreBatch::new(&store);
+        let inserted = acc.flush_identity(&mut batch);
+        batch.commit().unwrap();
+
+        // Compute deltas from inserted tuples (mirrors pipeline T6a pattern)
+        let mut deltas: std::collections::HashMap<Vec<u8>, i64> = std::collections::HashMap::new();
+        for (collection_id, _, _, _, _) in &inserted {
+            *deltas.entry(collection_id.clone()).or_insert(0) += 1;
+        }
+
+        // Two distinct txs → two activity entries → delta of 2
+        assert_eq!(inserted.len(), 2);
+        assert_eq!(*deltas.get(coll.as_slice()).unwrap(), 2);
+
+        // Verify the activities are in the DB
+        let results = store
+            .list_identity_collection_activities(&coll, 10, None, None)
+            .unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
     #[test]
     fn test_multiple_collections_multiple_txs() {
         let (_dir, store) = test_store();

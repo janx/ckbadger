@@ -4217,9 +4217,9 @@ impl Indexer {
                     // T6a: Spore writes (clusters + cells + content).
                     // CFs: SPORE_DATA, SPORE_BY_CLUSTER, CLUSTER_AGG, STATS (spore keys only)
                     // Runs in parallel with T6b — writes to independent CFs.
-                    let h6a = s.spawn(|| -> Result<(f64, f64)> {
+                    let h6a = s.spawn(|| -> Result<(f64, f64, HashMap<Vec<u8>, i64>)> {
                         if skip_spore {
-                            return Ok((0.0, 0.0));
+                            return Ok((0.0, 0.0, HashMap::new()));
                         }
                         let t = Instant::now();
                         let mut batch = StoreBatch::new(store);
@@ -4298,7 +4298,18 @@ impl Indexer {
                             block_tx_idx += tx_count_for_block;
                         }
                         spore_activity_acc.flush(&mut activity_batch);
-                        identity_activity_acc.flush_identity(&mut identity_activity_batch);
+                        let identity_inserted =
+                            identity_activity_acc.flush_identity(&mut identity_activity_batch);
+                        let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> =
+                            HashMap::new();
+                        for (collection_id, _, _, _, _) in identity_inserted {
+                            let delta = identity_activity_count_deltas
+                                .entry(collection_id)
+                                .or_insert(0);
+                            *delta = delta.checked_add(1).ok_or_else(|| {
+                                anyhow!("identity activity delta overflow in T6a pipeline")
+                            })?;
+                        }
                         let mut commit_ms =
                             commit_phase_no_wal("T6a_spore", first_block, last_block, batch)?;
                         if !activity_batch.is_empty() {
@@ -4317,7 +4328,11 @@ impl Indexer {
                                 identity_activity_batch,
                             )?;
                         }
-                        Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                        Ok((
+                            t.elapsed().as_secs_f64() * 1000.0,
+                            commit_ms,
+                            identity_activity_count_deltas,
+                        ))
                     });
 
                     // T6b: mNFT + DotBit writes and DotBit consumption.
@@ -4325,7 +4340,7 @@ impl Indexer {
                     // Runs in parallel with T6a — mNFT/DotBit use independent CFs from Spore.
                     // All parsing is done in the parser stage (pre_parsed_nft_data);
                     // this thread only does DB writes.
-                    let h6b = s.spawn(|| -> Result<(f64, f64)> {
+                    let h6b = s.spawn(|| -> Result<(f64, f64, HashMap<Vec<u8>, i64>, HashMap<Vec<u8>, i64>)> {
                     let t = Instant::now();
                     let mut batch = StoreBatch::new(store);
                     let mut activity_batch = StoreBatch::new(store);
@@ -4475,8 +4490,9 @@ impl Indexer {
                     }
 
                     // Write .bit collection activities directly (bypassing accumulator)
+                    let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
                     for (tx_hash, activity) in &dotbit_pipeline_activity {
-                        let _inserted = resolve_dotbit_tx_activity(
+                        let inserted = resolve_dotbit_tx_activity(
                             activity.das_action.as_deref(),
                             &activity.created_account_ids,
                             &activity.consumed_account_ids,
@@ -4487,9 +4503,26 @@ impl Indexer {
                             activity.timestamp_ms,
                             &mut activity_batch,
                         );
+                        if inserted {
+                            let delta = identity_activity_count_deltas
+                                .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
+                                .or_insert(0);
+                            *delta = delta.checked_add(1).ok_or_else(|| {
+                                anyhow!("dotbit identity activity delta overflow in T6b pipeline")
+                            })?;
+                        }
                     }
                     // Bulk sync: skip undo journal (BULK_SYNC.md rules 5-7)
-                    object_activity_acc.flush(&mut activity_batch);
+                    let object_inserted = object_activity_acc.flush(&mut activity_batch);
+                    let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+                    for (collection_id, _, _, _, _) in object_inserted {
+                        let delta = object_activity_count_deltas
+                            .entry(collection_id)
+                            .or_insert(0);
+                        *delta = delta.checked_add(1).ok_or_else(|| {
+                            anyhow!("nft activity delta overflow in T6b pipeline")
+                        })?;
+                    }
                     let mut commit_ms =
                         commit_phase_no_wal("T6b_mnft_dotbit", first_block, last_block, batch)?;
                     if !activity_batch.is_empty() {
@@ -4500,7 +4533,7 @@ impl Indexer {
                             activity_batch,
                         )?;
                     }
-                    Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms))
+                    Ok((t.elapsed().as_secs_f64() * 1000.0, commit_ms, identity_activity_count_deltas, object_activity_count_deltas))
                 });
 
                     // T7: Stats accumulation (overlaps with T1-T6 IO)
@@ -4905,8 +4938,10 @@ impl Indexer {
                     let (t2_ms, t2_commit_ms) = h2.join().expect("T2 panicked")?;
                     let (t4_ms, t4_commit_ms) = h4.join().expect("T4 panicked")?;
                     let (t5_ms, t5_commit_ms) = h5.join().expect("T5 panicked")?;
-                    let (t6a_ms, t6a_commit_ms) = h6a.join().expect("T6a panicked")?;
-                    let (t6b_ms, t6b_commit_ms) = h6b.join().expect("T6b panicked")?;
+                    let (t6a_ms, t6a_commit_ms, t6a_identity_deltas) =
+                        h6a.join().expect("T6a panicked")?;
+                    let (t6b_ms, t6b_commit_ms, t6b_identity_deltas, t6b_object_deltas) =
+                        h6b.join().expect("T6b panicked")?;
                     let (stats, t7_ms) = h7.join().expect("T7 panicked")?;
                     let (t_act_ms, t_act_commit_ms, act_accum, act_addrs, h_accum, h_addrs) =
                         match h_act {
@@ -4924,6 +4959,47 @@ impl Indexer {
                                 HashMap::new(),
                             ),
                         };
+
+                    // Apply activity count deltas that T6a/T6b collected but could
+                    // not apply inside their parallel threads (aggregates were
+                    // committed before deltas were known).
+                    let mut delta_commit_ms = 0.0_f64;
+                    let combined_identity_deltas = {
+                        let mut m = t6a_identity_deltas;
+                        for (k, v) in t6b_identity_deltas {
+                            let entry = m.entry(k).or_insert(0);
+                            *entry = entry.checked_add(v).ok_or_else(|| {
+                                anyhow!("combined identity activity delta overflow in pipeline")
+                            })?;
+                        }
+                        m
+                    };
+                    if !combined_identity_deltas.is_empty() || !t6b_object_deltas.is_empty() {
+                        let mut delta_batch = StoreBatch::new(store);
+                        let empty_identity_aggs = HashMap::new();
+                        apply_identity_collection_activity_count_deltas(
+                            store,
+                            &mut delta_batch,
+                            combined_identity_deltas,
+                            &empty_identity_aggs,
+                        )?;
+                        let empty_object_aggs = HashMap::new();
+                        apply_object_collection_activity_count_deltas_with_pending(
+                            store,
+                            &mut delta_batch,
+                            t6b_object_deltas,
+                            &empty_object_aggs,
+                        )?;
+                        if !delta_batch.is_empty() {
+                            delta_commit_ms = commit_phase_no_wal(
+                                "T6_activity_deltas",
+                                first_block,
+                                last_block,
+                                delta_batch,
+                            )?;
+                        }
+                    }
+
                     let commit_total_ms = t1_commit_ms
                         + t1b_commit_ms
                         + t2_commit_ms
@@ -4931,7 +5007,8 @@ impl Indexer {
                         + t5_commit_ms
                         + t6a_commit_ms
                         + t6b_commit_ms
-                        + t_act_commit_ms;
+                        + t_act_commit_ms
+                        + delta_commit_ms;
                     Ok((
                         stats,
                         [
