@@ -413,7 +413,7 @@ async fn search(
                                 "Spore {}",
                                 entry.name.as_deref().unwrap_or("Unnamed spore")
                             ),
-                            url: format!("/nfts/{}", hash_query),
+                            url: format!("/objects/{}", hash_query),
                             match_kind: "exact_hash".to_string(),
                         });
                     }
@@ -615,8 +615,8 @@ async fn search(
                 results.push(SearchResult {
                     result_type: "nft".to_string(),
                     id: collection_hex.clone(),
-                    label: format!("NFT Collection {}", name),
-                    url: format!("/nfts/{}", collection_hex),
+                    label: format!("Object Collection {}", name),
+                    url: format!("/objects/{}", collection_hex),
                     match_kind: "name_contains".to_string(),
                 });
             }
@@ -648,7 +648,7 @@ async fn search(
                     result_type: "spore".to_string(),
                     id: spore_hex.clone(),
                     label: format!("Spore {}", name),
-                    url: format!("/nfts/{}", spore_hex),
+                    url: format!("/objects/{}", spore_hex),
                     match_kind: "name_contains".to_string(),
                 });
             }
