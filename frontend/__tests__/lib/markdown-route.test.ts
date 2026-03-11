@@ -31,7 +31,8 @@ function sampleDynamicPath(routePath: string): string {
     .replace('[collectionId]', 'dotbit')
     .replace('[clusterId]', `0x${'b'.repeat(64)}`)
     .replace('[sporeId]', `0x${'c'.repeat(64)}`)
-    .replace('[nftId]', `0x${'9'.repeat(56)}`)
+    .replace('[identityId]', `0x${'9'.repeat(56)}`)
+    .replace('[objectId]', `0x${'8'.repeat(56)}`)
     .replace('[codeHash]', `0x${'d'.repeat(64)}`)
     .replace('[typeHash]', `0x${'e'.repeat(64)}`)
     .replace('[hash]', `0x${'f'.repeat(64)}`)
@@ -57,9 +58,9 @@ describe('parseMarkdownSourcePath', () => {
     expect(parseMarkdownSourcePath('/blocks/123').kind).toBe('block_detail');
     expect(parseMarkdownSourcePath('/tx/0x123').kind).toBe('tx_detail');
     expect(parseMarkdownSourcePath('/charts/hash-rate').kind).toBe('chart_detail');
-    expect(parseMarkdownSourcePath('/nfts/dotbit/0x123').kind).toBe('dotbit_item_detail');
-    expect(parseMarkdownSourcePath('/nfts/did/0x123').kind).toBe('did_ckb_item_detail');
-    expect(parseMarkdownSourcePath('/nfts/mnft/0x123').kind).toBe('mnft_item_detail');
+    expect(parseMarkdownSourcePath('/identities/dotbit/0x123').kind).toBe('dotbit_item_detail');
+    expect(parseMarkdownSourcePath('/identities/did/0x123').kind).toBe('did_ckb_item_detail');
+    expect(parseMarkdownSourcePath('/objects/mnft/0x123').kind).toBe('mnft_item_detail');
     expect(parseMarkdownSourcePath('/unknown/path').kind).toBe('unknown');
   });
 

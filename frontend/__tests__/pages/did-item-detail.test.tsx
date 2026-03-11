@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
-import DidCkbItemDetailPage from '@/app/nfts/did/[nftId]/client-page';
+import DidCkbItemDetailPage from '@/app/identities/did/[identityId]/client-page';
 import { api } from '@/lib/api';
 import { render } from '../utils/test-utils';
 
@@ -21,8 +21,8 @@ const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ nftId: '0xabc' }),
-  usePathname: () => '/nfts/did/0xabc',
+  useParams: () => ({ identityId: '0xabc' }),
+  usePathname: () => '/identities/did/0xabc',
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -61,7 +61,7 @@ describe('DidCkbItemDetailPage', () => {
       outputIndex: null,
     } as any);
 
-    render(<DidCkbItemDetailPage nftId="0xabc" />);
+    render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', {
@@ -83,7 +83,7 @@ describe('DidCkbItemDetailPage', () => {
       outputIndex: null,
     } as any);
 
-    render(<DidCkbItemDetailPage nftId="0xabc" />);
+    render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
@@ -123,7 +123,7 @@ describe('DidCkbItemDetailPage', () => {
       nextCursor: null,
     } as any);
 
-    render(<DidCkbItemDetailPage nftId="0xabc" />);
+    render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
@@ -179,7 +179,7 @@ describe('DidCkbItemDetailPage', () => {
       } as any;
     });
 
-    render(<DidCkbItemDetailPage nftId="0xabc" />);
+    render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDidCkbItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
@@ -206,7 +206,7 @@ describe('DidCkbItemDetailPage', () => {
   it('renders not found panel when item is missing', async () => {
     vi.mocked(api.getDidCkbItemDetail).mockRejectedValue(new Error('API error: 404'));
 
-    render(<DidCkbItemDetailPage nftId="0xabc" />);
+    render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('did:ckb item not found')).toBeInTheDocument();

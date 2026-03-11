@@ -1,23 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import SporeDetailPage from '@/app/nfts/[sporeId]/client-page';
+import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
-    getSporeNft: vi.fn(),
+    getSporeObject: vi.fn(),
     getSporeCluster: vi.fn(),
-    getSporeNftDecoded: vi.fn(),
-    getSporeNftOccupationChart: vi.fn(),
+    getSporeObjectDecoded: vi.fn(),
+    getSporeObjectOccupationChart: vi.fn(),
     getAddress: vi.fn(),
     getTransactionDetail: vi.fn(),
     getCell: vi.fn(),
-    getNftCollection: vi.fn(),
-    getNftCollectionOccupationChart: vi.fn(),
-    getNftCollectionItems: vi.fn(),
-    getNftCollectionHolders: vi.fn(),
-    getNftCollectionActivities: vi.fn(),
+    getObjectCollection: vi.fn(),
+    getObjectCollectionOccupationChart: vi.fn(),
+    getObjectCollectionItems: vi.fn(),
+    getObjectCollectionHolders: vi.fn(),
+    getObjectCollectionActivities: vi.fn(),
   },
 }));
 
@@ -33,7 +33,7 @@ const mockReplace = vi.fn();
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => mockParams,
-  usePathname: () => `/nfts/${mockParams.sporeId}`,
+  usePathname: () => `/objects/${mockParams.sporeId}`,
   useSearchParams: () => new URLSearchParams(mockSearchParamsString),
   useRouter: () => ({ replace: mockReplace, push: vi.fn() }),
 }));
@@ -110,7 +110,7 @@ describe('SporeDetailPage', () => {
       sporeId: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     };
     mockSearchParamsString = '';
-    vi.mocked(api.getSporeNftOccupationChart).mockResolvedValue({
+    vi.mocked(api.getSporeObjectOccupationChart).mockResolvedValue({
       title: 'Spore Capacity Occupation',
       data: [],
       series: [],
@@ -123,7 +123,7 @@ describe('SporeDetailPage', () => {
       liveCellsCount: 0,
       transactionsCount: 0,
     } as any);
-    vi.mocked(api.getSporeNftDecoded).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getSporeObjectDecoded).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: mockSpore.txHash,
       blockNumber: 123456,
@@ -164,26 +164,26 @@ describe('SporeDetailPage', () => {
       dataSize: 0,
       createdAtBlock: mockSpore.createdAtBlock,
     } as any);
-    vi.mocked(api.getNftCollectionOccupationChart).mockResolvedValue({
+    vi.mocked(api.getObjectCollectionOccupationChart).mockResolvedValue({
       title: 'Test Collection Capacity Occupation',
       data: [],
       series: [],
     });
-    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+    vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
       data: [],
       total: 0,
       limit: 20,
       hasMore: false,
       nextCursor: null,
     });
-    vi.mocked(api.getNftCollectionHolders).mockResolvedValue({
+    vi.mocked(api.getObjectCollectionHolders).mockResolvedValue({
       data: [],
       total: 0,
       limit: 20,
       hasMore: false,
       nextCursor: null,
     });
-    vi.mocked(api.getNftCollectionActivities).mockResolvedValue({
+    vi.mocked(api.getObjectCollectionActivities).mockResolvedValue({
       data: [],
       limit: 20,
       hasMore: false,
@@ -192,19 +192,19 @@ describe('SporeDetailPage', () => {
   });
 
   it('links back to NFT tab on assets page', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      const backLink = screen.getByText('← Back to NFTs');
+      const backLink = screen.getByText('← Back to Objects');
       expect(backLink).toBeInTheDocument();
-      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=nft');
+      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=object');
     });
   });
 
   it('renders occupation history panel', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
@@ -214,7 +214,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('renders improved spore content panels', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
@@ -228,7 +228,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('renders media source analysis from API profile', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue({
+    vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
       mediaProfile: {
         tier: 'fully_onchain',
@@ -255,7 +255,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('uses vertical layout for long identity fields', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
@@ -272,7 +272,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('shows owner address resolved from lock hash', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue(mockSpore);
+    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
@@ -290,11 +290,11 @@ describe('SporeDetailPage', () => {
   });
 
   it('renders decoded traits panel for DOB spores', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue({
+    vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
       contentType: 'dob/0',
     } as any);
-    vi.mocked(api.getSporeNftDecoded).mockResolvedValue({
+    vi.mocked(api.getSporeObjectDecoded).mockResolvedValue({
       sporeId: mockSpore.sporeId,
       contentType: 'dob/0',
       dnaHex: '0102',
@@ -314,7 +314,7 @@ describe('SporeDetailPage', () => {
 
   it('renders payload text view for text spores', async () => {
     const encoded = encodeSporeData('text/plain', 'hello from payload text panel');
-    vi.mocked(api.getSporeNft).mockResolvedValue({
+    vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
       contentType: 'text/plain',
     } as any);
@@ -356,7 +356,7 @@ describe('SporeDetailPage', () => {
   });
 
   it('renders cluster metadata from JSON description', async () => {
-    vi.mocked(api.getSporeNft).mockResolvedValue({
+    vi.mocked(api.getSporeObject).mockResolvedValue({
       ...mockSpore,
       clusterId: '0xcluster',
     } as any);
@@ -392,10 +392,10 @@ describe('SporeDetailPage', () => {
     expect(descriptionField).not.toHaveClass('sm:flex-row');
   });
 
-  it('falls back to NFT collection detail when spore lookup returns 404', async () => {
-    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
-    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+  it('falls back to object collection detail when spore lookup returns 404', async () => {
+    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
       data: [
         {
           nftId: '0x1111',
@@ -422,22 +422,22 @@ describe('SporeDetailPage', () => {
     });
 
     expect(screen.getByText('Test Collection')).toBeInTheDocument();
-    expect(screen.getByText('Total NFTs')).toBeInTheDocument();
+    expect(screen.getByText('Total Objects')).toBeInTheDocument();
     expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
     expect(screen.getByText(/^Occupied:/)).toBeInTheDocument();
     expect(screen.getByText('Capacity & Occupation')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Activities \(150\)$/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Holders \(42\)$/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(500\)$/ }));
 
     await waitFor(() => {
       expect(screen.getByText('alice.bit')).toBeInTheDocument();
     });
     expect(screen.getByText('Created at block #100')).toBeInTheDocument();
     expect(screen.queryByLabelText('Search .bit')).not.toBeInTheDocument();
-    expect(api.getNftCollectionItems).toHaveBeenCalledWith(
+    expect(api.getObjectCollectionItems).toHaveBeenCalledWith(
       mockCollection.collectionId,
       expect.objectContaining({ limit: 20 })
     );
@@ -445,15 +445,15 @@ describe('SporeDetailPage', () => {
 
   it('hydrates collection tab from query params', async () => {
     mockSearchParamsString = 'tab=holders';
-    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
       expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
     });
-    expect(api.getNftCollectionHolders).toHaveBeenCalledWith(
+    expect(api.getObjectCollectionHolders).toHaveBeenCalledWith(
       mockCollection.collectionId,
       expect.objectContaining({ limit: 20 })
     );
@@ -461,8 +461,8 @@ describe('SporeDetailPage', () => {
 
   it('falls back to Activities tab when tab query is invalid', async () => {
     mockSearchParamsString = 'tab=invalid';
-    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
@@ -472,23 +472,23 @@ describe('SporeDetailPage', () => {
   });
 
   it('updates tab query param when switching collection tabs', async () => {
-    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs \(500\)$/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(500\)$/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs \(500\)$/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects \(500\)$/ }));
 
     await waitFor(() => {
       expect(
         mockReplace.mock.calls.some(
           ([href]) =>
-            String(href).includes(`/nfts/${mockParams.sporeId}`) &&
-            String(href).includes('tab=nfts')
+            String(href).includes(`/objects/${mockParams.sporeId}`) &&
+            String(href).includes('tab=objects')
         )
       ).toBe(true);
     });
@@ -499,7 +499,8 @@ describe('SporeDetailPage', () => {
       expect(
         mockReplace.mock.calls.some(
           ([href]) =>
-            String(href).includes(`/nfts/${mockParams.sporeId}`) && !String(href).includes('tab=')
+            String(href).includes(`/objects/${mockParams.sporeId}`) &&
+            !String(href).includes('tab=')
         )
       ).toBe(true);
     });
@@ -530,9 +531,9 @@ describe('SporeDetailPage', () => {
   });
 
   it('links mnft collection item to mnft asset detail page', async () => {
-    vi.mocked(api.getSporeNft).mockRejectedValue(new Error('API error: 404'));
-    vi.mocked(api.getNftCollection).mockResolvedValue(mockCollection);
-    vi.mocked(api.getNftCollectionItems).mockResolvedValue({
+    vi.mocked(api.getSporeObject).mockRejectedValue(new Error('API error: 404'));
+    vi.mocked(api.getObjectCollection).mockResolvedValue(mockCollection);
+    vi.mocked(api.getObjectCollectionItems).mockResolvedValue({
       data: [
         {
           nftId: '0x1111',
@@ -552,15 +553,15 @@ describe('SporeDetailPage', () => {
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^NFTs/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects/ })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /^NFTs/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Objects/ }));
 
     await waitFor(() => {
       const link = screen.getByRole('link', { name: '0x1111' });
       expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', '/nfts/mnft/0x1111');
+      expect(link).toHaveAttribute('href', '/objects/mnft/0x1111');
     });
   });
 });

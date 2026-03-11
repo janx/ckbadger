@@ -3,10 +3,8 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import IdentityCollectionPage from '@/app/identities/[collectionId]/client-page';
 import { api } from '@/lib/api';
-const DOTBIT_COLLECTION_ID =
-  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
-const DID_CKB_COLLECTION_ID =
-  '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -206,7 +204,7 @@ describe('IdentityCollectionPage', () => {
     await waitFor(() => {
       const link = screen.getByRole('link', { name: 'alice.bit' });
       expect(link).toBeInTheDocument();
-      expect(link).toHaveAttribute('href', '/nfts/dotbit/0x1111');
+      expect(link).toHaveAttribute('href', '/identities/dotbit/0x1111');
     });
   });
 

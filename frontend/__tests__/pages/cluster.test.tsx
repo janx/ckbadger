@@ -250,7 +250,7 @@ describe('ClusterDetailPage', () => {
   });
 
   it('hydrates collection tab from query params', async () => {
-    mockSearchParamsString = 'tab=nfts';
+    mockSearchParamsString = 'tab=objects';
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -329,7 +329,7 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       const backLink = screen.getByText('← Back to Objects');
       expect(backLink).toBeInTheDocument();
-      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=nft');
+      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=object');
     });
   });
 
@@ -471,7 +471,7 @@ describe('ClusterDetailPage', () => {
   });
 
   it('hydrates list controls from URL search params', async () => {
-    mockSearchParamsString = 'tab=nfts&content=text&sort=sizeAsc&q=text%2Fplain';
+    mockSearchParamsString = 'tab=objects&content=text&sort=sizeAsc&q=text%2Fplain';
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -576,7 +576,9 @@ describe('ClusterDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
-      expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=nfts'))).toBe(true);
+      expect(mockReplace.mock.calls.some(([href]) => String(href).includes('tab=objects'))).toBe(
+        true
+      );
     });
 
     fireEvent.click(screen.getByRole('button', { name: /^Holders \(/ }));

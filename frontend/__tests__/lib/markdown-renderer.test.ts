@@ -167,7 +167,7 @@ describe('renderMarkdownPage', () => {
     } as any);
 
     const result = await renderMarkdownPage({
-      page: parseMarkdownSourcePath('/nfts/mnft/0xmnft'),
+      page: parseMarkdownSourcePath('/objects/mnft/0xmnft'),
       searchParams: new URLSearchParams(),
       origin: 'http://localhost:3000',
     });
@@ -189,7 +189,7 @@ describe('renderMarkdownPage', () => {
   it('fails fast on invalid mnft activity action query param', async () => {
     await expect(
       renderMarkdownPage({
-        page: parseMarkdownSourcePath('/nfts/mnft/0xmnft'),
+        page: parseMarkdownSourcePath('/objects/mnft/0xmnft'),
         searchParams: new URLSearchParams('action=invalid'),
         origin: 'http://localhost:3000',
       })
@@ -224,7 +224,7 @@ describe('renderMarkdownPage', () => {
     } as any);
 
     const result = await renderMarkdownPage({
-      page: parseMarkdownSourcePath('/nfts/dotbit/0xdotbit'),
+      page: parseMarkdownSourcePath('/identities/dotbit/0xdotbit'),
       searchParams: new URLSearchParams(),
       origin: 'http://localhost:3000',
     });
@@ -268,7 +268,7 @@ describe('renderMarkdownPage', () => {
     } as any);
 
     const result = await renderMarkdownPage({
-      page: parseMarkdownSourcePath('/nfts/did/0xdid'),
+      page: parseMarkdownSourcePath('/identities/did/0xdid'),
       searchParams: new URLSearchParams(),
       origin: 'http://localhost:3000',
     });

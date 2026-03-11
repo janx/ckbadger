@@ -301,7 +301,7 @@ describe('renderRawPage', () => {
     });
 
     const result = await renderRawPage({
-      page: parseRawSourcePath('/nfts/did/0xdid'),
+      page: parseRawSourcePath('/identities/did/0xdid'),
       searchParams: new URLSearchParams(),
       origin: 'http://localhost:3000',
     });
@@ -346,7 +346,7 @@ describe('renderRawPage', () => {
     });
 
     const result = await renderRawPage({
-      page: parseRawSourcePath('/nfts/dotbit/0xdotbit'),
+      page: parseRawSourcePath('/identities/dotbit/0xdotbit'),
       searchParams: new URLSearchParams(),
       origin: 'http://localhost:3000',
     });
@@ -411,7 +411,7 @@ describe('renderRawPage', () => {
     });
 
     const result = await renderRawPage({
-      page: parseRawSourcePath('/nfts/mnft/0xmnft'),
+      page: parseRawSourcePath('/objects/mnft/0xmnft'),
       searchParams: new URLSearchParams('action=transfer'),
       origin: 'http://localhost:3000',
     });

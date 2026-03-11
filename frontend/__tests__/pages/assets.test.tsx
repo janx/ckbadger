@@ -19,7 +19,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getAssets: vi.fn(),
     getToken: vi.fn(),
-    getNftCollection: vi.fn(),
+    getObjectCollection: vi.fn(),
     getSporeCluster: vi.fn(),
   },
 }));
@@ -589,7 +589,10 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       // Dual-render: links appear in both table and card layouts
       const links = screen.getAllByRole('link', { name: /\.bit/i });
-      expect(links[0]).toHaveAttribute('href', '/nfts/dotbit');
+      expect(links[0]).toHaveAttribute(
+        'href',
+        '/identities/dotbit/0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f'
+      );
       expect(screen.getAllByText('DOTBIT').length).toBeGreaterThan(0);
     });
   });
@@ -603,7 +606,10 @@ describe('AssetsPage', () => {
     await waitFor(() => {
       // Dual-render: links appear in both table and card layouts
       const links = screen.getAllByRole('link', { name: /did:ckb/i });
-      expect(links[0]).toHaveAttribute('href', '/nfts/did:ckb');
+      expect(links[0]).toHaveAttribute(
+        'href',
+        '/identities/did/0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f'
+      );
       expect(screen.getAllByText('did:ckb').length).toBeGreaterThan(0);
     });
   });

@@ -55,7 +55,7 @@ describe('MostUtilizedAssetsPage', () => {
       expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');
       expect(screen.getByText('Description')).toBeInTheDocument();
       expect(
-        screen.getByText('Ranks token and NFT collection assets by utilization in live state.')
+        screen.getByText('Ranks token and Object collection assets by utilization in live state.')
       ).toBeInTheDocument();
     });
   });

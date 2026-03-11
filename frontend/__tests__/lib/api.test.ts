@@ -1,8 +1,6 @@
 import { api, resolveApiBase } from '@/lib/api';
-const DOTBIT_COLLECTION_ID =
-  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
-const DID_CKB_COLLECTION_ID =
-  '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DOTBIT_COLLECTION_ID = '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
@@ -347,9 +345,9 @@ describe('api', () => {
       expect(chart.title).toContain('Capacity Occupation');
     });
 
-    it('fetches spore nft occupation chart', async () => {
+    it('fetches spore object occupation chart', async () => {
       server.use(
-        http.get('*/api/v1/spore/nfts/:sporeId/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/spore/objects/:sporeId/charts/occupation', ({ params }) => {
           expect(params.sporeId).toBe('0x9999');
           return HttpResponse.json({
             title: 'Spore Capacity Occupation',
@@ -359,13 +357,13 @@ describe('api', () => {
         })
       );
 
-      const chart = await api.getSporeNftOccupationChart('0x9999');
+      const chart = await api.getSporeObjectOccupationChart('0x9999');
       expect(chart.title).toContain('Capacity Occupation');
     });
 
     it('fetches spore dob decoded result', async () => {
       server.use(
-        http.get('*/api/v1/spore/nfts/:sporeId/decode', ({ params }) => {
+        http.get('*/api/v1/spore/objects/:sporeId/decode', ({ params }) => {
           expect(params.sporeId).toBe('0x9999');
           return HttpResponse.json({
             sporeId: '0x9999',
@@ -378,14 +376,14 @@ describe('api', () => {
         })
       );
 
-      const decoded = await api.getSporeNftDecoded('0x9999');
+      const decoded = await api.getSporeObjectDecoded('0x9999');
       expect(decoded.contentType).toBe('dob/0');
       expect(decoded.traits[0].name).toBe('Background');
     });
 
-    it('fetches nft collection detail', async () => {
+    it('fetches object collection detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {
+        http.get('*/api/v1/assets/objects/:collectionId', ({ params }) => {
           expect(params.collectionId).toBe('0xcollection');
           return HttpResponse.json({
             collectionId: '0xcollection',
@@ -401,15 +399,15 @@ describe('api', () => {
         })
       );
 
-      const collection = await api.getNftCollection('0xcollection');
+      const collection = await api.getObjectCollection('0xcollection');
       expect(collection.collectionId).toBe('0xcollection');
       expect(collection.liveOccupiedCapacity).toBe('600');
     });
 
-    it('normalizes dotbit alias for nft collection detail requests', async () => {
+    it('fetches dotbit identity collection detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {
-          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+        http.get('*/api/v1/assets/identities/:collectionId', ({ params }) => {
+          expect(params.collectionId).toBe('dotbit');
           return HttpResponse.json({
             collectionId: DOTBIT_COLLECTION_ID,
             standard: 'dotbit',
@@ -418,20 +416,18 @@ describe('api', () => {
             liveCount: 7,
             holdersCount: 5,
             activitiesCount: 20,
-            liveCapacity: '1000',
-            liveOccupiedCapacity: '600',
           });
         })
       );
 
-      const collection = await api.getNftCollection('.bit');
+      const collection = await api.getIdentityCollection('dotbit');
       expect(collection.standard).toBe('dotbit');
     });
 
-    it('normalizes did:ckb alias for nft collection detail requests', async () => {
+    it('fetches did:ckb identity collection detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId', ({ params }) => {
-          expect(params.collectionId).toBe(DID_CKB_COLLECTION_ID);
+        http.get('*/api/v1/assets/identities/:collectionId', ({ params }) => {
+          expect(params.collectionId).toBe('did:ckb');
           return HttpResponse.json({
             collectionId: DID_CKB_COLLECTION_ID,
             standard: 'did_ckb',
@@ -440,19 +436,17 @@ describe('api', () => {
             liveCount: 7,
             holdersCount: 5,
             activitiesCount: 20,
-            liveCapacity: '1000',
-            liveOccupiedCapacity: '600',
           });
         })
       );
 
-      const collection = await api.getNftCollection('did:ckb');
+      const collection = await api.getIdentityCollection('did:ckb');
       expect(collection.standard).toBe('did_ckb');
     });
 
-    it('fetches nft collection occupation chart', async () => {
+    it('fetches object collection occupation chart', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId/charts/occupation', ({ params }) => {
+        http.get('*/api/v1/assets/objects/:collectionId/charts/occupation', ({ params }) => {
           expect(params.collectionId).toBe('0xcollection');
           return HttpResponse.json({
             title: 'Test Collection Capacity Occupation',
@@ -462,31 +456,31 @@ describe('api', () => {
         })
       );
 
-      const chart = await api.getNftCollectionOccupationChart('0xcollection');
+      const chart = await api.getObjectCollectionOccupationChart('0xcollection');
       expect(chart.title).toContain('Capacity Occupation');
     });
 
-    it('normalizes dotbit alias for nft collection requests', async () => {
+    it('fetches object collection occupation chart by collection id', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId/charts/occupation', ({ params }) => {
-          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+        http.get('*/api/v1/assets/objects/:collectionId/charts/occupation', ({ params }) => {
+          expect(params.collectionId).toBe('0xcollection2');
           return HttpResponse.json({
-            title: '.bit Capacity Occupation',
+            title: 'Collection Capacity Occupation',
             data: [],
             series: [],
           });
         })
       );
 
-      const chart = await api.getNftCollectionOccupationChart('dotbit');
+      const chart = await api.getObjectCollectionOccupationChart('0xcollection2');
       expect(chart.title).toContain('Capacity Occupation');
     });
 
-    it('builds query params for nft collection items search', async () => {
+    it('builds query params for identity collection items search', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId/items', ({ request, params }) => {
+        http.get('*/api/v1/assets/identities/:collectionId/items', ({ request, params }) => {
           const url = new URL(request.url);
-          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          expect(params.collectionId).toBe('dotbit');
           expect(url.searchParams.get('limit')).toBe('20');
           expect(url.searchParams.get('cursor')).toBe('abc');
           expect(url.searchParams.get('search')).toBe('alice');
@@ -500,7 +494,7 @@ describe('api', () => {
         })
       );
 
-      const result = await api.getNftCollectionItems('.bit', {
+      const result = await api.getIdentityCollectionItems('dotbit', {
         limit: 20,
         cursor: 'abc',
         search: 'alice',
@@ -509,11 +503,11 @@ describe('api', () => {
       expect(result.hasMore).toBe(false);
     });
 
-    it('builds query params for nft collection holders', async () => {
+    it('builds query params for identity collection holders', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId/holders', ({ request, params }) => {
+        http.get('*/api/v1/assets/identities/:collectionId/holders', ({ request, params }) => {
           const url = new URL(request.url);
-          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          expect(params.collectionId).toBe('dotbit');
           expect(url.searchParams.get('limit')).toBe('20');
           expect(url.searchParams.get('cursor')).toBe('2:abcd');
           return HttpResponse.json({
@@ -526,18 +520,18 @@ describe('api', () => {
         })
       );
 
-      const result = await api.getNftCollectionHolders('.bit', {
+      const result = await api.getIdentityCollectionHolders('dotbit', {
         limit: 20,
         cursor: '2:abcd',
       });
       expect(result.total).toBe(0);
     });
 
-    it('builds query params for nft collection activities', async () => {
+    it('builds query params for identity collection activities', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/:collectionId/activities', ({ request, params }) => {
+        http.get('*/api/v1/assets/identities/:collectionId/activities', ({ request, params }) => {
           const url = new URL(request.url);
-          expect(params.collectionId).toBe(DOTBIT_COLLECTION_ID);
+          expect(params.collectionId).toBe('dotbit');
           expect(url.searchParams.get('limit')).toBe('20');
           expect(url.searchParams.get('cursor')).toBe('300:1');
           expect(url.searchParams.get('action')).toBe('transfer');
@@ -550,7 +544,7 @@ describe('api', () => {
         })
       );
 
-      const result = await api.getNftCollectionActivities('dotbit', {
+      const result = await api.getIdentityCollectionActivities('dotbit', {
         limit: 20,
         cursor: '300:1',
         action: 'transfer',
@@ -609,7 +603,7 @@ describe('api', () => {
 
     it('fetches dotbit item detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/dotbit/items/:nftId', ({ params }) => {
+        http.get('*/api/v1/assets/identities/dotbit/items/:nftId', ({ params }) => {
           expect(params.nftId).toBe('0xabc');
           return HttpResponse.json({
             nftId: '0xabc',
@@ -633,27 +627,30 @@ describe('api', () => {
 
     it('fetches dotbit item activities with query params', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/dotbit/items/:nftId/activities', ({ request, params }) => {
-          const url = new URL(request.url);
-          expect(params.nftId).toBe('0xabc');
-          expect(url.searchParams.get('limit')).toBe('20');
-          expect(url.searchParams.get('cursor')).toBe('300:0');
-          expect(url.searchParams.get('action')).toBe('transfer');
-          return HttpResponse.json({
-            data: [
-              {
-                txHash: '0xtx',
-                blockNumber: 300,
-                txIndex: 0,
-                timestamp: '1700000300',
-                actions: ['transfer'],
-              },
-            ],
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
-        })
+        http.get(
+          '*/api/v1/assets/identities/dotbit/items/:nftId/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.nftId).toBe('0xabc');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('300:0');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [
+                {
+                  txHash: '0xtx',
+                  blockNumber: 300,
+                  txIndex: 0,
+                  timestamp: '1700000300',
+                  actions: ['transfer'],
+                },
+              ],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
       );
 
       const activities = await api.getDotbitItemActivities('0xabc', {
@@ -667,7 +664,7 @@ describe('api', () => {
 
     it('fetches did:ckb item detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/did/items/:nftId', ({ params }) => {
+        http.get('*/api/v1/assets/identities/did/items/:nftId', ({ params }) => {
           expect(params.nftId).toBe('0xdid');
           return HttpResponse.json({
             nftId: '0xdid',
@@ -691,27 +688,30 @@ describe('api', () => {
 
     it('fetches did:ckb item activities with query params', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/did/items/:nftId/activities', ({ request, params }) => {
-          const url = new URL(request.url);
-          expect(params.nftId).toBe('0xdid');
-          expect(url.searchParams.get('limit')).toBe('20');
-          expect(url.searchParams.get('cursor')).toBe('300:0');
-          expect(url.searchParams.get('action')).toBe('transfer');
-          return HttpResponse.json({
-            data: [
-              {
-                txHash: '0xtx',
-                blockNumber: 300,
-                txIndex: 0,
-                timestamp: '1700000300',
-                actions: ['transfer'],
-              },
-            ],
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
-        })
+        http.get(
+          '*/api/v1/assets/identities/did/items/:nftId/activities',
+          ({ request, params }) => {
+            const url = new URL(request.url);
+            expect(params.nftId).toBe('0xdid');
+            expect(url.searchParams.get('limit')).toBe('20');
+            expect(url.searchParams.get('cursor')).toBe('300:0');
+            expect(url.searchParams.get('action')).toBe('transfer');
+            return HttpResponse.json({
+              data: [
+                {
+                  txHash: '0xtx',
+                  blockNumber: 300,
+                  txIndex: 0,
+                  timestamp: '1700000300',
+                  actions: ['transfer'],
+                },
+              ],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            });
+          }
+        )
       );
 
       const activities = await api.getDidCkbItemActivities('0xdid', {
@@ -725,7 +725,7 @@ describe('api', () => {
 
     it('fetches mnft item detail', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/items/:nftId', ({ params }) => {
+        http.get('*/api/v1/assets/objects/items/:nftId', ({ params }) => {
           expect(params.nftId).toBe('0xmnfttoken');
           return HttpResponse.json({
             nftId: '0xmnfttoken',
@@ -769,7 +769,7 @@ describe('api', () => {
 
     it('fetches mnft item activities with query params', async () => {
       server.use(
-        http.get('*/api/v1/assets/nfts/items/:nftId/activities', ({ request, params }) => {
+        http.get('*/api/v1/assets/objects/items/:nftId/activities', ({ request, params }) => {
           const url = new URL(request.url);
           expect(params.nftId).toBe('0xmnfttoken');
           expect(url.searchParams.get('limit')).toBe('20');

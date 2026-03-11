@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 
-import MnftItemDetailPage from '@/app/nfts/mnft/[nftId]/client-page';
+import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
 import { api } from '@/lib/api';
 import { render } from '../utils/test-utils';
 
@@ -21,8 +21,8 @@ const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ nftId: '0xmnft' }),
-  usePathname: () => '/nfts/mnft/0xmnft',
+  useParams: () => ({ objectId: '0xmnft' }),
+  usePathname: () => '/objects/mnft/0xmnft',
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -96,7 +96,7 @@ describe('MnftItemDetailPage', () => {
       ],
     });
 
-    render(<MnftItemDetailPage nftId="0xmnft" />);
+    render(<MnftItemDetailPage objectId="0xmnft" />);
 
     await waitFor(() => {
       expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe('MnftItemDetailPage', () => {
   it('renders not found panel when item is missing', async () => {
     vi.mocked(api.getMnftItemDetail).mockRejectedValue(new Error('API error: 404'));
 
-    render(<MnftItemDetailPage nftId="0xmnft" />);
+    render(<MnftItemDetailPage objectId="0xmnft" />);
 
     await waitFor(() => {
       expect(screen.getByText('mNFT item not found')).toBeInTheDocument();

@@ -6,7 +6,9 @@ import { render } from '../utils/test-utils';
 
 describe('ObjectActivityCard', () => {
   it('renders block link, tx link, and plain text actions', () => {
-    render(<ObjectActivityCard txHash="0xabc123" blockNumber={456} actions={['transfer', 'mint']} />);
+    render(
+      <ObjectActivityCard txHash="0xabc123" blockNumber={456} actions={['transfer', 'mint']} />
+    );
 
     const blockLink = screen.getByRole('link', { name: '#456' });
     expect(blockLink).toHaveAttribute('href', '/blocks/456');
@@ -15,7 +17,9 @@ describe('ObjectActivityCard', () => {
   });
 
   it('renders tx index when provided', () => {
-    render(<ObjectActivityCard txHash="0xabc123" blockNumber={100} txIndex={3} actions={['mint']} />);
+    render(
+      <ObjectActivityCard txHash="0xabc123" blockNumber={100} txIndex={3} actions={['mint']} />
+    );
 
     expect(screen.getByText(/Tx Index 3/)).toBeInTheDocument();
   });

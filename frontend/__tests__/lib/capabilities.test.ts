@@ -23,16 +23,16 @@ describe('buildAiCapabilities', () => {
   it('declares tx debugger profile in raw route matrix', () => {
     const capabilities = buildAiCapabilities();
 
-    expect(capabilities.routes.markdown).toContain('/nfts/dotbit/{nftId}');
-    expect(capabilities.routes.markdown).toContain('/nfts/did/{nftId}');
-    expect(capabilities.routes.markdown).toContain('/nfts/mnft/{nftId}');
+    expect(capabilities.routes.markdown).toContain('/identities/dotbit/{identityId}');
+    expect(capabilities.routes.markdown).toContain('/identities/did/{identityId}');
+    expect(capabilities.routes.markdown).toContain('/objects/mnft/{objectId}');
     expect(capabilities.routes.raw).toContain('/tx/{hash}');
-    expect(capabilities.routes.raw).toContain('/nfts/dotbit/{nftId}');
-    expect(capabilities.routes.raw).toContain('/nfts/did/{nftId}');
-    expect(capabilities.routes.raw).toContain('/nfts/mnft/{nftId}');
-    expect(capabilities.rawProfiles.routes['/nfts/dotbit/{nftId}']).toEqual(['default']);
-    expect(capabilities.rawProfiles.routes['/nfts/did/{nftId}']).toEqual(['default']);
-    expect(capabilities.rawProfiles.routes['/nfts/mnft/{nftId}']).toEqual(['default']);
+    expect(capabilities.routes.raw).toContain('/identities/dotbit/{identityId}');
+    expect(capabilities.routes.raw).toContain('/identities/did/{identityId}');
+    expect(capabilities.routes.raw).toContain('/objects/mnft/{objectId}');
+    expect(capabilities.rawProfiles.routes['/identities/dotbit/{identityId}']).toEqual(['default']);
+    expect(capabilities.rawProfiles.routes['/identities/did/{identityId}']).toEqual(['default']);
+    expect(capabilities.rawProfiles.routes['/objects/mnft/{objectId}']).toEqual(['default']);
     expect(capabilities.rawProfiles.routes['/tx/{hash}']).toEqual(['default', 'debugger']);
     expect(capabilities.rawProfiles.txDebuggerProfile.payloadPath).toBe(
       'data.txDebugger.mockTransaction'

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 
-import DotbitItemDetailPage from '@/app/nfts/dotbit/[nftId]/client-page';
+import DotbitItemDetailPage from '@/app/identities/dotbit/[identityId]/client-page';
 import { api } from '@/lib/api';
 import { render } from '../utils/test-utils';
 
@@ -21,8 +21,8 @@ const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ nftId: '0xabc' }),
-  usePathname: () => '/nfts/dotbit/0xabc',
+  useParams: () => ({ identityId: '0xabc' }),
+  usePathname: () => '/identities/dotbit/0xabc',
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -62,7 +62,7 @@ describe('DotbitItemDetailPage', () => {
       outputIndex: 2,
     } as any);
 
-    render(<DotbitItemDetailPage nftId="0xabc" />);
+    render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', {
@@ -85,7 +85,7 @@ describe('DotbitItemDetailPage', () => {
       outputIndex: null,
     } as any);
 
-    render(<DotbitItemDetailPage nftId="0xabc" />);
+    render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
@@ -127,7 +127,7 @@ describe('DotbitItemDetailPage', () => {
       nextCursor: null,
     } as any);
 
-    render(<DotbitItemDetailPage nftId="0xabc" />);
+    render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
@@ -189,7 +189,7 @@ describe('DotbitItemDetailPage', () => {
       } as any;
     });
 
-    render(<DotbitItemDetailPage nftId="0xabc" />);
+    render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(api.getDotbitItemActivities).toHaveBeenCalledWith('0xabc', { limit: 20 });
@@ -227,7 +227,7 @@ describe('DotbitItemDetailPage', () => {
       outputIndex: 2,
     } as any);
 
-    render(<DotbitItemDetailPage nftId="0xabc" />);
+    render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       const links = screen.getAllByRole('link');
@@ -238,7 +238,7 @@ describe('DotbitItemDetailPage', () => {
   it('renders not found panel when item is missing', async () => {
     vi.mocked(api.getDotbitItemDetail).mockRejectedValue(new Error('API error: 404'));
 
-    render(<DotbitItemDetailPage nftId="0xabc" />);
+    render(<DotbitItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('.bit item not found')).toBeInTheDocument();

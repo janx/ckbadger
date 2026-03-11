@@ -22,8 +22,8 @@ const mockReplace = vi.fn();
 let mockSearchParams = new URLSearchParams();
 
 vi.mock('@/src/navigation', () => ({
-  useParams: () => ({ nftId: '0xabc' }),
-  usePathname: () => '/nfts/dotbit/0xabc',
+  useParams: () => ({ identityId: '0xabc' }),
+  usePathname: () => '/identities/dotbit/0xabc',
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
 }));
@@ -40,7 +40,7 @@ const dotbitConfig: IdentityItemDetailConfig = {
     nameLabel: '.bit Name',
     idLabel: 'Account ID',
     backLabel: 'Back to .bit Collection',
-    backHref: '/nfts/dotbit',
+    backHref: '/identities/dotbit',
     defaultTitle: '.bit account',
     notFoundMsg: '.bit item not found',
     recycledMsg: 'Recycled .bit account has no live cell.',
@@ -57,7 +57,7 @@ const didCkbConfig: IdentityItemDetailConfig = {
     nameLabel: 'did:ckb Name',
     idLabel: 'DID ID',
     backLabel: 'Back to did:ckb Collection',
-    backHref: '/nfts/did:ckb',
+    backHref: '/identities/did:ckb',
     defaultTitle: 'did:ckb identity',
     notFoundMsg: 'did:ckb item not found',
     recycledMsg: 'Recycled did:ckb identity has no live cell.',
