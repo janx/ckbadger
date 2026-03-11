@@ -54,7 +54,7 @@ pub(crate) struct PerfStats {
 }
 
 impl PerfStats {
-    #[cfg(test)]
+    #[allow(dead_code)] // currently only used in tests
     pub(crate) fn add_fetch(&self, duration: Duration) {
         self.fetch_us
             .fetch_add(duration.as_micros() as u64, Ordering::Relaxed);

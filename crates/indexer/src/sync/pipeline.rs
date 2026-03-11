@@ -2521,22 +2521,6 @@ impl Indexer {
         }
         drained
     }
-
-    #[allow(dead_code)]
-    pub(super) async fn fetch_blocks_parallel(
-        &self,
-        start: u64,
-        end: u64,
-    ) -> Result<Vec<BlockResponseWithCycles>> {
-        let store = Arc::clone(
-            self.ckb_store
-                .as_ref()
-                .expect("ckb_store must exist for block fetch"),
-        );
-        tokio::task::spawn_blocking(move || Self::fetch_blocks_direct(&store, start, end))
-            .await
-            .map_err(|e| anyhow::anyhow!("Block fetch task panicked: {}", e))?
-    }
 }
 
 #[cfg(test)]
