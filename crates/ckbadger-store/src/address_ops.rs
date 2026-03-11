@@ -1,7 +1,5 @@
 //! Address balance operations.
 
-use rocksdb::IteratorMode;
-
 use crate::store::CkbadgerStore;
 use crate::types::AddressBalance;
 
@@ -30,30 +28,6 @@ impl CkbadgerStore {
     ) -> anyhow::Result<()> {
         let value = bincode::serialize(balance)?;
         self.put_cf(self.cf_addr_balance(), lock_hash, &value)
-    }
-
-    /// List top addresses by balance (full scan, sorted).
-    pub fn top_addresses(&self, limit: usize) -> anyhow::Result<Vec<(Vec<u8>, AddressBalance)>> {
-        let iter = self.iterator_cf(self.cf_addr_balance(), IteratorMode::Start);
-
-        let mut all: Vec<(Vec<u8>, AddressBalance)> = Vec::new();
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!("failed to iterate addr_balance in top_addresses: {}", e)
-            })?;
-            let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize address balance in top_addresses: lock_hash=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
-                )
-            })?;
-            all.push((key.to_vec(), balance));
-        }
-
-        all.sort_by(|a, b| b.1.balance.cmp(&a.1.balance));
-        all.truncate(limit);
-        Ok(all)
     }
 
     /// List transactions for an address (newest first).
@@ -123,25 +97,6 @@ mod tests {
     use super::*;
     use crate::batch::StoreBatch;
     use tempfile::tempdir;
-
-    #[test]
-    fn test_top_addresses_fails_on_invalid_payload() {
-        let dir = tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let lock_hash = [0xAA; 32];
-        store
-            .put_cf(
-                store.cf_addr_balance(),
-                &lock_hash,
-                b"invalid-address-balance",
-            )
-            .unwrap();
-
-        let err = store.top_addresses(10).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize address balance in top_addresses"));
-    }
 
     #[test]
     fn test_list_addr_txs_recent_rejects_non_32_byte_lock_hash() {

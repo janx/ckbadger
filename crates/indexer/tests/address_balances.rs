@@ -1,7 +1,6 @@
 //! Integration tests for address balance operations in ckbadger-store.
 //!
-//! Tests balance insertion, updates, cumulative modifications, and
-//! top_addresses ordering.
+//! Tests balance insertion, updates, and cumulative modifications.
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::AddressBalance;
@@ -126,51 +125,6 @@ fn test_multiple_operations_cumulative() {
     assert_eq!(r3.txs_count, 3);
     assert_eq!(r3.first_seen_block, 100);
     assert_eq!(r3.last_activity_block, 300);
-}
-
-#[test]
-fn test_top_addresses_ordering() {
-    let store = setup_store();
-
-    let addr1 = vec![0x01u8; 32]; // 500 CKB - should be rank 2
-    let addr2 = vec![0x02u8; 32]; // 1000 CKB - should be rank 1
-    let addr3 = vec![0x03u8; 32]; // 100 CKB - should be rank 4
-    let addr4 = vec![0x04u8; 32]; // 250 CKB - should be rank 3
-
-    let bal1 = make_balance(500_00000000, 3, 5, 5, 100, 0x01, 500, 0x10);
-    let bal2 = make_balance(1000_00000000, 5, 10, 10, 50, 0x02, 600, 0x20);
-    let bal3 = make_balance(100_00000000, 1, 2, 2, 200, 0x03, 300, 0x30);
-    let bal4 = make_balance(250_00000000, 2, 3, 3, 150, 0x04, 400, 0x40);
-
-    let mut batch = StoreBatch::new(&store);
-    batch.put_addr_balance(&addr1, &bal1);
-    batch.put_addr_balance(&addr2, &bal2);
-    batch.put_addr_balance(&addr3, &bal3);
-    batch.put_addr_balance(&addr4, &bal4);
-    batch.commit().unwrap();
-
-    // Request top 4
-    let top = store.top_addresses(4).unwrap();
-    assert_eq!(top.len(), 4);
-
-    // Verify descending balance order
-    assert_eq!(top[0].1.balance, 1000_00000000);
-    assert_eq!(top[0].0, addr2);
-
-    assert_eq!(top[1].1.balance, 500_00000000);
-    assert_eq!(top[1].0, addr1);
-
-    assert_eq!(top[2].1.balance, 250_00000000);
-    assert_eq!(top[2].0, addr4);
-
-    assert_eq!(top[3].1.balance, 100_00000000);
-    assert_eq!(top[3].0, addr3);
-
-    // Verify limit truncation
-    let top2 = store.top_addresses(2).unwrap();
-    assert_eq!(top2.len(), 2);
-    assert_eq!(top2[0].1.balance, 1000_00000000);
-    assert_eq!(top2[1].1.balance, 500_00000000);
 }
 
 #[test]

@@ -162,21 +162,6 @@ impl CkbadgerStore {
         Ok(result)
     }
 
-    pub fn block_headers_count(&self) -> usize {
-        let mut count = 0;
-        let iter = self.iterator_cf(self.cf_block_headers(), IteratorMode::Start);
-        for item in iter {
-            match item {
-                Ok(_) => count += 1,
-                Err(e) => panic!(
-                    "failed to iterate block_headers in block_headers_count: {}",
-                    e
-                ),
-            }
-        }
-        count
-    }
-
     /// Find the first missing block number in `block_headers` if there is an internal gap.
     ///
     /// Returns:
