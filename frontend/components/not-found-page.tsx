@@ -4,6 +4,8 @@ import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { NotFoundCellOcean } from '@/components/not-found-cell-ocean';
+import { resolveBuildVersion } from '@/lib/runtime-config';
+import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 
 const GLYPHS = ['\u2588', '\u2592', '\u2593', '\u2591', '\u00d7', '#', '%', '\u2573'];
 const ORIGINAL_CHARS = ['4', '0', '4'];
@@ -14,6 +16,18 @@ export function NotFoundPage() {
     useRef<HTMLSpanElement>(null),
     useRef<HTMLSpanElement>(null),
   ];
+
+  const buildVersion = resolveBuildVersion();
+  const latestBlock = useRealtimeStore((state) => state.latestBlock);
+  const blockNumber = latestBlock?.number ?? '---';
+
+  // Lock body scroll on 404 page
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, []);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -63,7 +77,7 @@ export function NotFoundPage() {
   }, []);
 
   return (
-    <main className="bg-base-bg relative min-h-screen overflow-hidden">
+    <main className="bg-base-bg relative h-screen overflow-hidden">
       <style>{`
         @keyframes tearScan {
           0% { top: -2px; opacity: 0; }
@@ -132,7 +146,7 @@ export function NotFoundPage() {
       <Header />
 
       {/* Content section */}
-      <section className="relative z-20 flex min-h-screen items-center justify-center">
+      <section className="relative z-20 flex h-full items-center justify-center">
         <div className="flex flex-col items-center gap-8">
           {/* Glitch 404 text */}
           <div
@@ -170,36 +184,65 @@ export function NotFoundPage() {
               yet more is crystallizing from the chain
             </p>
           </div>
-
-          {/* Return Home link */}
-          <Link
-            href="/"
-            className="border-jade-dim bg-jade/10 text-jade hover:bg-jade/20 rounded-md border px-5 py-2.5 font-mono text-xs uppercase tracking-[0.18em] transition"
-          >
-            Return Home
-          </Link>
         </div>
       </section>
 
-      {/* Fixed bottom error line */}
-      <div
-        className="fixed bottom-12 left-0 z-30 flex w-full items-center justify-center"
-        style={{ animation: 'flickerLine 3s infinite' }}
-      >
-        <span className="font-mono text-sm">
-          <span className="text-rouge">ERR</span>
-          <span className="text-text-ghost"> cell_not_found: outpoint unreachable</span>
-          <span
-            className="ml-0.5 inline-block"
-            style={{
-              width: '8px',
-              height: '16px',
-              backgroundColor: '#2edba3',
-              animation: 'blink 1s step-end infinite',
-              verticalAlign: 'text-bottom',
-            }}
-          />
-        </span>
+      {/* Bottom area: error line + footer */}
+      <div className="absolute bottom-0 left-0 z-30 flex w-full flex-col items-center gap-3 pb-4">
+        {/* ERR line */}
+        <div style={{ animation: 'flickerLine 3s infinite' }}>
+          <span className="font-mono text-sm">
+            <span className="text-rouge">ERR</span>
+            <span className="text-text-ghost"> cell_not_found: outpoint unreachable</span>
+            <span
+              className="ml-0.5 inline-block"
+              style={{
+                width: '8px',
+                height: '16px',
+                backgroundColor: '#2edba3',
+                animation: 'blink 1s step-end infinite',
+                verticalAlign: 'text-bottom',
+              }}
+            />
+          </span>
+        </div>
+
+        {/* Footer blended into 404 */}
+        <div className="text-text-ghost flex flex-wrap items-center justify-center gap-3 font-mono text-[11px]">
+          <span className="select-none">&gt;</span>
+          <span>
+            <a
+              href="https://x.com/busyforking"
+              target="_blank"
+              rel="noreferrer"
+              className="text-text-ghost hover:text-jade transition-colors"
+            >
+              @busyforking
+            </a>
+            {' + '}
+            <span className="text-text-ghost">Claude</span>
+            {' + '}
+            <span className="text-text-ghost">Codex</span>
+          </span>
+          <span className="text-base-border">|</span>
+          <span>
+            tip: <span className="text-jade/50 tabular-nums">{blockNumber}</span>
+          </span>
+          <span className="text-base-border">|</span>
+          <span>{buildVersion}</span>
+          <span className="text-base-border">|</span>
+          <Link href="/hardforks" className="text-text-ghost hover:text-jade transition-colors">
+            Hardforks
+          </Link>
+          <a
+            href="https://github.com/janx/ckbadger"
+            target="_blank"
+            rel="noreferrer"
+            className="text-text-ghost hover:text-jade transition-colors"
+          >
+            Github
+          </a>
+        </div>
       </div>
     </main>
   );

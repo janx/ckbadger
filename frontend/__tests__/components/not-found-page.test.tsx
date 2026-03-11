@@ -27,9 +27,6 @@ describe('NotFoundPage', () => {
     // Terminal error line
     expect(screen.getByText(/cell_not_found/)).toBeInTheDocument();
 
-    // Return home link
-    expect(screen.getByRole('link', { name: /return home/i })).toHaveAttribute('href', '/');
-
     // Header nav links still present
     expect(screen.getByRole('link', { name: 'DAO' })).toHaveAttribute('href', '/dao');
     expect(screen.getByRole('link', { name: 'Assets' })).toHaveAttribute('href', '/assets');
