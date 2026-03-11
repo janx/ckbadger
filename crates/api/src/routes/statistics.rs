@@ -1246,7 +1246,7 @@ fn parse_code_hash_set(hexes: &[&str]) -> HashSet<Vec<u8>> {
         .collect()
 }
 
-fn shannon_to_ckb_string(value: i128) -> String {
+pub(crate) fn shannon_to_ckb_string(value: i128) -> String {
     let negative = value < 0;
     let abs = value.abs();
     let whole = abs / SHANNONS_PER_CKB;
@@ -1545,7 +1545,10 @@ pub(crate) fn load_block_date_transitions_cached(
     Ok(transitions)
 }
 
-fn block_number_to_date(transitions: &[(i64, NaiveDate)], block_number: i64) -> Option<NaiveDate> {
+pub(crate) fn block_number_to_date(
+    transitions: &[(i64, NaiveDate)],
+    block_number: i64,
+) -> Option<NaiveDate> {
     if transitions.is_empty() {
         return None;
     }
@@ -1558,7 +1561,9 @@ fn block_number_to_date(transitions: &[(i64, NaiveDate)], block_number: i64) -> 
     }
 }
 
-fn current_snapshot_date(store: &ckbadger_store::CkbadgerStore) -> Result<NaiveDate, String> {
+pub(crate) fn current_snapshot_date(
+    store: &ckbadger_store::CkbadgerStore,
+) -> Result<NaiveDate, String> {
     let tip = store.get_sync_tip_block().map_err(|e| e.to_string())?;
     let date = tip
         .and_then(|(_, header)| DateTime::from_timestamp_millis(header.timestamp))
@@ -1569,7 +1574,7 @@ fn current_snapshot_date(store: &ckbadger_store::CkbadgerStore) -> Result<NaiveD
 
 const LIVE_CELL_SCAN_BATCH_SIZE: usize = 2_048;
 
-fn visit_live_cells_in_batches<F>(
+pub(crate) fn visit_live_cells_in_batches<F>(
     store: &ckbadger_store::CkbadgerStore,
     cells_store: &ckbadger_store::CkbadgerStore,
     mut visit: F,
@@ -1617,7 +1622,7 @@ where
     flush_batch(&mut batch)
 }
 
-fn occupied_capacity_bucket_index(occupied_shannons: i128) -> usize {
+pub(crate) fn occupied_capacity_bucket_index(occupied_shannons: i128) -> usize {
     let ckb_100 = 100_i128 * SHANNONS_PER_CKB;
     let ckb_1k = 1_000_i128 * SHANNONS_PER_CKB;
     let ckb_10k = 10_000_i128 * SHANNONS_PER_CKB;

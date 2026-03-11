@@ -1,6 +1,11 @@
 use crate::cache::CacheTtl;
 use crate::routes::assets::AssetResponse;
-use crate::routes::statistics::build_block_time_distribution_response;
+use crate::routes::statistics::{
+    block_number_to_date, build_block_time_distribution_response, current_snapshot_date,
+    load_block_date_transitions, occupied_capacity_bucket_index, shannon_to_ckb_string,
+    visit_live_cells_in_batches, ChartDataPoint, ChartResponse, StackedAreaChartResponse,
+    StackedAreaDataPoint, StackedAreaSeries,
+};
 use crate::utils::{
     accumulate_live_capacity, resolve_collection_standard, resolve_dob_collection_name,
     resolve_nft_collection_name, resolve_nft_collection_storage_tier_override,
@@ -9,7 +14,7 @@ use crate::AppState;
 use ckbadger_store::AddressBalance;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -702,8 +707,181 @@ pub async fn warmup_assets_cache_once(state: Arc<AppState>) -> anyhow::Result<()
     refresh
 }
 
+struct LiveCellChartData {
+    cell_age: StackedAreaChartResponse,
+    cell_size: ChartResponse,
+}
+
+fn compute_live_cell_charts(state: &AppState) -> Result<LiveCellChartData, String> {
+    let transitions = load_block_date_transitions(state.store.as_ref())?;
+    let snapshot_date = current_snapshot_date(state.store.as_ref())?;
+
+    // Cell age buckets
+    let mut lt_1d: i128 = 0;
+    let mut d1_7d: i128 = 0;
+    let mut d7_30d: i128 = 0;
+    let mut d30_180d: i128 = 0;
+    let mut gt_180d: i128 = 0;
+
+    // Cell size buckets
+    let bucket_labels = [
+        "<100 CKB",
+        "100-1k CKB",
+        "1k-10k CKB",
+        "10k-100k CKB",
+        "100k-1m CKB",
+        ">=1m CKB",
+    ];
+    let mut bucket_counts = vec![0_i128; bucket_labels.len()];
+    let mut bucket_occupied = vec![0_i128; bucket_labels.len()];
+
+    visit_live_cells_in_batches(
+        state.store.as_ref(),
+        state.append_only_store.as_ref(),
+        |cell| {
+            let occupied = cell.occupied_capacity as i128;
+            if occupied < 0 {
+                return Err(format!(
+                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
+                cell.created_at_block, occupied
+            ));
+            }
+
+            // Cell age accumulation
+            if let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) {
+                let age_days_raw = (snapshot_date - created_date).num_days();
+                if age_days_raw < 0 {
+                    return Err(format!(
+                    "negative cell age detected: snapshot_date={}, created_date={}, created_at_block={}",
+                    snapshot_date, created_date, cell.created_at_block
+                ));
+                }
+                match age_days_raw {
+                    0 => lt_1d += occupied,
+                    1..=6 => d1_7d += occupied,
+                    7..=29 => d7_30d += occupied,
+                    30..=179 => d30_180d += occupied,
+                    _ => gt_180d += occupied,
+                }
+            }
+
+            // Cell size accumulation
+            let idx = occupied_capacity_bucket_index(occupied);
+            bucket_counts[idx] += 1;
+            bucket_occupied[idx] += occupied;
+
+            Ok(())
+        },
+    )?;
+
+    // Build cell-age response
+    let snapshot_values = HashMap::from([
+        ("lt1d".to_string(), shannon_to_ckb_string(lt_1d)),
+        ("d1to7d".to_string(), shannon_to_ckb_string(d1_7d)),
+        ("d7to30d".to_string(), shannon_to_ckb_string(d7_30d)),
+        ("d30to180d".to_string(), shannon_to_ckb_string(d30_180d)),
+        ("gt180d".to_string(), shannon_to_ckb_string(gt_180d)),
+    ]);
+
+    let snapshot_label = snapshot_date.format("%Y-%m-%d").to_string();
+    let previous_label = (snapshot_date - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let cell_age = StackedAreaChartResponse {
+        data: vec![
+            StackedAreaDataPoint {
+                date: previous_label,
+                values: snapshot_values.clone(),
+            },
+            StackedAreaDataPoint {
+                date: snapshot_label,
+                values: snapshot_values,
+            },
+        ],
+        series: vec![
+            StackedAreaSeries {
+                key: "lt1d".to_string(),
+                label: "< 1d".to_string(),
+                color: "#22c55e".to_string(),
+            },
+            StackedAreaSeries {
+                key: "d1to7d".to_string(),
+                label: "1-7d".to_string(),
+                color: "#84cc16".to_string(),
+            },
+            StackedAreaSeries {
+                key: "d7to30d".to_string(),
+                label: "7-30d".to_string(),
+                color: "#f59e0b".to_string(),
+            },
+            StackedAreaSeries {
+                key: "d30to180d".to_string(),
+                label: "30-180d".to_string(),
+                color: "#f97316".to_string(),
+            },
+            StackedAreaSeries {
+                key: "gt180d".to_string(),
+                label: "> 180d".to_string(),
+                color: "#ef4444".to_string(),
+            },
+        ],
+        title: "Cell Age vs Occupied Capacity".to_string(),
+    };
+
+    // Build cell-size response
+    let cell_size_data = bucket_labels
+        .iter()
+        .enumerate()
+        .map(|(idx, label)| ChartDataPoint {
+            date: (*label).to_string(),
+            value: bucket_counts[idx].to_string(),
+            value2: Some(shannon_to_ckb_string(bucket_occupied[idx])),
+        })
+        .collect();
+
+    let cell_size = ChartResponse {
+        data: cell_size_data,
+        title: "Cell Size Distribution".to_string(),
+        y_axis_label: "Live Cells".to_string(),
+        y2_axis_label: Some("Occupied Capacity (CKB)".to_string()),
+    };
+
+    Ok(LiveCellChartData {
+        cell_age,
+        cell_size,
+    })
+}
+
 pub async fn warmup_chart_caches(state: Arc<AppState>) {
     info!("Starting cache warmup for charts...");
+
+    // Warm up live-cell charts (cell-age and cell-size) in a single pass
+    // before the lightweight stub-key deletions below.
+    let state_for_cells = state.clone();
+    match tokio::task::spawn_blocking(move || compute_live_cell_charts(&state_for_cells)).await {
+        Ok(Ok(data)) => {
+            state
+                .cache
+                .set(
+                    "chart:cell-age-vs-occupied-capacity:v1",
+                    &data.cell_age,
+                    CacheTtl::CHART,
+                )
+                .await;
+            state
+                .cache
+                .set(
+                    "chart:cell-size-distribution:v1",
+                    &data.cell_size,
+                    CacheTtl::CHART,
+                )
+                .await;
+            info!("Warmed up live-cell chart caches (cell-age + cell-size)");
+        }
+        Ok(Err(e)) => tracing::warn!("Failed to warmup live-cell charts: {}", e),
+        Err(e) => tracing::warn!("Live-cell chart warmup panicked: {}", e),
+    }
 
     // These chart caches used to be prefilled with placeholder payloads (often empty),
     // which overrides real chart handlers after cache flush/restart.
