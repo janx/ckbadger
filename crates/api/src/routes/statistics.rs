@@ -3612,7 +3612,7 @@ async fn get_asset_ecosystem(
 
     state
         .cache
-        .set(cache_key, &response, CacheTtl::ADDRESS_BALANCE)
+        .set(cache_key, &response, CacheTtl::ASSET_ECOSYSTEM)
         .await;
 
     ok(response)

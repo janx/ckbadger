@@ -118,6 +118,8 @@ impl CacheTtl {
     pub const CHART: Duration = Duration::from_secs(21600);
     /// Assets/tokens/NFT cached data TTL (refreshed every 30s by background loop)
     pub const ASSETS: Duration = Duration::from_secs(45);
+    /// Asset ecosystem overview (homepage panel)
+    pub const ASSET_ECOSYSTEM: Duration = Duration::from_secs(30);
 }
 
 #[cfg(test)]

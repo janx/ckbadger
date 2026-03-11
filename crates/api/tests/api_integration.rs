@@ -6979,3 +6979,81 @@ async fn test_scripts_list_reads_from_derived_store() {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["name"], "CoreOnlyScript");
 }
+
+#[tokio::test]
+async fn test_asset_ecosystem_returns_expected_structure() {
+    let store = test_store();
+
+    // Seed one token so the warmup cache populates CACHE_KEY_ASSETS_TOKEN.
+    store
+        .put_token_direct(
+            &[0xAA; 32],
+            &TokenInfo {
+                type_code_hash: vec![0x01; 32],
+                hash_type: 1,
+                type_args: vec![0x02; 20],
+                standard: "xudt".to_string(),
+                name: Some("TestToken".to_string()),
+                symbol: Some("TT".to_string()),
+                decimals: Some(8),
+                total_supply: Some(1_000_000),
+                max_supply: None,
+                holders_count: 42,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: 10,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_daily_delta(
+            &[0xAA; 32],
+            20240101,
+            &TokenDailyDelta {
+                live_capacity_delta: 500_00000000,
+                live_used_capacity_delta: 300_00000000,
+            },
+        )
+        .unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri("/api/v1/statistics/asset-ecosystem")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Verify top-level structure (response is the struct directly, not wrapped in "data")
+    assert!(json["topTokens"].is_array(), "topTokens should be an array");
+    assert!(
+        json["capacityBreakdown"].is_array(),
+        "capacityBreakdown should be an array"
+    );
+    assert!(
+        json["totalKnowledgeSizeCkb"].is_string(),
+        "totalKnowledgeSizeCkb should be a string"
+    );
+
+    // Verify seeded token appears in topTokens
+    let top_tokens = json["topTokens"].as_array().unwrap();
+    assert_eq!(top_tokens.len(), 1);
+    assert_eq!(top_tokens[0]["name"], "TestToken");
+    assert_eq!(top_tokens[0]["symbol"], "TT");
+    assert_eq!(top_tokens[0]["holdersCount"], 42);
+
+    // Verify capacity breakdown has the expected categories
+    let breakdown = json["capacityBreakdown"].as_array().unwrap();
+    let categories: Vec<&str> = breakdown
+        .iter()
+        .map(|c| c["category"].as_str().unwrap())
+        .collect();
+    assert_eq!(categories, vec!["dao", "tokens", "objects", "other"]);
+}

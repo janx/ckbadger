@@ -33,7 +33,7 @@ export function DaoOverview() {
     refetchInterval: 300_000,
   });
 
-  const sparkData = depositChart?.data.slice(-30).map((d) => parseFloat(d.value)) ?? [];
+  const sparkData = depositChart?.data?.slice(-30).map((d) => parseFloat(d.value)) ?? [];
 
   const headerActions = (
     <Link

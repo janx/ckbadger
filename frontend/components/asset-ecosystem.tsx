@@ -31,9 +31,22 @@ export function AssetEcosystem() {
     refetchInterval: 30_000,
   });
 
+  const headerActions = (
+    <Link
+      href="/tokens"
+      className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
+    >
+      VIEW ALL &rarr;
+    </Link>
+  );
+
   return (
     <TerminalPanel>
-      <TerminalPanelHeader>Asset Ecosystem</TerminalPanelHeader>
+      <TerminalPanelHeader actions={headerActions}>
+        <Link href="/tokens" className="hover:text-jade transition-colors">
+          Asset Ecosystem
+        </Link>
+      </TerminalPanelHeader>
       <TerminalPanelContent padding="md">
         {/* Top Tokens */}
         <div className="mb-4">
