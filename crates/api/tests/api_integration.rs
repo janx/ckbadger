@@ -683,8 +683,10 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
 
     // knowledge_size = occupied_capacity
     assert_eq!(json["knowledgeSize"], "1000000000000000000");
-    // circulating_supply = total_issuance - GENESIS_BURNT (840_000_000_000_000_000)
-    let expected_circulating: i128 = 3_500_000_000_000_000_000 - 840_000_000_000_000_000;
+    // circulating_supply = total_issuance - (GENESIS_BURNT + cum_treasury) - total_deposited
+    let expected_circulating: i128 = 3_500_000_000_000_000_000
+        - (840_000_000_000_000_000 + 2_000_000_000_000_000)
+        - 50_000_000_000_000_000;
     assert_eq!(json["circulatingSupply"], expected_circulating.to_string());
     // dao_locked = total_deposited
     assert_eq!(json["daoLocked"], "50000000000000000");

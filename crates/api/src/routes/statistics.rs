@@ -2530,9 +2530,15 @@ async fn fetch_network_stats_from_db(
     let knowledge_size = dao_snapshot
         .as_ref()
         .map(|s| s.occupied_capacity.to_string());
-    let circulating_supply = dao_snapshot
-        .as_ref()
-        .map(|s| (s.total_issuance - GENESIS_BURNT as i128).to_string());
+    let circulating_supply = match dao_snapshot.as_ref() {
+        Some(s) => {
+            let total_supply = s.total_issuance;
+            let (_, _, cum_treasury) = snapshot_secondary_cumulative(s)?;
+            let burnt = GENESIS_BURNT as i128 + cum_treasury;
+            Some((total_supply - burnt - s.total_deposited).to_string())
+        }
+        None => None,
+    };
     let dao_locked = dao_snapshot.as_ref().map(|s| s.total_deposited.to_string());
 
     Ok(NetworkStats {
