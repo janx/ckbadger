@@ -188,6 +188,7 @@ enum AssetSortKey {
     Occupied,
     Capacity,
     OnchainRatio,
+    HMultiplier,
 }
 
 fn default_asset_sort_key() -> AssetSortKey {
@@ -238,6 +239,7 @@ pub struct AssetResponse {
     pub storage_tier: Option<String>,
     pub fully_onchain_ratio: Option<String>,
     pub fully_onchain_count: Option<i64>,
+    pub h_multiplier: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -712,6 +714,21 @@ fn asset_display_name(entry: &CachedAssetEntry) -> String {
     }
 }
 
+fn compute_h_multiplier(entry: &CachedAssetEntry) -> f64 {
+    match (&entry.live_capacity, &entry.live_occupied_capacity) {
+        (Some(cap_str), Some(occ_str)) => {
+            let cap: f64 = cap_str.parse().unwrap_or(0.0);
+            let occ: f64 = occ_str.parse().unwrap_or(0.0);
+            if occ > 0.0 {
+                cap / occ
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
 fn compare_asset_entries(
     left: &CachedAssetEntry,
     right: &CachedAssetEntry,
@@ -753,6 +770,14 @@ fn compare_asset_entries(
             parse_ratio_1e4(right.fully_onchain_ratio.as_deref()),
             direction,
         ),
+        AssetSortKey::HMultiplier => {
+            let left_hm = compute_h_multiplier(left);
+            let right_hm = compute_h_multiplier(right);
+            apply_direction(
+                left_hm.partial_cmp(&right_hm).unwrap_or(Ordering::Equal),
+                direction,
+            )
+        }
     };
 
     if compared != Ordering::Equal {

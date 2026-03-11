@@ -149,6 +149,20 @@ impl CachedAssetEntry {
             storage_tier: self.storage_tier.clone(),
             fully_onchain_ratio: self.fully_onchain_ratio.clone(),
             fully_onchain_count: self.fully_onchain_count,
+            h_multiplier: {
+                match (&self.live_capacity, &self.live_occupied_capacity) {
+                    (Some(cap_str), Some(occ_str)) => {
+                        let cap: f64 = cap_str.parse().unwrap_or(0.0);
+                        let occ: f64 = occ_str.parse().unwrap_or(0.0);
+                        if occ > 0.0 {
+                            Some(((cap / occ) * 100.0).round() / 100.0)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            },
         }
     }
 }
