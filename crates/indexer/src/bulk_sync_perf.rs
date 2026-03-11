@@ -214,10 +214,11 @@ impl BulkSyncPerfRun {
         &mut self,
         env: crate::sys_info::EnvironmentSnapshot,
         rocksdb_config: RocksDbConfig,
-    ) {
-        self.write_environment_env(&env, &rocksdb_config).ok();
+    ) -> Result<()> {
+        self.write_environment_env(&env, &rocksdb_config)?;
         self.environment = Some(env);
         self.rocksdb_config = Some(rocksdb_config);
+        Ok(())
     }
 
     pub fn record_batch_sample(&mut self, sample: BatchSample) -> Result<()> {
@@ -523,6 +524,22 @@ impl BulkSyncPerfRun {
             "| max_imm_memtables | {} |\n",
             metrics.max_imm_memtables
         ));
+        content.push_str(&format!(
+            "| avg_load_avg_1m | {} |\n",
+            format_float(metrics.avg_load_avg_1m)
+        ));
+        content.push_str(&format!(
+            "| max_load_avg_1m | {} |\n",
+            format_float(metrics.max_load_avg_1m)
+        ));
+        content.push_str(&format!(
+            "| min_mem_available_mb | {} |\n",
+            metrics.min_mem_available_mb
+        ));
+        content.push_str(&format!(
+            "| avg_disk_write_mb_per_batch | {} |\n",
+            format_float(metrics.avg_disk_write_mb_per_batch)
+        ));
         content.push('\n');
 
         if let Some(baseline) = baseline {
@@ -581,6 +598,21 @@ impl BulkSyncPerfRun {
                     metrics.p99_commit_ms,
                     baseline.p99_commit_ms,
                 ),
+                (
+                    "avg_load_avg_1m",
+                    metrics.avg_load_avg_1m,
+                    baseline.avg_load_avg_1m,
+                ),
+                (
+                    "max_load_avg_1m",
+                    metrics.max_load_avg_1m,
+                    baseline.max_load_avg_1m,
+                ),
+                (
+                    "avg_disk_write_mb_per_batch",
+                    metrics.avg_disk_write_mb_per_batch,
+                    baseline.avg_disk_write_mb_per_batch,
+                ),
             ] {
                 content.push_str(&format!(
                     "| {} | {} | {} | {} |\n",
@@ -590,6 +622,16 @@ impl BulkSyncPerfRun {
                     format_delta_pct(current, previous),
                 ));
             }
+            // min_mem_available_mb is u64 — handle separately
+            content.push_str(&format!(
+                "| min_mem_available_mb | {} | {} | {} |\n",
+                metrics.min_mem_available_mb,
+                baseline.min_mem_available_mb,
+                format_delta_pct(
+                    metrics.min_mem_available_mb as f64,
+                    baseline.min_mem_available_mb as f64
+                ),
+            ));
         }
 
         fs::write(self.run_dir.join("report.md"), content)?;
@@ -1063,7 +1105,8 @@ mod tests {
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
 
-        run.set_environment(test_env_snapshot(), test_rocksdb_config());
+        run.set_environment(test_env_snapshot(), test_rocksdb_config())
+            .unwrap();
 
         let env_file = std::fs::read_to_string(dir.path().join("run-1/environment.env")).unwrap();
 
@@ -1135,7 +1178,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        run.set_environment(test_env_snapshot(), test_rocksdb_config());
+        run.set_environment(test_env_snapshot(), test_rocksdb_config())
+            .unwrap();
         run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
         run.finish_completed().unwrap();
@@ -1154,7 +1198,9 @@ mod tests {
         // Baseline run with environment
         let mut baseline =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        baseline.set_environment(test_env_snapshot(), test_rocksdb_config());
+        baseline
+            .set_environment(test_env_snapshot(), test_rocksdb_config())
+            .unwrap();
         baseline
             .record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
@@ -1165,7 +1211,9 @@ mod tests {
             BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
         let mut changed_config = test_rocksdb_config();
         changed_config.block_cache_bulk_mb = 8192; // Changed from 4096
-        current.set_environment(test_env_snapshot(), changed_config);
+        current
+            .set_environment(test_env_snapshot(), changed_config)
+            .unwrap();
         current
             .record_batch_sample(test_batch_sample(10, 2.0, 80.0, 120, 5, 1))
             .unwrap();
@@ -1185,7 +1233,9 @@ mod tests {
         // Baseline run
         let mut baseline =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        baseline.set_environment(test_env_snapshot(), test_rocksdb_config());
+        baseline
+            .set_environment(test_env_snapshot(), test_rocksdb_config())
+            .unwrap();
         baseline
             .record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
@@ -1194,7 +1244,9 @@ mod tests {
         // Current run with same env
         let mut current =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
-        current.set_environment(test_env_snapshot(), test_rocksdb_config());
+        current
+            .set_environment(test_env_snapshot(), test_rocksdb_config())
+            .unwrap();
         current
             .record_batch_sample(test_batch_sample(10, 2.0, 80.0, 120, 5, 1))
             .unwrap();
@@ -1209,7 +1261,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        run.set_environment(test_env_snapshot(), test_rocksdb_config());
+        run.set_environment(test_env_snapshot(), test_rocksdb_config())
+            .unwrap();
         run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
         run.finish_completed().unwrap();
