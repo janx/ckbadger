@@ -41,11 +41,11 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/spore/clusters/{cluster_id}/spores",
             get(get_spores_by_cluster),
         )
-        .route("/spore/nfts", get(list_spores))
-        .route("/spore/nfts/{spore_id}", get(get_spore))
-        .route("/spore/nfts/{spore_id}/decode", get(decode_spore))
+        .route("/spore/objects", get(list_spores))
+        .route("/spore/objects/{spore_id}", get(get_spore))
+        .route("/spore/objects/{spore_id}/decode", get(decode_spore))
         .route(
-            "/spore/nfts/{spore_id}/charts/occupation",
+            "/spore/objects/{spore_id}/charts/occupation",
             get(get_spore_occupation_chart),
         )
         .route("/spore/owner/{lock_hash}", get(get_spores_by_owner))
