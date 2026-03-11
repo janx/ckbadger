@@ -183,15 +183,31 @@ fn resolve_storage_tier(
 }
 
 /// Background loop that refreshes the assets cache every 30 seconds.
+/// Skips the refresh cycle when the sync tip block number hasn't changed
+/// since the last successful refresh, avoiding wasteful CF scans when idle.
 pub async fn refresh_assets_cache_loop(state: Arc<AppState>) {
+    let mut last_refreshed_tip: i64 = -1;
     loop {
+        let current_tip = state
+            .store
+            .get_sync_status()
+            .map(|s| s.tip_block_number)
+            .unwrap_or(-1);
+
+        if current_tip == last_refreshed_tip {
+            tracing::trace!("Warmup: tip unchanged at {}, skipping refresh", current_tip);
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            continue;
+        }
+
         let state_clone = state.clone();
         let result =
             tokio::task::spawn_blocking(move || refresh_assets_cache_sync(&state_clone)).await;
 
         match result {
             Ok(Ok(())) => {
-                tracing::debug!("Assets cache refreshed successfully");
+                last_refreshed_tip = current_tip;
+                tracing::debug!("Assets cache refreshed at tip {}", current_tip);
             }
             Ok(Err(e)) => {
                 tracing::warn!("Assets cache refresh failed: {}", e);
