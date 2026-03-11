@@ -36,6 +36,9 @@ const mockScriptsResponse = {
       codeCellOutputIndex: null,
       liveCapacitySum: '2000000000',
       liveOccupiedCapacitySum: '1000000000',
+      liveCellsCount: 4200,
+      cellsCount: 8500,
+      deployedAt: 0,
     } satisfies KnownScript,
     {
       codeHash: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
@@ -57,6 +60,9 @@ const mockScriptsResponse = {
       codeCellOutputIndex: null,
       liveCapacitySum: '10000000000',
       liveOccupiedCapacitySum: '5000000000',
+      liveCellsCount: 1500,
+      cellsCount: 3200,
+      deployedAt: 100,
     } satisfies KnownScript,
   ],
   total: 2,
@@ -188,6 +194,37 @@ describe('ScriptsPage', () => {
       'title',
       unknownScriptRefFull
     );
+  });
+
+  it('renders Live Cells and Total Cells sort headers at xl width', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+    render(<ScriptsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Total Cells' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders Deployed column header at xl width', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+    render(<ScriptsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Deployed')).toBeInTheDocument();
+    });
+  });
+
+  it('supports sorting by live cells', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+    render(<ScriptsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Live Cells' }));
+    await waitFor(() => {
+      expect(api.getScripts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'liveCells', sortDirection: 'desc' })
+      );
+    });
   });
 
   it('shows API errors instead of empty-state message', async () => {

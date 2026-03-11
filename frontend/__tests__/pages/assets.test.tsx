@@ -51,6 +51,7 @@ const mockTokenAssets = {
       clusterName: null,
       liveCapacity: '2000000000',
       liveOccupiedCapacity: '1000000000',
+      hMultiplier: 2.0,
     },
   ],
   total: 1,
@@ -85,6 +86,7 @@ const mockClusterAssets = {
       storageTier: 'fully_onchain' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 50,
+      hMultiplier: 1.8,
     },
   ],
   total: 1,
@@ -116,6 +118,7 @@ const mockDotbitIdentityAssets = {
       clusterName: null,
       liveCapacity: '7000000000',
       liveOccupiedCapacity: '3000000000',
+      hMultiplier: 2.33,
     },
   ],
   total: 1,
@@ -147,6 +150,7 @@ const mockDidCkbIdentityAssets = {
       clusterName: null,
       liveCapacity: '8000000000',
       liveOccupiedCapacity: '5000000000',
+      hMultiplier: 1.6,
     },
   ],
   total: 1,
@@ -181,6 +185,7 @@ const mockMixedObjectAssets = {
       storageTier: 'fully_onchain' as const,
       fullyOnchainRatio: '1.0000',
       fullyOnchainCount: 10,
+      hMultiplier: 3.0,
     },
     {
       id: '0x2222222222222222222222222222222222222222222222222222222222222222',
@@ -206,6 +211,7 @@ const mockMixedObjectAssets = {
       storageTier: 'centralized_dependent' as const,
       fullyOnchainRatio: '0.0000',
       fullyOnchainCount: 0,
+      hMultiplier: 2.22,
     },
   ],
   total: 2,
@@ -245,6 +251,7 @@ const sortableTokenAssets = {
       clusterName: null,
       liveCapacity: '2000000000',
       liveOccupiedCapacity: '1000000000',
+      hMultiplier: 2.0,
     },
     {
       id: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -267,6 +274,7 @@ const sortableTokenAssets = {
       clusterName: null,
       liveCapacity: '9000000000',
       liveOccupiedCapacity: '5000000000',
+      hMultiplier: 1.8,
     },
   ],
   total: 2,
@@ -794,6 +802,45 @@ describe('AssetsPage', () => {
       // Dual-render: text appears in both table and card layouts
       expect(screen.getAllByText('MNFT Without Icon').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('OFFCHAIN DEPENDENT').length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it('renders HM sort header at xl width', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by HM' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders HM column with formatted multiplier value', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      // mockTokenAssets.data[0].hMultiplier is 2.0
+      expect(screen.getByText('×2.00')).toBeInTheDocument();
+    });
+  });
+
+  it('renders Circulation sort header for tokens tab at xl width', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Circulation' })).toBeInTheDocument();
+    });
+  });
+
+  it('supports sorting by HM', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by HM' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by HM' }));
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'hMultiplier', sortDirection: 'desc' })
+      );
     });
   });
 

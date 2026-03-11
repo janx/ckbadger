@@ -32,7 +32,8 @@ type AssetSortKey =
   | 'transfers'
   | 'occupied'
   | 'capacity'
-  | 'onchainRatio';
+  | 'onchainRatio'
+  | 'hMultiplier';
 const TOKEN_STANDARD_OPTIONS = ['xudt', 'sudt'];
 const OBJECT_STANDARD_OPTIONS = ['spore', 'm-nft'];
 const IDENTITY_STANDARD_OPTIONS = ['dotbit', 'did:ckb'];
@@ -108,6 +109,20 @@ function formatStandardLabel(standard: string): string {
     default:
       return standard.toUpperCase();
   }
+}
+function formatTokenSupply(totalSupply: string | null, decimals: number | null): string | null {
+  if (!totalSupply) return null;
+  if (decimals == null || decimals === 0) {
+    return new Intl.NumberFormat().format(BigInt(totalSupply));
+  }
+  const num = BigInt(totalSupply);
+  const divisor = BigInt(10 ** decimals);
+  const integer = (num / divisor).toString();
+  const remainder = num % divisor;
+  const formatted = new Intl.NumberFormat().format(BigInt(integer));
+  if (remainder === BigInt(0)) return formatted;
+  const decimal = remainder.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return `${formatted}.${decimal}`;
 }
 function getStandardOptions(assetType: AssetTab, selectedStandard?: string) {
   const options =
@@ -256,8 +271,20 @@ function AssetTable({
               <div className={mediumNumberColumnClass}>
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
               </div>
+              {assetType === 'token' && (
+                <div className="hidden xl:block">
+                  <div className={capacityColumnClass}>
+                    <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
+                  </div>
+                </div>
+              )}
               <div className={capacityColumnClass}>
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
+              </div>
+              <div className="hidden xl:block">
+                <div className={capacityColumnClass}>
+                  <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
+                </div>
               </div>
               <div className={capacityColumnClass}>
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
@@ -294,7 +321,10 @@ function AssetTable({
         {renderSortHeader('transfers24h', '24h Txns', smallNumberColumnClass, 'right')}
         {renderSortHeader('holders', 'Holders', mediumNumberColumnClass, 'right')}
         <div className="hidden xl:contents">
+          {assetType === 'token' &&
+            renderSortHeader('supply', 'Circulation', capacityColumnClass, 'right')}
           {renderSortHeader('occupied', 'Occupied (CKB)', capacityColumnClass, 'right')}
+          {renderSortHeader('hMultiplier', 'HM', capacityColumnClass, 'right')}
         </div>
         {renderSortHeader('capacity', 'Capacity (CKB)', capacityColumnClass, 'right')}
       </div>
@@ -379,6 +409,20 @@ function AssetTable({
             <div className={`${mediumNumberColumnClass} text-text-muted font-mono tabular-nums`}>
               {formatNumber(asset.holdersCount)}
             </div>
+            {assetType === 'token' && (
+              <div className="hidden xl:block">
+                <div className={`${capacityColumnClass} text-text-primary font-mono tabular-nums`}>
+                  {(() => {
+                    const formatted = formatTokenSupply(asset.totalSupply, asset.decimals);
+                    return formatted ? (
+                      <span title={`Total Circulation: ${formatted}`}>{formatted}</span>
+                    ) : (
+                      <span className="text-text-muted">-</span>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
             <div className="hidden xl:block">
               <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
                 {(() => {
@@ -389,6 +433,19 @@ function AssetTable({
                   const compact = formatCkbCompact(occupied);
                   return <span title={`${compact.full} CKB`}>{compact.value}</span>;
                 })()}
+              </div>
+            </div>
+            <div className="hidden xl:block">
+              <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
+                {asset.hMultiplier != null ? (
+                  <span
+                    title={`H-Multiplier: capacity / occupied = ×${asset.hMultiplier.toFixed(2)}`}
+                  >
+                    ×{asset.hMultiplier.toFixed(2)}
+                  </span>
+                ) : (
+                  <span className="text-text-muted">-</span>
+                )}
               </div>
             </div>
             <div className={`${capacityColumnClass} text-text-secondary font-mono tabular-nums`}>
