@@ -741,6 +741,16 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_object(), key, account_id);
     }
 
+    pub fn put_dotbit_outpoint_by_account_id(
+        &mut self,
+        account_id: &[u8],
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_dotbit_outpoint_by_account_id_key(account_id, tx_hash, output_index);
+        self.put_cf(self.store.cf_stats_object(), key, []);
+    }
+
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.delete_cf(self.store.cf_token_holders(), key);

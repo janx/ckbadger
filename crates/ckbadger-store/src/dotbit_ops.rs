@@ -1,6 +1,6 @@
 //! DotBit-specific store operations.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
@@ -78,65 +78,71 @@ impl CkbadgerStore {
     /// Scans dotbit outpoint index in `stats` and validates liveness via `live_cells`.
     /// Returns account_id -> (tx_hash, output_index) for accounts that currently have
     /// a live outpoint.
+    ///
+    /// Uses the `DOTBIT_OUTPOINT_BY_ACCOUNT_ID` reverse index for O(k) lookups per
+    /// account (where k is the number of historical outpoints for that account),
+    /// instead of scanning all dotbit outpoints.
     pub fn get_live_dotbit_outpoints_by_account_ids(
         &self,
         account_ids: &[Vec<u8>],
         cells_store: &CkbadgerStore,
     ) -> anyhow::Result<DotbitLiveOutpointMap> {
-        let targets: HashSet<Vec<u8>> = account_ids.iter().cloned().collect();
-        if targets.is_empty() {
+        if account_ids.is_empty() {
             return Ok(HashMap::new());
         }
 
-        let prefix = [keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT];
-        let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
-        let mut resolved: DotbitLiveOutpointMap = HashMap::with_capacity(targets.len());
+        let mut resolved: DotbitLiveOutpointMap = HashMap::with_capacity(account_ids.len());
 
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate stats_object in get_live_dotbit_outpoints_by_account_ids: {}",
-                    e
-                )
-            })?;
-            if key.first() != Some(&keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT) {
-                break;
-            }
-            if key.len() != keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE {
-                anyhow::bail!(
-                    "invalid dotbit outpoint key length: expected {}, got {}",
-                    keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE,
-                    key.len()
-                );
-            }
-            if !targets.contains(value.as_ref()) {
-                continue;
-            }
+        for account_id in account_ids {
+            let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
+            let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
 
-            let (tx_hash, output_index) = keys::decode_dotbit_account_outpoint_key(&key);
-            if self
-                .get_cell(&tx_hash, output_index, cells_store)?
-                .is_none()
-            {
-                continue;
-            }
-
-            if let Some((existing_tx_hash, existing_output_index)) = resolved.get(value.as_ref()) {
-                if existing_tx_hash != &tx_hash || *existing_output_index != output_index {
+            for item in iter {
+                let (key, _) = item.map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to iterate stats_object in get_live_dotbit_outpoints_by_account_ids: account_id=0x{}, error={}",
+                        bytes_to_hex(account_id),
+                        e
+                    )
+                })?;
+                if !key.starts_with(&prefix) {
+                    break;
+                }
+                if key.len() != keys::DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE {
                     anyhow::bail!(
-                        "multiple live dotbit outpoints for account_id=0x{:x?}: first=0x{:x?}-{}, second=0x{:x?}-{}",
-                        value.as_ref(),
-                        existing_tx_hash,
-                        existing_output_index,
-                        tx_hash,
-                        output_index
+                        "invalid dotbit outpoint_by_account_id key length: expected {}, got {}, account_id=0x{}",
+                        keys::DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE,
+                        key.len(),
+                        bytes_to_hex(account_id)
                     );
                 }
-            } else {
-                resolved.insert(value.to_vec(), (tx_hash, output_index));
-            }
 
-            if resolved.len() == targets.len() {
+                let (tx_hash, output_index) = keys::decode_dotbit_outpoint_by_account_id_key(&key);
+                if self
+                    .get_cell(&tx_hash, output_index, cells_store)?
+                    .is_none()
+                {
+                    continue;
+                }
+
+                if let Some((existing_tx_hash, existing_output_index)) =
+                    resolved.get(account_id.as_slice())
+                {
+                    if existing_tx_hash != &tx_hash || *existing_output_index != output_index {
+                        anyhow::bail!(
+                            "multiple live dotbit outpoints for account_id=0x{}: first=0x{}-{}, second=0x{}-{}",
+                            bytes_to_hex(account_id),
+                            bytes_to_hex(existing_tx_hash),
+                            existing_output_index,
+                            bytes_to_hex(&tx_hash),
+                            output_index
+                        );
+                    }
+                } else {
+                    resolved.insert(account_id.clone(), (tx_hash, output_index));
+                }
+
+                // Found a live outpoint for this account — move to next account
                 break;
             }
         }
@@ -145,36 +151,38 @@ impl CkbadgerStore {
     }
 
     /// List all historical .bit account outpoints recorded for an account ID.
+    ///
+    /// Uses the `DOTBIT_OUTPOINT_BY_ACCOUNT_ID` reverse index for efficient
+    /// per-account lookup instead of scanning all dotbit outpoints.
     pub fn list_dotbit_account_outpoints_by_account_id(
         &self,
         account_id: &[u8],
     ) -> anyhow::Result<Vec<(Vec<u8>, i16)>> {
-        let prefix = [keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT];
+        let prefix = keys::encode_dotbit_outpoint_by_account_id_prefix(account_id);
         let iter = self.prefix_iterator_cf(self.cf_stats_object(), &prefix);
         let mut outpoints = Vec::new();
 
         for item in iter {
-            let (key, value) = item.map_err(|e| {
+            let (key, _) = item.map_err(|e| {
                 anyhow::anyhow!(
-                    "failed to iterate stats_object in list_dotbit_account_outpoints_by_account_id: {}",
+                    "failed to iterate stats_object in list_dotbit_account_outpoints_by_account_id: account_id=0x{}, error={}",
+                    bytes_to_hex(account_id),
                     e
                 )
             })?;
-            if key.first() != Some(&keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT) {
+            if !key.starts_with(&prefix) {
                 break;
             }
-            if key.len() != keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE {
+            if key.len() != keys::DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE {
                 anyhow::bail!(
-                    "invalid dotbit outpoint key length: expected {}, got {}",
-                    keys::DOTBIT_ACCOUNT_OUTPOINT_KEY_SIZE,
-                    key.len()
+                    "invalid dotbit outpoint_by_account_id key length: expected {}, got {}, account_id=0x{}",
+                    keys::DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE,
+                    key.len(),
+                    bytes_to_hex(account_id)
                 );
             }
-            if value.as_ref() != account_id {
-                continue;
-            }
 
-            outpoints.push(keys::decode_dotbit_account_outpoint_key(&key));
+            outpoints.push(keys::decode_dotbit_outpoint_by_account_id_key(&key));
         }
 
         Ok(outpoints)
@@ -247,8 +255,10 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         // Historical outpoint (no live cell now)
         batch.put_dotbit_account_outpoint(&old_tx, old_idx, &account_id);
+        batch.put_dotbit_outpoint_by_account_id(&account_id, &old_tx, old_idx);
         // Current outpoint with a live cell
         batch.put_dotbit_account_outpoint(&live_tx, live_idx, &account_id);
+        batch.put_dotbit_outpoint_by_account_id(&account_id, &live_tx, live_idx);
         batch.put_cell(
             &live_tx,
             live_idx,
@@ -288,8 +298,11 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         batch.put_dotbit_account_outpoint(&tx_a, 4, &account_id);
+        batch.put_dotbit_outpoint_by_account_id(&account_id, &tx_a, 4);
         batch.put_dotbit_account_outpoint(&tx_b, 5, &account_id);
+        batch.put_dotbit_outpoint_by_account_id(&account_id, &tx_b, 5);
         batch.put_dotbit_account_outpoint(&tx_other, 6, &[0x44u8; 20]);
+        batch.put_dotbit_outpoint_by_account_id(&[0x44u8; 20], &tx_other, 6);
         batch.commit().unwrap();
 
         let mut outpoints = store

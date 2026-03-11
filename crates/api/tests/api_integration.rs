@@ -4840,6 +4840,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
         },
     );
     batch.put_dotbit_account_outpoint(&nft_a_tx_hash, nft_a_output_index, &nft_a);
+    batch.put_dotbit_outpoint_by_account_id(&nft_a, &nft_a_tx_hash, nft_a_output_index);
     batch.put_cell_by_type(&nft_a_type_hash, 100, &nft_a_tx_hash, nft_a_output_index);
     batch.commit().unwrap();
 
@@ -5361,7 +5362,9 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
     );
     core_batch.put_identity_by_collection(&collection_id, &account_id);
     core_batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    core_batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
     core_batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
+    core_batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0);
     core_batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -5868,8 +5871,11 @@ async fn test_assets_nft_item_activities_dotbit() {
         },
     );
     batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
     batch.put_dotbit_account_outpoint(&transfer_tx_1, 0, &account_id);
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_1, 0);
     batch.put_dotbit_account_outpoint(&transfer_tx_2, 0, &account_id);
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx_2, 0);
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,
@@ -6055,7 +6061,9 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         },
     );
     batch.put_dotbit_account_outpoint(&mint_tx, 0, &account_id);
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &mint_tx, 0);
     batch.put_dotbit_account_outpoint(&transfer_tx, 0, &account_id);
+    batch.put_dotbit_outpoint_by_account_id(&account_id, &transfer_tx, 0);
     batch.put_consumed_cell_with_consumer(
         &mint_tx,
         0,

@@ -261,6 +261,7 @@ pub mod stats_prefix {
     pub const NFT_COLLECTION_OWNER: u8 = 0x1C;
     pub const ACTIVITY_DAILY: u8 = 0x1D;
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
+    pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
 }
 
 // Flat re-exports for convenience
@@ -294,6 +295,8 @@ pub const STATS_PREFIX_DAO_LATEST_STATS: u8 = stats_prefix::DAO_LATEST_STATS;
 pub const STATS_PREFIX_NFT_COLLECTION_OWNER: u8 = stats_prefix::NFT_COLLECTION_OWNER;
 pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
+pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
+    stats_prefix::DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -486,6 +489,37 @@ pub fn encode_dotbit_account_outpoint_key(
 
 pub fn decode_dotbit_account_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
+}
+
+/// .bit outpoint reverse index key: prefix(1B) + account_id(20B) + outpoint(34B)
+pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE: usize = 55;
+
+/// Prefix for scanning all outpoints of a given .bit account: prefix(1B) + account_id(20B)
+pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE: usize = 21;
+
+pub fn encode_dotbit_outpoint_by_account_id_key(
+    account_id: &[u8],
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE] {
+    let mut key = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE];
+    key[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    key[1..21].copy_from_slice(&account_id[..20]);
+    key[21..55].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
+}
+
+pub fn encode_dotbit_outpoint_by_account_id_prefix(
+    account_id: &[u8],
+) -> [u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE] {
+    let mut prefix = [0u8; DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE];
+    prefix[0] = STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+    prefix[1..21].copy_from_slice(&account_id[..20]);
+    prefix
+}
+
+pub fn decode_dotbit_outpoint_by_account_id_key(key: &[u8]) -> (Vec<u8>, i16) {
+    decode_outpoint(&key[21..55])
 }
 
 /// Spore type-script index key: prefix(1B) + type_script_hash(32B)
@@ -1276,6 +1310,24 @@ mod tests {
         let (decoded_tx_hash, decoded_output_index) = decode_dotbit_account_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 10);
+    }
+
+    #[test]
+    fn test_dotbit_outpoint_by_account_id_key_roundtrip() {
+        let account_id = [0xAFu8; 20];
+        let tx_hash = [0xBBu8; 32];
+        let key = encode_dotbit_outpoint_by_account_id_key(&account_id, &tx_hash, 5);
+        assert_eq!(key.len(), DOTBIT_OUTPOINT_BY_ACCOUNT_ID_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID);
+        assert_eq!(&key[1..21], &account_id);
+        let (decoded_tx_hash, decoded_output_index) =
+            decode_dotbit_outpoint_by_account_id_key(&key);
+        assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+        assert_eq!(decoded_output_index, 5);
+
+        let prefix = encode_dotbit_outpoint_by_account_id_prefix(&account_id);
+        assert_eq!(prefix.len(), DOTBIT_OUTPOINT_BY_ACCOUNT_ID_PREFIX_SIZE);
+        assert!(key.starts_with(&prefix));
     }
 
     #[test]

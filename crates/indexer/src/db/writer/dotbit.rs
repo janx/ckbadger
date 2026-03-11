@@ -556,6 +556,11 @@ impl BatchWriter {
             account_output.output_index,
             &account.account_id,
         );
+        batch.put_dotbit_outpoint_by_account_id(
+            &account.account_id,
+            tx_hash,
+            account_output.output_index,
+        );
         Ok(())
     }
 
