@@ -132,7 +132,7 @@ pub struct ChartRangeParams {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct NftItemsParams {
+pub struct ObjectItemsParams {
     #[serde(default = "default_limit")]
     pub(crate) limit: i64,
     pub(crate) cursor: Option<String>,
@@ -149,14 +149,14 @@ pub struct MnftItemActivitiesParams {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct NftCollectionHoldersParams {
+pub struct CollectionHoldersParams {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct NftCollectionActivitiesParams {
+pub struct CollectionActivitiesParams {
     #[serde(default = "default_limit")]
     pub(crate) limit: i64,
     pub(crate) cursor: Option<String>,
@@ -270,7 +270,7 @@ pub struct NftCollectionDetailResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NftCollectionItemResponse {
+pub struct CollectionItemResponse {
     pub nft_id: String,
     pub name: Option<String>,
     pub standard: String,
@@ -350,7 +350,7 @@ pub struct MnftItemActivityResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NftCollectionHolderResponse {
+pub struct CollectionHolderResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub item_count: i64,
@@ -358,7 +358,7 @@ pub struct NftCollectionHolderResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NftCollectionActivityResponse {
+pub struct CollectionActivityResponse {
     pub tx_hash: String,
     pub block_number: i64,
     pub tx_index: i32,
@@ -1935,7 +1935,7 @@ pub(crate) fn list_identity_items_inner(
     search_lower: Option<&str>,
     status_filter: NftItemStatusFilter,
     agg: &ObjectCollectionAggregate,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
+) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
     let is_dotbit = collection_id_bytes == DOTBIT_SENTINEL_COLLECTION;
 
     let mut matched_items: Vec<(Vec<u8>, ckbadger_store::types::IdentityEntry)> =
@@ -2062,7 +2062,7 @@ pub(crate) fn list_identity_items_inner(
                 (None, None)
             };
 
-            rows.push(NftCollectionItemResponse {
+            rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
                 standard: "dotbit".to_string(),
@@ -2082,7 +2082,7 @@ pub(crate) fn list_identity_items_inner(
     } else {
         // did:ckb — no outpoint resolution needed
         for (nft_id, entry) in &page_items {
-            rows.push(NftCollectionItemResponse {
+            rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
                 standard: "did_ckb".to_string(),
@@ -2152,8 +2152,8 @@ pub(crate) fn list_identity_items_inner(
 async fn list_nft_collection_items(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
-    Query(params): Query<NftItemsParams>,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
+    Query(params): Query<ObjectItemsParams>,
+) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
     let search_lower = normalize_nft_items_search(params.search.as_deref());
@@ -2286,7 +2286,7 @@ async fn list_nft_collection_items(
             _ => (None, None),
         };
 
-        rows.push(NftCollectionItemResponse {
+        rows.push(CollectionItemResponse {
             nft_id: format!("0x{}", hex::encode(nft_id)),
             name: entry.name.clone(),
             standard: entry.standard.asset_standard().to_string(),
@@ -2406,8 +2406,8 @@ fn list_nft_collection_holders_ranked_cached(
 async fn list_nft_collection_holders(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
-    Query(params): Query<NftCollectionHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionHolderResponse>> {
+    Query(params): Query<CollectionHoldersParams>,
+) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
     let cursor = params
@@ -2456,9 +2456,9 @@ async fn list_nft_collection_holders(
         None
     };
 
-    let rows: Vec<NftCollectionHolderResponse> = page
+    let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
-        .map(|(lock_hash, count)| NftCollectionHolderResponse {
+        .map(|(lock_hash, count)| CollectionHolderResponse {
             lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
             address: None,
             item_count: *count,
@@ -2476,8 +2476,8 @@ async fn list_nft_collection_holders(
 async fn list_nft_collection_activities(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
-    Query(params): Query<NftCollectionActivitiesParams>,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionActivityResponse>> {
+    Query(params): Query<CollectionActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<CollectionActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_nft_collection_id(&collection_id)?;
     let cursor = params
@@ -2504,7 +2504,7 @@ async fn list_nft_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
-    let page: Vec<NftCollectionActivityResponse> = results
+    let page: Vec<CollectionActivityResponse> = results
         .into_iter()
         .take(limit as usize)
         .map(|(block_number, tx_index, entry)| {
@@ -2520,7 +2520,7 @@ async fn list_nft_collection_activities(
                     ckbadger_store::AssetAction::Update => "update".to_string(),
                 })
                 .collect();
-            NftCollectionActivityResponse {
+            CollectionActivityResponse {
                 tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
                 block_number,
                 tx_index,
@@ -2547,7 +2547,7 @@ async fn list_nft_collection_activities(
 async fn get_dotbit_item_detail(
     State(state): State<Arc<AppState>>,
     Path(nft_id): Path<String>,
-) -> ApiResult<NftCollectionItemResponse> {
+) -> ApiResult<CollectionItemResponse> {
     let nft_id_bytes = decode_nft_item_id(&nft_id)?;
     let entry = state
         .store
@@ -2598,7 +2598,7 @@ async fn get_dotbit_item_detail(
         (None, None)
     };
 
-    ok(NftCollectionItemResponse {
+    ok(CollectionItemResponse {
         nft_id: format!("0x{}", hex::encode(&nft_id_bytes)),
         name: entry.name,
         standard: entry.standard.asset_standard().to_string(),
@@ -2619,7 +2619,7 @@ async fn get_dotbit_item_detail(
 async fn get_did_ckb_item_detail(
     State(state): State<Arc<AppState>>,
     Path(nft_id): Path<String>,
-) -> ApiResult<NftCollectionItemResponse> {
+) -> ApiResult<CollectionItemResponse> {
     let nft_id_bytes = decode_nft_item_id(&nft_id)?;
     let entry = state
         .store
@@ -2631,7 +2631,7 @@ async fn get_did_ckb_item_detail(
         return Err(ApiError::bad_request("NFT item is not a did:ckb identity"));
     }
 
-    ok(NftCollectionItemResponse {
+    ok(CollectionItemResponse {
         nft_id: format!("0x{}", hex::encode(&nft_id_bytes)),
         name: entry.name,
         standard: "did_ckb".to_string(),

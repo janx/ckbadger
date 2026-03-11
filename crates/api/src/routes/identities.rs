@@ -12,9 +12,9 @@ use std::time::Duration;
 use super::assets::{
     decode_activity_cursor, decode_nft_item_cursor, list_canonical_nft_collection_activities_page,
     list_identity_items_inner, normalize_identity_activity_action_filter,
-    normalize_nft_items_search, normalize_nft_items_status, NftCollectionActivitiesParams,
-    NftCollectionActivityResponse, NftCollectionHolderResponse, NftCollectionItemResponse,
-    NftItemsParams,
+    normalize_nft_items_search, normalize_nft_items_status, CollectionActivitiesParams,
+    CollectionActivityResponse, CollectionHolderResponse, CollectionItemResponse,
+    ObjectItemsParams,
 };
 use crate::cache::InMemoryCache;
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
@@ -174,7 +174,7 @@ async fn list_identity_collection_holders(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<IdentityCollectionHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionHolderResponse>> {
+) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
     let cursor = params
@@ -224,9 +224,9 @@ async fn list_identity_collection_holders(
         None
     };
 
-    let rows: Vec<NftCollectionHolderResponse> = page
+    let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
-        .map(|(lock_hash, count)| NftCollectionHolderResponse {
+        .map(|(lock_hash, count)| CollectionHolderResponse {
             lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
             address: None,
             item_count: *count,
@@ -246,8 +246,8 @@ async fn list_identity_collection_holders(
 async fn list_identity_collection_activities(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
-    Query(params): Query<NftCollectionActivitiesParams>,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionActivityResponse>> {
+    Query(params): Query<CollectionActivitiesParams>,
+) -> ApiResult<CursorPaginatedResponse<CollectionActivityResponse>> {
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
     let cursor = params
@@ -276,7 +276,7 @@ async fn list_identity_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
-    let page: Vec<NftCollectionActivityResponse> = results
+    let page: Vec<CollectionActivityResponse> = results
         .into_iter()
         .take(limit as usize)
         .map(|(block_number, tx_index, entry)| {
@@ -292,7 +292,7 @@ async fn list_identity_collection_activities(
                     ckbadger_store::AssetAction::Update => "update".to_string(),
                 })
                 .collect();
-            NftCollectionActivityResponse {
+            CollectionActivityResponse {
                 tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
                 block_number,
                 tx_index,
@@ -321,8 +321,8 @@ async fn list_identity_collection_activities(
 async fn list_identity_collection_items(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
-    Query(params): Query<NftItemsParams>,
-) -> ApiResult<CursorPaginatedResponse<NftCollectionItemResponse>> {
+    Query(params): Query<ObjectItemsParams>,
+) -> ApiResult<CursorPaginatedResponse<CollectionItemResponse>> {
     let limit = params.limit.clamp(1, 100);
     let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
     let search_lower = normalize_nft_items_search(params.search.as_deref());
