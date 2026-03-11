@@ -13,7 +13,7 @@ export function resolveSearchRoute(input: string): string | null {
   if (!body) return null;
 
   if (bodyLower === 'did:ckb' || bodyLower === 'did_ckb') {
-    return '/nfts/did:ckb';
+    return '/identities/did:ckb';
   }
 
   if (intent.prefix === 'block') {
@@ -50,7 +50,7 @@ export function resolveSearchRoute(input: string): string | null {
 
   if (intent.prefix === 'spore') {
     const hash = normalizeHash32(body);
-    return hash ? `/nfts/${hash}` : null;
+    return hash ? `/objects/${hash}` : null;
   }
 
   if (intent.prefix === 'cluster') {

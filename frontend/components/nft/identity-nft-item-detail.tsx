@@ -25,12 +25,12 @@ import {
   type NftCollectionItem,
 } from '@/lib/api';
 import {
-  normalizeNftId,
+  normalizeAssetId,
   parseActivityCursor,
   formatActivityTimestamp,
   normalizeActivityAction,
   formatExpiry,
-} from '@/lib/nft-utils';
+} from '@/lib/asset-utils';
 import { formatNumber } from '@/lib/utils';
 
 export interface IdentityNftItemDetailConfig {
@@ -63,7 +63,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nftId = normalizeNftId(routeNftId);
+  const nftId = normalizeAssetId(routeNftId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );

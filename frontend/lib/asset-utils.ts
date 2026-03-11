@@ -1,9 +1,9 @@
 /**
- * Shared utility functions for NFT pages.
+ * Shared utility functions for asset detail pages (Objects + Identities).
  */
 
-/** Decode URI component and ensure 0x prefix for NFT IDs from URL params. */
-export function normalizeNftId(raw: string): string {
+/** Decode URI component and ensure 0x prefix for asset IDs from URL params. */
+export function normalizeAssetId(raw: string): string {
   const decoded = decodeURIComponent(raw);
   return decoded.startsWith('0x') ? decoded : `0x${decoded}`;
 }

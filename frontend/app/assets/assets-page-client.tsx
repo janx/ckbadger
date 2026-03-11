@@ -18,7 +18,12 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, Asset } from '@/lib/api';
-import { getClusterDetailHref, getNftDetailHref, getTokenDetailHref } from '@/lib/detail-routes';
+import {
+  getClusterDetailHref,
+  getIdentityItemDetailHref,
+  getObjectDetailHref,
+  getTokenDetailHref,
+} from '@/lib/detail-routes';
 import { formatCkbCompact } from '@/lib/utils';
 type AssetTab = 'token' | 'object' | 'identity';
 type SortDirection = 'asc' | 'desc';
@@ -198,7 +203,9 @@ function AssetTable({
     if (asset.standard === 'spore') {
       return getClusterDetailHref(asset.clusterId || asset.id);
     }
-    return getNftDetailHref(asset.id, asset.standard);
+    if (asset.assetType === 'identity')
+      return getIdentityItemDetailHref(asset.standard, asset.id);
+    return getObjectDetailHref(asset.id);
   };
   const getAssetName = (asset: Asset) => {
     if (asset.assetType === 'token') {

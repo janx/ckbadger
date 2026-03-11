@@ -2,7 +2,7 @@ import Link from '@/components/ui/link';
 
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { formatCkbCompact, formatNumber } from '@/lib/utils';
-import { formatStorageTier } from '@/lib/nft-utils';
+import { formatStorageTier } from '@/lib/asset-utils';
 
 interface NftCollectionStatCardsProps {
   totalCount: number;

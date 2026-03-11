@@ -1,25 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  normalizeNftId,
+  normalizeAssetId,
   parseActivityCursor,
   formatActivityTimestamp,
   normalizeActivityAction,
   formatStorageTier,
   formatExpiry,
-} from '@/lib/nft-utils';
+} from '@/lib/asset-utils';
 
-describe('normalizeNftId', () => {
+describe('normalizeAssetId', () => {
   it('returns input unchanged when already prefixed', () => {
-    expect(normalizeNftId('0xabc')).toBe('0xabc');
+    expect(normalizeAssetId('0xabc')).toBe('0xabc');
   });
 
   it('adds 0x prefix when missing', () => {
-    expect(normalizeNftId('abc')).toBe('0xabc');
+    expect(normalizeAssetId('abc')).toBe('0xabc');
   });
 
   it('decodes URI-encoded input', () => {
-    expect(normalizeNftId('0x%20abc')).toBe('0x abc');
+    expect(normalizeAssetId('0x%20abc')).toBe('0x abc');
   });
 });
 

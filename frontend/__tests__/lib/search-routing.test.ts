@@ -29,8 +29,8 @@ describe('resolveSearchRoute', () => {
   });
 
   it('routes did:ckb aliases to did collection detail', () => {
-    expect(resolveSearchRoute('did:ckb')).toBe('/nfts/did:ckb');
-    expect(resolveSearchRoute('DID_CKB')).toBe('/nfts/did:ckb');
+    expect(resolveSearchRoute('did:ckb')).toBe('/identities/did:ckb');
+    expect(resolveSearchRoute('DID_CKB')).toBe('/identities/did:ckb');
   });
 
   it('returns null for unknown query', () => {

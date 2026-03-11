@@ -1,5 +1,8 @@
 import { api, resolveApiBase } from '@/lib/api';
-import { DID_CKB_COLLECTION_ID, DOTBIT_COLLECTION_ID } from '@/lib/nft-collections';
+const DOTBIT_COLLECTION_ID =
+  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DID_CKB_COLLECTION_ID =
+  '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 import { DEFAULT_API_BASE } from '@/lib/runtime-config';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';

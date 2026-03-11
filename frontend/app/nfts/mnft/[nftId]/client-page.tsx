@@ -17,7 +17,7 @@ import { DataField, DataGrid } from '@/components/ui/data-field';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { Address } from '@/components/ui/address';
 import { api } from '@/lib/api';
-import { normalizeNftId, parseActivityCursor } from '@/lib/nft-utils';
+import { normalizeAssetId, parseActivityCursor } from '@/lib/asset-utils';
 import { formatNumber } from '@/lib/utils';
 function decodeTokenState(state: number): string {
   switch (state) {
@@ -46,7 +46,7 @@ export default function MnftItemDetailPage({ nftId: routeNftId }: MnftItemDetail
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nftId = normalizeNftId(routeNftId);
+  const nftId = normalizeAssetId(routeNftId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );

@@ -27,9 +27,30 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { NftActivityCard } from '@/components/nft/nft-activity-card';
 import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
-import { isDidCkbAlias, isDotbitAlias, normalizeNftAssetId } from '@/lib/nft-collections';
+const DOTBIT_COLLECTION_ID =
+  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+const DID_CKB_COLLECTION_ID =
+  '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+
+function isDotbitAlias(assetId: string): boolean {
+  const normalized = assetId.toLowerCase();
+  return normalized === 'dotbit' || normalized === '.bit' || normalized === DOTBIT_COLLECTION_ID;
+}
+
+function isDidCkbAlias(assetId: string): boolean {
+  const normalized = assetId.toLowerCase();
+  return (
+    normalized === 'did:ckb' || normalized === 'did_ckb' || normalized === DID_CKB_COLLECTION_ID
+  );
+}
+
+function normalizeNftAssetId(assetId: string): string {
+  if (isDotbitAlias(assetId)) return DOTBIT_COLLECTION_ID;
+  if (isDidCkbAlias(assetId)) return DID_CKB_COLLECTION_ID;
+  return assetId;
+}
 import { formatNumber, truncateHash } from '@/lib/utils';
-import { formatActivityTimestamp, formatStorageTier } from '@/lib/nft-utils';
+import { formatActivityTimestamp, formatStorageTier } from '@/lib/asset-utils';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { decodeDobContent, extractSporePayload } from '@/lib/dob-render';
 import { ClusterDescription } from '@/components/spore/cluster-description';

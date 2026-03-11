@@ -23,9 +23,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { NftActivityCard } from '@/components/nft/nft-activity-card';
 import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
-import { isDotbitAlias } from '@/lib/nft-collections';
+const DOTBIT_COLLECTION_ID =
+  '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
+
+function isDotbitAlias(assetId: string): boolean {
+  const normalized = assetId.toLowerCase();
+  return normalized === 'dotbit' || normalized === '.bit' || normalized === DOTBIT_COLLECTION_ID;
+}
 import { formatNumber } from '@/lib/utils';
-import { formatActivityTimestamp } from '@/lib/nft-utils';
+import { formatActivityTimestamp } from '@/lib/asset-utils';
 type IdentityTab = 'activities' | 'identities' | 'holders';
 function isIdentityTab(value: string | null): value is IdentityTab {
   return value === 'activities' || value === 'identities' || value === 'holders';

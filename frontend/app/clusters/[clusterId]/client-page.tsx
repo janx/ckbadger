@@ -25,7 +25,7 @@ import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-r
 import { ClusterDescription } from '@/components/spore/cluster-description';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatNumber } from '@/lib/utils';
-import { formatActivityTimestamp } from '@/lib/nft-utils';
+import { formatActivityTimestamp } from '@/lib/asset-utils';
 type ListContentFilter = 'all' | 'image' | 'video' | 'audio' | 'text' | 'other';
 type ListSort = 'createdDesc' | 'createdAsc' | 'sizeDesc' | 'sizeAsc';
 type CollectionSectionTab = 'activities' | 'nfts' | 'holders';

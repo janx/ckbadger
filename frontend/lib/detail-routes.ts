@@ -1,5 +1,3 @@
-import { toNftDetailSlug } from '@/lib/nft-collections';
-
 function hasKnownScriptName(name: string | null | undefined): boolean {
   return Boolean(name && name.trim() && name.trim().toLowerCase() !== 'unknown');
 }
@@ -27,8 +25,15 @@ export function getClusterDetailHref(clusterId: string): string {
   return `/clusters/${encodeURIComponent(clusterId)}`;
 }
 
-export function getNftDetailHref(assetId: string, standard?: string | null): string {
-  return `/nfts/${toNftDetailSlug(assetId, standard ?? undefined)}`;
+export function getObjectDetailHref(assetId: string): string {
+  return `/objects/${encodeURIComponent(assetId)}`;
+}
+
+export function getIdentityItemDetailHref(standard: string, identityId: string): string {
+  if (standard === 'dotbit') return `/identities/dotbit/${encodeURIComponent(identityId)}`;
+  if (standard === 'did_ckb' || standard === 'did:ckb')
+    return `/identities/did/${encodeURIComponent(identityId)}`;
+  return `/objects/mnft/${encodeURIComponent(identityId)}`;
 }
 
 export function getScriptDetailHref(input: {
