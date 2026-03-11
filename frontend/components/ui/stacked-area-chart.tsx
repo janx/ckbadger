@@ -346,7 +346,7 @@ export function StackedAreaChart({
 
   if (!fullData.length) {
     return (
-      <div className="text-text-muted flex h-64 items-center justify-center">No data available</div>
+      <div className="text-text-dim flex h-64 items-center justify-center">No data available</div>
     );
   }
 
@@ -391,7 +391,7 @@ export function StackedAreaChart({
       {interactive && isZoomed && (
         <button
           onClick={handleReset}
-          className="bg-base-elevated text-text-secondary hover:bg-base-elevated/80 absolute right-2 top-2 z-10 rounded px-2 py-1 text-xs"
+          className="bg-base-elevated text-text hover:bg-base-elevated/80 absolute right-2 top-2 z-10 rounded px-2 py-1 text-xs"
         >
           Reset Zoom
         </button>
@@ -421,7 +421,7 @@ export function StackedAreaChart({
               x={padding.left - 8}
               y={yScale(tick)}
               textAnchor="end"
-              className="fill-text-muted font-mono tabular-nums"
+              className="fill-text-dim font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -436,7 +436,7 @@ export function StackedAreaChart({
             x={xScale(idx)}
             y={height - padding.bottom + 20}
             textAnchor="middle"
-            className="fill-text-muted font-mono tabular-nums"
+            className="fill-text-dim font-mono tabular-nums"
             fontSize={10}
           >
             {data[idx]?.date || ''}
@@ -471,7 +471,7 @@ export function StackedAreaChart({
               x={width - padding.right + 8}
               y={yScaleOverlay(tick)}
               textAnchor="start"
-              className="fill-text-muted font-mono tabular-nums"
+              className="fill-text-dim font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -531,7 +531,7 @@ export function StackedAreaChart({
             <text
               x={8}
               y={14}
-              className="fill-text-secondary font-mono font-medium tabular-nums"
+              className="fill-text font-mono font-medium tabular-nums"
               fontSize={10}
             >
               {data[hoverIndex]?.date}
@@ -541,13 +541,13 @@ export function StackedAreaChart({
                 key={s.key}
                 x={8}
                 y={28 + i * 14}
-                className="fill-text-muted font-mono tabular-nums"
+                className="fill-text-dim font-mono tabular-nums"
                 fontSize={10}
               >
                 <title>{s.label}</title>
                 <tspan fill={s.color}>● </tspan>
                 <tspan>{formatTooltipLabel(s.label)}: </tspan>
-                <tspan className="fill-text-primary">
+                <tspan className="fill-text-bright">
                   {formatValue(stackedValues[hoverIndex][s.key], isPercentage)}
                 </tspan>
               </text>
@@ -556,22 +556,20 @@ export function StackedAreaChart({
               <text
                 x={8}
                 y={28 + series.length * 14}
-                className="fill-text-muted font-mono tabular-nums"
+                className="fill-text-dim font-mono tabular-nums"
                 fontSize={10}
               >
                 <title>{overlayLine.label}</title>
                 <tspan fill={overlayLine.color}>━ </tspan>
                 <tspan>{formatTooltipLabel(overlayLine.label)}: </tspan>
-                <tspan className="fill-text-primary">
-                  {formatValue(overlayValues[hoverIndex])}
-                </tspan>
+                <tspan className="fill-text-bright">{formatValue(overlayValues[hoverIndex])}</tspan>
               </text>
             )}
           </g>
         )}
       </svg>
       {interactive && isZoomed && (
-        <div className="text-text-muted mt-1 text-center font-mono text-xs tabular-nums">
+        <div className="text-text-dim mt-1 text-center font-mono text-xs tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}

@@ -287,7 +287,7 @@ export function MultiSeriesLineChart({
 
   if (!fullData.length) {
     return (
-      <div className="text-text-muted flex h-64 items-center justify-center">No data available</div>
+      <div className="text-text-dim flex h-64 items-center justify-center">No data available</div>
     );
   }
 
@@ -309,8 +309,8 @@ export function MultiSeriesLineChart({
             onClick={() => toggleSeries(s.key)}
             className={`flex items-center gap-2 rounded border px-3 py-1.5 font-mono text-xs transition-colors ${
               visibleSeries.has(s.key)
-                ? 'border-base-border bg-base-elevated text-text-primary'
-                : 'border-base-border bg-base-surface text-text-muted'
+                ? 'border-base-border bg-base-elevated text-text-bright'
+                : 'border-base-border bg-base-surface text-text-dim'
             }`}
           >
             <span
@@ -326,7 +326,7 @@ export function MultiSeriesLineChart({
         {isZoomed && (
           <button
             onClick={handleReset}
-            className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-2 py-1 font-mono text-xs transition-colors"
+            className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-2 py-1 font-mono text-xs transition-colors"
           >
             Reset Zoom
           </button>
@@ -358,7 +358,7 @@ export function MultiSeriesLineChart({
               x={padding.left - 8}
               y={yScale(tick)}
               textAnchor="end"
-              className="fill-text-muted font-mono tabular-nums"
+              className="fill-text-dim font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -373,7 +373,7 @@ export function MultiSeriesLineChart({
             x={xScale(idx)}
             y={height - padding.bottom + 20}
             textAnchor="middle"
-            className="fill-text-muted font-mono tabular-nums"
+            className="fill-text-dim font-mono tabular-nums"
             fontSize={10}
           >
             {data[idx]?.date || ''}
@@ -453,7 +453,7 @@ export function MultiSeriesLineChart({
             <text
               x={8}
               y={14}
-              className="fill-text-secondary font-mono font-medium tabular-nums"
+              className="fill-text font-mono font-medium tabular-nums"
               fontSize={10}
             >
               {data[hoverIndex]?.date}
@@ -465,11 +465,11 @@ export function MultiSeriesLineChart({
                   key={s.key}
                   x={8}
                   y={30 + i * 16}
-                  className="fill-text-muted font-mono tabular-nums"
+                  className="fill-text-dim font-mono tabular-nums"
                   fontSize={10}
                 >
                   <tspan fill={s.color}>{s.label}: </tspan>
-                  <tspan className="fill-text-primary">
+                  <tspan className="fill-text-bright">
                     {formatValue(seriesValues[s.key][hoverIndex])}
                   </tspan>
                 </text>
@@ -479,12 +479,12 @@ export function MultiSeriesLineChart({
       </svg>
 
       {isZoomed && (
-        <div className="text-text-muted mt-1 text-center font-mono text-xs tabular-nums">
+        <div className="text-text-dim mt-1 text-center font-mono text-xs tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}
 
-      <div className="text-text-muted mt-4 text-center font-mono text-xs">
+      <div className="text-text-dim mt-4 text-center font-mono text-xs">
         Drag to select range | Scroll to zoom | Middle-click drag to pan
       </div>
     </div>

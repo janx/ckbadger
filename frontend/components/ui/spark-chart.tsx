@@ -46,7 +46,7 @@ export function SparkChart({
   if (!data.length) {
     return (
       <div
-        className={cn('text-text-muted flex items-center justify-center', className)}
+        className={cn('text-text-dim flex items-center justify-center', className)}
         style={{ height }}
       >
         No data

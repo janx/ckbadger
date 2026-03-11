@@ -63,7 +63,7 @@ export function PieChart({
   if (!data.length || total === 0) {
     return (
       <div
-        className="text-text-muted flex items-center justify-center"
+        className="text-text-dim flex items-center justify-center"
         style={{ width: size, height: size }}
       >
         No data available
@@ -97,7 +97,7 @@ export function PieChart({
                 x={0}
                 y={-0.1}
                 textAnchor="middle"
-                className="fill-text-primary text-[0.12px] font-medium"
+                className="fill-text-bright text-[0.12px] font-medium"
               >
                 {slices[hoverIndex].label.length > 12
                   ? slices[hoverIndex].label.slice(0, 12) + '...'
@@ -107,14 +107,14 @@ export function PieChart({
                 x={0}
                 y={0.15}
                 textAnchor="middle"
-                className="fill-text-secondary font-mono text-[0.14px] tabular-nums"
+                className="fill-text font-mono text-[0.14px] tabular-nums"
               >
                 {formatValue(slices[hoverIndex].percentage)}
               </text>
             </>
           )}
           {hoverIndex === null && (
-            <text x={0} y={0.05} textAnchor="middle" className="fill-text-muted text-[0.1px]">
+            <text x={0} y={0.05} textAnchor="middle" className="fill-text-dim text-[0.1px]">
               Hover for details
             </text>
           )}
@@ -136,18 +136,18 @@ export function PieChart({
                 className="h-3 w-3 flex-shrink-0 rounded"
                 style={{ backgroundColor: slice.color }}
               />
-              <span className="text-text-secondary min-w-0 flex-1 truncate" title={slice.label}>
+              <span className="text-text min-w-0 flex-1 truncate" title={slice.label}>
                 {slice.label.length > 20
                   ? slice.label.slice(0, 8) + '...' + slice.label.slice(-6)
                   : slice.label}
               </span>
-              <span className="text-text-primary flex-shrink-0 font-mono tabular-nums">
+              <span className="text-text-bright flex-shrink-0 font-mono tabular-nums">
                 {formatValue(slice.percentage)}
               </span>
             </div>
           ))}
           {slices.length > 15 && (
-            <div className="text-text-muted px-2 py-1 text-xs">+{slices.length - 15} more</div>
+            <div className="text-text-dim px-2 py-1 text-xs">+{slices.length - 15} more</div>
           )}
         </div>
       )}

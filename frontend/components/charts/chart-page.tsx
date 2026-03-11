@@ -73,10 +73,7 @@ export function ChartPage({
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
-          <Link
-            href={backLink}
-            className="hover:text-amber text-text-muted text-sm transition-colors"
-          >
+          <Link href={backLink} className="hover:text-jade text-text-dim text-sm transition-colors">
             ← {backLabel}
           </Link>
         </div>
@@ -90,7 +87,7 @@ export function ChartPage({
               <div className="border-base-border bg-base-surface/50 h-96 animate-pulse rounded border" />
             )}
             {error && (
-              <div className="text-text-muted flex h-96 items-center justify-center">
+              <div className="text-text-dim flex h-96 items-center justify-center">
                 Failed to load chart data
               </div>
             )}
@@ -109,19 +106,19 @@ export function ChartPage({
                   <div className="flex items-center gap-2">
                     <span
                       className={
-                        chartType === 'bar' ? 'bg-amber h-3 w-3 rounded' : 'bg-amber h-0.5 w-4'
+                        chartType === 'bar' ? 'bg-jade h-3 w-3 rounded' : 'bg-jade h-0.5 w-4'
                       }
                     />
-                    <span className="text-text-muted">{data.yAxisLabel}</span>
+                    <span className="text-text-dim">{data.yAxisLabel}</span>
                   </div>
                   {chartType === 'line' && data.y2AxisLabel && (
                     <div className="flex items-center gap-2">
-                      <span className="bg-warning h-0.5 w-4" />
-                      <span className="text-text-muted">{data.y2AxisLabel}</span>
+                      <span className="bg-rouge h-0.5 w-4" />
+                      <span className="text-text-dim">{data.y2AxisLabel}</span>
                     </div>
                   )}
                 </div>
-                <div className="text-text-muted mt-4 text-center font-mono text-xs">
+                <div className="text-text-dim mt-4 text-center font-mono text-xs">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

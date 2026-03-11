@@ -388,7 +388,7 @@ export function LineChart({
 
   if (!fullData.length) {
     return (
-      <div className="text-text-muted flex h-64 items-center justify-center">No data available</div>
+      <div className="text-text-dim flex h-64 items-center justify-center">No data available</div>
     );
   }
 
@@ -429,8 +429,8 @@ export function LineChart({
           onClick={handleToggleLogScale}
           className={`rounded border px-2 py-1 font-mono text-xs transition-colors ${
             useLogScale
-              ? 'border-interactive text-interactive bg-interactive/10'
-              : 'hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary'
+              ? 'border-jade text-jade bg-jade/10'
+              : 'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text'
           }`}
         >
           Log Scale
@@ -438,7 +438,7 @@ export function LineChart({
         {interactive && isZoomed && (
           <button
             onClick={handleReset}
-            className="hover:border-interactive hover:text-interactive border-base-border bg-base-elevated text-text-secondary rounded border px-2 py-1 font-mono text-xs transition-colors"
+            className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-2 py-1 font-mono text-xs transition-colors"
           >
             Reset Zoom
           </button>
@@ -469,7 +469,7 @@ export function LineChart({
               x={padding.left - 8}
               y={yScale(tick)}
               textAnchor="end"
-              className="fill-text-muted font-mono tabular-nums"
+              className="fill-text-dim font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -485,7 +485,7 @@ export function LineChart({
               x={width - padding.right + 8}
               y={y2Scale(tick)}
               textAnchor="start"
-              className="fill-emphasis font-mono tabular-nums"
+              className="fill-aqua font-mono tabular-nums"
               dominantBaseline="middle"
               fontSize={10}
             >
@@ -499,7 +499,7 @@ export function LineChart({
             x={xScale(idx)}
             y={height - padding.bottom + 20}
             textAnchor="middle"
-            className="fill-text-muted font-mono tabular-nums"
+            className="fill-text-dim font-mono tabular-nums"
             fontSize={10}
           >
             {data[idx]?.date || ''}
@@ -527,7 +527,7 @@ export function LineChart({
                     x={labelOnRight ? markerX - 6 : markerX + 6}
                     y={padding.top + 12}
                     textAnchor={labelOnRight ? 'end' : 'start'}
-                    className="hover:fill-interactive fill-text-secondary font-mono underline decoration-dotted"
+                    className="hover:fill-jade fill-text font-mono underline decoration-dotted"
                     fontSize={9}
                     data-testid="line-chart-marker-label"
                   >
@@ -539,7 +539,7 @@ export function LineChart({
                   x={labelOnRight ? markerX - 6 : markerX + 6}
                   y={padding.top + 12}
                   textAnchor={labelOnRight ? 'end' : 'start'}
-                  className="fill-text-secondary font-mono"
+                  className="fill-text font-mono"
                   fontSize={9}
                   data-testid="line-chart-marker-label"
                 >
@@ -675,28 +675,28 @@ export function LineChart({
             <text
               x={8}
               y={16}
-              className="fill-text-secondary font-mono font-medium tabular-nums"
+              className="fill-text font-mono font-medium tabular-nums"
               fontSize={10}
             >
               {data[hoverIndex]?.date}
             </text>
-            <text x={8} y={32} className="fill-text-muted font-mono tabular-nums" fontSize={10}>
+            <text x={8} y={32} className="fill-text-dim font-mono tabular-nums" fontSize={10}>
               <tspan fill={primaryColor}>{yAxisLabel}: </tspan>
-              <tspan className="fill-text-primary">
+              <tspan className="fill-text-bright">
                 {formatValue(values[hoverIndex], isPercent)}
               </tspan>
             </text>
             {y2AxisLabel && values2.length > 0 && (
-              <text x={8} y={48} className="fill-text-muted font-mono tabular-nums" fontSize={10}>
+              <text x={8} y={48} className="fill-text-dim font-mono tabular-nums" fontSize={10}>
                 <tspan fill={secondaryColor}>{y2AxisLabel}: </tspan>
-                <tspan className="fill-text-primary">{formatValue(values2[hoverIndex])}</tspan>
+                <tspan className="fill-text-bright">{formatValue(values2[hoverIndex])}</tspan>
               </text>
             )}
           </g>
         )}
       </svg>
       {interactive && isZoomed && (
-        <div className="text-text-muted mt-1 text-center font-mono text-xs tabular-nums">
+        <div className="text-text-dim mt-1 text-center font-mono text-xs tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}
