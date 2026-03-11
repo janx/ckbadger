@@ -3225,7 +3225,7 @@ async fn test_spore_list_empty_db() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri("/api/v1/spore/nfts")
+        .uri("/api/v1/spore/objects")
         .body(Body::empty())
         .unwrap();
 
@@ -3645,7 +3645,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/spore/nfts/{}/charts/occupation",
+            "/api/v1/spore/objects/{}/charts/occupation",
             spore_id_hex
         ))
         .body(Body::empty())
@@ -3665,7 +3665,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
 
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/spore/nfts/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
+            "/api/v1/spore/objects/{}/charts/occupation?from=2024-01-16&to=2024-01-16",
             spore_id_hex
         ))
         .body(Body::empty())
@@ -3681,7 +3681,7 @@ async fn test_spore_occupation_chart_and_spore_capacity_fields() {
     assert_eq!(data[0]["values"]["unoccupied"], "39");
 
     let request = Request::builder()
-        .uri(format!("/api/v1/spore/nfts/{}", spore_id_hex))
+        .uri(format!("/api/v1/spore/objects/{}", spore_id_hex))
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -3752,7 +3752,7 @@ async fn test_spore_decode_endpoint_returns_issues_without_ckb_direct_store() {
     let app = create_router(config).await;
 
     let request = Request::builder()
-        .uri(format!("/api/v1/spore/nfts/{}/decode", spore_id_hex))
+        .uri(format!("/api/v1/spore/objects/{}/decode", spore_id_hex))
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
