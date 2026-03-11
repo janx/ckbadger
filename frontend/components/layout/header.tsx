@@ -21,17 +21,12 @@ export function Header() {
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm">
-      <div className="container relative mx-auto flex h-[42px] items-center justify-between gap-4 px-4">
+    <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
+      <div className="container relative mx-auto flex h-[56px] items-center gap-4 px-4">
         <Logo />
 
-        <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
-          <div className="w-full max-w-[clamp(18rem,40vw,42rem)]">
-            <SearchBar variant={isHomePage ? 'home' : 'compact'} />
-          </div>
-        </div>
-
-        <nav className="relative z-10 hidden shrink-0 items-center justify-end gap-2 md:flex">
+        {/* Left: nav links next to logo (desktop) */}
+        <nav className="relative z-10 hidden shrink-0 items-center gap-2 pl-[96px] md:flex">
           {navLinks.map((link) => (
             <Link
               key={link.href}
@@ -39,7 +34,7 @@ export function Header() {
               className={`rounded-md border px-3 py-1.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                 isLinkActive(link.href)
                   ? 'border-jade/40 bg-jade/8 text-jade'
-                  : 'text-text-dim hover:text-jade hover:border-jade/20 border-transparent'
+                  : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
               }`}
             >
               {link.label}
@@ -47,7 +42,14 @@ export function Header() {
           ))}
         </nav>
 
-        <div className="flex items-center space-x-3 md:hidden">
+        {/* Right: search bar (desktop) */}
+        <div className="hidden min-w-0 flex-1 items-center justify-end md:flex">
+          <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
+            <SearchBar variant={isHomePage ? 'home' : 'compact'} />
+          </div>
+        </div>
+
+        <div className="ml-auto flex items-center space-x-3 md:hidden">
           <button
             type="button"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -91,7 +93,7 @@ export function Header() {
                 className={`block rounded-md border px-3 py-2.5 font-mono text-xs uppercase tracking-[0.12em] transition ${
                   isLinkActive(link.href)
                     ? 'border-jade/40 bg-jade/8 text-jade'
-                    : 'text-text-dim hover:text-jade hover:border-jade/20 border-transparent'
+                    : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
                 }`}
               >
                 {link.label}

@@ -174,7 +174,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               isHome
                 ? 'border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim h-10 rounded-xl pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
-                  ? 'py-1.5 pl-3 pr-3 text-sm'
+                  ? 'py-1 pl-3 pr-3 text-[11px]'
                   : 'px-3 py-2.5 pr-3 text-sm sm:px-4 sm:py-3 sm:text-base'
             )}
           />
