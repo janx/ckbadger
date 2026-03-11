@@ -27,9 +27,10 @@ describe('tooling config', () => {
   it('does not keep runtime next/link imports in app-level code', () => {
     const runtimeFiles = [
       'components/not-found-page.tsx',
-      'components/nft/identity-nft-item-detail.tsx',
-      'components/nft/nft-activity-card.tsx',
-      'components/nft/nft-collection-stat-cards.tsx',
+      'components/identity/identity-item-detail.tsx',
+      'components/identity/identity-activity-card.tsx',
+      'components/object/object-activity-card.tsx',
+      'components/object/object-collection-stat-cards.tsx',
       'components/home-charts.tsx',
       'components/mempool-blocks.tsx',
       'components/latest-transactions.tsx',
@@ -54,9 +55,9 @@ describe('tooling config', () => {
       'app/cell/[outpoint]/client-page.tsx',
       'app/tokens/[typeHash]/client-page.tsx',
       'app/scripts/[name]/client-page.tsx',
-      'app/nfts/[sporeId]/client-page.tsx',
+      'app/objects/[sporeId]/client-page.tsx',
       'app/dao/page.tsx',
-      'app/nfts/mnft/[nftId]/client-page.tsx',
+      'app/objects/mnft/[objectId]/client-page.tsx',
       'app/clusters/[clusterId]/client-page.tsx',
       'app/script/[codeHash]/client-page.tsx',
       'app/charts/cell-count/page.tsx',
@@ -83,7 +84,7 @@ describe('tooling config', () => {
       'components/layout/logo.tsx',
       'app/address/[addr]/client-page.tsx',
       'app/assets/assets-page-client.tsx',
-      'app/nfts/[sporeId]/client-page.tsx',
+      'app/objects/[sporeId]/client-page.tsx',
     ];
 
     for (const relativePath of runtimeFiles) {

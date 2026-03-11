@@ -1,26 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 
-import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
+import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { render } from '../utils/test-utils';
 
-describe('NftCollectionStatCards', () => {
+describe('ObjectCollectionStatCards', () => {
   it('renders total count with default label', () => {
     render(
-      <NftCollectionStatCards
+      <ObjectCollectionStatCards
         totalCount={500}
         liveCapacity="100000000000"
         liveOccupiedCapacity="61000000000"
       />
     );
 
-    expect(screen.getByText('Total NFTs')).toBeInTheDocument();
+    expect(screen.getByText('Total Objects')).toBeInTheDocument();
     expect(screen.getByText('500')).toBeInTheDocument();
   });
 
   it('renders custom total label', () => {
     render(
-      <NftCollectionStatCards
+      <ObjectCollectionStatCards
         totalCount={42}
         totalLabel="Total Spores"
         liveCapacity="100000000000"
@@ -33,7 +33,7 @@ describe('NftCollectionStatCards', () => {
 
   it('renders capacity and occupied capacity', () => {
     render(
-      <NftCollectionStatCards
+      <ObjectCollectionStatCards
         totalCount={10}
         liveCapacity="100000000000"
         liveOccupiedCapacity="61000000000"
@@ -47,7 +47,7 @@ describe('NftCollectionStatCards', () => {
 
   it('renders storage tier when provided', () => {
     render(
-      <NftCollectionStatCards
+      <ObjectCollectionStatCards
         totalCount={10}
         liveCapacity={null}
         liveOccupiedCapacity={null}
@@ -63,7 +63,7 @@ describe('NftCollectionStatCards', () => {
 
   it('renders created at block when provided', () => {
     render(
-      <NftCollectionStatCards
+      <ObjectCollectionStatCards
         totalCount={10}
         liveCapacity={null}
         liveOccupiedCapacity={null}
@@ -78,7 +78,7 @@ describe('NftCollectionStatCards', () => {
 
   it('shows dashes when capacity is null', () => {
     render(
-      <NftCollectionStatCards totalCount={10} liveCapacity={null} liveOccupiedCapacity={null} />
+      <ObjectCollectionStatCards totalCount={10} liveCapacity={null} liveOccupiedCapacity={null} />
     );
 
     const dashes = screen.getAllByText('--');
@@ -87,7 +87,7 @@ describe('NftCollectionStatCards', () => {
 
   it('does not render storage card when storageTier is not provided', () => {
     render(
-      <NftCollectionStatCards totalCount={10} liveCapacity={null} liveOccupiedCapacity={null} />
+      <ObjectCollectionStatCards totalCount={10} liveCapacity={null} liveOccupiedCapacity={null} />
     );
 
     expect(screen.queryByText('Storage Integrity')).not.toBeInTheDocument();
@@ -95,7 +95,7 @@ describe('NftCollectionStatCards', () => {
 
   it('does not render created at card when createdAtBlock is not provided', () => {
     render(
-      <NftCollectionStatCards totalCount={10} liveCapacity={null} liveOccupiedCapacity={null} />
+      <ObjectCollectionStatCards totalCount={10} liveCapacity={null} liveOccupiedCapacity={null} />
     );
 
     expect(screen.queryByText('Created At')).not.toBeInTheDocument();

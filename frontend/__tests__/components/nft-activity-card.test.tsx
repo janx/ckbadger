@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 
-import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { render } from '../utils/test-utils';
 
-describe('NftActivityCard', () => {
+describe('ObjectActivityCard', () => {
   it('renders block link, tx link, and plain text actions', () => {
-    render(<NftActivityCard txHash="0xabc123" blockNumber={456} actions={['transfer', 'mint']} />);
+    render(<ObjectActivityCard txHash="0xabc123" blockNumber={456} actions={['transfer', 'mint']} />);
 
     const blockLink = screen.getByRole('link', { name: '#456' });
     expect(blockLink).toHaveAttribute('href', '/blocks/456');
@@ -15,14 +15,14 @@ describe('NftActivityCard', () => {
   });
 
   it('renders tx index when provided', () => {
-    render(<NftActivityCard txHash="0xabc123" blockNumber={100} txIndex={3} actions={['mint']} />);
+    render(<ObjectActivityCard txHash="0xabc123" blockNumber={100} txIndex={3} actions={['mint']} />);
 
     expect(screen.getByText(/Tx Index 3/)).toBeInTheDocument();
   });
 
   it('renders timestamp when provided', () => {
     render(
-      <NftActivityCard
+      <ObjectActivityCard
         txHash="0xabc123"
         blockNumber={100}
         timestamp="2023-01-01T00:00:00Z"
@@ -35,7 +35,7 @@ describe('NftActivityCard', () => {
 
   it('applies normalizeAction to action labels', () => {
     render(
-      <NftActivityCard
+      <ObjectActivityCard
         txHash="0xabc123"
         blockNumber={100}
         actions={['burn', 'transfer']}
@@ -48,7 +48,7 @@ describe('NftActivityCard', () => {
 
   it('renders Badge components when badgeActions is true', () => {
     render(
-      <NftActivityCard
+      <ObjectActivityCard
         txHash="0xabc123"
         blockNumber={100}
         actions={['mint', 'burn']}
@@ -61,7 +61,7 @@ describe('NftActivityCard', () => {
   });
 
   it('does not render timestamp when not provided', () => {
-    render(<NftActivityCard txHash="0xabc123" blockNumber={100} actions={['mint']} />);
+    render(<ObjectActivityCard txHash="0xabc123" blockNumber={100} actions={['mint']} />);
 
     expect(screen.queryByText(/Timestamp:/)).not.toBeInTheDocument();
   });

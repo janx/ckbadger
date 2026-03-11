@@ -4,7 +4,7 @@ import type {
   CursorPaginatedResponse,
   MnftItemActivity,
   MnftItemDetail,
-  NftCollectionItem,
+  CollectionItem,
   TransactionDetail,
   TransactionLifecycle,
 } from '@/lib/api';
@@ -226,9 +226,9 @@ interface TxWitnessData {
 type RawPayload = {
   block?: unknown;
   cell?: Cell;
-  dotbitItem?: NftCollectionItem;
+  dotbitItem?: CollectionItem;
   dotbitActivities?: CursorPaginatedResponse<MnftItemActivity>;
-  didCkbItem?: NftCollectionItem;
+  didCkbItem?: CollectionItem;
   didCkbActivities?: CursorPaginatedResponse<MnftItemActivity>;
   mnftItem?: MnftItemDetail;
   mnftActivities?: CursorPaginatedResponse<MnftItemActivity>;

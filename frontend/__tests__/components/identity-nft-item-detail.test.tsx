@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 
 import {
-  IdentityNftItemDetail,
-  type IdentityNftItemDetailConfig,
-} from '@/components/nft/identity-nft-item-detail';
+  IdentityItemDetail,
+  type IdentityItemDetailConfig,
+} from '@/components/identity/identity-item-detail';
 import { api } from '@/lib/api';
 import { render } from '../utils/test-utils';
 
@@ -31,7 +31,7 @@ vi.mock('@/src/navigation', () => ({
 const mockFetchDetail = vi.fn();
 const mockFetchActivities = vi.fn();
 
-const dotbitConfig: IdentityNftItemDetailConfig = {
+const dotbitConfig: IdentityItemDetailConfig = {
   standard: 'dotbit',
   fetchDetail: mockFetchDetail,
   fetchActivities: mockFetchActivities,
@@ -48,7 +48,7 @@ const dotbitConfig: IdentityNftItemDetailConfig = {
   },
 };
 
-const didCkbConfig: IdentityNftItemDetailConfig = {
+const didCkbConfig: IdentityItemDetailConfig = {
   standard: 'did_ckb',
   fetchDetail: mockFetchDetail,
   fetchActivities: mockFetchActivities,
@@ -65,7 +65,7 @@ const didCkbConfig: IdentityNftItemDetailConfig = {
   },
 };
 
-describe('IdentityNftItemDetail', () => {
+describe('IdentityItemDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReplace.mockReset();
@@ -99,7 +99,7 @@ describe('IdentityNftItemDetail', () => {
       outputIndex: 2,
     });
 
-    render(<IdentityNftItemDetail config={dotbitConfig} nftId="0xabc" />);
+    render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('DOTBIT')).toBeInTheDocument();
@@ -122,7 +122,7 @@ describe('IdentityNftItemDetail', () => {
       outputIndex: null,
     });
 
-    render(<IdentityNftItemDetail config={didCkbConfig} nftId="0xabc" />);
+    render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('DID:CKB')).toBeInTheDocument();
@@ -136,7 +136,7 @@ describe('IdentityNftItemDetail', () => {
   it('shows not found message for dotbit', async () => {
     mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
 
-    render(<IdentityNftItemDetail config={dotbitConfig} nftId="0xabc" />);
+    render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('.bit item not found')).toBeInTheDocument();
@@ -146,7 +146,7 @@ describe('IdentityNftItemDetail', () => {
   it('shows not found message for did:ckb', async () => {
     mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
 
-    render(<IdentityNftItemDetail config={didCkbConfig} nftId="0xabc" />);
+    render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('did:ckb item not found')).toBeInTheDocument();
@@ -166,7 +166,7 @@ describe('IdentityNftItemDetail', () => {
       outputIndex: null,
     });
 
-    render(<IdentityNftItemDetail config={dotbitConfig} nftId="0xabc" />);
+    render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('Recycled .bit account has no live cell.')).toBeInTheDocument();

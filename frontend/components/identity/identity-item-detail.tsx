@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useState } from 'react';
 
 import { Header } from '@/components/layout/header';
-import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { IdentityActivityCard } from '@/components/identity/identity-activity-card';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DataField, DataGrid } from '@/components/ui/data-field';
@@ -22,7 +22,7 @@ import {
   api,
   type CursorPaginatedResponse,
   type MnftItemActivity,
-  type NftCollectionItem,
+  type CollectionItem,
 } from '@/lib/api';
 import {
   normalizeAssetId,
@@ -33,11 +33,11 @@ import {
 } from '@/lib/asset-utils';
 import { formatNumber } from '@/lib/utils';
 
-export interface IdentityNftItemDetailConfig {
+export interface IdentityItemDetailConfig {
   standard: 'dotbit' | 'did_ckb';
-  fetchDetail: (nftId: string) => Promise<NftCollectionItem>;
+  fetchDetail: (identityId: string) => Promise<CollectionItem>;
   fetchActivities: (
-    nftId: string,
+    identityId: string,
     params: { limit: number; cursor?: string }
   ) => Promise<CursorPaginatedResponse<MnftItemActivity>>;
   labels: {
@@ -54,24 +54,24 @@ export interface IdentityNftItemDetailConfig {
 }
 
 interface Props {
-  config: IdentityNftItemDetailConfig;
-  nftId: string;
+  config: IdentityItemDetailConfig;
+  identityId: string;
 }
 
-export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
+export function IdentityItemDetail({ config, identityId: routeIdentityId }: Props) {
   const { labels, fetchDetail, fetchActivities } = config;
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nftId = normalizeAssetId(routeNftId);
+  const identityId = normalizeAssetId(routeIdentityId);
   const [activityCursor, setActivityCursor] = useState<string | undefined>(() =>
     parseActivityCursor(searchParams.get('activity_cursor'))
   );
   const [activityCursorHistory, setActivityCursorHistory] = useState<string[]>([]);
 
   const detailQuery = useQuery({
-    queryKey: [`${config.standard}-item-detail`, nftId],
-    queryFn: () => fetchDetail(nftId),
+    queryKey: [`${config.standard}-item-detail`, identityId],
+    queryFn: () => fetchDetail(identityId),
     retry: false,
   });
 
@@ -298,7 +298,7 @@ export function IdentityNftItemDetail({ config, nftId: routeNftId }: Props) {
                 ) : (
                   <div className="space-y-2">
                     {itemActivities.data.map((activity) => (
-                      <NftActivityCard
+                      <IdentityActivityCard
                         key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
                         txHash={activity.txHash}
                         blockNumber={activity.blockNumber}

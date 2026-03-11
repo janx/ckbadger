@@ -18,8 +18,8 @@ import { DataField, DataGrid } from '@/components/ui/data-field';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
-import { NftActivityCard } from '@/components/nft/nft-activity-card';
-import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
+import { ObjectActivityCard } from '@/components/object/object-activity-card';
+import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { getOccupationRangeParams, OccupationRangeKey } from '@/lib/occupation-range';
 import { ClusterDescription } from '@/components/spore/cluster-description';
@@ -397,7 +397,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
           }
           subtitle="On-chain cluster metadata, capacity footprint, and spore composition."
         />
-        <NftCollectionStatCards
+        <ObjectCollectionStatCards
           totalCount={cluster.sporesCount}
           totalLabel="Total Spores"
           liveCapacity={cluster.liveCapacity}
@@ -590,7 +590,7 @@ export default function ClusterDetailPage({ clusterId }: ClusterDetailPageProps)
                     ) : (
                       <div className="space-y-2">
                         {clusterActivities.data.map((activity) => (
-                          <NftActivityCard
+                          <ObjectActivityCard
                             key={`${activity.txHash}-${activity.txIndex}`}
                             txHash={activity.txHash}
                             blockNumber={activity.blockNumber}

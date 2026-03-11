@@ -6,9 +6,9 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import {
   api,
-  type NftCollectionActivity,
-  type NftCollectionHolder,
-  type NftItemStatusFilter,
+  type CollectionActivity,
+  type CollectionHolder,
+  type ItemStatusFilter,
 } from '@/lib/api';
 import {
   TerminalPanel,
@@ -21,8 +21,8 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { NftActivityCard } from '@/components/nft/nft-activity-card';
-import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
+import { ObjectActivityCard } from '@/components/object/object-activity-card';
+import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 const DOTBIT_COLLECTION_ID =
   '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 
@@ -46,7 +46,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
   const tabFromQuery = searchParams.get('tab');
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [statusFilter, setStatusFilter] = useState<NftItemStatusFilter>('all');
+  const [statusFilter, setStatusFilter] = useState<ItemStatusFilter>('all');
   const [activeTab, setActiveTab] = useState<IdentityTab>(() =>
     isIdentityTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
@@ -74,7 +74,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
     ? isDotbitAlias(collection.collectionId) || collection.standard.toLowerCase() === 'dotbit'
     : isDotbitAlias(collectionId);
   const searchLabel = isDotbit ? 'Search .bit' : 'Search did:ckb';
-  const itemDetailPrefix = isDotbit ? '/nfts/dotbit' : '/nfts/did';
+  const itemDetailPrefix = isDotbit ? '/identities/dotbit' : '/identities/did';
   // Fetch collection items
   const {
     data: collectionItems,
@@ -205,7 +205,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
           title={collection.name || 'Identity Collection'}
           badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
         />
-        <NftCollectionStatCards
+        <ObjectCollectionStatCards
           totalCount={collection.totalCount}
           totalLabel="Total Identities"
           liveCount={collection.liveCount}
@@ -241,7 +241,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                         <select
                           value={statusFilter}
                           onChange={(event) =>
-                            setStatusFilter(event.target.value as NftItemStatusFilter)
+                            setStatusFilter(event.target.value as ItemStatusFilter)
                           }
                           aria-label="Status Filter"
                           className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
@@ -287,8 +287,8 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {collectionActivities.data.map((activity: NftCollectionActivity) => (
-                        <NftActivityCard
+                      {collectionActivities.data.map((activity: CollectionActivity) => (
+                        <ObjectActivityCard
                           key={`${activity.txHash}-${activity.txIndex}`}
                           txHash={activity.txHash}
                           blockNumber={activity.blockNumber}
@@ -435,7 +435,7 @@ export default function IdentityCollectionPage({ collectionId }: IdentityCollect
                     </div>
                   ) : (
                     <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
-                      {collectionHolders.data.map((holder: NftCollectionHolder) => (
+                      {collectionHolders.data.map((holder: CollectionHolder) => (
                         <div
                           key={holder.lockScriptHash}
                           className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"

@@ -4,13 +4,13 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Badge } from '@/components/ui/page-header';
 import { formatNumber } from '@/lib/utils';
 
-interface NftActivityCardProps {
+interface IdentityActivityCardProps {
   txHash: string;
   blockNumber: number;
   txIndex?: number;
   timestamp?: string;
   actions: string[];
-  /** Optional transform applied to each action label before display (e.g. burn→recycled). */
+  /** Optional transform applied to each action label before display (e.g. burn->recycled). */
   normalizeAction?: (action: string) => string;
   /** When true, actions render as colored Badge components instead of plain text. */
   badgeActions?: boolean;
@@ -23,7 +23,7 @@ function actionBadgeVariant(action: string): 'green' | 'red' | 'blue' | 'neutral
   return 'neutral';
 }
 
-export function NftActivityCard({
+export function IdentityActivityCard({
   txHash,
   blockNumber,
   txIndex,
@@ -31,7 +31,7 @@ export function NftActivityCard({
   actions,
   normalizeAction,
   badgeActions = false,
-}: NftActivityCardProps) {
+}: IdentityActivityCardProps) {
   const displayActions = normalizeAction ? actions.map(normalizeAction) : actions;
 
   return (
@@ -44,7 +44,7 @@ export function NftActivityCard({
           </Link>
           {txIndex !== undefined && (
             <>
-              <span className="text-text-dim mx-1">•</span>
+              <span className="text-text-dim mx-1">&bull;</span>
               Tx Index {txIndex}
             </>
           )}

@@ -4,7 +4,7 @@ import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-pa
 import { formatCkbCompact, formatNumber } from '@/lib/utils';
 import { formatStorageTier } from '@/lib/asset-utils';
 
-interface NftCollectionStatCardsProps {
+interface ObjectCollectionStatCardsProps {
   totalCount: number;
   totalLabel?: string;
   liveCount?: number;
@@ -24,16 +24,16 @@ function parseShannons(value: string | null | undefined): bigint | null {
   }
 }
 
-export function NftCollectionStatCards({
+export function ObjectCollectionStatCards({
   totalCount,
-  totalLabel = 'Total NFTs',
+  totalLabel = 'Total Objects',
   liveCount,
   liveCapacity,
   liveOccupiedCapacity,
   createdAtBlock,
   storageTier,
   storageOnchainRatio,
-}: NftCollectionStatCardsProps) {
+}: ObjectCollectionStatCardsProps) {
   const capacity = parseShannons(liveCapacity);
   const occupied = parseShannons(liveOccupiedCapacity);
   const occupationPercent =

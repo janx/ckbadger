@@ -7,9 +7,9 @@ import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import {
   api,
-  type NftCollectionActivity,
-  type NftCollectionHolder,
-  type NftItemStatusFilter,
+  type CollectionActivity,
+  type CollectionHolder,
+  type ItemStatusFilter,
 } from '@/lib/api';
 import {
   TerminalPanel,
@@ -25,8 +25,8 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CapacityOccupationSection } from '@/components/ui/capacity-occupation-section';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { NftActivityCard } from '@/components/nft/nft-activity-card';
-import { NftCollectionStatCards } from '@/components/nft/nft-collection-stat-cards';
+import { ObjectActivityCard } from '@/components/object/object-activity-card';
+import { ObjectCollectionStatCards } from '@/components/object/object-collection-stat-cards';
 const DOTBIT_COLLECTION_ID =
   '0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f';
 const DID_CKB_COLLECTION_ID =
@@ -74,7 +74,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   const [searchInput, setSearchInput] = useState('');
   const [searchKeyword, setSearchKeyword] = useState('');
   const [collectionStatusSelection, setCollectionStatusSelection] =
-    useState<NftItemStatusFilter>('all');
+    useState<ItemStatusFilter>('all');
   const [activeCollectionTab, setActiveCollectionTab] = useState<CollectionSectionTab>(() =>
     isCollectionSectionTab(tabFromQuery) ? tabFromQuery : 'activities'
   );
@@ -117,7 +117,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     isDotbitCollection || isDidCkbCollection || (!spore && isNotFoundError(sporeQuery.error));
   const collectionQuery = useQuery({
     queryKey: ['nft-collection', assetId],
-    queryFn: () => api.getNftCollection(assetId),
+    queryFn: () => api.getObjectCollection(assetId),
     enabled: shouldQueryCollection,
     retry: false,
   });
@@ -198,8 +198,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       queryKey: ['nft-collection-occupation-chart', collectionAssetId, occupationRange],
       queryFn: () =>
         occupationRangeParams
-          ? api.getNftCollectionOccupationChart(collectionAssetId, occupationRangeParams)
-          : api.getNftCollectionOccupationChart(collectionAssetId),
+          ? api.getObjectCollectionOccupationChart(collectionAssetId, occupationRangeParams)
+          : api.getObjectCollectionOccupationChart(collectionAssetId),
       enabled: !!collection,
     });
   const {
@@ -216,7 +216,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       collectionStatusFilter,
     ],
     queryFn: () =>
-      api.getNftCollectionItems(collectionAssetId, {
+      api.getObjectCollectionItems(collectionAssetId, {
         limit: 20,
         cursor: collectionItemsPagination.cursor,
         search: collectionSearchKeyword || undefined,
@@ -232,7 +232,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
   } = useQuery({
     queryKey: ['nft-collection-holders', collectionAssetId, collectionHoldersPagination.cursor],
     queryFn: () =>
-      api.getNftCollectionHolders(collectionAssetId, {
+      api.getCollectionHolders(collectionAssetId, {
         limit: 20,
         cursor: collectionHoldersPagination.cursor,
       }),
@@ -250,7 +250,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       collectionActivitiesPagination.cursor,
     ],
     queryFn: () =>
-      api.getNftCollectionActivities(collectionAssetId, {
+      api.getObjectCollectionActivities(collectionAssetId, {
         limit: 20,
         cursor: collectionActivitiesPagination.cursor,
       }),
@@ -432,7 +432,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
             title={collection.name || 'NFT Collection'}
             badge={<Badge variant="neutral">{collection.standard.toUpperCase()}</Badge>}
           />
-          <NftCollectionStatCards
+          <ObjectCollectionStatCards
             totalCount={collection.totalCount}
             liveCount={collection.liveCount}
             liveCapacity={collection.liveCapacity}
@@ -479,7 +479,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                             value={collectionStatusFilter}
                             onChange={(event) =>
                               setCollectionStatusSelection(
-                                event.target.value as NftItemStatusFilter
+                                event.target.value as ItemStatusFilter
                               )
                             }
                             aria-label="Status Filter"
@@ -525,8 +525,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {collectionActivities.data.map((activity: NftCollectionActivity) => (
-                          <NftActivityCard
+                        {collectionActivities.data.map((activity: CollectionActivity) => (
+                          <ObjectActivityCard
                             key={`${activity.txHash}-${activity.txIndex}`}
                             txHash={activity.txHash}
                             blockNumber={activity.blockNumber}
@@ -760,7 +760,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
                       </div>
                     ) : (
                       <div className="border-base-border bg-base-surface/30 overflow-hidden rounded border">
-                        {collectionHolders.data.map((holder: NftCollectionHolder) => (
+                        {collectionHolders.data.map((holder: CollectionHolder) => (
                           <div
                             key={holder.lockScriptHash}
                             className="row-scan hover:bg-base-elevated/40 border-base-border flex items-center justify-between gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0"

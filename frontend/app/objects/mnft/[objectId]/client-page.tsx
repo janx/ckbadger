@@ -4,7 +4,7 @@ import Link from '@/components/ui/link';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
-import { NftActivityCard } from '@/components/nft/nft-activity-card';
+import { ObjectActivityCard } from '@/components/object/object-activity-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import {
   TerminalPanel,
@@ -353,7 +353,7 @@ export default function MnftItemDetailPage({ objectId: routeObjectId }: MnftItem
               ) : (
                 <div className="space-y-2">
                   {itemActivities.data.map((activity) => (
-                    <NftActivityCard
+                    <ObjectActivityCard
                       key={`${activity.blockNumber}-${activity.txIndex}-${activity.txHash}`}
                       txHash={activity.txHash}
                       blockNumber={activity.blockNumber}

@@ -8,8 +8,8 @@ import { api } from '@/lib/api';
 
 const didCkbConfig: IdentityItemDetailConfig = {
   standard: 'did_ckb',
-  fetchDetail: (nftId) => api.getDidCkbItemDetail(nftId),
-  fetchActivities: (nftId, params) => api.getDidCkbItemActivities(nftId, params),
+  fetchDetail: (identityId) => api.getDidCkbItemDetail(identityId),
+  fetchActivities: (identityId, params) => api.getDidCkbItemActivities(identityId, params),
   labels: {
     standardDisplay: 'DID:CKB',
     nameLabel: 'did:ckb Name',
@@ -28,5 +28,5 @@ export interface DidCkbItemDetailPageProps {
 }
 
 export default function DidCkbItemDetailPage({ identityId }: DidCkbItemDetailPageProps) {
-  return <IdentityItemDetail config={didCkbConfig} nftId={identityId} />;
+  return <IdentityItemDetail config={didCkbConfig} identityId={identityId} />;
 }

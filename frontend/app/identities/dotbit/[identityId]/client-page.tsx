@@ -8,8 +8,8 @@ import { api } from '@/lib/api';
 
 const dotbitConfig: IdentityItemDetailConfig = {
   standard: 'dotbit',
-  fetchDetail: (nftId) => api.getDotbitItemDetail(nftId),
-  fetchActivities: (nftId, params) => api.getDotbitItemActivities(nftId, params),
+  fetchDetail: (identityId) => api.getDotbitItemDetail(identityId),
+  fetchActivities: (identityId, params) => api.getDotbitItemActivities(identityId, params),
   labels: {
     standardDisplay: 'DOTBIT',
     nameLabel: '.bit Name',
@@ -28,5 +28,5 @@ export interface DotbitItemDetailPageProps {
 }
 
 export default function DotbitItemDetailPage({ identityId }: DotbitItemDetailPageProps) {
-  return <IdentityItemDetail config={dotbitConfig} nftId={identityId} />;
+  return <IdentityItemDetail config={dotbitConfig} identityId={identityId} />;
 }
