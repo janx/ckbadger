@@ -10,6 +10,20 @@ const STATUS_RUNNING: &str = "running";
 const STATUS_COMPLETED: &str = "completed";
 const STATUS_FAILED: &str = "failed";
 
+#[derive(Debug, Clone)]
+pub struct RocksDbConfig {
+    pub rocksdb_budget_gb: u64,
+    pub block_cache_bulk_mb: u64,
+    pub wbm_bulk_mb: u64,
+    pub write_buffer_mega_mb: u64,
+    pub l0_slowdown_bulk: u32,
+    pub l0_stop_bulk: u32,
+    pub max_background_jobs: i32,
+    pub max_subcompactions: u32,
+    pub unordered_write: bool,
+    pub direct_io_reads: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchSample {
     pub blocks: u64,
@@ -34,9 +48,15 @@ pub struct BatchSample {
     pub compaction_pending_mb: u64,
     pub l0_files: u64,
     pub imm_memtables: u64,
+    pub timestamp_utc: String,
+    pub load_avg_1m: f64,
+    pub mem_available_mb: u64,
+    pub disk_read_mb: f64,
+    pub disk_write_mb: f64,
 }
 
 impl BatchSample {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         blocks: u64,
         batch_seconds: f64,
@@ -44,6 +64,11 @@ impl BatchSample {
         compaction_pending_mb: u64,
         l0_files: u64,
         imm_memtables: u64,
+        timestamp_utc: String,
+        load_avg_1m: f64,
+        mem_available_mb: u64,
+        disk_read_mb: f64,
+        disk_write_mb: f64,
     ) -> Self {
         Self {
             blocks,
@@ -68,6 +93,11 @@ impl BatchSample {
             compaction_pending_mb,
             l0_files,
             imm_memtables,
+            timestamp_utc,
+            load_avg_1m,
+            mem_available_mb,
+            disk_read_mb,
+            disk_write_mb,
         }
     }
 }
@@ -120,6 +150,10 @@ pub struct BulkSyncPerfMetrics {
     pub max_compaction_pending_mb: u64,
     pub max_l0_files: u64,
     pub max_imm_memtables: u64,
+    pub avg_load_avg_1m: f64,
+    pub max_load_avg_1m: f64,
+    pub min_mem_available_mb: u64,
+    pub avg_disk_write_mb_per_batch: f64,
 }
 
 pub struct BulkSyncPerfRun {
@@ -131,6 +165,8 @@ pub struct BulkSyncPerfRun {
     status: String,
     batch_samples: Vec<BatchSample>,
     heartbeat_samples: Vec<HeartbeatSample>,
+    environment: Option<crate::sys_info::EnvironmentSnapshot>,
+    rocksdb_config: Option<RocksDbConfig>,
 }
 
 impl BulkSyncPerfRun {
@@ -156,6 +192,8 @@ impl BulkSyncPerfRun {
             status: STATUS_RUNNING.to_string(),
             batch_samples: Vec::new(),
             heartbeat_samples: Vec::new(),
+            environment: None,
+            rocksdb_config: None,
         };
         run.write_metadata()?;
         run.write_status(None)?;
@@ -170,6 +208,16 @@ impl BulkSyncPerfRun {
 
     pub fn status(&self) -> &str {
         &self.status
+    }
+
+    pub fn set_environment(
+        &mut self,
+        env: crate::sys_info::EnvironmentSnapshot,
+        rocksdb_config: RocksDbConfig,
+    ) {
+        self.write_environment_env(&env, &rocksdb_config).ok();
+        self.environment = Some(env);
+        self.rocksdb_config = Some(rocksdb_config);
     }
 
     pub fn record_batch_sample(&mut self, sample: BatchSample) -> Result<()> {
@@ -224,6 +272,10 @@ impl BulkSyncPerfRun {
             latest_dir.join("metrics.env"),
         )?;
         fs::copy(self.run_dir.join("report.md"), latest_dir.join("report.md"))?;
+        let env_src = self.run_dir.join("environment.env");
+        if env_src.exists() {
+            fs::copy(&env_src, latest_dir.join("environment.env"))?;
+        }
         Ok(())
     }
 
@@ -285,6 +337,23 @@ impl BulkSyncPerfRun {
             .max()
             .unwrap_or(0);
 
+        // Environment pressure aggregates
+        let load_avgs: Vec<f64> = self.batch_samples.iter().map(|s| s.load_avg_1m).collect();
+        let avg_load_avg_1m = average(&load_avgs);
+        let max_load_avg_1m = load_avgs
+            .iter()
+            .copied()
+            .max_by(f64::total_cmp)
+            .unwrap_or(0.0);
+        let min_mem_available_mb = self
+            .batch_samples
+            .iter()
+            .map(|s| s.mem_available_mb)
+            .min()
+            .unwrap_or(0);
+        let disk_writes: Vec<f64> = self.batch_samples.iter().map(|s| s.disk_write_mb).collect();
+        let avg_disk_write_mb_per_batch = average(&disk_writes);
+
         BulkSyncPerfMetrics {
             run_id: self.run_id.clone(),
             status: status.to_string(),
@@ -305,6 +374,10 @@ impl BulkSyncPerfRun {
             max_compaction_pending_mb,
             max_l0_files,
             max_imm_memtables,
+            avg_load_avg_1m,
+            max_load_avg_1m,
+            min_mem_available_mb,
+            avg_disk_write_mb_per_batch,
         }
     }
 
@@ -326,6 +399,26 @@ impl BulkSyncPerfRun {
         Ok(())
     }
 
+    fn write_environment_env(
+        &self,
+        env: &crate::sys_info::EnvironmentSnapshot,
+        config: &RocksDbConfig,
+    ) -> Result<()> {
+        let content = format!(
+            "# Hardware\ncpu_model={}\ncpu_cores={}\nram_total_mb={}\ndisk_device={}\ndisk_scheduler={}\n\n# OS\nkernel={}\nfilesystem={}\n\n# RocksDB config\nrocksdb_budget_gb={}\nblock_cache_bulk_mb={}\nwbm_bulk_mb={}\nwrite_buffer_mega_mb={}\nl0_slowdown_bulk={}\nl0_stop_bulk={}\nmax_background_jobs={}\nmax_subcompactions={}\nunordered_write={}\ndirect_io_reads={}\n",
+            env.cpu_model, env.cpu_cores, env.ram_total_mb,
+            env.disk_device, env.disk_scheduler,
+            env.kernel, env.filesystem,
+            config.rocksdb_budget_gb, config.block_cache_bulk_mb,
+            config.wbm_bulk_mb, config.write_buffer_mega_mb,
+            config.l0_slowdown_bulk, config.l0_stop_bulk,
+            config.max_background_jobs, config.max_subcompactions,
+            config.unordered_write, config.direct_io_reads,
+        );
+        fs::write(self.run_dir.join("environment.env"), content)?;
+        Ok(())
+    }
+
     fn write_metrics_file(&self, metrics: &BulkSyncPerfMetrics) -> Result<()> {
         let mut content = format!(
             "run_id={}\nstatus={}\nstarted_at_utc={}\n",
@@ -335,7 +428,7 @@ impl BulkSyncPerfRun {
             content.push_str(&format!("finished_at_utc={}\n", finished_at_utc));
         }
         content.push_str(&format!(
-            "wall_clock_seconds={}\nbatches={}\nblocks={}\nblocks_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\n",
+            "wall_clock_seconds={}\nbatches={}\nblocks={}\nblocks_per_sec_wall={}\nblocks_per_batch={}\navg_batch_seconds={}\np95_batch_seconds={}\np99_batch_seconds={}\ntotal_commit_seconds={}\navg_commit_ms={}\np95_commit_ms={}\np99_commit_ms={}\nmax_compaction_pending_mb={}\nmax_l0_files={}\nmax_imm_memtables={}\navg_load_avg_1m={}\nmax_load_avg_1m={}\nmin_mem_available_mb={}\navg_disk_write_mb_per_batch={}\n",
             format_float(metrics.wall_clock_seconds),
             metrics.batches,
             metrics.blocks,
@@ -351,6 +444,10 @@ impl BulkSyncPerfRun {
             metrics.max_compaction_pending_mb,
             metrics.max_l0_files,
             metrics.max_imm_memtables,
+            format_float(metrics.avg_load_avg_1m),
+            format_float(metrics.max_load_avg_1m),
+            metrics.min_mem_available_mb,
+            format_float(metrics.avg_disk_write_mb_per_batch),
         ));
         fs::write(self.run_dir.join("metrics.env"), content)?;
         Ok(())
@@ -368,6 +465,10 @@ impl BulkSyncPerfRun {
         if let Some(finished_at_utc) = metrics.finished_at_utc.as_deref() {
             content.push_str(&format!("- Finished at (UTC): {}\n", finished_at_utc));
         }
+
+        // Environment section
+        self.write_report_environment_section(&mut content)?;
+
         content.push_str("\n## Current Metrics\n\n");
         content.push_str("| Metric | Value |\n");
         content.push_str("| --- | ---: |\n");
@@ -495,6 +596,57 @@ impl BulkSyncPerfRun {
         Ok(())
     }
 
+    fn write_report_environment_section(&self, content: &mut String) -> Result<()> {
+        let (env, config) = match (&self.environment, &self.rocksdb_config) {
+            (Some(e), Some(c)) => (e, c),
+            _ => return Ok(()),
+        };
+
+        content.push_str("\n## Environment\n\n");
+
+        // Check baseline for diff
+        let baseline_env_path = self.output_root.join("latest/environment.env");
+        if baseline_env_path.exists() {
+            let current_pairs = environment_key_value_pairs(env, config);
+            let baseline_content = fs::read_to_string(&baseline_env_path)?;
+            let baseline_map: HashMap<String, String> = baseline_content
+                .lines()
+                .filter(|line| !line.starts_with('#') && !line.is_empty())
+                .filter_map(|line| line.split_once('='))
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+
+            let mut diffs: Vec<(String, String, String)> = Vec::new();
+            for (key, current_val) in &current_pairs {
+                let baseline_val = baseline_map.get(key).cloned().unwrap_or_default();
+                if *current_val != baseline_val {
+                    diffs.push((key.clone(), current_val.clone(), baseline_val));
+                }
+            }
+
+            if diffs.is_empty() {
+                content.push_str("Environment: identical to baseline\n");
+            } else {
+                content.push_str("| Parameter | Current | Baseline |\n");
+                content.push_str("| --- | --- | --- |\n");
+                for (key, current_val, baseline_val) in &diffs {
+                    content.push_str(&format!(
+                        "| {} | {} | {} |\n",
+                        key, current_val, baseline_val
+                    ));
+                }
+            }
+        } else {
+            content.push_str("| Parameter | Value |\n");
+            content.push_str("| --- | --- |\n");
+            for (key, value) in environment_key_value_pairs(env, config) {
+                content.push_str(&format!("| {} | {} |\n", key, value));
+            }
+        }
+
+        Ok(())
+    }
+
     fn append_sample<T: Serialize>(&self, kind: &str, sample: &T) -> Result<()> {
         let json = serde_json::to_string(&SampleRecord { kind, sample })?;
         let mut file = OpenOptions::new()
@@ -504,6 +656,55 @@ impl BulkSyncPerfRun {
         writeln!(file, "{json}")?;
         Ok(())
     }
+}
+
+fn environment_key_value_pairs(
+    env: &crate::sys_info::EnvironmentSnapshot,
+    config: &RocksDbConfig,
+) -> Vec<(String, String)> {
+    vec![
+        ("cpu_model".to_string(), env.cpu_model.clone()),
+        ("cpu_cores".to_string(), env.cpu_cores.to_string()),
+        ("ram_total_mb".to_string(), env.ram_total_mb.to_string()),
+        ("disk_device".to_string(), env.disk_device.clone()),
+        ("disk_scheduler".to_string(), env.disk_scheduler.clone()),
+        ("kernel".to_string(), env.kernel.clone()),
+        ("filesystem".to_string(), env.filesystem.clone()),
+        (
+            "rocksdb_budget_gb".to_string(),
+            config.rocksdb_budget_gb.to_string(),
+        ),
+        (
+            "block_cache_bulk_mb".to_string(),
+            config.block_cache_bulk_mb.to_string(),
+        ),
+        ("wbm_bulk_mb".to_string(), config.wbm_bulk_mb.to_string()),
+        (
+            "write_buffer_mega_mb".to_string(),
+            config.write_buffer_mega_mb.to_string(),
+        ),
+        (
+            "l0_slowdown_bulk".to_string(),
+            config.l0_slowdown_bulk.to_string(),
+        ),
+        ("l0_stop_bulk".to_string(), config.l0_stop_bulk.to_string()),
+        (
+            "max_background_jobs".to_string(),
+            config.max_background_jobs.to_string(),
+        ),
+        (
+            "max_subcompactions".to_string(),
+            config.max_subcompactions.to_string(),
+        ),
+        (
+            "unordered_write".to_string(),
+            config.unordered_write.to_string(),
+        ),
+        (
+            "direct_io_reads".to_string(),
+            config.direct_io_reads.to_string(),
+        ),
+    ]
 }
 
 #[derive(Serialize)]
@@ -596,6 +797,10 @@ fn read_metrics_env(path: &Path) -> Result<Option<BulkSyncPerfMetrics>> {
         max_compaction_pending_mb: read_u64(&map, "max_compaction_pending_mb"),
         max_l0_files: read_u64(&map, "max_l0_files"),
         max_imm_memtables: read_u64(&map, "max_imm_memtables"),
+        avg_load_avg_1m: read_f64(&map, "avg_load_avg_1m"),
+        max_load_avg_1m: read_f64(&map, "max_load_avg_1m"),
+        min_mem_available_mb: read_u64(&map, "min_mem_available_mb"),
+        avg_disk_write_mb_per_batch: read_f64(&map, "avg_disk_write_mb_per_batch"),
     }))
 }
 
@@ -617,10 +822,61 @@ fn read_f64(map: &HashMap<String, String>, key: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{BatchSample, BulkSyncPerfRun, HeartbeatSample};
+    use super::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
+    use crate::sys_info::EnvironmentSnapshot;
     use tempfile::TempDir;
 
     const TEST_BUILD_VERSION: &str = "0.1.0+feature/foo@abcdef123456";
+
+    fn test_batch_sample(
+        blocks: u64,
+        batch_seconds: f64,
+        commit_ms: f64,
+        compaction_pending_mb: u64,
+        l0_files: u64,
+        imm_memtables: u64,
+    ) -> BatchSample {
+        BatchSample::new(
+            blocks,
+            batch_seconds,
+            commit_ms,
+            compaction_pending_mb,
+            l0_files,
+            imm_memtables,
+            String::new(),
+            0.0,
+            0,
+            0.0,
+            0.0,
+        )
+    }
+
+    fn test_env_snapshot() -> EnvironmentSnapshot {
+        EnvironmentSnapshot {
+            cpu_model: "AMD Ryzen 9 7950X".to_string(),
+            cpu_cores: 32,
+            ram_total_mb: 95326,
+            kernel: "6.19.6-1-cachyos-eevdf".to_string(),
+            disk_device: "nvme0n1".to_string(),
+            disk_scheduler: "none".to_string(),
+            filesystem: "btrfs".to_string(),
+        }
+    }
+
+    fn test_rocksdb_config() -> RocksDbConfig {
+        RocksDbConfig {
+            rocksdb_budget_gb: 22,
+            block_cache_bulk_mb: 4096,
+            wbm_bulk_mb: 2048,
+            write_buffer_mega_mb: 256,
+            l0_slowdown_bulk: 40,
+            l0_stop_bulk: 60,
+            max_background_jobs: 8,
+            max_subcompactions: 4,
+            unordered_write: true,
+            direct_io_reads: false,
+        }
+    }
 
     #[test]
     fn test_bulk_sync_perf_run_start_writes_initial_artifacts() {
@@ -689,9 +945,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
-        run.record_batch_sample(BatchSample::new(20, 2.0, 80.0, 200, 7, 2))
+        run.record_batch_sample(test_batch_sample(20, 2.0, 80.0, 200, 7, 2))
             .unwrap();
         run.record_heartbeat_sample(HeartbeatSample::new(15, 100, 150, 6, 1))
             .unwrap();
@@ -710,14 +966,14 @@ mod tests {
         let mut baseline =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
         baseline
-            .record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
+            .record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
         baseline.finish_completed().unwrap();
 
         let mut current =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
         current
-            .record_batch_sample(BatchSample::new(10, 2.0, 80.0, 120, 5, 1))
+            .record_batch_sample(test_batch_sample(10, 2.0, 80.0, 120, 5, 1))
             .unwrap();
         current.finish_completed().unwrap();
 
@@ -731,9 +987,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
-        run.record_batch_sample(BatchSample::new(20, 2.0, 80.0, 200, 7, 2))
+        run.record_batch_sample(test_batch_sample(20, 2.0, 80.0, 200, 7, 2))
             .unwrap();
 
         run.finish_completed().unwrap();
@@ -756,7 +1012,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut run =
             BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
-        run.record_batch_sample(BatchSample::new(10, 1.0, 40.0, 100, 4, 1))
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
             .unwrap();
 
         let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
@@ -786,7 +1042,7 @@ mod tests {
             write_ms: 44.0,
             t1_ms: 55.0,
             t_act_ms: 66.0,
-            ..BatchSample::new(10, 1.0, 40.0, 100, 4, 1)
+            ..test_batch_sample(10, 1.0, 40.0, 100, 4, 1)
         })
         .unwrap();
         run.finish_completed().unwrap();
@@ -799,5 +1055,196 @@ mod tests {
         let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
         assert!(!report.contains("nft_precompute_ms"));
         assert!(!report.contains("t_act_ms"));
+    }
+
+    #[test]
+    fn test_set_environment_writes_environment_env() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.set_environment(test_env_snapshot(), test_rocksdb_config());
+
+        let env_file = std::fs::read_to_string(dir.path().join("run-1/environment.env")).unwrap();
+
+        assert!(env_file.contains("cpu_model=AMD Ryzen 9 7950X"));
+        assert!(env_file.contains("cpu_cores=32"));
+        assert!(env_file.contains("ram_total_mb=95326"));
+        assert!(env_file.contains("disk_device=nvme0n1"));
+        assert!(env_file.contains("disk_scheduler=none"));
+        assert!(env_file.contains("kernel=6.19.6-1-cachyos-eevdf"));
+        assert!(env_file.contains("filesystem=btrfs"));
+        assert!(env_file.contains("rocksdb_budget_gb=22"));
+        assert!(env_file.contains("block_cache_bulk_mb=4096"));
+        assert!(env_file.contains("wbm_bulk_mb=2048"));
+        assert!(env_file.contains("write_buffer_mega_mb=256"));
+        assert!(env_file.contains("l0_slowdown_bulk=40"));
+        assert!(env_file.contains("l0_stop_bulk=60"));
+        assert!(env_file.contains("max_background_jobs=8"));
+        assert!(env_file.contains("max_subcompactions=4"));
+        assert!(env_file.contains("unordered_write=true"));
+        assert!(env_file.contains("direct_io_reads=false"));
+    }
+
+    #[test]
+    fn test_metrics_include_environment_pressure_aggregates() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+
+        run.record_batch_sample(BatchSample::new(
+            10,
+            1.0,
+            40.0,
+            100,
+            4,
+            1,
+            String::new(),
+            4.5,
+            80000,
+            10.0,
+            200.0,
+        ))
+        .unwrap();
+        run.record_batch_sample(BatchSample::new(
+            20,
+            2.0,
+            80.0,
+            200,
+            7,
+            2,
+            String::new(),
+            8.5,
+            60000,
+            20.0,
+            400.0,
+        ))
+        .unwrap();
+
+        run.finish_completed().unwrap();
+
+        let metrics = std::fs::read_to_string(dir.path().join("run-1/metrics.env")).unwrap();
+        assert!(metrics.contains("avg_load_avg_1m=6.500"));
+        assert!(metrics.contains("max_load_avg_1m=8.500"));
+        assert!(metrics.contains("min_mem_available_mb=60000"));
+        assert!(metrics.contains("avg_disk_write_mb_per_batch=300.000"));
+    }
+
+    #[test]
+    fn test_report_includes_environment_section() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.set_environment(test_env_snapshot(), test_rocksdb_config());
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-1/report.md")).unwrap();
+        assert!(report.contains("## Environment"));
+        assert!(report.contains("cpu_model"));
+        assert!(report.contains("AMD Ryzen 9 7950X"));
+        assert!(report.contains("rocksdb_budget_gb"));
+    }
+
+    #[test]
+    fn test_report_environment_diff_when_baseline_exists() {
+        let dir = TempDir::new().unwrap();
+
+        // Baseline run with environment
+        let mut baseline =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        baseline.set_environment(test_env_snapshot(), test_rocksdb_config());
+        baseline
+            .record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        baseline.finish_completed().unwrap();
+
+        // Current run with different config
+        let mut current =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
+        let mut changed_config = test_rocksdb_config();
+        changed_config.block_cache_bulk_mb = 8192; // Changed from 4096
+        current.set_environment(test_env_snapshot(), changed_config);
+        current
+            .record_batch_sample(test_batch_sample(10, 2.0, 80.0, 120, 5, 1))
+            .unwrap();
+        current.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-2/report.md")).unwrap();
+        assert!(report.contains("## Environment"));
+        assert!(report.contains("block_cache_bulk_mb"));
+        assert!(report.contains("8192"));
+        assert!(report.contains("4096"));
+    }
+
+    #[test]
+    fn test_report_environment_identical_to_baseline() {
+        let dir = TempDir::new().unwrap();
+
+        // Baseline run
+        let mut baseline =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        baseline.set_environment(test_env_snapshot(), test_rocksdb_config());
+        baseline
+            .record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        baseline.finish_completed().unwrap();
+
+        // Current run with same env
+        let mut current =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-2", TEST_BUILD_VERSION).unwrap();
+        current.set_environment(test_env_snapshot(), test_rocksdb_config());
+        current
+            .record_batch_sample(test_batch_sample(10, 2.0, 80.0, 120, 5, 1))
+            .unwrap();
+        current.finish_completed().unwrap();
+
+        let report = std::fs::read_to_string(dir.path().join("run-2/report.md")).unwrap();
+        assert!(report.contains("Environment: identical to baseline"));
+    }
+
+    #[test]
+    fn test_environment_env_copied_to_latest_on_completion() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.set_environment(test_env_snapshot(), test_rocksdb_config());
+        run.record_batch_sample(test_batch_sample(10, 1.0, 40.0, 100, 4, 1))
+            .unwrap();
+        run.finish_completed().unwrap();
+
+        let latest_env =
+            std::fs::read_to_string(dir.path().join("latest/environment.env")).unwrap();
+        assert!(latest_env.contains("cpu_model=AMD Ryzen 9 7950X"));
+        assert!(latest_env.contains("rocksdb_budget_gb=22"));
+    }
+
+    #[test]
+    fn test_batch_samples_include_environment_fields_in_jsonl() {
+        let dir = TempDir::new().unwrap();
+        let mut run =
+            BulkSyncPerfRun::start_for_test(dir.path(), "run-1", TEST_BUILD_VERSION).unwrap();
+        run.record_batch_sample(BatchSample::new(
+            10,
+            1.0,
+            40.0,
+            100,
+            4,
+            1,
+            "2026-03-11T10:00:00.000Z".to_string(),
+            4.5,
+            80000,
+            10.0,
+            200.0,
+        ))
+        .unwrap();
+
+        let samples = std::fs::read_to_string(dir.path().join("run-1/samples.jsonl")).unwrap();
+        assert!(samples.contains("\"timestamp_utc\""));
+        assert!(samples.contains("\"load_avg_1m\""));
+        assert!(samples.contains("\"mem_available_mb\""));
+        assert!(samples.contains("\"disk_read_mb\""));
+        assert!(samples.contains("\"disk_write_mb\""));
     }
 }

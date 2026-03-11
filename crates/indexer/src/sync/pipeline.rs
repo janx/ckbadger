@@ -2358,6 +2358,11 @@ impl Indexer {
                                 perf_stats.compaction_pending_bytes / (1024 * 1024),
                                 perf_stats.l0_files_count,
                                 perf_stats.immutable_memtables,
+                                String::new(),
+                                0.0,
+                                0,
+                                0.0,
+                                0.0,
                             )
                         });
                         info!(
