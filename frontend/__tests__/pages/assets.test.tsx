@@ -805,6 +805,45 @@ describe('AssetsPage', () => {
     });
   });
 
+  it('renders HM sort header at xl width', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by HM' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders HM column with formatted multiplier value', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      // mockTokenAssets.data[0].hMultiplier is 2.0
+      expect(screen.getByText('×2.00')).toBeInTheDocument();
+    });
+  });
+
+  it('renders Circulation sort header for tokens tab at xl width', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by Circulation' })).toBeInTheDocument();
+    });
+  });
+
+  it('supports sorting by HM', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(sortableTokenAssets);
+    render(<AssetsPage />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sort by HM' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by HM' }));
+    await waitFor(() => {
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'hMultiplier', sortDirection: 'desc' })
+      );
+    });
+  });
+
   it('renders object table with dual-render layout (table lg+ and card below lg)', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockClusterAssets);
 
