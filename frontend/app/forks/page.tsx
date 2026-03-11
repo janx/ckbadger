@@ -48,7 +48,7 @@ export default function ForksPage() {
         <TerminalPanel>
           <TerminalPanelHeader indicator="warning">Fork Event Log</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-muted flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+            <div className="border-base-border bg-base-surface/50 text-text-muted hidden border-b px-4 py-2 font-mono text-xs uppercase tracking-wider lg:flex">
               <div className="w-24">Event</div>
               <div className="w-16 text-center">Depth</div>
               <div className="w-28">Fork Point</div>
@@ -60,7 +60,8 @@ export default function ForksPage() {
             {isLoading
               ? Array.from({ length: 10 }).map((_, i) => (
                   <TerminalRow key={i} hoverable={false}>
-                    <div className="flex animate-pulse items-center">
+                    {/* Table skeleton (lg+) */}
+                    <div className="hidden animate-pulse items-center lg:flex">
                       <div className="w-24">
                         <div className="bg-base-elevated h-5 w-16 rounded" />
                       </div>
@@ -83,11 +84,28 @@ export default function ForksPage() {
                         <div className="bg-base-elevated ml-auto h-4 w-20 rounded" />
                       </div>
                     </div>
+                    {/* Card skeleton (<lg) */}
+                    <div className="animate-pulse space-y-1.5 lg:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="bg-base-elevated h-5 w-16 rounded" />
+                        <div className="bg-base-elevated h-4 w-20 rounded" />
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="bg-base-elevated h-4 w-16 rounded" />
+                        <div className="bg-base-elevated h-4 w-24 rounded" />
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="bg-base-elevated h-4 w-20 rounded" />
+                        <div className="bg-base-elevated h-4 w-20 rounded" />
+                      </div>
+                      <div className="bg-base-elevated h-4 w-32 rounded" />
+                    </div>
                   </TerminalRow>
                 ))
               : data?.data?.map((event) => (
                   <TerminalRow key={event.id}>
-                    <div className="flex items-center">
+                    {/* Table row (lg+) */}
+                    <div className="hidden items-center lg:flex">
                       <div className="w-24">
                         <Link href={`/forks/${event.id}`}>
                           <Badge variant={getBadgeVariant(event.eventType)}>
@@ -136,6 +154,47 @@ export default function ForksPage() {
                       </div>
                       <div className="text-text-muted w-28 text-right">
                         {formatTimeAgo(event.detectedAt)}
+                      </div>
+                    </div>
+                    {/* Card row (<lg) */}
+                    <div className="space-y-1.5 lg:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <Link href={`/forks/${event.id}`}>
+                          <Badge variant={getBadgeVariant(event.eventType)}>
+                            {event.eventType.toUpperCase()}
+                          </Badge>
+                        </Link>
+                        <span className="text-text-muted text-xs">
+                          {formatTimeAgo(event.detectedAt)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs">
+                        <span className="text-text-secondary">
+                          Depth: <span className="text-warning font-mono">{event.depth}</span>
+                        </span>
+                        <Link
+                          href={`/blocks/${event.forkPointNumber}`}
+                          className="text-emphasis font-mono hover:underline"
+                        >
+                          Fork #{event.forkPointNumber.toLocaleString()}
+                        </Link>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs">
+                        <span className="text-text-muted">
+                          Old:{' '}
+                          <span className="text-text-secondary font-mono">
+                            #{event.oldTipNumber.toLocaleString()}
+                          </span>
+                        </span>
+                        <span className="text-text-muted">
+                          New:{' '}
+                          <span className="text-text-secondary font-mono">
+                            #{event.newTipNumber.toLocaleString()}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="text-negative text-xs">
+                        {event.orphanedBlocksCount} blocks, {event.orphanedTxsCount} txs orphaned
                       </div>
                     </div>
                   </TerminalRow>
