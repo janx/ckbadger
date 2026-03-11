@@ -1,117 +1,98 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { api } from '@/lib/api';
 import { SyncBanner } from '@/components/stats-cards';
-import { HomeCharts } from '@/components/home-charts';
-import { MiniStatsCards } from '@/components/mini-stats-cards';
-import { EpochProgress } from '@/components/chain-wave/epoch-progress';
+import { HeroStatRow } from '@/components/hero-stat-row';
+import { LatestActivities } from '@/components/latest-activities';
+import { DaoOverview } from '@/components/dao-overview';
+import { AssetEcosystem } from '@/components/asset-ecosystem';
+import { ActivityTrend } from '@/components/activity-trend';
+import { KnowledgeSizeTrend, NetworkHealth, ScriptUtilization } from '@/components/home-layer2';
 import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
-import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
-import { LatestActivities } from '@/components/latest-activities';
-import { ActivityBreakdown } from '@/components/activity-breakdown';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
-import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
+import { DeepForkAlert } from '@/components/deep-fork-alert';
+import Link from '@/components/ui/link';
 
-interface InitialData {
-  stats: NetworkStats | null;
-  blocks: Block[];
-  transactions: Transaction[];
-  blockTimeChart: ChartResponse | null;
-  hashRateChart: ChartResponse | null;
-}
-
-interface HomeContentProps {
-  initialData: InitialData;
-}
-
-export function HomeContent({ initialData }: HomeContentProps) {
-  const { isConnected } = useRealtimeData();
-
-  const { data: stats, isLoading: statsLoading } = useQuery({
+export function HomeContent() {
+  const { data: stats } = useQuery({
     queryKey: ['network-stats'],
     queryFn: () => api.getNetworkStats(),
-    initialData: initialData.stats ?? undefined,
     staleTime: 0,
-    refetchInterval: 10000,
+    refetchInterval: 10_000,
   });
 
+  const { isConnected } = useRealtimeData();
+
+  const showSyncBanner = stats?.syncStatus?.isSyncing && stats?.syncStatus?.syncMode === 'bulk';
+
   return (
-    <main className="container mx-auto px-4 py-4 sm:py-6">
-      {stats && <SyncBanner stats={stats} />}
+    <div className="container mx-auto px-4 py-4 sm:py-6">
+      {/* Deep fork alert */}
+      {stats && stats.deepForkStatus && <DeepForkAlert status={stats.deepForkStatus} />}
 
+      {/* Sync Banner — only during bulk sync */}
+      {showSyncBanner && stats && (
+        <div className="mt-2">
+          <SyncBanner stats={stats} />
+        </div>
+      )}
+
+      {/* Hero Stat Row */}
       <div className="mt-4">
-        <HomeCharts
-          stats={stats}
-          isLoading={statsLoading}
-          initialBlockTimeChart={initialData.blockTimeChart}
-          initialHashRateChart={initialData.hashRateChart}
-        />
+        <HeroStatRow stats={stats ?? null} />
       </div>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <EpochProgress
-          epochNumber={parseEpochInfo(stats).epochNumber}
-          epochIndex={parseEpochInfo(stats).epochIndex}
-          epochLength={parseEpochInfo(stats).epochLength}
-          latestBlock={stats?.latestBlock ?? 0}
-          estimatedTimeRemaining={stats?.estimatedEpochTime}
-        />
-        <MiniStatsCards />
-      </div>
-
-      <div className="mt-4">
-        <PipelinePreview initialBlocks={initialData.blocks} />
-      </div>
-
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      {/* ═══ LAYER 1: DOMAIN KNOWLEDGE ═══ */}
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <LatestActivities isRealtime={isConnected} />
-        <ActivityBreakdown isRealtime={isConnected} />
+        <DaoOverview />
       </div>
 
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <LatestBlocks isRealtime={isConnected} initialBlocks={initialData.blocks} />
-        <LatestTransactions
-          isRealtime={isConnected}
-          initialTransactions={initialData.transactions}
-        />
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <AssetEcosystem />
+        <ActivityTrend />
       </div>
 
-      <LiveIndicator isConnected={isConnected} />
-    </main>
-  );
-}
-
-function LiveIndicator({ isConnected }: { isConnected: boolean }) {
-  if (!isConnected) return null;
-
-  return (
-    <div className="fixed bottom-4 right-4 z-50">
-      <div className="border-jade/50 bg-base-surface/90 flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-sm">
-        <div className="indicator-light" />
-        <span className="text-jade font-mono text-xs uppercase tracking-wider">Live</span>
+      {/* ═══ LAYER 2: AGGREGATIONS ═══ */}
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        <KnowledgeSizeTrend />
+        <NetworkHealth stats={stats ?? null} />
+        <ScriptUtilization />
       </div>
+
+      {/* Link cards */}
+      <div className="mt-3 flex gap-4">
+        <Link
+          href="/charts/total-supply"
+          className="text-text-dim hover:text-text-bright font-mono text-xs transition-colors"
+        >
+          Supply &amp; Economics →
+        </Link>
+        <Link
+          href="/charts"
+          className="text-text-dim hover:text-text-bright font-mono text-xs transition-colors"
+        >
+          All Charts →
+        </Link>
+      </div>
+
+      {/* ═══ LAYER 0: RAW DATA ═══ */}
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        <LatestBlocks isRealtime={isConnected} compact />
+        <LatestTransactions isRealtime={isConnected} compact />
+      </div>
+
+      {/* Live indicator */}
+      {isConnected && (
+        <div className="fixed bottom-4 right-4 z-50">
+          <div className="terminal-card border-jade/30 bg-base-surface/80 flex items-center gap-1.5 border px-2 py-1 backdrop-blur-sm">
+            <span className="bg-jade h-1.5 w-1.5 animate-pulse rounded-full" />
+            <span className="text-jade font-mono text-[10px] uppercase tracking-wider">Live</span>
+          </div>
+        </div>
+      )}
     </div>
   );
-}
-
-function parseEpochInfo(stats: NetworkStats | null | undefined): {
-  epochNumber: number;
-  epochIndex: number;
-  epochLength: number;
-} {
-  if (!stats?.epoch) {
-    return { epochNumber: 0, epochIndex: 0, epochLength: 1800 };
-  }
-
-  const match = stats.epoch.match(/(\d+)\((\d+)\/(\d+)\)/);
-  if (match) {
-    return {
-      epochNumber: parseInt(match[1], 10),
-      epochIndex: parseInt(match[2], 10),
-      epochLength: parseInt(match[3], 10),
-    };
-  }
-
-  return { epochNumber: 0, epochIndex: 0, epochLength: 1800 };
 }

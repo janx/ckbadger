@@ -17,15 +17,20 @@ import { HexDisplay } from '@/components/ui/hex-display';
 interface LatestBlocksProps {
   isRealtime?: boolean;
   initialBlocks?: Block[];
+  compact?: boolean;
 }
 
-export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocksProps) {
+export function LatestBlocks({
+  isRealtime = false,
+  initialBlocks,
+  compact = false,
+}: LatestBlocksProps) {
   const [newBlockNumber, setNewBlockNumber] = useState<number | null>(null);
   const prevBlocksRef = useRef<number[]>([]);
 
   const { data: blocks, isLoading } = useQuery({
     queryKey: ['latest-blocks'],
-    queryFn: () => api.getBlocks({ limit: 10 }),
+    queryFn: () => api.getBlocks({ limit: compact ? 4 : 10 }),
     initialData: initialBlocks?.length
       ? {
           data: initialBlocks,
@@ -75,7 +80,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
       </TerminalPanelHeader>
       <TerminalPanelContent padding="none">
         {showSkeleton
-          ? Array.from({ length: 8 }).map((_, i) => (
+          ? Array.from({ length: compact ? 4 : 8 }).map((_, i) => (
               <TerminalRow key={i} hoverable={false}>
                 <div className="flex animate-pulse items-center justify-between">
                   <div className="space-y-2">
@@ -89,7 +94,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                 </div>
               </TerminalRow>
             ))
-          : blocks?.data?.slice(0, 8).map((block) => (
+          : blocks?.data?.slice(0, compact ? 4 : 8).map((block) => (
               <TerminalRow
                 key={block.number}
                 className={cn(

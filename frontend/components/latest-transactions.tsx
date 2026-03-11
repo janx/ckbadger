@@ -16,11 +16,13 @@ import { HexDisplay } from '@/components/ui/hex-display';
 interface LatestTransactionsProps {
   isRealtime?: boolean;
   initialTransactions?: Transaction[];
+  compact?: boolean;
 }
 
 export function LatestTransactions({
   isRealtime = false,
   initialTransactions,
+  compact = false,
 }: LatestTransactionsProps) {
   const [newTxHash, setNewTxHash] = useState<string | null>(null);
   const prevTxsRef = useRef<string[]>([]);
@@ -31,7 +33,7 @@ export function LatestTransactions({
     isFetching,
   } = useQuery({
     queryKey: ['latest-transactions'],
-    queryFn: () => api.getTransactions({ limit: 10 }),
+    queryFn: () => api.getTransactions({ limit: compact ? 4 : 10 }),
     initialData: initialTransactions?.length
       ? {
           data: initialTransactions,
@@ -81,7 +83,7 @@ export function LatestTransactions({
       </TerminalPanelHeader>
       <TerminalPanelContent padding="none">
         {showSkeleton
-          ? Array.from({ length: 8 }).map((_, i) => (
+          ? Array.from({ length: compact ? 4 : 8 }).map((_, i) => (
               <TerminalRow key={i} hoverable={false}>
                 <div className="flex animate-pulse items-center justify-between">
                   <div className="space-y-2">
@@ -95,7 +97,7 @@ export function LatestTransactions({
                 </div>
               </TerminalRow>
             ))
-          : txs?.data?.slice(0, 8).map((tx) => (
+          : txs?.data?.slice(0, compact ? 4 : 8).map((tx) => (
               <TerminalRow
                 key={tx.hash}
                 className={cn(
