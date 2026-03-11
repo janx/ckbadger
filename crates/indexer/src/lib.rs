@@ -9,6 +9,7 @@ pub mod parser;
 pub mod rpc;
 pub mod runtime_diag;
 pub mod sync;
+pub mod sys_info;
 pub mod verify;
 
 pub use cache::CacheInvalidator;
