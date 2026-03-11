@@ -9,7 +9,7 @@ interface HexCharProps {
   groupIndex: number;
   isHovered: boolean;
   onHover: (index: number | null) => void;
-  color: 'sky' | 'violet' | 'amber' | 'rose';
+  color: 'aqua' | 'lavender' | 'gold' | 'rouge';
   showGroupHighlight: boolean;
 }
 
@@ -23,29 +23,29 @@ const HexChar = memo(function HexChar({
   showGroupHighlight,
 }: HexCharProps) {
   const colorClasses = {
-    sky: {
-      base: 'text-sky-dim',
-      hover: 'text-sky',
+    aqua: {
+      base: 'text-aqua-dim',
+      hover: 'text-aqua',
     },
-    violet: {
-      base: 'text-violet/70',
-      hover: 'text-violet',
+    lavender: {
+      base: 'text-lavender-dim',
+      hover: 'text-lavender',
     },
-    amber: {
-      base: 'text-amber-dim',
-      hover: 'text-amber',
+    gold: {
+      base: 'text-gold-dim',
+      hover: 'text-gold',
     },
-    rose: {
-      base: 'text-rose/70',
-      hover: 'text-rose',
+    rouge: {
+      base: 'text-rouge-dim',
+      hover: 'text-rouge',
     },
   };
 
-  const groupColorKeys: Array<'sky' | 'violet' | 'amber' | 'rose'> = [
-    'sky',
-    'violet',
-    'amber',
-    'rose',
+  const groupColorKeys: Array<'aqua' | 'lavender' | 'gold' | 'rouge'> = [
+    'aqua',
+    'lavender',
+    'gold',
+    'rouge',
   ];
   const effectiveColor = showGroupHighlight ? groupColorKeys[groupIndex % 4] : color;
 
@@ -76,7 +76,7 @@ interface HexDisplayProps {
   groupSize?: number;
   showGroupHighlight?: boolean;
   copyable?: boolean;
-  color?: 'sky' | 'violet' | 'amber' | 'rose';
+  color?: 'aqua' | 'lavender' | 'gold' | 'rouge';
   size?: 'sm' | 'md' | 'lg';
   className?: string;
   mono?: boolean;
@@ -90,7 +90,7 @@ export function HexDisplay({
   groupSize = 4,
   showGroupHighlight = true,
   copyable = true,
-  color = 'sky',
+  color = 'aqua',
   size = 'md',
   className,
   mono = true,
@@ -151,10 +151,10 @@ export function HexDisplay({
   };
 
   const prefixColorClasses = {
-    sky: 'text-sky-dim',
-    violet: 'text-violet/70',
-    amber: 'text-amber-dim',
-    rose: 'text-rose/70',
+    aqua: 'text-aqua-dim',
+    lavender: 'text-lavender-dim',
+    gold: 'text-gold-dim',
+    rouge: 'text-rouge-dim',
   };
 
   const allowWrap = !truncate;
@@ -170,7 +170,7 @@ export function HexDisplay({
           className
         )}
       >
-        <span className="text-amber animate-subtle-bounce">Copied</span>
+        <span className="text-jade animate-subtle-bounce">Copied</span>
       </span>
     );
   }
@@ -193,7 +193,7 @@ export function HexDisplay({
       {chars.map(({ char, groupIndex, originalIndex }) => {
         if (char === '.') {
           return (
-            <span key={`ellipsis-${originalIndex}`} className="text-text-muted mx-0.5">
+            <span key={`ellipsis-${originalIndex}`} className="text-text-dim mx-0.5">
               {char}
             </span>
           );
@@ -220,7 +220,7 @@ interface ByteGroupDisplayProps {
   value: string;
   bytesPerGroup?: number;
   separator?: string;
-  color?: 'sky' | 'violet' | 'amber' | 'rose';
+  color?: 'aqua' | 'lavender' | 'gold' | 'rouge';
   className?: string;
 }
 
@@ -228,7 +228,7 @@ export function ByteGroupDisplay({
   value,
   bytesPerGroup = 4,
   separator = ' ',
-  color = 'sky',
+  color = 'aqua',
   className,
 }: ByteGroupDisplayProps) {
   const cleanValue = value.startsWith('0x') ? value.slice(2) : value;
@@ -246,19 +246,19 @@ export function ByteGroupDisplay({
   }, [cleanValue, bytesPerGroup]);
 
   const colorClasses = {
-    sky: ['text-sky', 'text-sky-dim'],
-    violet: ['text-violet', 'text-violet/70'],
-    amber: ['text-amber', 'text-amber-dim'],
-    rose: ['text-rose', 'text-rose/70'],
+    aqua: ['text-aqua', 'text-aqua-dim'],
+    lavender: ['text-lavender', 'text-lavender-dim'],
+    gold: ['text-gold', 'text-gold-dim'],
+    rouge: ['text-rouge', 'text-rouge-dim'],
   };
 
   return (
     <span className={cn('font-mono tabular-nums', className)}>
-      {prefix && <span className="text-text-muted">{prefix}</span>}
+      {prefix && <span className="text-text-dim">{prefix}</span>}
       {groups.map((group, index) => (
         <span key={index}>
           <span className={colorClasses[color][index % 2]}>{group}</span>
-          {index < groups.length - 1 && <span className="text-text-muted">{separator}</span>}
+          {index < groups.length - 1 && <span className="text-text-dim">{separator}</span>}
         </span>
       ))}
     </span>

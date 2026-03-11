@@ -18,7 +18,7 @@ function getTypeBadge(activity: GlobalActivity): { label: string; className: str
   if (activity.isCellbase) {
     return {
       label: 'Coinbase',
-      className: 'bg-violet/10 text-violet border border-violet-dim/50',
+      className: 'bg-lavender/10 text-lavender border border-lavender-dim/50',
     };
   }
   const delta = BigInt(activity.ckbDelta);
@@ -36,7 +36,7 @@ function getTypeBadge(activity: GlobalActivity): { label: string; className: str
   }
   return {
     label: 'Self',
-    className: 'bg-base-elevated text-text-muted border border-base-border/50',
+    className: 'bg-base-elevated text-text-dim border border-base-border/50',
   };
 }
 
@@ -61,25 +61,25 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
     }
     case 'object':
       return (
-        <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
+        <span className="border-base-border/60 bg-base-elevated/80 text-text rounded border px-1.5 py-0.5 text-[10px]">
           {change.standard === 'm-nft' ? 'M-NFT' : 'Spore'} {change.action}
         </span>
       );
     case 'identity':
       return (
-        <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
+        <span className="border-base-border/60 bg-base-elevated/80 text-text rounded border px-1.5 py-0.5 text-[10px]">
           {change.standard === 'did_ckb' ? 'did:ckb' : '.bit'} {change.action}
         </span>
       );
     case 'daoDeposit':
       return (
-        <span className="border-base-border/60 bg-base-elevated/80 text-text-secondary rounded border px-1.5 py-0.5 text-[10px]">
+        <span className="border-base-border/60 bg-base-elevated/80 text-text rounded border px-1.5 py-0.5 text-[10px]">
           DAO Deposit
         </span>
       );
     case 'daoWithdrawRequest':
       return (
-        <span className="border-warning-700/50 bg-warning-900/30 text-warning-300 rounded border px-1.5 py-0.5 text-[10px]">
+        <span className="border-gold-dim/50 bg-gold/10 text-gold rounded border px-1.5 py-0.5 text-[10px]">
           DAO Withdraw Request
         </span>
       );
@@ -139,7 +139,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   const headerActions = (
     <Link
       href="/activities"
-      className="text-text-muted hover:text-emphasis font-mono text-xs transition-colors"
+      className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
     >
       VIEW ALL →
     </Link>
@@ -181,8 +181,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                   key={activityKey}
                   className={cn(
                     'transition-all duration-500',
-                    newActivityKey === activityKey &&
-                      'bg-amber/10 shadow-[0_0_8px_rgba(240,184,102,0.15)]'
+                    newActivityKey === activityKey && 'bg-jade/10 shadow-glow-jade'
                   )}
                 >
                   {/* Row 1: Address | Type badge | Time */}
@@ -190,7 +189,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                     <div className="min-w-0 flex-1">
                       <Link
                         href={`/address/${activity.address}`}
-                        className="text-text-secondary font-mono text-sm transition-opacity hover:opacity-80"
+                        className="text-text font-mono text-sm transition-opacity hover:opacity-80"
                       >
                         {isCkbAddress ? (
                           truncateAddress(activity.address)
@@ -215,7 +214,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                       >
                         {badge.label}
                       </span>
-                      <span className="text-text-muted text-xs">
+                      <span className="text-text-dim text-xs">
                         {formatTimeAgo(activity.timestamp)}
                       </span>
                     </div>
@@ -229,19 +228,17 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                         truncate
                         startChars={8}
                         endChars={6}
-                        color="amber"
+                        color="aqua"
                         size="sm"
                         showGroupHighlight={false}
                       />
                     </Link>
                     <Link
                       href={`/blocks/${activity.blockNumber}`}
-                      className="hover:text-emphasis text-text-muted shrink-0 font-mono text-xs transition-colors"
+                      className="hover:text-jade text-text-dim shrink-0 font-mono text-xs transition-colors"
                     >
                       Block{' '}
-                      <span className="text-emphasis">
-                        #{activity.blockNumber.toLocaleString()}
-                      </span>
+                      <span className="text-aqua">#{activity.blockNumber.toLocaleString()}</span>
                     </Link>
                   </div>
 

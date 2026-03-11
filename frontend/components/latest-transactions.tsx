@@ -111,7 +111,7 @@ export function LatestTransactions({
                         truncate
                         startChars={8}
                         endChars={6}
-                        color="amber"
+                        color="aqua"
                         size="sm"
                         showGroupHighlight={false}
                       />

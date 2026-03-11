@@ -62,7 +62,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
   const headerActions = (
     <Link
       href="/blocks"
-      className="text-text-muted hover:text-interactive font-mono text-xs transition-colors"
+      className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
     >
       VIEW ALL →
     </Link>
@@ -94,7 +94,7 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                 key={block.number}
                 className={cn(
                   'transition-all duration-500',
-                  newBlockNumber === block.number && 'bg-amber/10 shadow-glow'
+                  newBlockNumber === block.number && 'bg-jade/10 shadow-glow-jade'
                 )}
               >
                 <div className="flex items-center justify-between gap-4">
@@ -103,14 +103,14 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                       href={`/blocks/${block.number}`}
                       className="group flex items-center gap-1 transition-opacity hover:opacity-80"
                     >
-                      <span className="text-text-muted text-xs">#</span>
-                      <span className="text-interactive font-mono font-bold tabular-nums">
+                      <span className="text-text-dim text-xs">#</span>
+                      <span className="text-aqua font-mono font-bold tabular-nums">
                         {block.number.toLocaleString()}
                       </span>
                     </Link>
                     <div className="mt-1.5 flex items-center gap-3 text-xs">
-                      <span className="text-text-muted">
-                        <span className="text-amber-dim">{block.transactionsCount}</span> txs
+                      <span className="text-text-dim">
+                        <span className="text-text-bright">{block.transactionsCount}</span> txs
                       </span>
                       {block.hardforkActivation && (
                         <span
@@ -133,13 +133,13 @@ export function LatestBlocks({ isRealtime = false, initialBlocks }: LatestBlocks
                         truncate
                         startChars={8}
                         endChars={6}
-                        color="sky"
+                        color="aqua"
                         size="sm"
                         showGroupHighlight={false}
                         copyable={false}
                       />
                     </Link>
-                    <div className="text-text-muted mt-1.5 text-xs">
+                    <div className="text-text-dim mt-1.5 text-xs">
                       {formatTimeAgo(block.timestamp)}
                     </div>
                   </div>
