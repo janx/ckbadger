@@ -27,14 +27,18 @@ export function KnowledgeSizeTrend() {
   );
 
   return (
-    <ChartCard
-      title="Knowledge Size"
-      href="/charts/knowledge-size"
-      isLoading={isLoading}
-      height={100}
-    >
-      <SparkChart data={sparkData} height={60} color={CHART_PRIMARY_COLOR} />
-    </ChartCard>
+    <div className="border-base-border bg-base-surface rounded-lg border p-4">
+      {isLoading ? (
+        <div className="bg-base-elevated h-16 w-full animate-pulse rounded" />
+      ) : (
+        <>
+          <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
+            Knowledge Size — 30 Day Trend
+          </div>
+          <SparkChart data={sparkData} height={60} color={CHART_PRIMARY_COLOR} />
+        </>
+      )}
+    </div>
   );
 }
 
