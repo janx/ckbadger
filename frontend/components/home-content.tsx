@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { SyncBanner } from '@/components/stats-cards';
+import { StatsBar } from '@/components/stats-bar';
 import { CKBytesCard } from '@/components/ckbytes-card';
 import { HomeCharts } from '@/components/home-charts';
 import { MiniStatsCards } from '@/components/mini-stats-cards';
@@ -43,8 +44,13 @@ export function HomeContent({ initialData }: HomeContentProps) {
     <main className="container mx-auto px-4 py-4 sm:py-6">
       {stats && <SyncBanner stats={stats} />}
 
+      {/* Stats Bar */}
+      <div className="mt-3">
+        <StatsBar stats={stats ?? null} />
+      </div>
+
       {/* Row 1: CKBytes */}
-      <div className="mt-4">
+      <div className="mt-3">
         <CKBytesCard stats={stats ?? null} />
       </div>
 

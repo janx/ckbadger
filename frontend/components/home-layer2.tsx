@@ -21,22 +21,43 @@ export function KnowledgeSizeTrend() {
     refetchInterval: 300_000,
   });
 
-  const sparkData = useMemo(
-    () => chart?.data?.slice(-30).map((d) => parseFloat(d.value)) ?? [],
-    [chart]
-  );
+  const deltaData = useMemo(() => {
+    const points = chart?.data?.slice(-31) ?? [];
+    if (points.length < 2) return [];
+    const deltas: { date: string; delta: number }[] = [];
+    for (let i = 1; i < points.length; i++) {
+      deltas.push({
+        date: points[i].date,
+        delta: parseFloat(points[i].value) - parseFloat(points[i - 1].value),
+      });
+    }
+    return deltas;
+  }, [chart]);
+
+  const maxDelta = Math.max(...deltaData.map((d) => Math.abs(d.delta)), 1);
 
   return (
-    <div className="border-base-border bg-base-surface rounded-lg border p-4">
-      {isLoading ? (
-        <div className="bg-base-elevated h-16 w-full animate-pulse rounded" />
+    <div className="border-base-border bg-base-surface rounded-lg border px-4 py-3">
+      <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+        Knowledge Size — Daily Change
+      </div>
+      {isLoading || deltaData.length === 0 ? (
+        <div className="bg-base-elevated h-8 w-full animate-pulse rounded" />
       ) : (
-        <>
-          <div className="text-text-dim mb-2 font-mono text-[10px] uppercase tracking-wider">
-            Knowledge Size — 30 Day Trend
-          </div>
-          <SparkChart data={sparkData} height={60} color={CHART_PRIMARY_COLOR} />
-        </>
+        <div className="flex h-8 items-end gap-[1px]">
+          {deltaData.map((d) => (
+            <div
+              key={d.date}
+              className="flex-1 rounded-t-sm"
+              style={{
+                height: `${Math.max((Math.abs(d.delta) / maxDelta) * 100, 4)}%`,
+                backgroundColor: d.delta >= 0 ? CHART_PRIMARY_COLOR : '#e8555a',
+                opacity: 0.8,
+              }}
+              title={`${d.date}: ${d.delta >= 0 ? '+' : ''}${d.delta.toFixed(2)}`}
+            />
+          ))}
+        </div>
       )}
     </div>
   );

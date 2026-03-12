@@ -74,18 +74,19 @@ describe('KnowledgeSizeTrend', () => {
     render(<KnowledgeSizeTrend />);
 
     await waitFor(() => {
-      expect(screen.getByText('Knowledge Size — 30 Day Trend')).toBeInTheDocument();
+      expect(screen.getByText('Knowledge Size — Daily Change')).toBeInTheDocument();
     });
   });
 
-  it('renders sparkline after loading', async () => {
+  it('renders delta bar chart after loading', async () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse());
 
     const { container } = render(<KnowledgeSizeTrend />);
 
     await waitFor(() => {
-      const svg = container.querySelector('svg');
-      expect(svg).toBeInTheDocument();
+      // Delta bar chart renders div bars with title attributes
+      const bars = container.querySelectorAll('[title]');
+      expect(bars.length).toBeGreaterThan(0);
     });
   });
 });

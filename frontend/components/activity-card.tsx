@@ -28,6 +28,8 @@ const ACTIVITY_COLORS: Record<string, string> = {
   'Script Call': '#ff8800',
 };
 
+const SCRIPT_COLORS = ['#44ee77', '#ff66aa', '#44bbff', '#00ffaa', '#bb88ff', '#66ff99'];
+
 function buildPieData(stats: ActivitySummary24h) {
   return [
     { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_COLORS.Transfer },
@@ -151,6 +153,44 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
         {!isLoading && pieData.length > 0 && (
           <div className="mb-4 flex justify-center">
             <PieChart data={pieData} size={160} formatValue={(v) => v.toLocaleString()} />
+          </div>
+        )}
+
+        {/* Script breakdown */}
+        {!isLoading && summary && summary.scriptCounts.length > 0 && (
+          <div className="mb-4">
+            <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+              Script Usage (24h)
+            </div>
+            <div className="space-y-1">
+              {summary.scriptCounts
+                .filter((s) => s.count > 0)
+                .sort((a, b) => b.count - a.count)
+                .slice(0, 6)
+                .map((s, i) => {
+                  const maxCount = Math.max(...summary.scriptCounts.map((sc) => sc.count), 1);
+                  const pct = (s.count / maxCount) * 100;
+                  return (
+                    <div key={s.codeHash} className="flex items-center gap-2">
+                      <span className="text-text-dim w-20 truncate font-mono text-[10px]">
+                        {s.name || `${s.codeHash.slice(0, 10)}...`}
+                      </span>
+                      <div className="bg-base-elevated h-1.5 flex-1 overflow-hidden rounded-full">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${pct}%`,
+                            backgroundColor: SCRIPT_COLORS[i % SCRIPT_COLORS.length],
+                          }}
+                        />
+                      </div>
+                      <span className="text-text-dim w-8 text-right font-mono text-[10px] tabular-nums">
+                        {formatCompact(s.count)}
+                      </span>
+                    </div>
+                  );
+                })}
+            </div>
           </div>
         )}
 

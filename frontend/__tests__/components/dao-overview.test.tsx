@@ -55,22 +55,17 @@ describe('DaoOverview', () => {
     render(<DaoOverview />);
 
     await waitFor(() => {
-      expect(screen.getByText('11.20B')).toBeInTheDocument();
+      expect(screen.getByText('11.20B CKB')).toBeInTheDocument();
     });
 
-    // APC value
-    expect(screen.getByText('2.45%')).toBeInTheDocument();
+    // APC value inline
+    expect(screen.getByText('APC 2.45%')).toBeInTheDocument();
 
-    // Depositors count
-    expect(screen.getByText('4,521')).toBeInTheDocument();
+    // Depositors count inline
+    expect(screen.getByText('4,521 depositors')).toBeInTheDocument();
 
-    // Labels
-    expect(screen.getByText('Total Deposited')).toBeInTheDocument();
-    expect(screen.getByText('APC')).toBeInTheDocument();
-    expect(screen.getByText('Depositors')).toBeInTheDocument();
-
-    // 30-Day Trend label
-    expect(screen.getByText('30-Day Trend')).toBeInTheDocument();
+    // Card title
+    expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
   });
 
   it('shows loading skeleton initially', () => {
@@ -83,19 +78,19 @@ describe('DaoOverview', () => {
     expect(pulseElements.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders sparkline when chart data is available', async () => {
+  it('renders delta bar chart when chart data is available', async () => {
     vi.mocked(api.getDaoStatistics).mockResolvedValue(mockDaoStatistics());
     vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse());
 
     const { container } = render(<DaoOverview />);
 
     await waitFor(() => {
-      expect(screen.getByText('11.20B')).toBeInTheDocument();
+      expect(screen.getByText('11.20B CKB')).toBeInTheDocument();
     });
 
-    // SparkChart renders an SVG
-    const svg = container.querySelector('svg');
-    expect(svg).toBeInTheDocument();
+    // Delta bar chart renders div bars with title attributes
+    const bars = container.querySelectorAll('[title]');
+    expect(bars.length).toBeGreaterThan(0);
   });
 
   it('formats millions correctly', async () => {
@@ -107,7 +102,7 @@ describe('DaoOverview', () => {
     render(<DaoOverview />);
 
     await waitFor(() => {
-      expect(screen.getByText('450.00M')).toBeInTheDocument();
+      expect(screen.getByText('450.00M CKB')).toBeInTheDocument();
     });
   });
 });
