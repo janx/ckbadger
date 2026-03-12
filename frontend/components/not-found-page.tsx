@@ -10,7 +10,11 @@ import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 const GLYPHS = ['\u2588', '\u2592', '\u2593', '\u2591', '\u00d7', '#', '%', '\u2573'];
 const ORIGINAL_CHARS = ['4', '0', '4'];
 
-export function NotFoundPage() {
+interface NotFoundPageProps {
+  errMessage?: string;
+}
+
+export function NotFoundPage({ errMessage }: NotFoundPageProps = {}) {
   const charRefs = [
     useRef<HTMLSpanElement>(null),
     useRef<HTMLSpanElement>(null),
@@ -193,7 +197,10 @@ export function NotFoundPage() {
         <div style={{ animation: 'flickerLine 3s infinite' }}>
           <span className="font-mono text-sm">
             <span className="text-rouge">ERR</span>
-            <span className="text-text-ghost"> cell_not_found: outpoint unreachable</span>
+            <span className="text-text-ghost">
+              {' '}
+              {errMessage || 'cell_not_found: outpoint unreachable'}
+            </span>
             <span
               className="ml-0.5 inline-block"
               style={{
