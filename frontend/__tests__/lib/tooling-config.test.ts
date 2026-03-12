@@ -150,4 +150,21 @@ describe('tooling config', () => {
     expect(routerSource).toContain("import('@/app/");
     expect(routerSource).not.toContain("from '@/app/");
   });
+
+  it('caps the shared Tailwind container at 1280px for page layout width', async () => {
+    const tailwindConfig =
+      await vi.importActual<typeof import('@/tailwind.config')>('@/tailwind.config');
+
+    expect(tailwindConfig.default.theme).toMatchObject({
+      container: {
+        center: true,
+        screens: {
+          sm: '640px',
+          md: '768px',
+          lg: '1024px',
+          xl: '1280px',
+        },
+      },
+    });
+  });
 });
