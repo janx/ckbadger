@@ -273,6 +273,14 @@ pub struct DaoStatisticsResponse {
     pub deposit_compensation_ckb: String,
     pub burnt: String,
     pub burnt_ckb: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deposit_change_24h: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depositors_change_24h: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_compensation_change_24h: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unclaimed_compensation_change_24h: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -529,7 +537,45 @@ fn snapshot_circulating_supply(
     Ok(Some(circulating))
 }
 
-fn dao_latest_to_response(latest: &ckbadger_store::DaoLatestStatistics) -> DaoStatisticsResponse {
+#[derive(Default)]
+struct DaoDeltas {
+    deposit_change: Option<String>,
+    depositors_change: Option<i32>,
+    claimed_compensation_change: Option<String>,
+    unclaimed_compensation_change: Option<String>,
+}
+
+fn compute_dao_24h_deltas(state: &AppState) -> DaoDeltas {
+    let Ok(Some(latest)) = state.store.get_latest_dao_daily_snapshot() else {
+        return DaoDeltas::default();
+    };
+    let Ok(latest_date) = chrono::NaiveDate::parse_from_str(&latest.date, "%Y-%m-%d") else {
+        return DaoDeltas::default();
+    };
+    let prev_date = latest_date - chrono::Duration::days(1);
+    let prev_key = prev_date.format("%Y%m%d").to_string();
+    let Ok(Some(prev)) = state.store.get_dao_daily_snapshot(&prev_key) else {
+        return DaoDeltas::default();
+    };
+
+    let deposit_delta = latest.total_deposited - prev.total_deposited;
+    let depositors_delta = latest.depositors_count - prev.depositors_count;
+    let claimed_delta = latest.compensation - prev.compensation;
+    let unclaimed_delta =
+        latest.unclaimed_compensation as i128 - prev.unclaimed_compensation as i128;
+
+    DaoDeltas {
+        deposit_change: Some(shannon_to_ckb(&deposit_delta.to_string())),
+        depositors_change: Some(depositors_delta as i32),
+        claimed_compensation_change: Some(shannon_to_ckb(&claimed_delta.to_string())),
+        unclaimed_compensation_change: Some(shannon_to_ckb(&unclaimed_delta.to_string())),
+    }
+}
+
+fn dao_latest_to_response(
+    latest: &ckbadger_store::DaoLatestStatistics,
+    deltas: DaoDeltas,
+) -> DaoStatisticsResponse {
     let total_deposited = latest.total_deposited.to_string();
     let total_compensation_paid = latest.total_compensation_paid.to_string();
     let unclaimed_compensation = latest.unclaimed_compensation.to_string();
@@ -554,6 +600,10 @@ fn dao_latest_to_response(latest: &ckbadger_store::DaoLatestStatistics) -> DaoSt
         deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
+        deposit_change_24h: deltas.deposit_change,
+        depositors_change_24h: deltas.depositors_change,
+        claimed_compensation_change_24h: deltas.claimed_compensation_change,
+        unclaimed_compensation_change_24h: deltas.unclaimed_compensation_change,
     }
 }
 
@@ -696,7 +746,8 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
         if latest.tip_block_number == latest_block_number {
-            return ok(dao_latest_to_response(&latest));
+            let deltas = compute_dao_24h_deltas(&state);
+            return ok(dao_latest_to_response(&latest, deltas));
         }
     }
 
@@ -762,6 +813,8 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         ("0".to_string(), "0".to_string(), "0".to_string())
     };
 
+    let deltas = compute_dao_24h_deltas(&state);
+
     let response = DaoStatisticsResponse {
         total_deposited: total_deposited_str.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited_str),
@@ -779,6 +832,10 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         deposit_compensation_ckb: shannon_to_ckb(&deposit_compensation),
         burnt: burnt.clone(),
         burnt_ckb: shannon_to_ckb(&burnt),
+        deposit_change_24h: deltas.deposit_change,
+        depositors_change_24h: deltas.depositors_change,
+        claimed_compensation_change_24h: deltas.claimed_compensation_change,
+        unclaimed_compensation_change_24h: deltas.unclaimed_compensation_change,
     };
 
     state
