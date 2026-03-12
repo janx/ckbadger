@@ -189,7 +189,7 @@ function AssetTable({
   const nameColumnClass = 'min-w-0 flex-[2_0_10rem] pr-4';
   const typeColumnClass = 'w-20 shrink-0';
   const smallNumberColumnClass = 'w-20 shrink-0 whitespace-nowrap text-right';
-  const mediumNumberColumnClass = 'w-24 shrink-0 whitespace-nowrap text-right';
+  const mediumNumberColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
   const capacityColumnClass = 'w-28 shrink-0 whitespace-nowrap text-right';
   const formatNumber = (num: number | string) => {
     return new Intl.NumberFormat().format(Number(num));
@@ -283,10 +283,10 @@ function AssetTable({
                 </div>
               )}
               <div className={`${capacityColumnClass} hidden xl:block`}>
-                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
+                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
               </div>
               <div className={`${capacityColumnClass} hidden xl:block`}>
-                <div className="bg-base-elevated ml-auto h-4 w-12 rounded" />
+                <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
               </div>
               <div className={capacityColumnClass}>
                 <div className="bg-base-elevated ml-auto h-4 w-16 rounded" />
@@ -325,10 +325,10 @@ function AssetTable({
         <div className="hidden xl:contents">
           {assetType === 'token' &&
             renderSortHeader('supply', 'Circulation', capacityColumnClass, 'right')}
-          {renderSortHeader('used', 'Used (CKB)', capacityColumnClass, 'right')}
           {renderSortHeader('hMultiplier', 'HM', capacityColumnClass, 'right')}
+          {renderSortHeader('used', 'Used', capacityColumnClass, 'right')}
         </div>
-        {renderSortHeader('capacity', 'Capacity (CKB)', capacityColumnClass, 'right')}
+        {renderSortHeader('capacity', 'Capacity', capacityColumnClass, 'right')}
       </div>
       {assets.map((asset: Asset) => (
         <TerminalRow key={asset.id}>
@@ -430,6 +430,17 @@ function AssetTable({
             <div
               className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
             >
+              {asset.hMultiplier != null ? (
+                <span title={`H-Multiplier: capacity / used = ×${asset.hMultiplier.toFixed(2)}`}>
+                  ×{asset.hMultiplier.toFixed(2)}
+                </span>
+              ) : (
+                <span className="text-text-dim">-</span>
+              )}
+            </div>
+            <div
+              className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
+            >
               {(() => {
                 const occupied = asset.liveUsedCapacity;
                 if (!occupied) {
@@ -438,17 +449,6 @@ function AssetTable({
                 const compact = formatCkbCompact(occupied);
                 return <span title={`${compact.full} CKB`}>{compact.value}</span>;
               })()}
-            </div>
-            <div
-              className={`${capacityColumnClass} text-text hidden font-mono tabular-nums xl:block`}
-            >
-              {asset.hMultiplier != null ? (
-                <span title={`H-Multiplier: capacity / used = ×${asset.hMultiplier.toFixed(2)}`}>
-                  ×{asset.hMultiplier.toFixed(2)}
-                </span>
-              ) : (
-                <span className="text-text-dim">-</span>
-              )}
             </div>
             <div className={`${capacityColumnClass} text-text font-mono tabular-nums`}>
               {(() => {

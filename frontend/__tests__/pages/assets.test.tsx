@@ -660,11 +660,11 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Used' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Used (CKB)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Used' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -700,10 +700,10 @@ describe('AssetsPage', () => {
     render(<AssetsPage />);
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sort by Capacity' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -783,8 +783,8 @@ describe('AssetsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sort by Standard' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Capacity (CKB)' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Used' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort by Capacity' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Sort by Transfers' })).not.toBeInTheDocument();
     });
 
