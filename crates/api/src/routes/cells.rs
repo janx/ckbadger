@@ -1530,7 +1530,7 @@ pub struct AddressResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
     pub balance: String,
-    pub occupied_capacity: String,
+    pub used_capacity: String,
     pub live_cells_count: i64,
     pub transactions_count: i64,
     pub recent_activities_count: i64,
@@ -2029,7 +2029,7 @@ async fn get_address(
         .get_addr_balance(&lock_hash)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (balance, occupied_capacity, live_cells_count, transactions_count) = match &addr_balance {
+    let (balance, used_capacity, live_cells_count, transactions_count) = match &addr_balance {
         Some(ab) => (
             ab.balance.to_string(),
             ab.used_capacity.to_string(),
@@ -2102,7 +2102,7 @@ async fn get_address(
         lock_script_hash: format!("0x{}", hex::encode(&lock_hash)),
         address,
         balance,
-        occupied_capacity,
+        used_capacity,
         live_cells_count,
         transactions_count,
         recent_activities_count,
