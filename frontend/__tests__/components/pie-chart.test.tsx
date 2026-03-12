@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render } from '../utils/test-utils';
+import { render, screen } from '../utils/test-utils';
 import { PieChart } from '@/components/ui/pie-chart';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
@@ -34,5 +34,22 @@ describe('PieChart', () => {
     const slices = document.querySelectorAll('svg path');
     expect(slices[0]).toHaveAttribute('fill', '#123456');
     expect(slices[1]).toHaveAttribute('fill', CHART_SECONDARY_COLOR);
+  });
+
+  it('renders a bounded chart shell for full-width pies when requested', () => {
+    render(
+      <PieChart
+        data={[
+          { label: 'A', value: 60 },
+          { label: 'B', value: 40 },
+        ]}
+        fullWidth
+        showLegend={false}
+        chartClassName="max-w-[15rem]"
+        testIdPrefix="bounded"
+      />
+    );
+
+    expect(screen.getByTestId('bounded-chart-shell')).toHaveClass('max-w-[15rem]');
   });
 });

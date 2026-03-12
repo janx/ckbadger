@@ -159,13 +159,20 @@ function PieSection<T extends { label: string; value: number; color?: string }>(
   return (
     <div
       data-testid={testIdPrefix ? `${testIdPrefix}-section` : undefined}
-      className={cn('flex items-start gap-3', isSectionClickable ? 'cursor-pointer' : '')}
+      className={cn(
+        'flex min-h-0 flex-1 items-center gap-3 lg:gap-4',
+        isSectionClickable ? 'cursor-pointer' : ''
+      )}
       onClick={handleSectionClick}
     >
-      <div className="w-1/2 shrink-0">
+      <div
+        data-testid={testIdPrefix ? `${testIdPrefix}-chart-rail` : undefined}
+        className="flex shrink-0 basis-[clamp(13rem,42%,17rem)] justify-center xl:basis-[clamp(12rem,40%,16rem)] 2xl:basis-[clamp(11.5rem,38%,15rem)]"
+      >
         <PieChart
           data={data}
           fullWidth
+          chartClassName="w-full max-w-[17rem] xl:max-w-[16rem] 2xl:max-w-[15rem]"
           showLegend={false}
           highlightIndex={highlightIndex}
           onHighlightChange={onHighlightChange}
@@ -173,8 +180,8 @@ function PieSection<T extends { label: string; value: number; color?: string }>(
           testIdPrefix={testIdPrefix}
         />
       </div>
-      <div className="flex w-1/2 flex-col justify-center self-stretch overflow-hidden">
-        <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+      <div className="flex min-w-0 flex-1 flex-col justify-center self-stretch overflow-hidden">
+        <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider lg:text-[11px]">
           {title}
         </div>
         {data.map((d, i) => {
@@ -184,7 +191,7 @@ function PieSection<T extends { label: string; value: number; color?: string }>(
               key={d.label}
               data-testid={testIdPrefix ? `${testIdPrefix}-legend-item-${i}` : undefined}
               className={cn(
-                'flex cursor-pointer items-center gap-1.5 py-0.5 font-mono text-[10px] leading-tight transition-opacity',
+                'flex cursor-pointer items-center gap-1.5 py-0.5 font-mono text-[10px] leading-tight transition-opacity lg:gap-2 lg:py-1 lg:text-[11px]',
                 highlightIndex !== null && highlightIndex !== i ? 'opacity-40' : ''
               )}
               onMouseEnter={() => onHighlightChange(i)}
@@ -192,7 +199,7 @@ function PieSection<T extends { label: string; value: number; color?: string }>(
               onClick={(event) => handleItemClick(event, d, i)}
             >
               <div
-                className="h-1.5 w-1.5 shrink-0 rounded-sm"
+                className="h-1.5 w-1.5 shrink-0 rounded-sm lg:h-2 lg:w-2"
                 style={{
                   backgroundColor: useExplicitColors ? d.color : getChartPaletteColor(i),
                 }}
@@ -251,13 +258,13 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
   );
 
   return (
-    <TerminalPanel variant="default" glow={isRealtime}>
+    <TerminalPanel variant="default" glow={isRealtime} className="flex flex-col lg:h-[44rem]">
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'} actions={headerActions}>
         <Link href="/charts" className="hover:text-jade transition-colors">
           Activity Stats (24h)
         </Link>
       </TerminalPanelHeader>
-      <TerminalPanelContent padding="md">
+      <TerminalPanelContent padding="md" className="flex min-h-0 flex-1 flex-col">
         {isLoading ? (
           <div className="space-y-4">
             <div className="bg-base-elevated h-6 w-full animate-pulse rounded" />
@@ -265,9 +272,9 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
             <div className="bg-base-elevated h-36 w-full animate-pulse rounded" />
           </div>
         ) : (
-          <div className="space-y-5">
+          <div className="flex h-full flex-col gap-4">
             {/* 24h stats — top */}
-            <div className="border-base-border/40 divide-base-border/40 flex items-stretch divide-x border-b pb-4">
+            <div className="border-base-border/40 divide-base-border/40 flex items-stretch divide-x border-b pb-3">
               <StatItem
                 label="Activities"
                 value={
@@ -295,37 +302,39 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
               />
             </div>
 
-            {/* Activity types pie */}
-            {activityPieData.length > 0 && (
-              <PieSection
-                title="Activity Types"
-                data={activityPieData}
-                highlightIndex={hoveredActivityIdx}
-                onHighlightChange={setHoveredActivityIdx}
-                useExplicitColors
-                sectionHref="/charts/activity-type-breakdown"
-                getItemHref={() => '/charts/activity-type-breakdown'}
-                testIdPrefix="activity-types"
-              />
-            )}
+            <div className="flex min-h-0 flex-1 flex-col gap-4">
+              {/* Activity types pie */}
+              {activityPieData.length > 0 && (
+                <PieSection
+                  title="Activity Types"
+                  data={activityPieData}
+                  highlightIndex={hoveredActivityIdx}
+                  onHighlightChange={setHoveredActivityIdx}
+                  useExplicitColors
+                  sectionHref="/charts/activity-type-breakdown"
+                  getItemHref={() => '/charts/activity-type-breakdown'}
+                  testIdPrefix="activity-types"
+                />
+              )}
 
-            {/* Script usage pie */}
-            {scriptPieData.length > 0 && (
-              <PieSection
-                title="Script Usage"
-                data={scriptPieData}
-                highlightIndex={hoveredScriptIdx}
-                onHighlightChange={setHoveredScriptIdx}
-                sectionHref="/charts/most-utilized-scripts"
-                getItemHref={(item) =>
-                  getScriptDetailHref({
-                    name: item.name,
-                    codeHash: item.codeHash,
-                  })
-                }
-                testIdPrefix="script-usage"
-              />
-            )}
+              {/* Script usage pie */}
+              {scriptPieData.length > 0 && (
+                <PieSection
+                  title="Script Usage"
+                  data={scriptPieData}
+                  highlightIndex={hoveredScriptIdx}
+                  onHighlightChange={setHoveredScriptIdx}
+                  sectionHref="/charts/most-utilized-scripts"
+                  getItemHref={(item) =>
+                    getScriptDetailHref({
+                      name: item.name,
+                      codeHash: item.codeHash,
+                    })
+                  }
+                  testIdPrefix="script-usage"
+                />
+              )}
+            </div>
           </div>
         )}
       </TerminalPanelContent>

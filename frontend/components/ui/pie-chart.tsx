@@ -2,6 +2,7 @@
 
 import { type MouseEvent, useMemo, useState } from 'react';
 import { getChartPaletteColor, CHART_TOOLTIP_BG } from '@/lib/chart-colors';
+import { cn } from '@/lib/utils';
 
 interface PieChartDataPoint {
   label: string;
@@ -13,6 +14,7 @@ interface PieChartProps {
   data: PieChartDataPoint[];
   size?: number;
   fullWidth?: boolean;
+  chartClassName?: string;
   showLegend?: boolean;
   formatValue?: (value: number) => string;
   highlightIndex?: number | null;
@@ -25,6 +27,7 @@ export function PieChart({
   data,
   size = 300,
   fullWidth = false,
+  chartClassName,
   showLegend = true,
   formatValue = (v) => v.toFixed(2) + '%',
   highlightIndex,
@@ -86,7 +89,8 @@ export function PieChart({
   return (
     <div className="flex flex-col items-center gap-6 lg:flex-row lg:items-start">
       <div
-        className={fullWidth ? 'relative aspect-square w-full' : 'relative'}
+        data-testid={testIdPrefix ? `${testIdPrefix}-chart-shell` : undefined}
+        className={cn(fullWidth ? 'relative aspect-square w-full' : 'relative', chartClassName)}
         style={fullWidth ? undefined : { width: size, height: size }}
       >
         <svg viewBox="-1.2 -1.2 2.4 2.4" className="h-full w-full">

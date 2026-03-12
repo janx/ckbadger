@@ -189,6 +189,40 @@ describe('ActivityCard script usage', () => {
     });
   });
 
+  it('uses a fixed-height desktop card with bounded pie rails', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
+      ],
+    });
+
+    const { container } = renderActivityCard();
+
+    await screen.findByText('Activity Types');
+
+    expect(container.querySelector('.lg\\:h-\\[44rem\\]')).toBeTruthy();
+    expect(screen.getByTestId('activity-types-section')).toHaveClass('flex-1');
+    expect(screen.getByTestId('activity-types-chart-rail')).not.toHaveClass('w-1/2');
+    expect(screen.getByTestId('activity-types-chart-shell')).toHaveClass(
+      'max-w-[17rem]',
+      '2xl:max-w-[15rem]'
+    );
+  });
+
   it('shows loading state initially', () => {
     vi.mocked(api.getActivitySummary24h).mockReturnValue(new Promise(() => {}));
 
