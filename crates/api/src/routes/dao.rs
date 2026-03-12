@@ -25,6 +25,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dao/deposits/{lock_hash}", get(get_deposits_by_address))
         .route("/dao/summary/{lock_hash}", get(get_address_dao_summary))
         .route("/dao/statistics", get(get_statistics))
+        .route("/dao/top-depositors", get(get_top_depositors))
         .route("/dao/calculator", get(calculate_compensation))
         .route("/dao/charts/total-deposit", get(get_total_deposit_chart))
         .route("/dao/charts/daily-deposit", get(get_daily_deposit_chart))
@@ -281,6 +282,24 @@ pub struct DaoStatisticsResponse {
     pub claimed_compensation_change_24h: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unclaimed_compensation_change_24h: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoTopDepositorResponse {
+    pub rank: i32,
+    pub lock_script_hash: String,
+    pub address: Option<String>,
+    pub total_capacity: String,
+    pub total_capacity_ckb: String,
+    pub deposit_count: i32,
+    pub average_deposit_days: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoTopDepositorsResponse {
+    pub depositors: Vec<DaoTopDepositorResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -852,6 +871,60 @@ fn epochs_to_days(epochs: f64) -> String {
         format!("{:.1} days", days)
     } else {
         format!("{:.0} days", days)
+    }
+}
+
+async fn get_top_depositors(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<DaoTopDepositorsResponse> {
+    let cache_key = "dao:top-depositors";
+    if let Some(cached) = state.mem_cache.get::<DaoTopDepositorsResponse>(cache_key) {
+        return ok(cached);
+    }
+
+    let top = state
+        .store
+        .get_dao_top_depositors()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .unwrap_or_else(|| ckbadger_store::DaoTopDepositors {
+            tip_block_number: 0,
+            depositors: vec![],
+        });
+
+    let depositors = top
+        .depositors
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let capacity_str = d.total_capacity.to_string();
+            let avg_epochs = d.average_deposit_blocks / 1800.0;
+            let avg_days = avg_epochs * 4.0 / 24.0;
+            DaoTopDepositorResponse {
+                rank: (i + 1) as i32,
+                lock_script_hash: format!("0x{}", hex::encode(&d.lock_script_hash)),
+                address: None,
+                total_capacity: capacity_str.clone(),
+                total_capacity_ckb: shannon_to_ckb(&capacity_str),
+                deposit_count: d.deposit_count,
+                average_deposit_days: format_deposit_days(avg_days),
+            }
+        })
+        .collect();
+
+    let response = DaoTopDepositorsResponse { depositors };
+    state
+        .mem_cache
+        .set(cache_key, &response, DAO_STATS_CACHE_TTL);
+    ok(response)
+}
+
+fn format_deposit_days(days: f64) -> String {
+    if days >= 1000.0 {
+        format!("{:.1}K", days / 1000.0)
+    } else if days < 0.1 {
+        "0".to_string()
+    } else {
+        format!("{:.1}", days)
     }
 }
 
