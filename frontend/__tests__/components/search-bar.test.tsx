@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '../utils/test-utils';
 import { api } from '@/lib/api';
 
+const SHARED_PLACEHOLDER = 'Search block / tx / address / cell ...';
+
 const pushMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@/src/navigation', () => ({
@@ -46,9 +48,21 @@ describe('SearchBar', () => {
     });
   });
 
+  it('uses the same placeholder copy across variants', () => {
+    const { rerender } = render(<SearchBar />);
+
+    expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+
+    rerender(<SearchBar variant="compact" />);
+    expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+
+    rerender(<SearchBar variant="home" />);
+    expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
+  });
+
   it('renders shortcut hints in home variant', () => {
     render(<SearchBar variant="home" />);
-    const input = screen.getByPlaceholderText('Search block / tx / address / cell ...');
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
 
     expect(input).toBeInTheDocument();
     expect(screen.getByText('/')).toBeInTheDocument();
@@ -64,10 +78,15 @@ describe('SearchBar', () => {
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
   });
 
-  it('does not render shortcut hints in compact variant', () => {
+  it('renders a more prominent compact variant without shortcut hints', () => {
     render(<SearchBar variant="compact" />);
 
-    expect(screen.getByPlaceholderText('Search blocks, txs...')).toBeInTheDocument();
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    expect(input).toBeInTheDocument();
+    expect(input.className).toContain('h-10');
+    expect(input.className).toContain('rounded-xl');
+    expect(input.className).toContain('border-jade/40');
+    expect(input.className).toContain('shadow-[0_10px_30px_rgba(6,8,16,0.32)]');
     expect(screen.queryByText('?')).not.toBeInTheDocument();
     expect(screen.queryByTestId('home-search-focus-glow')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
@@ -76,7 +95,7 @@ describe('SearchBar', () => {
   it('renders semantic icons for different search result types', async () => {
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText('Block, tx hash, address...');
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '12' } });
 
@@ -91,7 +110,7 @@ describe('SearchBar', () => {
   it('does not auto-navigate when multiple matches are returned on submit', async () => {
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText('Block, tx hash, address...');
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '12' } });
 
@@ -115,7 +134,7 @@ describe('SearchBar', () => {
 
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText('Block, tx hash, address...');
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'alpha' } });
 
@@ -135,7 +154,7 @@ describe('SearchBar', () => {
 
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText('Block, tx hash, address...');
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: 'not-found' } });
 
@@ -181,7 +200,7 @@ describe('SearchBar', () => {
 
     render(<SearchBar />);
 
-    const input = screen.getByPlaceholderText('Block, tx hash, address...');
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: hash } });
 

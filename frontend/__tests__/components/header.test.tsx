@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { render } from '../utils/test-utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '../utils/test-utils';
 import { Header } from '@/components/layout/header';
 
 const usePathnameMock = vi.fn(() => '/');
@@ -25,22 +25,27 @@ vi.mock('@/components/layout/logo', () => ({
   Logo: () => <div data-testid="logo">Logo</div>,
 }));
 
+vi.mock('@/components/stats-bar', () => ({
+  GlobalStatsBar: () => <div data-testid="global-stats-bar">GlobalStatsBar</div>,
+}));
+
 describe('Header', () => {
   beforeEach(() => {
     usePathnameMock.mockReset();
     searchBarMock.mockClear();
   });
 
-  it('uses highlighted home search variant on home page', () => {
+  it('uses compact search variant on home page', () => {
     usePathnameMock.mockReturnValue('/');
     const { getByTestId } = render(<Header />);
 
     const search = getByTestId('search-bar');
     expect(search).toBeInTheDocument();
-    expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'home')).toBeTruthy();
+    expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'compact')).toBeTruthy();
+    expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'home')).toBeFalsy();
     expect(search.parentElement?.className).toContain('max-w-[clamp(18rem,36vw,36rem)]');
     expect(search.parentElement?.parentElement?.className).toContain('flex-1');
-    expect(search.parentElement?.parentElement?.className).toContain('justify-end');
+    expect(search.parentElement?.parentElement?.className).toContain('md:pl-[96px]');
   });
 
   it('uses compact search variant on non-home pages', () => {
@@ -63,6 +68,8 @@ describe('Header', () => {
     expect(labels).toEqual(['DAO', 'Assets', 'Scripts', 'Charts']);
     expect(desktopNav?.querySelector('a')?.getAttribute('href')).toBe('/dao');
     expect(desktopNav?.className).toContain('shrink-0');
+    expect(desktopNav?.className).toContain('ml-auto');
+    expect(desktopNav?.className).not.toContain('pl-[96px]');
 
     const chartsLink = Array.from(desktopNav?.querySelectorAll('a') ?? []).find(
       (node) => node.textContent?.trim() === 'Charts'
@@ -75,5 +82,34 @@ describe('Header', () => {
     expect(chartsLink?.className).toContain('bg-jade/8');
     expect(daoLink?.className).toContain('text-text');
     expect(daoLink?.className).toContain('border-transparent');
+  });
+
+  it('aligns stats row with the desktop search baseline', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    const { getByTestId } = render(<Header />);
+
+    const stats = getByTestId('global-stats-bar');
+    expect(stats.parentElement?.className).toContain('md:pl-[96px]');
+  });
+
+  it('right-aligns mobile menu links below the compact search bar', () => {
+    usePathnameMock.mockReturnValue('/');
+    const { container } = render(<Header />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle menu' }));
+
+    const mobilePanel = container.querySelector(
+      'div.absolute.z-50.w-full.border-t.shadow-xl.backdrop-blur-sm.md\\:hidden'
+    );
+    const mobileLinks = Array.from(mobilePanel?.querySelectorAll('a') ?? []);
+
+    expect(mobileLinks.map((node) => node.textContent?.trim())).toEqual([
+      'DAO',
+      'Assets',
+      'Scripts',
+      'Charts',
+    ]);
+    expect(mobileLinks.every((node) => node.className.includes('text-right'))).toBe(true);
+    expect(searchBarMock.mock.calls.every(([props]) => props.variant === 'compact')).toBe(true);
   });
 });

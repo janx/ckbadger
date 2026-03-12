@@ -13,6 +13,8 @@ interface SearchBarProps {
   variant?: 'default' | 'compact' | 'home';
 }
 
+const SEARCH_PLACEHOLDER = 'Search block / tx / address / cell ...';
+
 export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -162,19 +164,13 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             }}
             onBlur={() => setIsInputFocused(false)}
             onKeyDown={handleKeyDown}
-            placeholder={
-              isHome
-                ? 'Search block / tx / address / cell ...'
-                : isCompact
-                  ? 'Search blocks, txs...'
-                  : 'Block, tx hash, address...'
-            }
+            placeholder={SEARCH_PLACEHOLDER}
             className={cn(
               'focus:border-jade focus:ring-jade border-base-border bg-base-surface placeholder:text-text-dim text-text-bright w-full rounded-lg border font-mono transition-colors focus:outline-none focus:ring-1',
               isHome
                 ? 'border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim h-10 rounded-xl pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
-                  ? 'py-1 pl-3 pr-3 text-[11px]'
+                  ? 'border-jade/40 bg-base-surface/95 h-10 rounded-xl px-4 pr-4 text-sm shadow-[0_10px_30px_rgba(6,8,16,0.32)] focus:ring-2'
                   : 'px-3 py-2.5 pr-3 text-sm sm:px-4 sm:py-3 sm:text-base'
             )}
           />
