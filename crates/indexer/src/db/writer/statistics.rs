@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use rocksdb::{Direction, IteratorMode};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ckbadger_common::dao::calculate_estimated_apc;
 use ckbadger_store::batch::StoreBatch;
@@ -871,11 +871,23 @@ impl BatchWriter {
         let mut total_blocks_held: f64 = 0.0;
         let mut active_filtered_count = 0usize;
         let mut unclaimed_compensation: u128 = 0;
+        let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
 
         self.store.scan_dao_deposits_by_status(0, |_, entry| {
             total_deposited += entry.capacity as i128;
             unique_depositors.insert(entry.lock_script_hash.clone());
             active_deposits += 1;
+
+            {
+                let dm = depositor_map
+                    .entry(entry.lock_script_hash.clone())
+                    .or_insert((0, 0, 0.0));
+                dm.0 += entry.capacity as i128;
+                dm.1 += 1;
+                if entry.deposit_block_number <= tip_block_number {
+                    dm.2 += (tip_block_number - entry.deposit_block_number) as f64;
+                }
+            }
 
             if entry.deposit_block_number <= tip_block_number {
                 total_blocks_held += (tip_block_number - entry.deposit_block_number) as f64;
@@ -997,6 +1009,39 @@ impl BatchWriter {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         let value = bincode::serialize(&latest)?;
         self.store.put_stats_key(&key, &value)?;
+
+        // Build and store top depositors
+        {
+            let mut sorted: Vec<_> = depositor_map.into_iter().collect();
+            sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            sorted.truncate(100);
+
+            let depositors = sorted
+                .into_iter()
+                .map(
+                    |(lock_hash, (total_capacity, deposit_count, total_blocks))| {
+                        let avg_blocks = if deposit_count > 0 {
+                            total_blocks / deposit_count as f64
+                        } else {
+                            0.0
+                        };
+                        DaoTopDepositorEntry {
+                            lock_script_hash: lock_hash,
+                            address: None, // Resolved at API layer
+                            total_capacity,
+                            deposit_count,
+                            average_deposit_blocks: avg_blocks,
+                        }
+                    },
+                )
+                .collect();
+
+            let top = DaoTopDepositors {
+                tip_block_number,
+                depositors,
+            };
+            self.store.put_dao_top_depositors(&top)?;
+        }
 
         // Update today's dao daily snapshot with the latest unclaimed compensation
         if let Some(mut today_snapshot) = self.store.get_latest_dao_daily_snapshot()? {
@@ -1914,5 +1959,40 @@ mod activity_stats_tests {
         assert_eq!(stats.transfer_count, 1);
         assert_eq!(stats.unknown_count, 0);
         assert_eq!(stats.script_call_count, 0);
+    }
+
+    #[test]
+    fn test_refresh_dao_statistics_computes_top_depositors() {
+        use std::collections::HashMap;
+
+        let mut depositor_map: HashMap<Vec<u8>, (i128, i32, f64)> = HashMap::new();
+        let lock_a = vec![0xAA; 32];
+        let lock_b = vec![0xBB; 32];
+
+        // Depositor A: two deposits
+        let e = depositor_map.entry(lock_a.clone()).or_insert((0, 0, 0.0));
+        e.0 += 500_00000000i128;
+        e.1 += 1;
+        e.2 += 1000.0;
+        let e = depositor_map.entry(lock_a.clone()).or_insert((0, 0, 0.0));
+        e.0 += 300_00000000i128;
+        e.1 += 1;
+        e.2 += 500.0;
+
+        // Depositor B: one deposit, larger
+        let e = depositor_map.entry(lock_b.clone()).or_insert((0, 0, 0.0));
+        e.0 += 1000_00000000i128;
+        e.1 += 1;
+        e.2 += 2000.0;
+
+        let mut sorted: Vec<_> = depositor_map.into_iter().collect();
+        sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        sorted.truncate(100);
+
+        assert_eq!(sorted[0].0, lock_b);
+        assert_eq!(sorted[0].1 .0, 1000_00000000);
+        assert_eq!(sorted[1].0, lock_a);
+        assert_eq!(sorted[1].1 .0, 800_00000000);
+        assert_eq!(sorted[1].1 .1, 2);
     }
 }
