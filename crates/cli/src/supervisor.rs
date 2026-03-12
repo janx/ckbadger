@@ -82,10 +82,20 @@ async fn stop_child_gracefully(name: &str, child: &mut Child) {
         return;
     }
 
-    // SAFETY: pid is a valid child process ID obtained from tokio::process::Child
-    let sigterm_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    let pid_i32 = match i32::try_from(pid) {
+        Ok(p) => p,
+        Err(_) => {
+            warn!(service = %name, pid, "PID exceeds i32::MAX, falling back to SIGKILL");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return;
+        }
+    };
+    // SAFETY: pid_i32 is a valid child process ID obtained from tokio::process::Child
+    let sigterm_result = unsafe { libc::kill(pid_i32, libc::SIGTERM) };
     if sigterm_result != 0 {
-        warn!(service = %name, pid, "failed to send SIGTERM, falling back to SIGKILL");
+        let err = std::io::Error::last_os_error();
+        warn!(service = %name, pid, error = %err, "failed to send SIGTERM, falling back to SIGKILL");
         let _ = child.kill().await;
         let _ = child.wait().await;
         return;
@@ -616,4 +626,19 @@ mod tests {
 
     // Compile-time check for the new constant
     const _: () = assert!(STABLE_RUNNING_THRESHOLD.as_secs() > 0);
+
+    #[tokio::test]
+    async fn test_stop_child_gracefully_sends_sigterm() {
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        stop_child_gracefully("test-sleep", &mut child).await;
+        // Child should have exited (SIGTERM default action is terminate)
+        let status = child.try_wait().unwrap();
+        assert!(
+            status.is_some(),
+            "child should have exited after graceful stop"
+        );
+    }
 }
