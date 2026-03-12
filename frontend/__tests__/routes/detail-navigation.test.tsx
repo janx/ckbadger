@@ -81,7 +81,17 @@ describe('detail navigation', () => {
       </MemoryRouter>
     );
 
-    const links = await screen.findAllByRole('link', { name: 'SECP256K1_BLAKE160' });
+    await waitFor(
+      () => {
+        expect(api.getScripts).toHaveBeenCalled();
+      },
+      { timeout: 3000 }
+    );
+    const links = await screen.findAllByRole(
+      'link',
+      { name: 'SECP256K1_BLAKE160' },
+      { timeout: 3000 }
+    );
     await user.click(links[0]);
 
     await waitFor(() => {

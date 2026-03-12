@@ -9,6 +9,11 @@ describe('tooling config', () => {
     expect(pkg.scripts.build).toMatch(/^vite build/);
   });
 
+  it('runs the default frontend test script in single-shot mode', () => {
+    expect(pkg.scripts.test).toBe('vitest run');
+    expect(pkg.scripts['test:watch']).toBe('vitest');
+  });
+
   it('does not keep next runtime packages in package.json', () => {
     expect(pkg.dependencies).not.toHaveProperty('next');
     expect(pkg.devDependencies).not.toHaveProperty('eslint-config-next');

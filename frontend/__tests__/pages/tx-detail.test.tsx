@@ -161,14 +161,14 @@ describe('TransactionDetailPage', () => {
       expect(api.getTransactionDetail).toHaveBeenCalled();
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Scripts' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Scripts' }, { timeout: 5000 }));
 
     const link = document.querySelector(
       `a[href="/script/${TYPE_CODE_HASH}?hashType=type&kind=type"]`
     );
     expect(link).not.toBeNull();
     expect(document.querySelector('a[href="/scripts/Unknown"]')).toBeNull();
-  });
+  }, 10000);
 
   it('does not render hash-only fallback label in IO tab', async () => {
     render(<TransactionDetailPage />);

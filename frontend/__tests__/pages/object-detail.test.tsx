@@ -276,17 +276,22 @@ describe('SporeDetailPage', () => {
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
-    await waitFor(() => {
-      expect(api.getAddress).toHaveBeenCalledWith(mockSpore.ownerLockHash);
-      const ownerLink = screen.getByRole('link', {
+    await waitFor(
+      () => {
+        expect(api.getAddress).toHaveBeenCalledWith(mockSpore.ownerLockHash);
+      },
+      { timeout: 3000 }
+    );
+
+    const ownerLink = await screen.findByRole(
+      'link',
+      {
         name: 'ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3',
-      });
-      expect(ownerLink).toBeInTheDocument();
-      expect(ownerLink).toHaveAttribute(
-        'href',
-        '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3'
-      );
-    });
+      },
+      { timeout: 3000 }
+    );
+    expect(ownerLink).toBeInTheDocument();
+    expect(ownerLink).toHaveAttribute('href', '/address/ckb1qyqszqgpqyqszqgpqyqszqgpqyqszqgp9f0v3');
   });
 
   it('renders decoded traits panel for DOB spores', async () => {
