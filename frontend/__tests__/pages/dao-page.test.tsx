@@ -8,6 +8,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getDaoStatistics: vi.fn(),
     getDaoDeposits: vi.fn(),
+    getDaoTopDepositors: vi.fn(),
     lookupScripts: vi.fn(),
   },
 }));
@@ -80,7 +81,9 @@ describe('DaoPage', () => {
     );
     expect(screen.getByText('Default Lock')).toHaveClass('text-info');
     expect(screen.getAllByText('CKB')[0]).toHaveClass('text-text-dim');
-    expect(screen.getAllByText('Active Deposits').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole('button', { name: 'Active Deposits' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Deposits' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Depositors' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'All' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Status' })).not.toBeInTheDocument();
     expect(screen.getByText('Showing 1-1 of 1 deposits, 20 per page')).toBeInTheDocument();
