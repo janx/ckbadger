@@ -239,7 +239,7 @@ fn read_molecule_bytes_field(
 }
 
 fn maybe_parse_spore_decode(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -383,7 +383,7 @@ fn summarize_spore_content_human_value(content_type: &str, content: &[u8]) -> St
 }
 
 fn maybe_parse_cluster_decode(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -486,7 +486,7 @@ fn read_u16_text_field(data: &[u8], offset: usize) -> Option<(usize, usize, Stri
 }
 
 fn maybe_parse_mnft_decode(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -730,7 +730,7 @@ fn maybe_parse_mnft_decode(
 }
 
 fn maybe_parse_dao_decode(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -793,7 +793,7 @@ fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> 
 }
 
 fn maybe_parse_udt_decode(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -834,7 +834,7 @@ fn maybe_parse_udt_decode(
 }
 
 fn maybe_parse_dotbit_decode(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -1238,7 +1238,7 @@ fn build_heuristic_guesses(data: &[u8]) -> Vec<CellDataGuess> {
 }
 
 fn build_script_hint_guess(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
 ) -> Option<CellDataGuess> {
     let type_code_hash = info.type_code_hash.as_ref()?;
@@ -1326,7 +1326,7 @@ fn build_script_hint_guess(
 }
 
 fn analyze_cell_data(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
     data: &[u8],
     data_size: i32,
 ) -> CellDataAnalysis {
@@ -1629,7 +1629,7 @@ pub struct AddressTokenResponse {
 fn cell_info_to_response(
     tx_hash: &[u8],
     output_index: i16,
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
 ) -> CellResponse {
     let is_special_burn = is_genesis_special_burn_cell(&info.lock_args, info.created_at_block);
     CellResponse {
@@ -1662,7 +1662,7 @@ fn cell_info_to_response(
 }
 
 fn estimated_occupied_capacity_breakdown(
-    info: &ckbadger_store::LiveCellInfo,
+    info: &ckbadger_store::PositionedCellInfo,
 ) -> OccupiedCapacityBreakdown {
     let capacity_field_bytes = 8;
     let lock_script_bytes = 32 + 1 + info.lock_args.len() as i64;
@@ -1741,7 +1741,7 @@ async fn list_live_cells(
 
     // Fetch cells from the store based on available filters.
     // The store supports listing by lock hash or type hash via prefix scans.
-    let raw_cells: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> =
+    let raw_cells: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)> =
         match (&lock_hash_bytes, &type_hash_bytes) {
             (Some(lock_bytes), Some(type_bytes)) => {
                 // Filter by lock first (usually more selective), then post-filter by type
@@ -1922,7 +1922,7 @@ async fn list_cells_by_script(
     let fetch_limit = limit + 1;
 
     // Use code_hash indexes for efficient prefix scans
-    let results: Vec<(Vec<u8>, i16, ckbadger_store::LiveCellInfo)> = match script_kind {
+    let results: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)> = match script_kind {
         "lock" => state
             .store
             .list_cells_by_lock_code_hash(
@@ -2300,10 +2300,14 @@ async fn get_cell(
         None
     };
 
-    let (info, status_str, consumed_meta) = match (live_cell, consumed_cell) {
+    let (info, status_str, consumed_meta): (
+        ckbadger_store::PositionedCellInfo,
+        &str,
+        Option<(i64, Option<Vec<u8>>)>,
+    ) = match (live_cell, consumed_cell) {
         (Some(cell), _) => (cell, "live", None),
         (None, Some(cell)) => (
-            cell.cell,
+            cell.to_positioned_cell_info(),
             "dead",
             Some((cell.consumed_at_block, cell.consumed_by_tx)),
         ),
@@ -2596,7 +2600,7 @@ fn load_cells_preferring_consumed(
     outpoints: &[(&[u8], i16)],
     cells_store: &CkbadgerStore,
 ) -> Result<
-    HashMap<(Vec<u8>, i16), ckbadger_store::LiveCellInfo>,
+    HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
     (axum::http::StatusCode, axum::Json<ApiError>),
 > {
     if outpoints.is_empty() {
@@ -2998,10 +3002,9 @@ mod tests {
         out
     }
 
-    fn make_info() -> LiveCellInfo {
+    fn make_payload() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 10000000000,
-            created_at_block: 100,
             lock_script_hash: vec![0u8; 32],
             lock_code_hash: vec![1u8; 32],
             lock_hash_type: 1,
@@ -3014,6 +3017,14 @@ mod tests {
             occupied_capacity: 0,
             udt_amount: None,
         }
+    }
+
+    fn make_info() -> ckbadger_store::PositionedCellInfo {
+        ckbadger_store::PositionedCellInfo::new(make_payload(), 100)
+    }
+
+    fn positioned(cell: LiveCellInfo) -> ckbadger_store::PositionedCellInfo {
+        ckbadger_store::PositionedCellInfo::new(cell, 100)
     }
 
     #[test]
@@ -3077,8 +3088,9 @@ mod tests {
     fn test_cell_info_to_response_preserves_udt_amount() {
         let info = LiveCellInfo {
             udt_amount: Some(12_345),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let tx_hash = vec![4u8; 32];
         let resp = cell_info_to_response(&tx_hash, 1, &info);
         assert_eq!(resp.udt_amount.as_deref(), Some("12345"));
@@ -3088,8 +3100,9 @@ mod tests {
     fn test_estimated_occupied_capacity_breakdown_without_type_script() {
         let info = LiveCellInfo {
             data_size: 16,
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
 
         let breakdown = estimated_occupied_capacity_breakdown(&info);
         assert_eq!(breakdown.capacity_field_bytes, 8);
@@ -3106,8 +3119,9 @@ mod tests {
             type_code_hash: Some(vec![4u8; 32]),
             type_args: Some(vec![5u8; 24]),
             data_size: 16,
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
 
         let breakdown = estimated_occupied_capacity_breakdown(&info);
         assert_eq!(breakdown.capacity_field_bytes, 8);
@@ -3123,8 +3137,9 @@ mod tests {
             type_code_hash: Some(hex::decode(SUDT_CODE_HASH.trim_start_matches("0x")).unwrap()),
             type_script_hash: Some(vec![0x11; 32]),
             data_size: 16,
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let mut data = vec![0u8; 16];
         data[0] = 0x2a;
 
@@ -3145,8 +3160,9 @@ mod tests {
                 hex::decode(SPORE_CODE_HASHES[0].trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x11; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let cluster_id = vec![0xAA; 32];
         let data = make_spore_data("image/png", &[1, 2, 3, 4], Some(cluster_id.as_slice()));
 
@@ -3173,8 +3189,9 @@ mod tests {
                 hex::decode(CLUSTER_CODE_HASHES[0].trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x19; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let data = make_cluster_data("Genesis Collection", "Primary cluster");
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3197,8 +3214,9 @@ mod tests {
                 hex::decode(MNFT_ISSUER_CODE_HASH.trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x20; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
 
         let info_blob = br#"{"name":"Issuer-01","info":"demo"}"#;
         let mut data = Vec::new();
@@ -3232,8 +3250,9 @@ mod tests {
                 hex::decode(MNFT_CLASS_CODE_HASH.trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x21; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let mut data = Vec::new();
         data.push(1); // version
         data.extend_from_slice(&100u32.to_be_bytes()); // total
@@ -3267,8 +3286,9 @@ mod tests {
                 hex::decode(MNFT_CLASS_CODE_HASH.trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x23; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
 
         // version(1) + total(4 BE) + issued(4 BE) + configure(1)
         // + name_len(2 BE) + name + desc_len(2 BE) + desc + renderer_len(2 BE)
@@ -3299,8 +3319,9 @@ mod tests {
                 hex::decode(MNFT_TOKEN_CODE_HASH.trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x22; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let mut data = Vec::new();
         data.push(2); // version
         data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44, 0xaa, 0xbb, 0xcc, 0xdd]); // characteristic
@@ -3329,8 +3350,9 @@ mod tests {
         let info = LiveCellInfo {
             type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
             type_script_hash: Some(vec![0x33; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let data = vec![0u8; 8];
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3347,8 +3369,9 @@ mod tests {
         let info = LiveCellInfo {
             type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
             type_script_hash: Some(vec![0x34; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let block_number = 987654u64;
         let data = block_number.to_le_bytes().to_vec();
 
@@ -3443,8 +3466,9 @@ mod tests {
                 hex::decode(SPORE_CODE_HASHES[0].trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x41; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let data = make_spore_data("text/plain", b"hello spore text", None);
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3528,8 +3552,9 @@ mod tests {
         let info = LiveCellInfo {
             type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
             type_script_hash: Some(vec![0x51; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let data = vec![0u8; 4];
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3550,8 +3575,9 @@ mod tests {
                 hex::decode(DOTBIT_ACCOUNT_CELL_TYPE_ID.trim_start_matches("0x")).unwrap(),
             ),
             type_script_hash: Some(vec![0x52; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let data = vec![0u8; 20];
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3570,8 +3596,9 @@ mod tests {
         let info = LiveCellInfo {
             type_code_hash: Some(hex::decode(SUDT_CODE_HASH.trim_start_matches("0x")).unwrap()),
             type_script_hash: Some(vec![0x53; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let data = vec![0u8; 8];
 
         let analysis = analyze_cell_data(&info, &data, data.len() as i32);
@@ -3590,8 +3617,9 @@ mod tests {
         let info = LiveCellInfo {
             type_code_hash: Some(vec![0x99; 32]),
             type_script_hash: Some(vec![0x12; 32]),
-            ..make_info()
+            ..make_payload()
         };
+        let info = positioned(info);
         let mut data = Vec::new();
         data.extend_from_slice(&1u32.to_le_bytes());
         data.extend_from_slice(&[0xAB; 32]);
@@ -3710,17 +3738,17 @@ mod tests {
 
         let live_cell = LiveCellInfo {
             capacity: 42_00000000,
-            ..make_info()
+            ..make_payload()
         };
         let consumed_cell = LiveCellInfo {
             capacity: 99_00000000,
-            ..make_info()
+            ..make_payload()
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_live, 0, &live_cell);
-        batch.put_cell(&tx_consumed, 0, &consumed_cell);
-        batch.put_consumed_cell_with_consumer(&tx_consumed, 0, &consumed_cell, 123, None);
+        batch.put_cell(&tx_live, 0, &live_cell, 100);
+        batch.put_cell(&tx_consumed, 0, &consumed_cell, 100);
+        batch.put_consumed_cell_with_consumer(&tx_consumed, 0, &consumed_cell, 100, 123, None);
         batch.delete_cell(&tx_consumed, 0);
         batch.commit().unwrap();
 

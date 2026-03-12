@@ -668,7 +668,6 @@ mod tests {
 
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            created_at_block: 1,
             lock_script_hash: vec![0x22; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -682,7 +681,7 @@ mod tests {
             udt_amount: Some(1234),
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.put_cell(&tx_hash, output_index, &cell, 1);
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
@@ -733,7 +732,6 @@ mod tests {
         // UDT input lookup must ignore it to avoid replaying historical spend deltas.
         let consumed_cell = LiveCellInfo {
             capacity: 100_000_000,
-            created_at_block: 1,
             lock_script_hash: vec![0x22; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -747,7 +745,7 @@ mod tests {
             udt_amount: Some(1234),
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 2);
+        batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 1, 2);
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
@@ -770,7 +768,6 @@ mod tests {
         // Typed cell exists, but token metadata does not. This must NOT be treated as UDT input.
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            created_at_block: 1,
             lock_script_hash: vec![0x22; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -784,7 +781,7 @@ mod tests {
             udt_amount: None,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.put_cell(&tx_hash, output_index, &cell, 1);
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
@@ -825,7 +822,6 @@ mod tests {
 
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            created_at_block: 1,
             lock_script_hash: vec![0x22; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -839,7 +835,7 @@ mod tests {
             udt_amount: None,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.put_cell(&tx_hash, output_index, &cell, 1);
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
@@ -877,7 +873,6 @@ mod tests {
 
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            created_at_block: 1,
             lock_script_hash: vec![0x22; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -891,7 +886,7 @@ mod tests {
             udt_amount: None,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_hash, output_index, &cell);
+        batch.put_cell(&tx_hash, output_index, &cell, 1);
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];

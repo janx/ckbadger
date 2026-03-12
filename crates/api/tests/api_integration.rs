@@ -943,7 +943,6 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
         output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -956,6 +955,7 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
             occupied_capacity: 138_00000000,
             udt_amount: None,
         },
+        123,
     );
     batch.commit().unwrap();
 
@@ -1017,7 +1017,6 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -1030,6 +1029,7 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        123,
         456,
         Some(&consumed_by_tx),
     );
@@ -1253,7 +1253,6 @@ async fn test_search_cell_prefix_supports_colon_and_hex_output_index() {
         1,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -1266,6 +1265,7 @@ async fn test_search_cell_prefix_supports_colon_and_hex_output_index() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        123,
     );
     batch.commit().unwrap();
 
@@ -2335,7 +2335,6 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
         code_cell_output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -2348,6 +2347,7 @@ async fn test_script_lookup_and_code_cell_resolve_deployment_reference_alias() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        123,
     );
     batch.put_cell_by_type(&type_hash, 123, &code_cell_tx_hash, code_cell_output_index);
     batch.commit().unwrap();
@@ -2489,7 +2489,6 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: type_hash.clone(),
             lock_hash_type: 1,
@@ -2502,6 +2501,7 @@ async fn test_cells_by_script_resolves_reference_hash_type_alias() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        123,
     );
     batch.put_cell_by_lock_code(&type_hash, 123, &tx_hash, 0);
     batch.commit().unwrap();
@@ -2553,7 +2553,6 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 123,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: data_hash.clone(),
             lock_hash_type: 0,
@@ -2566,6 +2565,7 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        123,
     );
     batch.put_cell_by_lock_code(&data_hash, 123, &tx_hash, 0);
     batch.commit().unwrap();
@@ -2680,7 +2680,6 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: older_block,
             lock_script_hash: vec![0x10; 32],
             lock_code_hash: vec![0x20; 32],
             lock_hash_type: 1,
@@ -2693,6 +2692,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        older_block,
     );
     batch.put_cell_by_type(&older_code_hash, older_block, &older_tx_hash, 0);
     batch.put_cell(
@@ -2700,7 +2700,6 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
         1,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: newer_block,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: vec![0x21; 32],
             lock_hash_type: 1,
@@ -2713,6 +2712,7 @@ async fn test_get_script_returns_deployments_sorted_by_deployed_at() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        newer_block,
     );
     batch.put_cell_by_type(&newer_code_hash, newer_block, &newer_tx_hash, 1);
     batch.commit().unwrap();
@@ -4774,7 +4774,6 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 100,
             lock_script_hash: vec![0x41; 32],
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
@@ -4787,6 +4786,7 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        100,
         200,
         Some(&transfer_tx),
     );
@@ -4970,7 +4970,6 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
         nft_a_output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            created_at_block: 100,
             lock_script_hash: vec![0x41; 32],
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
@@ -4983,6 +4982,7 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
             occupied_capacity: 62_00000000,
             udt_amount: None,
         },
+        100,
     );
     batch.put_dotbit_account_outpoint(&nft_a_tx_hash, nft_a_output_index, &nft_a);
     batch.put_dotbit_outpoint_by_account_id(&nft_a, &nft_a_tx_hash, nft_a_output_index);
@@ -5133,7 +5133,6 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
         output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            created_at_block: 100,
             lock_script_hash: vec![0x41; 32],
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
@@ -5146,6 +5145,7 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
             occupied_capacity: 62_00000000,
             udt_amount: None,
         },
+        100,
     );
     batch.put_cell_by_type(&nft_type_hash, 100, &tx_hash, output_index);
     // Intentionally no put_dotbit_account_outpoint(...): live cell exists but index is required.
@@ -5295,7 +5295,6 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
         output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            created_at_block: 101,
             lock_script_hash: vec![0x41; 32],
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
@@ -5308,6 +5307,7 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
             occupied_capacity: 62_00000000,
             udt_amount: None,
         },
+        101,
     );
     batch.commit().unwrap();
 
@@ -5515,7 +5515,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 100,
             lock_script_hash: vec![0x31; 32],
             lock_code_hash: vec![0x41; 32],
             lock_hash_type: 1,
@@ -5528,6 +5527,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        100,
         200,
         Some(&transfer_tx),
     );
@@ -5536,7 +5536,6 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 200,
             lock_script_hash: vec![0x32; 32],
             lock_code_hash: vec![0x42; 32],
             lock_hash_type: 1,
@@ -5549,6 +5548,7 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        200,
         300,
         Some(&burn_tx),
     );
@@ -5781,7 +5781,6 @@ async fn test_assets_nft_item_detail_mnft() {
         output_index,
         &LiveCellInfo {
             capacity: 300_00000000,
-            created_at_block: 120,
             lock_script_hash: vec![0x31; 32],
             lock_code_hash: vec![0x32; 32],
             lock_hash_type: 1,
@@ -5794,6 +5793,7 @@ async fn test_assets_nft_item_detail_mnft() {
             occupied_capacity: 62_00000000,
             udt_amount: None,
         },
+        120,
     );
     batch.commit().unwrap();
 
@@ -5862,7 +5862,6 @@ async fn test_assets_nft_item_activities_mnft() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 100,
             lock_script_hash: previous_owner_lock_hash,
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -5875,6 +5874,7 @@ async fn test_assets_nft_item_activities_mnft() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        100,
         300,
         Some(&transfer_tx),
     );
@@ -6026,7 +6026,6 @@ async fn test_assets_nft_item_activities_dotbit() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 300,
             lock_script_hash: owner_a,
             lock_code_hash: vec![0x31; 32],
             lock_hash_type: 1,
@@ -6039,6 +6038,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        300,
         320,
         Some(&transfer_tx_1),
     );
@@ -6047,7 +6047,6 @@ async fn test_assets_nft_item_activities_dotbit() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 320,
             lock_script_hash: owner_b,
             lock_code_hash: vec![0x41; 32],
             lock_hash_type: 1,
@@ -6060,6 +6059,7 @@ async fn test_assets_nft_item_activities_dotbit() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        320,
         340,
         Some(&transfer_tx_2),
     );
@@ -6214,7 +6214,6 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 100,
             lock_script_hash: owner_a,
             lock_code_hash: vec![0x51; 32],
             lock_hash_type: 1,
@@ -6227,6 +6226,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        100,
         200,
         Some(&transfer_tx),
     );
@@ -6235,7 +6235,6 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 200,
             lock_script_hash: owner_b,
             lock_code_hash: vec![0x61; 32],
             lock_hash_type: 1,
@@ -6248,6 +6247,7 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_burn_history() {
             occupied_capacity: 61_00000000,
             udt_amount: None,
         },
+        200,
         260,
         Some(&burn_tx),
     );

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, Result};
 use tracing::{error, info, warn};
 
-use ckbadger_store::types::LiveCellInfo;
+use ckbadger_store::types::PositionedCellInfo;
 
 use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
@@ -31,8 +31,8 @@ impl Indexer {
         &self,
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
         all_tx_data: &[TxData],
-        input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         address_balance_changes: &HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
     ) -> Result<()> {
         let mut tracker = self.hodl_tracker.lock().unwrap();

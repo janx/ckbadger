@@ -199,17 +199,21 @@ async fn get_cell_graph(
         None
     };
 
-    let (cell_info, status_str, consumed_by_tx, consumed_at_block) =
-        match (live_cell, consumed_cell) {
-            (Some(info), _) => (info, "live", None, 0),
-            (None, Some(info)) => (
-                info.cell,
-                "dead",
-                info.consumed_by_tx,
-                info.consumed_at_block,
-            ),
-            (None, None) => return Err(ApiError::not_found("Cell not found")),
-        };
+    let (cell_info, status_str, consumed_by_tx, consumed_at_block): (
+        ckbadger_store::PositionedCellInfo,
+        &str,
+        Option<Vec<u8>>,
+        i64,
+    ) = match (live_cell, consumed_cell) {
+        (Some(info), _) => (info, "live", None, 0),
+        (None, Some(info)) => (
+            info.to_positioned_cell_info(),
+            "dead",
+            info.consumed_by_tx,
+            info.consumed_at_block,
+        ),
+        (None, None) => return Err(ApiError::not_found("Cell not found")),
+    };
 
     let capacity_str = cell_info.capacity.to_string();
 

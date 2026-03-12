@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use anyhow::{anyhow, Result};
 use tracing::warn;
 
-use ckbadger_store::types::LiveCellInfo;
+use ckbadger_store::types::PositionedCellInfo;
 use ckbadger_store::CkbadgerStore;
 
 use super::helpers::*;
@@ -516,8 +516,8 @@ pub(crate) fn collect_token_max_supply_observations(
 pub(crate) fn load_activity_token_info_cache(
     store: &CkbadgerStore,
     tx_data: &[TxData],
-    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
 ) -> Result<HashMap<Vec<u8>, (Option<String>, Option<u8>)>> {
     let mut type_hashes = HashSet::<Vec<u8>>::new();
 

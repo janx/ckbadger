@@ -5,8 +5,9 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
+use ckbadger_store::types::decode_live_cell_marker;
 use ckbadger_store::CkbadgerStore;
-use ckbadger_store::LiveCellInfo;
+use ckbadger_store::{LiveCellInfo, PositionedCellInfo};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
@@ -22,22 +23,24 @@ fn make_live_cell(
     lock_hash_byte: u8,
     type_hash_byte: Option<u8>,
     data_size: i32,
-) -> LiveCellInfo {
-    LiveCellInfo {
-        capacity,
-        created_at_block: block,
-        lock_script_hash: vec![lock_hash_byte; 32],
-        lock_code_hash: vec![0x11u8; 32],
-        lock_hash_type: 1,
-        lock_args: vec![0x22u8; 20],
-        type_script_hash: type_hash_byte.map(|b| vec![b; 32]),
-        type_code_hash: type_hash_byte.map(|_| vec![0x44u8; 32]),
-        type_hash_type: type_hash_byte.map(|_| 1),
-        type_args: type_hash_byte.map(|_| vec![]),
-        data_size,
-        occupied_capacity: 0,
-        udt_amount: None,
-    }
+) -> PositionedCellInfo {
+    PositionedCellInfo::new(
+        LiveCellInfo {
+            capacity,
+            lock_script_hash: vec![lock_hash_byte; 32],
+            lock_code_hash: vec![0x11u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22u8; 20],
+            type_script_hash: type_hash_byte.map(|b| vec![b; 32]),
+            type_code_hash: type_hash_byte.map(|_| vec![0x44u8; 32]),
+            type_hash_type: type_hash_byte.map(|_| 1),
+            type_args: type_hash_byte.map(|_| vec![]),
+            data_size,
+            occupied_capacity: 0,
+            udt_amount: None,
+        },
+        block,
+    )
 }
 
 #[test]
@@ -47,7 +50,7 @@ fn test_insert_cell_visible_in_live_cells() {
     let cell = make_live_cell(100_00000000, 1000, 0xAA, Some(0xBB), 256);
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx_hash, 0, &cell);
+    batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     batch.commit().unwrap();
 
     // Verify live marker + canonical payload.
@@ -57,12 +60,12 @@ fn test_insert_cell_visible_in_live_cells() {
         marker.is_some(),
         "cell should be present in live_cells marker CF"
     );
+    assert_eq!(decode_live_cell_marker(&marker.unwrap()).unwrap(), 1000);
     let raw = store.get_cf(store.cf_cells(), &key).unwrap();
     assert!(raw.is_some(), "cell payload should be present in cells CF");
 
     let decoded: LiveCellInfo = bincode::deserialize(&raw.unwrap()).unwrap();
     assert_eq!(decoded.capacity, 100_00000000);
-    assert_eq!(decoded.created_at_block, 1000);
     assert_eq!(decoded.lock_script_hash, vec![0xAAu8; 32]);
     assert_eq!(decoded.data_size, 256);
 }
@@ -75,7 +78,7 @@ fn test_consume_cell_moves_to_consumed() {
 
     // Insert into live_cells
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx_hash, 0, &cell);
+    batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     batch.commit().unwrap();
 
     // Verify it exists in live_cells
@@ -84,7 +87,7 @@ fn test_consume_cell_moves_to_consumed() {
 
     // Consume: move to consumed_cells and delete from live_cells
     let mut batch = StoreBatch::new(&store);
-    batch.put_consumed_cell(&tx_hash, 0, &cell, 1001);
+    batch.put_consumed_cell(&tx_hash, 0, &cell.cell, cell.created_at_block, 1001);
     batch.delete_cell(&tx_hash, 0);
     batch.commit().unwrap();
 
@@ -119,9 +122,9 @@ fn test_batch_insert_multiple_cells() {
 
     // Insert all three in a single batch
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx1, 0, &cell1);
-    batch.put_cell(&tx2, 0, &cell2);
-    batch.put_cell(&tx3, 0, &cell3);
+    batch.put_cell(&tx1, 0, &cell1.cell, cell1.created_at_block);
+    batch.put_cell(&tx2, 0, &cell2.cell, cell2.created_at_block);
+    batch.put_cell(&tx3, 0, &cell3.cell, cell3.created_at_block);
     batch.commit().unwrap();
 
     // Verify all three exist
@@ -153,9 +156,9 @@ fn test_list_cells_by_lock_prefix_scan() {
 
     let mut batch = StoreBatch::new(&store);
     // Insert cells into live_cells
-    batch.put_cell(&tx1, 0, &cell1);
-    batch.put_cell(&tx2, 0, &cell2);
-    batch.put_cell(&tx3, 0, &cell3);
+    batch.put_cell(&tx1, 0, &cell1.cell, cell1.created_at_block);
+    batch.put_cell(&tx2, 0, &cell2.cell, cell2.created_at_block);
+    batch.put_cell(&tx3, 0, &cell3.cell, cell3.created_at_block);
     // Insert lock index entries
     batch.put_cell_by_lock(&lock_hash, 1000, &tx1, 0);
     batch.put_cell_by_lock(&lock_hash, 2000, &tx2, 0);
@@ -198,11 +201,11 @@ fn test_list_cells_by_lock_cursor_pagination() {
     let cell5 = make_live_cell(500_00000000, 3000, 0xAA, None, 90);
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx1, 0, &cell1);
-    batch.put_cell(&tx2, 0, &cell2);
-    batch.put_cell(&tx3, 0, &cell3);
-    batch.put_cell(&tx4, 0, &cell4);
-    batch.put_cell(&tx5, 0, &cell5);
+    batch.put_cell(&tx1, 0, &cell1.cell, cell1.created_at_block);
+    batch.put_cell(&tx2, 0, &cell2.cell, cell2.created_at_block);
+    batch.put_cell(&tx3, 0, &cell3.cell, cell3.created_at_block);
+    batch.put_cell(&tx4, 0, &cell4.cell, cell4.created_at_block);
+    batch.put_cell(&tx5, 0, &cell5.cell, cell5.created_at_block);
     batch.put_cell_by_lock(&lock_hash, 1000, &tx1, 0);
     batch.put_cell_by_lock(&lock_hash, 1000, &tx2, 0);
     batch.put_cell_by_lock(&lock_hash, 1000, &tx3, 0);
@@ -272,8 +275,8 @@ fn test_list_cells_by_type_prefix_scan() {
     let cell2 = make_live_cell(250_00000000, 600, 0xDD, Some(0xBB), 90);
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx1, 0, &cell1);
-    batch.put_cell(&tx2, 1, &cell2);
+    batch.put_cell(&tx1, 0, &cell1.cell, cell1.created_at_block);
+    batch.put_cell(&tx2, 1, &cell2.cell, cell2.created_at_block);
     batch.put_cell_by_type(&type_hash, 500, &tx1, 0);
     batch.put_cell_by_type(&type_hash, 600, &tx2, 1);
     batch.commit().unwrap();
@@ -288,7 +291,7 @@ fn test_list_cells_by_type_prefix_scan() {
 
     // Verify consumed cells are not returned by type prefix scan
     let mut batch = StoreBatch::new(&store);
-    batch.put_consumed_cell(&tx1, 0, &cell1, 700);
+    batch.put_consumed_cell(&tx1, 0, &cell1.cell, cell1.created_at_block, 700);
     batch.delete_cell(&tx1, 0);
     batch.delete_cell_by_type(&type_hash, 500, &tx1, 0);
     batch.commit().unwrap();

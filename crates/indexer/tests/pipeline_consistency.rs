@@ -10,6 +10,7 @@ use ckbadger_indexer::parser::cell::ParsedCell;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::LiveCellInfo;
 use ckbadger_store::CkbadgerStore;
+use ckbadger_store::PositionedCellInfo;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -51,27 +52,29 @@ fn occupied_capacity_from_cell(cell: &ParsedCell) -> i64 {
 
 fn precomputed_infos_for_insert(
     cells: &[(&[u8], i16, &ParsedCell, i64)],
-) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
+) -> HashMap<(Vec<u8>, i16), PositionedCellInfo> {
     cells
         .iter()
         .map(|(tx_hash, output_index, cell, created_at_block)| {
             (
                 ((*tx_hash).to_vec(), *output_index),
-                LiveCellInfo {
-                    capacity: cell.capacity,
-                    created_at_block: *created_at_block,
-                    lock_script_hash: cell.lock_script_hash.clone(),
-                    lock_code_hash: cell.lock_code_hash.clone(),
-                    lock_hash_type: cell.lock_hash_type,
-                    lock_args: cell.lock_args.clone(),
-                    type_script_hash: cell.type_script_hash.clone(),
-                    type_code_hash: cell.type_code_hash.clone(),
-                    type_hash_type: cell.type_hash_type,
-                    type_args: cell.type_args.clone(),
-                    data_size: cell.data_size,
-                    occupied_capacity: occupied_capacity_from_cell(cell),
-                    udt_amount: None,
-                },
+                PositionedCellInfo::new(
+                    LiveCellInfo {
+                        capacity: cell.capacity,
+                        lock_script_hash: cell.lock_script_hash.clone(),
+                        lock_code_hash: cell.lock_code_hash.clone(),
+                        lock_hash_type: cell.lock_hash_type,
+                        lock_args: cell.lock_args.clone(),
+                        type_script_hash: cell.type_script_hash.clone(),
+                        type_code_hash: cell.type_code_hash.clone(),
+                        type_hash_type: cell.type_hash_type,
+                        type_args: cell.type_args.clone(),
+                        data_size: cell.data_size,
+                        occupied_capacity: occupied_capacity_from_cell(cell),
+                        udt_amount: None,
+                    },
+                    *created_at_block,
+                ),
             )
         })
         .collect()
@@ -239,7 +242,6 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
 
     let legacy_like = LiveCellInfo {
         capacity: 300_00000000,
-        created_at_block: 1000,
         lock_script_hash: vec![0x33u8; 32],
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
@@ -254,7 +256,7 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
     };
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx_hash, 0, &legacy_like);
+    batch.put_cell(&tx_hash, 0, &legacy_like, 1000);
     batch.commit().unwrap();
 
     let err = writer
@@ -270,7 +272,6 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
 
     let bad = LiveCellInfo {
         capacity: 300_00000000,
-        created_at_block: 1000,
         lock_script_hash: vec![0x33u8; 32],
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
@@ -285,7 +286,7 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
     };
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx_hash, 0, &bad);
+    batch.put_cell(&tx_hash, 0, &bad, 1000);
     batch.commit().unwrap();
 
     let err = writer

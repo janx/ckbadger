@@ -1116,7 +1116,6 @@ mod tests {
         };
         let live_cell = LiveCellInfo {
             capacity: 1_000,
-            created_at_block: 1,
             lock_script_hash: vec![0xAA; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -1131,7 +1130,6 @@ mod tests {
         };
         let consumed_cell = LiveCellInfo {
             capacity: 400,
-            created_at_block: 1,
             lock_script_hash: vec![0xBB; 32],
             lock_code_hash: vec![0x33; 32],
             lock_hash_type: 1,
@@ -1148,8 +1146,8 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        batch.put_cell(&[0x10; 32], 0, &live_cell);
-        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 2);
+        batch.put_cell(&[0x10; 32], 0, &live_cell, 1);
+        batch.put_consumed_cell(&[0x20; 32], 0, &consumed_cell, 1, 2);
         batch.commit().unwrap();
 
         store

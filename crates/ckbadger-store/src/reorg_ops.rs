@@ -113,35 +113,32 @@ fn delete_cell_index_entries(
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
     cell: &LiveCellInfo,
+    created_at_block: i64,
     tx_hash: &[u8],
     output_index: i16,
 ) {
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_script_hash,
-        cell.created_at_block,
+        created_at_block,
         tx_hash,
         output_index,
     );
     batch.delete_cf(store.cf_cell_by_lock(), &idx_key);
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_code_hash,
-        cell.created_at_block,
+        created_at_block,
         tx_hash,
         output_index,
     );
     batch.delete_cf(store.cf_cell_by_lock_code(), &idx_key);
     if let Some(ref type_hash) = cell.type_script_hash {
         let idx_key =
-            keys::encode_cell_index_key(type_hash, cell.created_at_block, tx_hash, output_index);
+            keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_type(), &idx_key);
     }
     if let Some(ref type_code_hash) = cell.type_code_hash {
-        let idx_key = keys::encode_cell_index_key(
-            type_code_hash,
-            cell.created_at_block,
-            tx_hash,
-            output_index,
-        );
+        let idx_key =
+            keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_type_code(), &idx_key);
     }
 }
@@ -150,41 +147,34 @@ fn put_cell_index_entries(
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
     cell: &LiveCellInfo,
+    created_at_block: i64,
     tx_hash: &[u8],
     output_index: i16,
 ) {
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_script_hash,
-        cell.created_at_block,
+        created_at_block,
         tx_hash,
         output_index,
     );
     batch.put_cf(store.cf_cell_by_lock(), &idx_key, []);
     let idx_key = keys::encode_cell_index_key(
         &cell.lock_code_hash,
-        cell.created_at_block,
+        created_at_block,
         tx_hash,
         output_index,
     );
     batch.put_cf(store.cf_cell_by_lock_code(), &idx_key, []);
     if let Some(ref type_hash) = cell.type_script_hash {
         let idx_key =
-            keys::encode_cell_index_key(type_hash, cell.created_at_block, tx_hash, output_index);
+            keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_type(), &idx_key, []);
     }
     if let Some(ref type_code_hash) = cell.type_code_hash {
-        let idx_key = keys::encode_cell_index_key(
-            type_code_hash,
-            cell.created_at_block,
-            tx_hash,
-            output_index,
-        );
+        let idx_key =
+            keys::encode_cell_index_key(type_code_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_type_code(), &idx_key, []);
     }
-}
-
-fn encode_live_cell_marker(created_at_block: i64) -> Vec<u8> {
-    bincode::serialize(&LiveCellMarker { created_at_block }).expect("serialize LiveCellMarker")
 }
 
 /// Accumulate derived-CF deltas for a cell changing live state during rollback.
@@ -735,21 +725,28 @@ impl CkbadgerStore {
                     );
                 }
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                let info = self
+                let positioned = self
                     .get_live_cell_by_outpoint_key(&key, cells_store)?
                     .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing canonical cell for live outpoint during rollback fallback: outpoint=0x{}:{}",
-                        bytes_to_hex(&tx_hash),
-                        output_index
-                    )
+                        anyhow::anyhow!(
+                            "missing canonical cell for live outpoint during rollback fallback: outpoint=0x{}:{}",
+                            bytes_to_hex(&tx_hash),
+                            output_index
+                        )
                     })?;
-                if info.created_at_block > rollback_to {
+                if positioned.created_at_block > rollback_to {
                     batch.delete_cf(self.cf_live_cells(), &key);
-                    delete_cell_index_entries(self, &mut batch, &info, &tx_hash, output_index);
+                    delete_cell_index_entries(
+                        self,
+                        &mut batch,
+                        &positioned.cell,
+                        positioned.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
                     cells_removed += 1;
                     accumulate_cell_deltas(
-                        &info,
+                        &positioned.cell,
                         -1,
                         &mut addr_balance_deltas,
                         &mut script_info_deltas,
@@ -791,22 +788,28 @@ impl CkbadgerStore {
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
                 batch.delete_cf(self.cf_consumed_cells(), &key);
                 let info = cells_store
-                    .get_cell_payload_by_outpoint_key(&key)?
+                    .get_cell_by_outpoint_key(&key)?
                     .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "missing canonical cell for consumed outpoint during rollback fallback: outpoint=0x{}:{}",
-                        bytes_to_hex(&tx_hash),
-                        output_index
-                    )
-                    })?
-                    .into_live_cell_info(meta.created_at_block);
-                if info.created_at_block <= rollback_to {
+                        anyhow::anyhow!(
+                            "missing canonical cell for consumed outpoint during rollback fallback: outpoint=0x{}:{}",
+                            bytes_to_hex(&tx_hash),
+                            output_index
+                        )
+                    })?;
+                if meta.created_at_block <= rollback_to {
                     batch.put_cf(
                         self.cf_live_cells(),
                         &key,
-                        encode_live_cell_marker(info.created_at_block),
+                        encode_live_cell_marker(meta.created_at_block),
                     );
-                    put_cell_index_entries(self, &mut batch, &info, &tx_hash, output_index);
+                    put_cell_index_entries(
+                        self,
+                        &mut batch,
+                        &info,
+                        meta.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
                     cells_restored += 1;
                     accumulate_cell_deltas(
                         &info,
@@ -846,7 +849,7 @@ impl CkbadgerStore {
                     })?;
                     let outpoint_key = keys::encode_outpoint(&ctx.tx_hash, output_index);
                     if self.get_cf(self.cf_live_cells(), &outpoint_key)?.is_some() {
-                        let info = self
+                        let positioned = self
                             .get_live_cell_by_outpoint_key(&outpoint_key, cells_store)?
                             .ok_or_else(|| {
                                 anyhow::anyhow!(
@@ -859,13 +862,14 @@ impl CkbadgerStore {
                         delete_cell_index_entries(
                             self,
                             &mut batch,
-                            &info,
+                            &positioned.cell,
+                            positioned.created_at_block,
                             &ctx.tx_hash,
                             output_index,
                         );
                         cells_removed += 1;
                         accumulate_cell_deltas(
-                            &info,
+                            &positioned.cell,
                             -1,
                             &mut addr_balance_deltas,
                             &mut script_info_deltas,
@@ -927,16 +931,17 @@ impl CkbadgerStore {
                                 }
                             }
                             batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
-                            if consumed.cell.created_at_block <= rollback_to {
+                            if consumed.created_at_block <= rollback_to {
                                 batch.put_cf(
                                     self.cf_live_cells(),
                                     outpoint_key,
-                                    encode_live_cell_marker(consumed.cell.created_at_block),
+                                    encode_live_cell_marker(consumed.created_at_block),
                                 );
                                 put_cell_index_entries(
                                     self,
                                     &mut batch,
                                     &consumed.cell,
+                                    consumed.created_at_block,
                                     &input.tx_hash,
                                     input.output_index,
                                 );
@@ -2477,7 +2482,6 @@ mod tests {
         };
         let cell = LiveCellInfo {
             capacity: 500,
-            created_at_block: 1,
             lock_script_hash: lock_hash.clone(),
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2494,7 +2498,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        batch.put_cell(&tx_hash, 0, &cell);
+        batch.put_cell(&tx_hash, 0, &cell, 1);
         // Seed derived CFs so inline delta application can find them.
         batch.put_addr_balance(&lock_hash, &AddressBalance::default());
         batch.put_script_info(
@@ -2508,7 +2512,7 @@ mod tests {
 
         // Simulate consumption in block 2.
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&tx_hash, 0, &cell, 2);
+        batch.put_consumed_cell(&tx_hash, 0, &cell, 1, 2);
         batch.delete_cell(&tx_hash, 0);
         batch.commit().unwrap();
 
@@ -2557,7 +2561,6 @@ mod tests {
         let consuming_tx = vec![0x32; 32];
         let input_cell = LiveCellInfo {
             capacity: 400,
-            created_at_block: 1,
             lock_script_hash: vec![0xAA; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2572,7 +2575,6 @@ mod tests {
         };
         let rollback_output_cell = LiveCellInfo {
             capacity: 200,
-            created_at_block: 2,
             lock_script_hash: vec![0xBB; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2600,9 +2602,9 @@ mod tests {
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
         batch.put_tx_index(2, 0, &tx_index);
-        batch.put_cell(&input_tx, 0, &input_cell);
-        batch.put_cell(&consuming_tx, 0, &rollback_output_cell);
-        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 2, Some(&consuming_tx));
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&consuming_tx, 0, &rollback_output_cell, 2);
+        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&consuming_tx));
         batch.delete_cell(&input_tx, 0);
         batch.put_reorg_undo_log_by_block(
             2,
@@ -2685,7 +2687,6 @@ mod tests {
         let consuming_tx_b = vec![0x43; 32];
         let input_cell = LiveCellInfo {
             capacity: 400,
-            created_at_block: 1,
             lock_script_hash: vec![0xAA; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2700,7 +2701,6 @@ mod tests {
         };
         let rollback_output_cell_a = LiveCellInfo {
             capacity: 200,
-            created_at_block: 2,
             lock_script_hash: vec![0xBB; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2715,7 +2715,6 @@ mod tests {
         };
         let rollback_output_cell_b = LiveCellInfo {
             capacity: 180,
-            created_at_block: 2,
             lock_script_hash: vec![0xCC; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2744,10 +2743,17 @@ mod tests {
         batch.put_block_header(2, &header2);
         batch.put_tx_index(2, 0, &tx_index);
         batch.put_tx_index(2, 1, &tx_index);
-        batch.put_cell(&input_tx, 0, &input_cell);
-        batch.put_cell(&consuming_tx_a, 0, &rollback_output_cell_a);
-        batch.put_cell(&consuming_tx_b, 0, &rollback_output_cell_b);
-        batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 2, Some(&consuming_tx_a));
+        batch.put_cell(&input_tx, 0, &input_cell, 1);
+        batch.put_cell(&consuming_tx_a, 0, &rollback_output_cell_a, 2);
+        batch.put_cell(&consuming_tx_b, 0, &rollback_output_cell_b, 2);
+        batch.put_consumed_cell_with_consumer(
+            &input_tx,
+            0,
+            &input_cell,
+            1,
+            2,
+            Some(&consuming_tx_a),
+        );
         batch.delete_cell(&input_tx, 0);
         // Seed only one tx-context entry while tx_index indicates two txs in block 2.
         // rollback_to_block should detect partial coverage and use full-scan fallback.
@@ -2978,7 +2984,6 @@ mod tests {
         };
         let cell = LiveCellInfo {
             capacity: 100,
-            created_at_block: 2,
             lock_script_hash: vec![0xAA; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -2997,7 +3002,7 @@ mod tests {
         batch.put_block_header(2, &header2);
         batch.put_tx_hash_map(&cellbase_tx, 2, 0);
         batch.put_tx_index(2, 0, &tx_index);
-        batch.put_cell(&cellbase_tx, 0, &cell);
+        batch.put_cell(&cellbase_tx, 0, &cell, 2);
         batch.put_reorg_undo_log_by_block(
             2,
             0,
@@ -3064,7 +3069,6 @@ mod tests {
         };
         let keep_cell = LiveCellInfo {
             capacity: 100,
-            created_at_block: 1,
             lock_script_hash: vec![0xAA; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -3079,7 +3083,6 @@ mod tests {
         };
         let drop_live_cell = LiveCellInfo {
             capacity: 200,
-            created_at_block: 2,
             lock_script_hash: vec![0xBB; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -3094,7 +3097,6 @@ mod tests {
         };
         let drop_consumed_cell = LiveCellInfo {
             capacity: 300,
-            created_at_block: 2,
             lock_script_hash: vec![0xCC; 32],
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
@@ -3115,9 +3117,9 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        batch.put_cell(&keep_tx, 0, &keep_cell);
-        batch.put_cell(&drop_live_tx, 0, &drop_live_cell);
-        batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell);
+        batch.put_cell(&keep_tx, 0, &keep_cell, 1);
+        batch.put_cell(&drop_live_tx, 0, &drop_live_cell, 2);
+        batch.put_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 2);
         // Seed derived CFs so inline delta application can find them.
         batch.put_addr_balance(
             &[0xAA; 32],
@@ -3151,7 +3153,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_consumed_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 2);
+        batch.put_consumed_cell(&drop_consumed_tx, 0, &drop_consumed_cell, 2, 2);
         batch.delete_cell(&drop_consumed_tx, 0);
         batch.commit().unwrap();
 

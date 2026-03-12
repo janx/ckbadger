@@ -15,8 +15,8 @@ use tracing::{debug, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellInfo,
-    ObjectTypeIndex, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
+    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, ObjectTypeIndex,
+    PositionedCellInfo, SporeTypeIndex, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -47,7 +47,7 @@ use super::undo::*;
 
 pub(super) fn collect_missing_input_outpoints<T>(
     all_input_outpoints: &[(Vec<u8>, i16)],
-    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     same_batch_cells: &HashMap<(Vec<u8>, i16), T>,
 ) -> Vec<(Vec<u8>, i16)> {
     let mut seen = HashSet::new();
@@ -70,8 +70,8 @@ pub(super) fn collect_missing_input_outpoints<T>(
 /// Fails fast if any input is unresolved — at this point all inputs should be resolved.
 fn resolve_consumed_stats(
     tx_slice: &[TxData],
-    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     block_number: i64,
 ) -> Result<(i64, i128)> {
     let mut data_size_consumed: i64 = 0;
@@ -103,8 +103,8 @@ fn resolve_consumed_stats(
 fn build_activity_input_views(
     tx_data: &TxData,
     block_number: i64,
-    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dao_withdraw_outpoints: &HashSet<(Vec<u8>, i16)>,
 ) -> Result<Vec<crate::db::writer::activities::InputCellView>> {
     if tx_data.is_cellbase {
@@ -964,8 +964,8 @@ impl Indexer {
         blocks: &[BlockResponseWithCycles],
         all_parsed_blocks: &[crate::parser::block::ParsedBlock],
         all_tx_data: Vec<TxData>,
-        input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         address_balance_changes: HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>,
         script_usage_changes: ScriptUsageChanges,
         script_daily_changes: HashMap<(Vec<u8>, bool, u32), (i128, i128)>,
@@ -4767,11 +4767,11 @@ impl Indexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_store::LiveCellInfo;
 
     fn dummy_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 1,
-            created_at_block: 1,
             lock_script_hash: vec![1u8; 32],
             lock_code_hash: vec![2u8; 32],
             lock_hash_type: 1,
@@ -4784,6 +4784,10 @@ mod tests {
             occupied_capacity: 1,
             udt_amount: None,
         }
+    }
+
+    fn dummy_positioned_cell_info() -> PositionedCellInfo {
+        PositionedCellInfo::new(dummy_live_cell_info(), 1)
     }
 
     fn dummy_tx_index_entry() -> ckbadger_store::types::TxIndexEntry {
@@ -4887,7 +4891,7 @@ mod tests {
             (vec![0xCC; 32], 2),
         ];
         let mut resolved = HashMap::new();
-        resolved.insert((vec![0xBB; 32], 1), dummy_live_cell_info());
+        resolved.insert((vec![0xBB; 32], 1), dummy_positioned_cell_info());
         let mut same_batch = HashMap::new();
         same_batch.insert((vec![0xCC; 32], 2), ());
 
@@ -4950,7 +4954,10 @@ mod tests {
         info.lock_script_hash = vec![0xAB; 32];
 
         let mut batch_cell_infos = HashMap::new();
-        batch_cell_infos.insert((previous_tx_hash.to_vec(), 3), info.clone());
+        batch_cell_infos.insert(
+            (previous_tx_hash.to_vec(), 3),
+            PositionedCellInfo::new(info.clone(), 1),
+        );
 
         let inputs = build_activity_input_views(
             &tx,
@@ -4987,7 +4994,10 @@ mod tests {
             crate::parser::dao::DAO_CODE_HASH,
         ));
         let mut input_cell_info = HashMap::new();
-        input_cell_info.insert((previous_tx_hash.to_vec(), 1), info);
+        input_cell_info.insert(
+            (previous_tx_hash.to_vec(), 1),
+            PositionedCellInfo::new(info, 1),
+        );
 
         // Populate dao_withdraw_outpoints with the withdraw request outpoint
         let mut dao_withdraw_outpoints = HashSet::new();
@@ -5178,7 +5188,6 @@ mod tests {
 
         let live_cell = LiveCellInfo {
             capacity: 100_000_000,
-            created_at_block: 1,
             lock_script_hash: vec![0x55; 32],
             lock_code_hash: vec![0x66; 32],
             lock_hash_type: 1,
@@ -5193,7 +5202,7 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_hash, output_index, &live_cell);
+        batch.put_cell(&tx_hash, output_index, &live_cell, 1);
         batch.commit().unwrap();
 
         let resolved = resolve_input_udt_info_from_live_cells(

@@ -1605,7 +1605,7 @@ pub(crate) fn visit_live_cells_in_batches<F>(
     mut visit: F,
 ) -> Result<(), String>
 where
-    F: FnMut(&ckbadger_store::LiveCellInfo) -> Result<(), String>,
+    F: FnMut(&ckbadger_store::PositionedCellInfo) -> Result<(), String>,
 {
     let mut batch: Vec<(Vec<u8>, i16)> = Vec::with_capacity(LIVE_CELL_SCAN_BATCH_SIZE);
 
@@ -3953,7 +3953,6 @@ mod tests {
 
         let live_a = ckbadger_store::LiveCellInfo {
             capacity: 100_00000000,
-            created_at_block: 10,
             lock_script_hash: vec![0x11; 32],
             lock_code_hash: vec![0x22; 32],
             lock_hash_type: 1,
@@ -3968,7 +3967,6 @@ mod tests {
         };
         let live_b = ckbadger_store::LiveCellInfo {
             capacity: 200_00000000,
-            created_at_block: 20,
             lock_script_hash: vec![0x44; 32],
             lock_code_hash: vec![0x55; 32],
             lock_hash_type: 1,
@@ -3983,7 +3981,6 @@ mod tests {
         };
         let consumed_only = ckbadger_store::LiveCellInfo {
             capacity: 300_00000000,
-            created_at_block: 30,
             lock_script_hash: vec![0x77; 32],
             lock_code_hash: vec![0x88; 32],
             lock_hash_type: 1,
@@ -3998,9 +3995,9 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0xA1; 32], 0, &live_a);
-        batch.put_cell(&[0xA2; 32], 0, &live_b);
-        batch.put_consumed_cell(&[0xA3; 32], 0, &consumed_only, 99);
+        batch.put_cell(&[0xA1; 32], 0, &live_a, 10);
+        batch.put_cell(&[0xA2; 32], 0, &live_b, 20);
+        batch.put_consumed_cell(&[0xA3; 32], 0, &consumed_only, 30, 99);
         batch.commit().unwrap();
 
         let mut seen_blocks = Vec::new();

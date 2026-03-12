@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
-use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, SporeTypeIndex};
+use ckbadger_store::types::{LiveCellInfo, ObjectTypeIndex, PositionedCellInfo, SporeTypeIndex};
 
 use crate::parser::{
     analyze_spore_media_profile,
@@ -140,8 +140,8 @@ fn scan_preparsed_nft_tx(
 fn run_nft_precompute(
     all_parsed_blocks: &[crate::parser::block::ParsedBlock],
     all_tx_data: &[TxData],
-    input_cell_info: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-    batch_cell_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+    input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     dotbit_outpoint_fallback: &HashMap<(Vec<u8>, i16), Vec<u8>>,
 ) -> Result<PreParsedNftData> {
     let mut mnft_issuers: Vec<(usize, ParsedMnftIssuer)> = Vec::new();
@@ -308,21 +308,21 @@ impl Indexer {
             Arc<Vec<BlockResponseWithCycles>>,
             Vec<crate::parser::block::ParsedBlock>,
             Vec<TxData>,
-            HashMap<(Vec<u8>, i16), LiveCellInfo>,
+            HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             // Pre-computed in parser stage:
-            HashMap<(Vec<u8>, i16), LiveCellInfo>, // batch_cell_infos
+            HashMap<(Vec<u8>, i16), PositionedCellInfo>, // batch_cell_infos
             HashMap<Vec<u8>, (i128, i32, i32, i64, i64, Vec<u8>, i128)>, // address_balance_changes
-            ScriptUsageChanges,                    // script_usage_changes
+            ScriptUsageChanges,                          // script_usage_changes
             HashMap<(Vec<u8>, bool, u32), (i128, i128)>, // script_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // token_daily_changes
-            HashMap<Vec<u8>, SporeTypeIndex>,      // spore_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // spore_daily_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // cluster_daily_changes
-            HashMap<Vec<u8>, ObjectTypeIndex>,     // object_type_index_changes
-            HashMap<(Vec<u8>, u32), (i128, i128)>, // object_daily_changes
-            PreParsedSporeData,                    // pre-parsed spore/cluster data
-            PreParsedNftData,                      // pre-parsed mNFT/DotBit data
-            ParserBatchPerfSample,                 // parser hotpath timings
+            HashMap<(Vec<u8>, u32), (i128, i128)>,       // token_daily_changes
+            HashMap<Vec<u8>, SporeTypeIndex>,            // spore_type_index_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>,       // spore_daily_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>,       // cluster_daily_changes
+            HashMap<Vec<u8>, ObjectTypeIndex>,           // object_type_index_changes
+            HashMap<(Vec<u8>, u32), (i128, i128)>,       // object_daily_changes
+            PreParsedSporeData,                          // pre-parsed spore/cluster data
+            PreParsedNftData,                            // pre-parsed mNFT/DotBit data
+            ParserBatchPerfSample,                       // parser hotpath timings
         );
 
         let (fetch_tx, mut fetch_rx) = mpsc::channel::<FetchedBatch>(self.config.pipeline_buffer);
@@ -710,7 +710,7 @@ impl Indexer {
                 let t_cell_lookup = Instant::now();
                 let mut unresolved_retry_count: usize = 0;
                 let resolved_input_cells: Option<(
-                    HashMap<(Vec<u8>, i16), LiveCellInfo>,
+                    HashMap<(Vec<u8>, i16), PositionedCellInfo>,
                     usize,
                     usize,
                 )> = loop {
@@ -728,7 +728,7 @@ impl Indexer {
                     }
 
                     let mut attempt_cache_hits: usize = 0;
-                    let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> =
+                    let mut attempt_input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> =
                         HashMap::new();
                     for (tx_hash, idx) in &all_input_outpoints {
                         let hash_arr = match tx_hash_key32(
@@ -755,21 +755,23 @@ impl Indexer {
                             attempt_cache_hits += 1;
                             attempt_input_cell_info.insert(
                                 (tx_hash.clone(), *idx),
-                                LiveCellInfo {
-                                    capacity: cached.capacity,
-                                    created_at_block: cached.created_at_block,
-                                    lock_script_hash: cached.lock_script_hash.clone(),
-                                    lock_code_hash: cached.lock_code_hash.clone(),
-                                    lock_hash_type: cached.lock_hash_type,
-                                    lock_args: cached.lock_args.clone(),
-                                    type_script_hash: cached.type_script_hash.clone(),
-                                    type_code_hash: cached.type_code_hash.clone(),
-                                    type_hash_type: cached.type_hash_type,
-                                    type_args: cached.type_args.clone(),
-                                    data_size: cached.data_size,
-                                    occupied_capacity: cached.occupied_capacity,
-                                    udt_amount: cached.udt_amount,
-                                },
+                                PositionedCellInfo::new(
+                                    LiveCellInfo {
+                                        capacity: cached.capacity,
+                                        lock_script_hash: cached.lock_script_hash.clone(),
+                                        lock_code_hash: cached.lock_code_hash.clone(),
+                                        lock_hash_type: cached.lock_hash_type,
+                                        lock_args: cached.lock_args.clone(),
+                                        type_script_hash: cached.type_script_hash.clone(),
+                                        type_code_hash: cached.type_code_hash.clone(),
+                                        type_hash_type: cached.type_hash_type,
+                                        type_args: cached.type_args.clone(),
+                                        data_size: cached.data_size,
+                                        occupied_capacity: cached.occupied_capacity,
+                                        udt_amount: cached.udt_amount,
+                                    },
+                                    cached.created_at_block,
+                                ),
                             );
                         }
                     }
@@ -937,7 +939,8 @@ impl Indexer {
 
                 // Pass 1: Build batch_cell_infos
                 let build_batch_cell_infos_started = Instant::now();
-                let mut batch_cell_infos: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
+                let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> =
+                    HashMap::new();
                 for tx_data in &all_tx_data {
                     for (output_index, cell) in tx_data.cells.iter().enumerate() {
                         let output_index_i16 = match checked_usize_to_i16(
@@ -1038,21 +1041,23 @@ impl Indexer {
                         );
                         batch_cell_infos.insert(
                             (tx_data.hash.to_vec(), output_index_i16),
-                            LiveCellInfo {
-                                capacity: cell.capacity,
-                                created_at_block: tx_data.block_number,
-                                lock_script_hash: cell.lock_script_hash.clone(),
-                                lock_code_hash: cell.lock_code_hash.clone(),
-                                lock_hash_type: cell.lock_hash_type,
-                                lock_args: cell.lock_args.clone(),
-                                type_script_hash: cell.type_script_hash.clone(),
-                                type_code_hash: cell.type_code_hash.clone(),
-                                type_hash_type: cell.type_hash_type,
-                                type_args: cell.type_args.clone(),
-                                data_size: cell.data_size,
-                                occupied_capacity,
-                                udt_amount,
-                            },
+                            PositionedCellInfo::new(
+                                LiveCellInfo {
+                                    capacity: cell.capacity,
+                                    lock_script_hash: cell.lock_script_hash.clone(),
+                                    lock_code_hash: cell.lock_code_hash.clone(),
+                                    lock_hash_type: cell.lock_hash_type,
+                                    lock_args: cell.lock_args.clone(),
+                                    type_script_hash: cell.type_script_hash.clone(),
+                                    type_code_hash: cell.type_code_hash.clone(),
+                                    type_hash_type: cell.type_hash_type,
+                                    type_args: cell.type_args.clone(),
+                                    data_size: cell.data_size,
+                                    occupied_capacity,
+                                    udt_amount,
+                                },
+                                tx_data.block_number,
+                            ),
                         );
                     }
                 }
@@ -2920,24 +2925,26 @@ mod tests {
 
         // Simulate cross-batch input_cell_info: the consumed cell IS a dotbit
         // cell (type_code_hash matches) but has EMPTY type_args (historical cell).
-        let mut input_cell_info: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         input_cell_info.insert(
             (prev_tx_hash.clone(), 0),
-            LiveCellInfo {
-                capacity: 100_00000000,
-                created_at_block: 14_000_000,
-                lock_script_hash: vec![0xAA; 32],
-                lock_code_hash: vec![0xBB; 32],
-                lock_hash_type: 1,
-                lock_args: vec![0xCC; 20],
-                type_script_hash: Some(vec![0xDD; 32]),
-                type_code_hash: Some(dotbit_code_hash),
-                type_hash_type: Some(1),
-                type_args: Some(vec![]), // EMPTY — historical cell
-                data_size: 80,
-                occupied_capacity: 61_00000000,
-                udt_amount: None,
-            },
+            PositionedCellInfo::new(
+                LiveCellInfo {
+                    capacity: 100_00000000,
+                    lock_script_hash: vec![0xAA; 32],
+                    lock_code_hash: vec![0xBB; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0xCC; 20],
+                    type_script_hash: Some(vec![0xDD; 32]),
+                    type_code_hash: Some(dotbit_code_hash),
+                    type_hash_type: Some(1),
+                    type_args: Some(vec![]), // EMPTY — historical cell
+                    data_size: 80,
+                    occupied_capacity: 61_00000000,
+                    udt_amount: None,
+                },
+                14_000_000,
+            ),
         );
 
         // Simulate the DB fallback: the outpoint → account_id mapping that

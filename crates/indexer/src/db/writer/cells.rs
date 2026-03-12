@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::{decode_live_cell_marker, CellPayload, LiveCellInfo, LiveCellMarker};
+use ckbadger_store::types::{decode_live_cell_marker, LiveCellInfo, PositionedCellInfo};
 
 use crate::parser::cell::ParsedCell;
 
@@ -117,7 +117,7 @@ impl BatchWriter {
     pub fn insert_cells_batch(
         &self,
         cells: &[(&[u8], i16, &ParsedCell, i64)],
-        precomputed_infos: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        precomputed_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         domain_batch: &mut StoreBatch,
         cells_batch: &mut StoreBatch,
         skip_cell_indices: bool,
@@ -138,7 +138,7 @@ impl BatchWriter {
             })?;
             let raw_key = keys::encode_outpoint(tx_hash, *output_index);
             // Cell payload -> append-only batch
-            cells_batch.put_cell_payload(&raw_key, &info);
+            cells_batch.put_cell_payload(&raw_key, &info.cell);
             // Live marker -> domain batch
             domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
             if !skip_cell_indices {
@@ -203,16 +203,15 @@ impl BatchWriter {
         for (idx, marker) in marker_results.into_iter().enumerate() {
             match marker {
                 Ok(Some(marker_bytes)) => {
-                    let marker: LiveCellMarker =
-                        decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
-                            let (tx_hash, output_index, ..) = consumptions[idx];
-                            anyhow!(
-                                "failed to decode live cell marker during consumption: outpoint=0x{}:{}, marker_len={}",
-                                hex::encode(tx_hash),
-                                output_index,
-                                marker_bytes.len()
-                            )
-                        })?;
+                    let marker = decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
+                        let (tx_hash, output_index, ..) = consumptions[idx];
+                        anyhow!(
+                            "failed to decode live cell marker during consumption: outpoint=0x{}:{}, marker_len={}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            marker_bytes.len()
+                        )
+                    })?;
                     present_positions.push(idx);
                     live_markers.push(marker);
                     // Read cell payloads from append-only store
@@ -234,13 +233,13 @@ impl BatchWriter {
             }
         }
         let cell_results = self.append_only_store.multi_get_cf(cell_refs);
-        let mut infos_by_pos: HashMap<usize, LiveCellInfo> = HashMap::new();
+        let mut infos_by_pos: HashMap<usize, PositionedCellInfo> = HashMap::new();
         for (batch_idx, res) in cell_results.into_iter().enumerate() {
             let outpoint_idx = present_positions[batch_idx];
             let (tx_hash, output_index, ..) = consumptions[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
-                    let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
+                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
                         anyhow!(
                             "failed to deserialize live cell payload during consumption: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),
@@ -248,9 +247,10 @@ impl BatchWriter {
                             e
                         )
                     })?;
-                    let info =
-                        payload.into_live_cell_info(live_markers[batch_idx].created_at_block);
-                    infos_by_pos.insert(outpoint_idx, info);
+                    infos_by_pos.insert(
+                        outpoint_idx,
+                        PositionedCellInfo::new(info, live_markers[batch_idx]),
+                    );
                 }
                 Ok(None) => {
                     bail!(
@@ -344,13 +344,17 @@ impl BatchWriter {
             .store
             .get_cells_batch(outpoints, &self.append_only_store)?;
         for ((tx_hash, output_index), info) in live_cells {
+            let PositionedCellInfo {
+                cell,
+                created_at_block,
+            } = info;
             result.insert(
                 (tx_hash, output_index),
                 (
-                    info.capacity,
-                    info.created_at_block,
-                    info.lock_script_hash,
-                    info.data_size,
+                    cell.capacity,
+                    created_at_block,
+                    cell.lock_script_hash,
+                    cell.data_size,
                 ),
             );
         }
@@ -370,7 +374,7 @@ impl BatchWriter {
                     key,
                     (
                         info.cell.capacity,
-                        info.cell.created_at_block,
+                        info.created_at_block,
                         info.cell.lock_script_hash,
                         info.cell.data_size,
                     ),
@@ -385,7 +389,7 @@ impl BatchWriter {
         &self,
         outpoints: &[(&[u8], i16)],
         _bulk_sync_mode: bool,
-    ) -> Result<HashMap<(Vec<u8>, i16), LiveCellInfo>> {
+    ) -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
         }
@@ -409,15 +413,14 @@ impl BatchWriter {
         for (idx, marker) in marker_results.into_iter().enumerate() {
             match marker {
                 Ok(Some(marker_bytes)) => {
-                    let marker: LiveCellMarker =
-                        decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
-                            anyhow!(
-                                "failed to decode live cell marker: outpoint=0x{}:{}, marker_len={}",
-                                hex::encode(outpoints[idx].0),
-                                outpoints[idx].1,
-                                marker_bytes.len()
-                            )
-                        })?;
+                    let marker = decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
+                        anyhow!(
+                            "failed to decode live cell marker: outpoint=0x{}:{}, marker_len={}",
+                            hex::encode(outpoints[idx].0),
+                            outpoints[idx].1,
+                            marker_bytes.len()
+                        )
+                    })?;
                     present_positions.push(idx);
                     live_markers.push(marker);
                     // Read cell payloads from append-only store
@@ -445,7 +448,7 @@ impl BatchWriter {
             let (tx_hash, output_index) = outpoints[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
-                    let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
+                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
                         anyhow!(
                             "failed to decode live cell payload: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),
@@ -453,10 +456,11 @@ impl BatchWriter {
                             e
                         )
                     })?;
-                    let info =
-                        payload.into_live_cell_info(live_markers[batch_idx].created_at_block);
                     validate_input_cell_occupied_capacity(&info, tx_hash, output_index, "live")?;
-                    result.insert((tx_hash.to_vec(), output_index), info);
+                    result.insert(
+                        (tx_hash.to_vec(), output_index),
+                        PositionedCellInfo::new(info, live_markers[batch_idx]),
+                    );
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -498,8 +502,8 @@ impl BatchWriter {
     pub fn consume_cells_batch_preloaded(
         &self,
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
-        preloaded_cells: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
-        same_batch_cells: &HashMap<(Vec<u8>, i16), LiveCellInfo>,
+        preloaded_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        same_batch_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         domain_batch: &mut StoreBatch,
         skip_cell_indices: bool,
     ) -> Result<()> {
@@ -611,24 +615,26 @@ mod tests {
         cell: &ParsedCell,
         created_at_block: i64,
         udt_amount: Option<u128>,
-    ) -> HashMap<(Vec<u8>, i16), LiveCellInfo> {
+    ) -> HashMap<(Vec<u8>, i16), PositionedCellInfo> {
         HashMap::from([(
             (tx_hash.to_vec(), output_index),
-            LiveCellInfo {
-                capacity: cell.capacity,
+            PositionedCellInfo::new(
+                LiveCellInfo {
+                    capacity: cell.capacity,
+                    lock_script_hash: cell.lock_script_hash.clone(),
+                    lock_code_hash: cell.lock_code_hash.clone(),
+                    lock_hash_type: cell.lock_hash_type,
+                    lock_args: cell.lock_args.clone(),
+                    type_script_hash: cell.type_script_hash.clone(),
+                    type_code_hash: cell.type_code_hash.clone(),
+                    type_hash_type: cell.type_hash_type,
+                    type_args: cell.type_args.clone(),
+                    data_size: cell.data_size,
+                    occupied_capacity: occupied_capacity_from_parsed_cell(cell),
+                    udt_amount,
+                },
                 created_at_block,
-                lock_script_hash: cell.lock_script_hash.clone(),
-                lock_code_hash: cell.lock_code_hash.clone(),
-                lock_hash_type: cell.lock_hash_type,
-                lock_args: cell.lock_args.clone(),
-                type_script_hash: cell.type_script_hash.clone(),
-                type_code_hash: cell.type_code_hash.clone(),
-                type_hash_type: cell.type_hash_type,
-                type_args: cell.type_args.clone(),
-                data_size: cell.data_size,
-                occupied_capacity: occupied_capacity_from_parsed_cell(cell),
-                udt_amount,
-            },
+            ),
         )])
     }
 
@@ -734,10 +740,7 @@ mod tests {
 
         let tx_hash = vec![0xCC; 32];
         let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
-        let marker = bincode::serialize(&LiveCellMarker {
-            created_at_block: 1,
-        })
-        .unwrap();
+        let marker = ckbadger_store::types::encode_live_cell_marker(1);
 
         // Write a live marker and corrupt canonical data
         store
@@ -796,8 +799,8 @@ mod tests {
         let consumed_by = [0xBC_u8; 32];
         let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
             vec![(tx_hash.as_slice(), 2, 20, consumed_by.as_slice(), 21, 0)];
-        let preloaded_cells: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
-        let same_batch_cells: HashMap<(Vec<u8>, i16), LiveCellInfo> = HashMap::new();
+        let preloaded_cells: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        let same_batch_cells: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
 
         let mut batch = StoreBatch::new(&store);
         let err = writer

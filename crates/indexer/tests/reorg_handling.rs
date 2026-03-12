@@ -3,7 +3,9 @@
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{ActivityEntry, AddressBalance, ScriptInfo, TokenInfo};
 use ckbadger_store::CkbadgerStore;
-use ckbadger_store::{CachedBlockHeader, DeepForkInfo, LiveCellInfo, RollbackResult, TxIndexEntry};
+use ckbadger_store::{
+    CachedBlockHeader, DeepForkInfo, LiveCellInfo, PositionedCellInfo, RollbackResult, TxIndexEntry,
+};
 use std::sync::Arc;
 
 fn setup_store() -> Arc<CkbadgerStore> {
@@ -49,22 +51,24 @@ fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
     }
 }
 
-fn make_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
-    LiveCellInfo {
-        capacity: 10_000_000_000,
-        created_at_block: block_num,
-        lock_script_hash: lock_hash.to_vec(),
-        lock_code_hash: vec![0xAA; 32],
-        lock_hash_type: 1,
-        lock_args: vec![0xBB; 20],
-        type_script_hash: None,
-        type_code_hash: None,
-        type_hash_type: None,
-        type_args: None,
-        data_size: 0,
-        occupied_capacity: 0,
-        udt_amount: None,
-    }
+fn make_cell(block_num: i64, lock_hash: &[u8]) -> PositionedCellInfo {
+    PositionedCellInfo::new(
+        LiveCellInfo {
+            capacity: 10_000_000_000,
+            lock_script_hash: lock_hash.to_vec(),
+            lock_code_hash: vec![0xAA; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0xBB; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        },
+        block_num,
+    )
 }
 
 /// Insert a fully populated block (header + txs + cells + indexes).
@@ -101,12 +105,12 @@ fn insert_full_block(
     if let Some(cs) = cells_store {
         // Split stores: payload to append-only, marker to domain
         let mut cells_batch = StoreBatch::new(cs);
-        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell);
+        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell);
         cells_batch.commit().unwrap();
         domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
         // Unified test store: combined write
-        domain_batch.put_cell(&tx_hash, 0, &cell);
+        domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     }
     domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
     domain_batch.commit().unwrap();
@@ -155,7 +159,7 @@ fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
 
     let original = make_cell(100, &lock_hash);
     let mut original_cells_batch = StoreBatch::new(&append);
-    original_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &original);
+    original_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &original.cell);
     original_cells_batch.commit().unwrap();
 
     let mut original_domain_batch = StoreBatch::new(&domain);
@@ -172,21 +176,21 @@ fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
     rollback_batch.commit().unwrap();
 
     let mut reorged = make_cell(101, &lock_hash);
-    reorged.capacity = original.capacity;
-    reorged.lock_script_hash = original.lock_script_hash.clone();
-    reorged.lock_code_hash = original.lock_code_hash.clone();
-    reorged.lock_hash_type = original.lock_hash_type;
-    reorged.lock_args = original.lock_args.clone();
-    reorged.type_script_hash = original.type_script_hash.clone();
-    reorged.type_code_hash = original.type_code_hash.clone();
-    reorged.type_hash_type = original.type_hash_type;
-    reorged.type_args = original.type_args.clone();
-    reorged.data_size = original.data_size;
-    reorged.occupied_capacity = original.occupied_capacity;
-    reorged.udt_amount = original.udt_amount;
+    reorged.cell.capacity = original.capacity;
+    reorged.cell.lock_script_hash = original.lock_script_hash.clone();
+    reorged.cell.lock_code_hash = original.lock_code_hash.clone();
+    reorged.cell.lock_hash_type = original.lock_hash_type;
+    reorged.cell.lock_args = original.lock_args.clone();
+    reorged.cell.type_script_hash = original.type_script_hash.clone();
+    reorged.cell.type_code_hash = original.type_code_hash.clone();
+    reorged.cell.type_hash_type = original.type_hash_type;
+    reorged.cell.type_args = original.type_args.clone();
+    reorged.cell.data_size = original.data_size;
+    reorged.cell.occupied_capacity = original.occupied_capacity;
+    reorged.cell.udt_amount = original.udt_amount;
 
     let mut reorg_cells_batch = StoreBatch::new(&append);
-    reorg_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &reorged);
+    reorg_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &reorged.cell);
     reorg_cells_batch.commit().unwrap();
 
     let mut reorg_domain_batch = StoreBatch::new(&domain);
@@ -435,22 +439,24 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
 }
 
 /// Create a UDT cell with type_script_hash, type_code_hash, and udt_amount set.
-fn make_udt_cell(block_num: i64, lock_hash: &[u8]) -> LiveCellInfo {
-    LiveCellInfo {
-        capacity: 14_200_000_000,
-        created_at_block: block_num,
-        lock_script_hash: lock_hash.to_vec(),
-        lock_code_hash: vec![0xAA; 32],
-        lock_hash_type: 1,
-        lock_args: vec![0xBB; 20],
-        type_script_hash: Some(vec![0xCC; 32]),
-        type_code_hash: Some(vec![0xDD; 32]),
-        type_hash_type: Some(1),
-        type_args: Some(vec![0xEE; 20]),
-        data_size: 16,
-        occupied_capacity: 14_200_000_000,
-        udt_amount: Some(500_000_000),
-    }
+fn make_udt_cell(block_num: i64, lock_hash: &[u8]) -> PositionedCellInfo {
+    PositionedCellInfo::new(
+        LiveCellInfo {
+            capacity: 14_200_000_000,
+            lock_script_hash: lock_hash.to_vec(),
+            lock_code_hash: vec![0xAA; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0xBB; 20],
+            type_script_hash: Some(vec![0xCC; 32]),
+            type_code_hash: Some(vec![0xDD; 32]),
+            type_hash_type: Some(1),
+            type_args: Some(vec![0xEE; 20]),
+            data_size: 16,
+            occupied_capacity: 14_200_000_000,
+            udt_amount: Some(500_000_000),
+        },
+        block_num,
+    )
 }
 
 /// Insert a UDT cell into the store with a distinct tx_hash (byte [8]=0xFF).
@@ -472,11 +478,11 @@ fn insert_udt_cell(
 
     if let Some(cs) = cells_store {
         let mut cells_batch = StoreBatch::new(cs);
-        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell);
+        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell);
         cells_batch.commit().unwrap();
         domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
-        domain_batch.put_cell(&tx_hash, 0, &cell);
+        domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     }
     domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
     domain_batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);

@@ -264,7 +264,6 @@ mod tests {
             live_idx,
             &crate::types::LiveCellInfo {
                 capacity: 100_00000000,
-                created_at_block: 10,
                 lock_script_hash: vec![0x01; 32],
                 lock_code_hash: vec![0x02; 32],
                 lock_hash_type: 1,
@@ -277,6 +276,7 @@ mod tests {
                 occupied_capacity: 61_00000000,
                 udt_amount: None,
             },
+            10,
         );
         batch.commit().unwrap();
 
