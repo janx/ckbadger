@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { type MouseEvent, useMemo, useState } from 'react';
 import { getChartPaletteColor, CHART_TOOLTIP_BG } from '@/lib/chart-colors';
 
 interface PieChartDataPoint {
@@ -17,6 +17,8 @@ interface PieChartProps {
   formatValue?: (value: number) => string;
   highlightIndex?: number | null;
   onHighlightChange?: (index: number | null) => void;
+  onSliceClick?: (index: number, event: MouseEvent<SVGPathElement>) => void;
+  testIdPrefix?: string;
 }
 
 export function PieChart({
@@ -27,6 +29,8 @@ export function PieChart({
   formatValue = (v) => v.toFixed(2) + '%',
   highlightIndex,
   onHighlightChange,
+  onSliceClick,
+  testIdPrefix,
 }: PieChartProps) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const activeIndex =
@@ -89,6 +93,7 @@ export function PieChart({
           {slices.map((slice, i) => (
             <path
               key={i}
+              data-testid={testIdPrefix ? `${testIdPrefix}-slice-${i}` : undefined}
               d={slice.pathD}
               fill={slice.color}
               stroke={CHART_TOOLTIP_BG}
@@ -103,6 +108,7 @@ export function PieChart({
                 setHoverIndex(null);
                 onHighlightChange?.(null);
               }}
+              onClick={(event) => onSliceClick?.(i, event)}
               transform={activeIndex === i ? `scale(1.05)` : undefined}
               style={{ transformOrigin: 'center' }}
             />

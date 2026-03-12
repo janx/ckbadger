@@ -1,4 +1,6 @@
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { KnowledgeSizeTrend, NetworkHealth } from '@/components/home-layer2';
 import { ActivityCard } from '@/components/activity-card';
@@ -136,6 +138,25 @@ describe('NetworkHealth', () => {
 });
 
 describe('ActivityCard script usage', () => {
+  function NavigationHarness() {
+    const location = useLocation();
+
+    return (
+      <>
+        <div data-testid="pathname">{location.pathname}</div>
+        <ActivityCard />
+      </>
+    );
+  }
+
+  function renderActivityCard() {
+    return render(
+      <MemoryRouter initialEntries={['/']}>
+        <ActivityCard />
+      </MemoryRouter>
+    );
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -161,7 +182,7 @@ describe('ActivityCard script usage', () => {
       ],
     });
 
-    render(<ActivityCard />);
+    renderActivityCard();
 
     await waitFor(() => {
       expect(screen.getByText('Script Usage')).toBeInTheDocument();
@@ -171,9 +192,189 @@ describe('ActivityCard script usage', () => {
   it('shows loading state initially', () => {
     vi.mocked(api.getActivitySummary24h).mockReturnValue(new Promise(() => {}));
 
-    const { container } = render(<ActivityCard />);
+    const { container } = renderActivityCard();
 
     const pulseElements = container.querySelectorAll('.animate-pulse');
     expect(pulseElements.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('navigates to activity type breakdown when clicking an activity slice', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationHarness />
+      </MemoryRouter>
+    );
+
+    const slice = await screen.findByTestId('activity-types-slice-0');
+    await user.click(slice);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/charts/activity-type-breakdown');
+    });
+  });
+
+  it('navigates to activity type breakdown when clicking the activity section chrome', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationHarness />
+      </MemoryRouter>
+    );
+
+    const section = await screen.findByTestId('activity-types-section');
+    await user.click(section);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/charts/activity-type-breakdown');
+    });
+  });
+
+  it('navigates to script detail when clicking a script slice', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationHarness />
+      </MemoryRouter>
+    );
+
+    const slice = await screen.findByTestId('script-usage-slice-0');
+    await user.click(slice);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/secp256k1');
+    });
+  });
+
+  it('navigates to script detail when clicking a script legend item', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationHarness />
+      </MemoryRouter>
+    );
+
+    const legendItem = await screen.findByTestId('script-usage-legend-item-0');
+    await user.click(legendItem);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/scripts/secp256k1');
+    });
+  });
+
+  it('navigates to most utilized scripts when clicking script section chrome', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <NavigationHarness />
+      </MemoryRouter>
+    );
+
+    const section = await screen.findByTestId('script-usage-section');
+    await user.click(section);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pathname')).toHaveTextContent('/charts/most-utilized-scripts');
+    });
   });
 });

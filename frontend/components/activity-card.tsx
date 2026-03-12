@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { type MouseEvent, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { api, type ActivitySummary24h } from '@/lib/api';
 import {
   TerminalPanel,
@@ -12,6 +13,7 @@ import { formatCkbCompact, cn } from '@/lib/utils';
 import { PieChart } from '@/components/ui/pie-chart';
 import { CHART_PRIMARY_COLOR, getChartPaletteColor } from '@/lib/chart-colors';
 import Link from '@/components/ui/link';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 
 function formatCompact(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -119,23 +121,47 @@ export function ActivityBarChartCard() {
 // PieSection — reusable pie chart + side legend
 // ---------------------------------------------------------------------------
 
-function PieSection({
+function PieSection<T extends { label: string; value: number; color?: string }>({
   title,
   data,
   highlightIndex,
   onHighlightChange,
   useExplicitColors,
+  sectionHref,
+  getItemHref,
+  testIdPrefix,
 }: {
   title: string;
-  data: { label: string; value: number; color?: string }[];
+  data: T[];
   highlightIndex: number | null;
   onHighlightChange: (idx: number | null) => void;
   useExplicitColors?: boolean;
+  sectionHref?: string;
+  getItemHref?: (item: T, index: number) => string | null | undefined;
+  testIdPrefix?: string;
 }) {
+  const navigate = useNavigate();
   const total = data.reduce((s, x) => s + x.value, 0);
+  const isSectionClickable = Boolean(sectionHref);
+
+  function handleSectionClick() {
+    if (!sectionHref) return;
+    navigate(sectionHref);
+  }
+
+  function handleItemClick(event: MouseEvent<Element>, item: T, index: number) {
+    const href = getItemHref?.(item, index);
+    if (!href) return;
+    event.stopPropagation();
+    navigate(href);
+  }
 
   return (
-    <div className="flex items-start gap-3">
+    <div
+      data-testid={testIdPrefix ? `${testIdPrefix}-section` : undefined}
+      className={cn('flex items-start gap-3', isSectionClickable ? 'cursor-pointer' : '')}
+      onClick={handleSectionClick}
+    >
       <div className="w-1/2 shrink-0">
         <PieChart
           data={data}
@@ -143,6 +169,8 @@ function PieSection({
           showLegend={false}
           highlightIndex={highlightIndex}
           onHighlightChange={onHighlightChange}
+          onSliceClick={(index, event) => handleItemClick(event, data[index], index)}
+          testIdPrefix={testIdPrefix}
         />
       </div>
       <div className="flex w-1/2 flex-col justify-center self-stretch overflow-hidden">
@@ -154,12 +182,14 @@ function PieSection({
           return (
             <div
               key={d.label}
+              data-testid={testIdPrefix ? `${testIdPrefix}-legend-item-${i}` : undefined}
               className={cn(
                 'flex cursor-pointer items-center gap-1.5 py-0.5 font-mono text-[10px] leading-tight transition-opacity',
                 highlightIndex !== null && highlightIndex !== i ? 'opacity-40' : ''
               )}
               onMouseEnter={() => onHighlightChange(i)}
               onMouseLeave={() => onHighlightChange(null)}
+              onClick={(event) => handleItemClick(event, d, i)}
             >
               <div
                 className="h-1.5 w-1.5 shrink-0 rounded-sm"
@@ -206,6 +236,8 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
       .map((s) => ({
         label: s.name || `${s.codeHash.slice(0, 10)}...`,
         value: s.count,
+        codeHash: s.codeHash,
+        name: s.name,
       }));
   }, [summary]);
 
@@ -271,6 +303,9 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
                 highlightIndex={hoveredActivityIdx}
                 onHighlightChange={setHoveredActivityIdx}
                 useExplicitColors
+                sectionHref="/charts/activity-type-breakdown"
+                getItemHref={() => '/charts/activity-type-breakdown'}
+                testIdPrefix="activity-types"
               />
             )}
 
@@ -281,6 +316,14 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
                 data={scriptPieData}
                 highlightIndex={hoveredScriptIdx}
                 onHighlightChange={setHoveredScriptIdx}
+                sectionHref="/charts/most-utilized-scripts"
+                getItemHref={(item) =>
+                  getScriptDetailHref({
+                    name: item.name,
+                    codeHash: item.codeHash,
+                  })
+                }
+                testIdPrefix="script-usage"
               />
             )}
           </div>
