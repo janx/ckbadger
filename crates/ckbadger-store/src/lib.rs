@@ -36,6 +36,7 @@ mod dotbit_ops;
 mod identity_ops;
 mod mnft_ops;
 mod object_ops;
+mod proposal_ops;
 mod reorg_ops;
 mod spore_ops;
 mod stats_ops;
