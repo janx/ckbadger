@@ -125,18 +125,18 @@ export function StatCard({
 
   return (
     <div className={cn('min-w-0 text-center', className)}>
-      <div className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</div>
+      <div className="text-text-dim font-mono text-[11px] uppercase tracking-wider">{label}</div>
       <div
         className={cn(
-          'text-text-bright mt-2 break-words font-mono text-2xl font-bold tabular-nums',
+          'text-text-bright mt-1 break-words font-mono text-xl font-bold tabular-nums leading-tight',
           valueClassName
         )}
       >
         {value}
       </div>
-      {subValue && <div className="text-text mt-1 text-sm">{subValue}</div>}
+      {subValue && <div className="text-text mt-0.5 text-sm">{subValue}</div>}
       {trend && (
-        <div className={cn('mt-1 font-mono text-sm', trendColors[trend.direction])}>
+        <div className={cn('mt-0.5 font-mono text-xs', trendColors[trend.direction])}>
           {trendIcons[trend.direction]} {trend.value}
         </div>
       )}

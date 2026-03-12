@@ -118,6 +118,16 @@ function InteractivePieChart({
   );
 }
 
+function formatStatCkb(ckbValue: string | number) {
+  const f = formatCkbValue(ckbValue);
+  return (
+    <>
+      {f.integer}
+      <span className="text-text-dim text-[0.75em] font-normal">.{f.decimal.slice(0, 2)}</span>
+    </>
+  );
+}
+
 export default function DaoPage() {
   const depositsPagination = useCursorPagination();
   const [status, setStatus] = useState<number>(0);
@@ -323,23 +333,10 @@ export default function DaoPage() {
 
         <TerminalPanel className="mb-4" glow>
           <TerminalPanelContent>
-            <div className="grid gap-6 md:grid-cols-3">
+            <div className="grid gap-x-6 gap-y-4 md:grid-cols-3">
               <StatCard
                 label="Deposit"
-                value={
-                  stats
-                    ? (() => {
-                        const f = formatCkbValue(stats.totalDepositedCkb);
-                        return (
-                          <>
-                            {f.integer}
-                            <span className="text-text-bright/50 text-[0.85em]">.{f.decimal}</span>
-                            <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
-                          </>
-                        );
-                      })()
-                    : '...'
-                }
+                value={stats ? formatStatCkb(stats.totalDepositedCkb) : '...'}
                 trend={
                   stats?.depositChange24h
                     ? (() => {
@@ -351,20 +348,7 @@ export default function DaoPage() {
               />
               <StatCard
                 label="Claimed Compensation"
-                value={
-                  stats
-                    ? (() => {
-                        const f = formatCkbValue(stats.totalCompensationPaidCkb);
-                        return (
-                          <>
-                            {f.integer}
-                            <span className="text-text-bright/50 text-[0.85em]">.{f.decimal}</span>
-                            <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
-                          </>
-                        );
-                      })()
-                    : '...'
-                }
+                value={stats ? formatStatCkb(stats.totalCompensationPaidCkb) : '...'}
                 trend={
                   stats?.claimedCompensationChange24h
                     ? (() => {
@@ -377,7 +361,6 @@ export default function DaoPage() {
               <StatCard
                 label="Estimated APC"
                 value={stats?.estimatedApc ? `${stats.estimatedApc}%` : '...'}
-                valueClassName="font-display"
               />
               <StatCard
                 label="Addresses"
@@ -396,23 +379,22 @@ export default function DaoPage() {
                     : undefined
                 }
               />
-              <StatCard label="Average Deposit Time" value={stats?.averageDepositDays || '...'} />
+              <StatCard
+                label="Average Deposit Time"
+                value={
+                  stats?.averageDepositDays ? (
+                    <>
+                      {stats.averageDepositDays}
+                      <span className="text-text-dim ml-1 text-[0.7em] font-normal">days</span>
+                    </>
+                  ) : (
+                    '...'
+                  )
+                }
+              />
               <StatCard
                 label="Unclaimed Compensation"
-                value={
-                  stats
-                    ? (() => {
-                        const f = formatCkbValue(stats.unclaimedCompensationCkb);
-                        return (
-                          <>
-                            {f.integer}
-                            <span className="text-text-bright/50 text-[0.85em]">.{f.decimal}</span>
-                            <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
-                          </>
-                        );
-                      })()
-                    : '...'
-                }
+                value={stats ? formatStatCkb(stats.unclaimedCompensationCkb) : '...'}
                 trend={
                   stats?.unclaimedCompensationChange24h
                     ? (() => {
