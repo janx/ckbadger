@@ -58,8 +58,8 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
     typeof value === 'number' ? value.toLocaleString() : '--';
 
   return (
-    <section className="from-base-surface via-base-surface to-base-elevated ring-base-border/70 overflow-visible rounded-2xl bg-gradient-to-br p-4 ring-1 ring-inset">
-      <div className="mb-2">
+    <section className="overflow-visible">
+      <div className="mb-2 px-4">
         <h2 className="text-text-bright text-base font-semibold sm:text-lg">
           Transaction Pipeline
         </h2>
@@ -72,7 +72,7 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
             <span className="text-text-dim"> {'->'} </span>
             <span className="text-gold-dim">Proposals ({formatCount(proposalsCount)})</span>
             <span className="text-text-dim"> {'->'} </span>
-            <span className="text-gold">New Committed ({formatCount(committedCount)})</span>
+            <span className="text-emphasis">New Committed ({formatCount(committedCount)})</span>
           </p>
           <p className="border-base-border/60 bg-base-surface/70 text-text rounded-md border px-2 py-1 text-[11px] sm:text-right">
             w {'->'} size | h {'->'} cycles | x {'->'} fee | y {'->'} fee rate
@@ -80,13 +80,16 @@ export function PipelinePreview({ initialBlocks = [] }: PipelinePreviewProps) {
         </div>
       </div>
 
-      <MempoolBlocks
-        latestBlocks={initialBlocks}
-        chrome="flat"
-        showHeader={false}
-        showTxnLens
-        legendMode="none"
-      />
+      {/* Break out of container to full viewport width */}
+      <div className="relative left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen">
+        <MempoolBlocks
+          latestBlocks={initialBlocks}
+          chrome="flat"
+          showHeader={false}
+          showTxnLens
+          legendMode="none"
+        />
+      </div>
     </section>
   );
 }

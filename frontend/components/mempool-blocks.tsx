@@ -1088,7 +1088,7 @@ function MempoolDivider({ large = false }: { large?: boolean }) {
         <div className="flex items-center gap-2">
           <div className="to-base-border h-px w-4 bg-gradient-to-r from-transparent" />
           <div className="border-emphasis-dim/50 text-emphasis/80 bg-base-surface/70 rounded-md border px-2 py-1 text-[10px] font-medium tracking-wider">
-            MINED
+            ⛏️ MINING
           </div>
           <div className="to-base-border h-px w-4 bg-gradient-to-l from-transparent" />
         </div>
@@ -1558,10 +1558,7 @@ export function MempoolBlocks({
 
   const containerClassName =
     chrome === 'flat'
-      ? cn(
-          'rounded-2xl bg-gradient-to-br from-base-surface via-base-surface to-base-elevated/80',
-          showHeader ? 'p-5' : 'px-3 py-2 sm:px-4 sm:py-2.5'
-        )
+      ? cn(showHeader ? 'p-5' : 'px-3 py-2 sm:px-4 sm:py-2.5')
       : 'rounded-2xl border border-base-border/50 bg-gradient-to-br from-base-surface via-base-surface to-base-elevated p-5 shadow-xl';
 
   if (mempoolLoading && pendingBlocks.length === 0) {

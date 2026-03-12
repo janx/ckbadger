@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from '@/components/ui/link';
 import type { NetworkStats } from '@/lib/api';
 
 interface CKBytesCardProps {
@@ -12,7 +13,7 @@ function shannonsToCkb(shannons: string): number {
 }
 
 function formatCkbPrecise(ckb: number): string {
-  return ckb.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  return ckb.toLocaleString(undefined, { maximumFractionDigits: 8 });
 }
 
 function formatCkbCompact(ckb: number): string {
@@ -44,7 +45,7 @@ export function CKBytesCard({ stats }: CKBytesCardProps) {
 
   if (!stats?.circulatingSupply || !stats?.knowledgeSize || !stats?.daoLocked) {
     return (
-      <div className="border-base-border bg-base-surface rounded-lg border p-4">
+      <div className="rounded-lg p-4">
         <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">CKBytes</div>
         <div className="bg-base-elevated h-6 w-full animate-pulse rounded-full" />
       </div>
@@ -84,51 +85,53 @@ export function CKBytesCard({ stats }: CKBytesCardProps) {
   ];
 
   return (
-    <div className="border-base-border bg-base-surface rounded-lg border p-4">
-      <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">
-        CKBytes{' '}
-        <span className="text-text-bright font-bold">{formatCkbPrecise(circulating)} CKB</span>
-      </div>
+    <Link href="/charts/total-supply" className="block">
+      <div className="rounded-lg p-4">
+        <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">
+          CKBytes{' '}
+          <span className="text-text-bright font-bold">{formatCkbPrecise(circulating)} CKB</span>
+        </div>
 
-      {/* Stacked progress bar */}
-      <div className="flex h-5 w-full overflow-hidden rounded-full">
-        {segments.map((seg, i) => (
-          <div
-            key={seg.label}
-            className={`${hoveredIndex === i ? seg.hoverColor : hoveredIndex !== null ? seg.color + ' opacity-40' : seg.color} cursor-pointer transition-all duration-200`}
-            style={{ width: `${Math.max(seg.pct, 0.5)}%` }}
-            title={`${seg.label}: ${formatCkbCompact(seg.value)} CKB (${seg.pct.toFixed(1)}%)`}
-            onMouseEnter={() => setHoveredIndex(i)}
-            onMouseLeave={() => setHoveredIndex(null)}
-          />
-        ))}
-      </div>
-
-      {/* Legend */}
-      <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1">
-        {segments.map((seg, i) => (
-          <div
-            key={seg.label}
-            className={`flex cursor-pointer items-center gap-2 transition-opacity duration-200 ${hoveredIndex !== null && hoveredIndex !== i ? 'opacity-40' : ''}`}
-            onMouseEnter={() => setHoveredIndex(i)}
-            onMouseLeave={() => setHoveredIndex(null)}
-          >
-            <span
-              className={`${hoveredIndex === i ? seg.hoverColor : seg.color} inline-block h-2.5 w-2.5 rounded-full transition-all duration-200`}
+        {/* Stacked progress bar */}
+        <div className="flex h-5 w-full overflow-hidden rounded-full">
+          {segments.map((seg, i) => (
+            <div
+              key={seg.label}
+              className={`${hoveredIndex === i ? seg.hoverColor : hoveredIndex !== null ? seg.color + ' opacity-40' : seg.color} cursor-pointer transition-all duration-200`}
+              style={{ width: `${Math.max(seg.pct, 0.5)}%` }}
+              title={`${seg.label}: ${formatCkbCompact(seg.value)} CKB (${seg.pct.toFixed(1)}%)`}
+              onMouseEnter={() => setHoveredIndex(i)}
+              onMouseLeave={() => setHoveredIndex(null)}
             />
-            <span className="text-text-dim font-mono text-xs">{seg.label}</span>
-            <span className={`${seg.textColor} font-mono text-xs font-bold tabular-nums`}>
-              {formatCkbCompact(seg.value)} CKB
-            </span>
-            <span className="text-text-dim font-mono text-[10px] tabular-nums">
-              ({ckbToGB(seg.value)})
-            </span>
-            <span className="text-text-dim font-mono text-[10px] tabular-nums">
-              {seg.pct.toFixed(1)}%
-            </span>
-          </div>
-        ))}
+          ))}
+        </div>
+
+        {/* Legend */}
+        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1">
+          {segments.map((seg, i) => (
+            <div
+              key={seg.label}
+              className={`flex cursor-pointer items-center gap-2 transition-opacity duration-200 ${hoveredIndex !== null && hoveredIndex !== i ? 'opacity-40' : ''}`}
+              onMouseEnter={() => setHoveredIndex(i)}
+              onMouseLeave={() => setHoveredIndex(null)}
+            >
+              <span
+                className={`${hoveredIndex === i ? seg.hoverColor : seg.color} inline-block h-2.5 w-2.5 rounded-full transition-all duration-200`}
+              />
+              <span className="text-text-dim font-mono text-xs">{seg.label}</span>
+              <span className={`${seg.textColor} font-mono text-xs font-bold tabular-nums`}>
+                {formatCkbCompact(seg.value)} CKB
+              </span>
+              <span className="text-text-dim font-mono text-[10px] tabular-nums">
+                ({ckbToGB(seg.value)})
+              </span>
+              <span className="text-text-dim font-mono text-[10px] tabular-nums">
+                {seg.pct.toFixed(1)}%
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
-    </div>
+    </Link>
   );
 }

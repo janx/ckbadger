@@ -6,6 +6,8 @@ import { useState } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { SearchBar } from '@/components/search-bar';
 import { Logo } from '@/components/layout/logo';
+import { GlobalStatsBar } from '@/components/stats-bar';
+import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 
 const navLinks = [
   { href: '/dao', label: 'DAO' },
@@ -19,6 +21,8 @@ export function Header() {
   const pathname = usePathname();
   const isHomePage = pathname === '/';
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+  const heroVisible = useHomeScrollStore((s) => s.heroVisible);
+  const showStatsBar = isHomePage ? !heroVisible : true;
 
   return (
     <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
@@ -76,6 +80,16 @@ export function Header() {
               </svg>
             )}
           </button>
+        </div>
+      </div>
+
+      <div
+        className={`border-jade/10 overflow-hidden border-t bg-[#060810] transition-all duration-300 ${
+          showStatsBar ? 'h-7 opacity-100' : 'h-0 border-t-0 opacity-0'
+        }`}
+      >
+        <div className="container mx-auto flex h-7 items-center px-4 md:pl-[112px]">
+          <GlobalStatsBar />
         </div>
       </div>
 

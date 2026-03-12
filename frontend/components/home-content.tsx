@@ -2,7 +2,6 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { SyncBanner } from '@/components/stats-cards';
-import { StatsBar } from '@/components/stats-bar';
 import { CKBytesCard } from '@/components/ckbytes-card';
 import { HomeCharts } from '@/components/home-charts';
 import { MiniStatsCards } from '@/components/mini-stats-cards';
@@ -11,11 +10,13 @@ import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
 import { DaoOverview } from '@/components/dao-overview';
 import { KnowledgeSizeTrend } from '@/components/home-layer2';
 import { LatestActivities } from '@/components/latest-activities';
-import { ActivityCard } from '@/components/activity-card';
+import { ActivityCard, ActivityBarChartCard } from '@/components/activity-card';
 import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
+import { useHomeScrollStore } from '@/hooks/useHomeScrollStore';
 import { api, NetworkStats, Block, Transaction, ChartResponse } from '@/lib/api';
+import { useEffect, useRef } from 'react';
 
 interface InitialData {
   stats: NetworkStats | null;
@@ -31,6 +32,21 @@ interface HomeContentProps {
 
 export function HomeContent({ initialData }: HomeContentProps) {
   const { isConnected } = useRealtimeData();
+  const setHeroVisible = useHomeScrollStore((s) => s.setHeroVisible);
+  const heroRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = heroRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(([entry]) => setHeroVisible(entry.isIntersecting), {
+      threshold: 0,
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      setHeroVisible(true);
+    };
+  }, [setHeroVisible]);
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['network-stats'],
@@ -44,35 +60,8 @@ export function HomeContent({ initialData }: HomeContentProps) {
     <main className="container mx-auto px-4 py-4 sm:py-6">
       {stats && <SyncBanner stats={stats} />}
 
-      {/* Stats Bar */}
-      <div className="mt-3">
-        <StatsBar stats={stats ?? null} />
-      </div>
-
-      {/* Row 1: CKBytes */}
-      <div className="mt-3">
-        <CKBytesCard stats={stats ?? null} />
-      </div>
-
-      {/* Row 2: Knowledge Size | Nervos DAO (no headers) */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <KnowledgeSizeTrend />
-        <DaoOverview />
-      </div>
-
-      {/* Row 3: Latest Activities | Activity Card */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <LatestActivities isRealtime={isConnected} />
-        <ActivityCard isRealtime={isConnected} />
-      </div>
-
-      {/* Row 4: Transaction Pipeline */}
-      <div className="mt-4">
-        <PipelinePreview initialBlocks={initialData.blocks} />
-      </div>
-
-      {/* Row 5: Network Charts */}
-      <div className="mt-4">
+      {/* Row 1: Network Charts (Latest Block + Hash Rate) */}
+      <div ref={heroRef} className="mt-3">
         <HomeCharts
           stats={stats}
           isLoading={statsLoading}
@@ -81,7 +70,7 @@ export function HomeContent({ initialData }: HomeContentProps) {
         />
       </div>
 
-      {/* Row 6: Epoch + Tx Stats */}
+      {/* Row 2: Epoch + Tx Stats */}
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <EpochProgress
           epochNumber={parseEpochInfo(stats).epochNumber}
@@ -91,6 +80,31 @@ export function HomeContent({ initialData }: HomeContentProps) {
           estimatedTimeRemaining={stats?.estimatedEpochTime}
         />
         <MiniStatsCards />
+      </div>
+
+      {/* Row 3: CKBytes */}
+      <div className="mt-4">
+        <CKBytesCard stats={stats ?? null} />
+      </div>
+
+      {/* Row 4: Knowledge Size (left) | Nervos DAO (right) */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="flex flex-col gap-4">
+          <KnowledgeSizeTrend />
+          <ActivityBarChartCard />
+        </div>
+        <DaoOverview />
+      </div>
+
+      {/* Row 5: Latest Activities | Activity Card */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <LatestActivities isRealtime={isConnected} />
+        <ActivityCard isRealtime={isConnected} />
+      </div>
+
+      {/* Row 6: Transaction Pipeline */}
+      <div className="mt-4">
+        <PipelinePreview initialBlocks={initialData.blocks} />
       </div>
 
       {/* Row 7: Latest Blocks & Transactions */}

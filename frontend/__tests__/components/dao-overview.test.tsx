@@ -58,11 +58,11 @@ describe('DaoOverview', () => {
       expect(screen.getByText('11.20B CKB')).toBeInTheDocument();
     });
 
-    // APC value inline
-    expect(screen.getByText('APC 2.45%')).toBeInTheDocument();
+    // APC value in stats grid
+    expect(screen.getByText('2.45%')).toBeInTheDocument();
 
-    // Depositors count inline
-    expect(screen.getByText('4,521 depositors')).toBeInTheDocument();
+    // Depositors count in stats grid
+    expect(screen.getByText('4,521')).toBeInTheDocument();
 
     // Card title
     expect(screen.getByText('Nervos DAO')).toBeInTheDocument();

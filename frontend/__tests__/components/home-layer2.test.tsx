@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '../utils/test-utils';
-import { KnowledgeSizeTrend, NetworkHealth, ScriptUtilization } from '@/components/home-layer2';
+import { KnowledgeSizeTrend, NetworkHealth } from '@/components/home-layer2';
+import { ActivityCard } from '@/components/activity-card';
 import { api, type ChartResponse, type NetworkStats } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -8,7 +9,7 @@ vi.mock('@/lib/api', () => ({
     getKnowledgeSizeChart: vi.fn(),
     getAverageBlockTimeChart: vi.fn(),
     getHashRateChart: vi.fn(),
-    getScripts: vi.fn(),
+    getActivitySummary24h: vi.fn(),
   },
 }));
 
@@ -68,13 +69,13 @@ describe('KnowledgeSizeTrend', () => {
     vi.clearAllMocks();
   });
 
-  it('renders with "Knowledge Size" text', async () => {
+  it('renders with "Knowledge Bytes" text', async () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse());
 
     render(<KnowledgeSizeTrend />);
 
     await waitFor(() => {
-      expect(screen.getByText('Knowledge Size — Daily Change')).toBeInTheDocument();
+      expect(screen.getByText('Knowledge Bytes — Daily Change')).toBeInTheDocument();
     });
   });
 
@@ -134,77 +135,43 @@ describe('NetworkHealth', () => {
   });
 });
 
-describe('ScriptUtilization', () => {
+describe('ActivityCard script usage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders with "Script Utilization" text', async () => {
-    vi.mocked(api.getScripts).mockResolvedValue({
-      data: [
-        {
-          codeHash: '0xaaa',
-          name: 'secp256k1',
-          description: null,
-          scriptKind: null,
-          rfc: null,
-          website: null,
-          sourceUrl: null,
-          decoderType: null,
-          network: 'mainnet',
-          hashType: null,
-          dataHash: null,
-          typeHash: null,
-          tag: null,
-          deprecated: false,
-          isSystem: true,
-          codeCellTxHash: null,
-          codeCellOutputIndex: null,
-          liveUsedCapacitySum: '5000000000',
-          liveCellsCount: 100000,
-        },
-        {
-          codeHash: '0xbbb',
-          name: 'dao',
-          description: null,
-          scriptKind: null,
-          rfc: null,
-          website: null,
-          sourceUrl: null,
-          decoderType: null,
-          network: 'mainnet',
-          hashType: null,
-          dataHash: null,
-          typeHash: null,
-          tag: null,
-          deprecated: false,
-          isSystem: true,
-          codeCellTxHash: null,
-          codeCellOutputIndex: null,
-          liveUsedCapacitySum: '3000000000',
-          liveCellsCount: 50000,
-        },
+  it('renders "Script Usage" inside ActivityCard', async () => {
+    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
+      transferCount: 100,
+      daoDepositCount: 10,
+      daoWithdrawRequestCount: 5,
+      daoWithdrawCompleteCount: 3,
+      tokenCount: 20,
+      objectCount: 8,
+      identityCount: 2,
+      scriptCallCount: 15,
+      unknownCount: 0,
+      coinbaseCount: 50,
+      uniqueAddressCount: 200,
+      totalCkbMoved: '500000000000',
+      hoursCovered: 24,
+      scriptCounts: [
+        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
+        { codeHash: '0xbbb', name: 'dao', count: 200 },
       ],
-      total: 2,
-      limit: 5,
-      hasMore: false,
-      nextCursor: null,
     });
 
-    render(<ScriptUtilization />);
+    render(<ActivityCard />);
 
     await waitFor(() => {
-      expect(screen.getByText('secp256k1')).toBeInTheDocument();
+      expect(screen.getByText('Script Usage')).toBeInTheDocument();
     });
-
-    expect(screen.getByText('dao')).toBeInTheDocument();
-    expect(screen.getByText('Script Utilization')).toBeInTheDocument();
   });
 
   it('shows loading state initially', () => {
-    vi.mocked(api.getScripts).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getActivitySummary24h).mockReturnValue(new Promise(() => {}));
 
-    const { container } = render(<ScriptUtilization />);
+    const { container } = render(<ActivityCard />);
 
     const pulseElements = container.querySelectorAll('.animate-pulse');
     expect(pulseElements.length).toBeGreaterThanOrEqual(1);

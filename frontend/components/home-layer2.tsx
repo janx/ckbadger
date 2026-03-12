@@ -1,19 +1,19 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { api, type NetworkStats } from '@/lib/api';
 import { ChartCard } from '@/components/ui/chart-card';
 import { SparkChart } from '@/components/ui/spark-chart';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
-
-const BAR_COLORS = ['#8ce00a', '#00d7eb', '#ff66aa', '#bb88ff', '#ff8800'];
 
 // ---------------------------------------------------------------------------
 // KnowledgeSizeTrend
 // ---------------------------------------------------------------------------
 
 export function KnowledgeSizeTrend() {
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+
   const { data: chart, isLoading } = useQuery({
     queryKey: ['knowledge-size-chart'],
     queryFn: () => api.getKnowledgeSizeChart(),
@@ -35,25 +35,38 @@ export function KnowledgeSizeTrend() {
   }, [chart]);
 
   const maxDelta = Math.max(...deltaData.map((d) => Math.abs(d.delta)), 1);
+  const hovered = hoveredIdx !== null ? deltaData[hoveredIdx] : null;
 
   return (
     <div className="border-base-border bg-base-surface rounded-lg border px-4 py-3">
-      <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
-        Knowledge Size — Daily Change
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+          Knowledge Bytes — Daily Change
+        </div>
+        {hovered && (
+          <div className="font-mono text-[10px] tabular-nums">
+            <span className="text-text-dim">{hovered.date}</span>{' '}
+            <span className={hovered.delta >= 0 ? 'text-jade' : 'text-[#e8555a]'}>
+              {hovered.delta >= 0 ? '+' : ''}
+              {hovered.delta.toFixed(2)} CKB
+            </span>
+          </div>
+        )}
       </div>
       {isLoading || deltaData.length === 0 ? (
-        <div className="bg-base-elevated h-8 w-full animate-pulse rounded" />
+        <div className="bg-base-elevated h-14 w-full animate-pulse rounded" />
       ) : (
-        <div className="flex h-8 items-end gap-[1px]">
-          {deltaData.map((d) => (
+        <div className="flex h-14 items-end gap-[1px]" onMouseLeave={() => setHoveredIdx(null)}>
+          {deltaData.map((d, i) => (
             <div
               key={d.date}
-              className="flex-1 rounded-t-sm"
+              className="flex-1 cursor-crosshair rounded-t-sm transition-opacity duration-100"
               style={{
                 height: `${Math.max((Math.abs(d.delta) / maxDelta) * 100, 4)}%`,
                 backgroundColor: d.delta >= 0 ? CHART_PRIMARY_COLOR : '#e8555a',
-                opacity: 0.8,
+                opacity: hoveredIdx !== null && hoveredIdx !== i ? 0.3 : 0.8,
               }}
+              onMouseEnter={() => setHoveredIdx(i)}
               title={`${d.date}: ${d.delta >= 0 ? '+' : ''}${d.delta.toFixed(2)}`}
             />
           ))}
@@ -133,49 +146,6 @@ export function NetworkHealth({ stats }: NetworkHealthProps) {
             <SparkChart data={hrSparkData} height={28} color={CHART_SECONDARY_COLOR} />
           </div>
         </div>
-      </div>
-    </ChartCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ScriptUtilization
-// ---------------------------------------------------------------------------
-
-export function ScriptUtilization() {
-  const { data, isLoading } = useQuery({
-    queryKey: ['scripts-top5'],
-    queryFn: () => api.getScripts({ limit: 5, sortKey: 'used', sortDirection: 'desc' }),
-    staleTime: 60_000,
-    refetchInterval: 60_000,
-  });
-
-  const scripts = data?.data ?? [];
-  const maxCap = Math.max(...scripts.map((s) => parseFloat(s.liveUsedCapacitySum ?? '0')), 1);
-
-  return (
-    <ChartCard
-      title="Script Utilization"
-      href="/charts/most-utilized-scripts"
-      isLoading={isLoading}
-      height={100}
-    >
-      <div className="space-y-2">
-        {scripts.map((s, i) => {
-          const cap = parseFloat(s.liveUsedCapacitySum ?? '0');
-          const pct = (cap / maxCap) * 100;
-          return (
-            <div key={s.codeHash} className="flex items-center gap-2">
-              <span className="text-text-dim w-20 truncate font-mono text-[10px]">{s.name}</span>
-              <div className="bg-base-elevated h-2 flex-1 overflow-hidden rounded-full">
-                <div
-                  className="h-full rounded-full"
-                  style={{ width: `${pct}%`, backgroundColor: BAR_COLORS[i % BAR_COLORS.length] }}
-                />
-              </div>
-            </div>
-          );
-        })}
       </div>
     </ChartCard>
   );

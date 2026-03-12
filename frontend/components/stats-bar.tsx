@@ -1,7 +1,8 @@
 'use client';
 
+import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import type { NetworkStats } from '@/lib/api';
+import { api, type NetworkStats } from '@/lib/api';
 
 interface StatsBarProps {
   stats: NetworkStats | null;
@@ -69,6 +70,65 @@ export function StatsBar({ stats }: StatsBarProps) {
           {stats.avgBlockTime}
         </span>
       </span>
+    </div>
+  );
+}
+
+export function GlobalStatsBar() {
+  const { data: stats } = useQuery({
+    queryKey: ['network-stats'],
+    queryFn: () => api.getNetworkStats(),
+    staleTime: 0,
+    refetchInterval: 10000,
+  });
+
+  if (!stats) return null;
+
+  const epoch = parseEpoch(stats.epoch);
+  const epochPct = epoch ? ((epoch.index / epoch.length) * 100).toFixed(1) : null;
+
+  return (
+    <div className="flex items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
+      <span className="text-jade mr-2 text-xs">&gt;</span>
+
+      <Link href={`/blocks/${stats.latestBlock}`} className="group flex items-center">
+        <span className="text-jade/50 uppercase tracking-wider">block</span>
+        <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
+          {stats.latestBlock.toLocaleString()}
+        </span>
+      </Link>
+
+      <span className="text-jade/20 mx-2.5 select-none">|</span>
+
+      <Link href="/charts/epoch-time-length" className="group flex items-center">
+        <span className="text-jade/50 uppercase tracking-wider">epoch</span>
+        <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
+          {epoch ? epoch.number.toLocaleString() : stats.epoch}
+        </span>
+        {epoch && (
+          <span className="text-jade/40 ml-1.5">
+            {epoch.index}/{epoch.length} {epochPct}%
+          </span>
+        )}
+      </Link>
+
+      <span className="text-jade/20 mx-2.5 select-none">|</span>
+
+      <Link href="/charts/hash-rate" className="group flex items-center">
+        <span className="text-jade/50 uppercase tracking-wider">hash</span>
+        <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
+          {stats.hashRate}
+        </span>
+      </Link>
+
+      <span className="text-jade/20 mx-2.5 select-none">|</span>
+
+      <span className="flex items-center">
+        <span className="text-jade/50 uppercase tracking-wider">interval</span>
+        <span className="text-jade ml-1.5 font-bold">{stats.avgBlockTime}</span>
+      </span>
+
+      <span className="text-jade animate-blink-cursor ml-2 inline-block h-3.5 w-[7px]" />
     </div>
   );
 }

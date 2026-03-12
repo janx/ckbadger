@@ -12,17 +12,25 @@ interface PieChartDataPoint {
 interface PieChartProps {
   data: PieChartDataPoint[];
   size?: number;
+  fullWidth?: boolean;
   showLegend?: boolean;
   formatValue?: (value: number) => string;
+  highlightIndex?: number | null;
+  onHighlightChange?: (index: number | null) => void;
 }
 
 export function PieChart({
   data,
   size = 300,
+  fullWidth = false,
   showLegend = true,
   formatValue = (v) => v.toFixed(2) + '%',
+  highlightIndex,
+  onHighlightChange,
 }: PieChartProps) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const activeIndex =
+    highlightIndex !== undefined && highlightIndex !== null ? highlightIndex : hoverIndex;
 
   const total = useMemo(() => data.reduce((sum, d) => sum + d.value, 0), [data]);
 
@@ -73,7 +81,10 @@ export function PieChart({
 
   return (
     <div className="flex flex-col items-center gap-6 lg:flex-row lg:items-start">
-      <div className="relative" style={{ width: size, height: size }}>
+      <div
+        className={fullWidth ? 'relative aspect-square w-full' : 'relative'}
+        style={fullWidth ? undefined : { width: size, height: size }}
+      >
         <svg viewBox="-1.2 -1.2 2.4 2.4" className="h-full w-full">
           {slices.map((slice, i) => (
             <path
@@ -83,15 +94,21 @@ export function PieChart({
               stroke={CHART_TOOLTIP_BG}
               strokeWidth={0.02}
               className="cursor-pointer transition-opacity"
-              opacity={hoverIndex === null || hoverIndex === i ? 1 : 0.5}
-              onMouseEnter={() => setHoverIndex(i)}
-              onMouseLeave={() => setHoverIndex(null)}
-              transform={hoverIndex === i ? `scale(1.05)` : undefined}
+              opacity={activeIndex === null || activeIndex === i ? 1 : 0.5}
+              onMouseEnter={() => {
+                setHoverIndex(i);
+                onHighlightChange?.(i);
+              }}
+              onMouseLeave={() => {
+                setHoverIndex(null);
+                onHighlightChange?.(null);
+              }}
+              transform={activeIndex === i ? `scale(1.05)` : undefined}
               style={{ transformOrigin: 'center' }}
             />
           ))}
           <circle cx={0} cy={0} r={0.6} fill={CHART_TOOLTIP_BG} />
-          {hoverIndex !== null && slices[hoverIndex] && (
+          {activeIndex !== null && slices[activeIndex] && (
             <>
               <text
                 x={0}
@@ -99,9 +116,9 @@ export function PieChart({
                 textAnchor="middle"
                 className="fill-text-bright text-[0.12px] font-medium"
               >
-                {slices[hoverIndex].label.length > 12
-                  ? slices[hoverIndex].label.slice(0, 12) + '...'
-                  : slices[hoverIndex].label}
+                {slices[activeIndex].label.length > 12
+                  ? slices[activeIndex].label.slice(0, 12) + '...'
+                  : slices[activeIndex].label}
               </text>
               <text
                 x={0}
@@ -109,11 +126,11 @@ export function PieChart({
                 textAnchor="middle"
                 className="fill-text font-mono text-[0.14px] tabular-nums"
               >
-                {formatValue(slices[hoverIndex].percentage)}
+                {formatValue(slices[activeIndex].percentage)}
               </text>
             </>
           )}
-          {hoverIndex === null && (
+          {activeIndex === null && (
             <text x={0} y={0.05} textAnchor="middle" className="fill-text-dim text-[0.1px]">
               Hover for details
             </text>
@@ -127,10 +144,16 @@ export function PieChart({
             <div
               key={i}
               className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm transition-colors ${
-                hoverIndex === i ? 'bg-base-elevated' : 'hover:bg-base-elevated/50'
+                activeIndex === i ? 'bg-base-elevated' : 'hover:bg-base-elevated/50'
               }`}
-              onMouseEnter={() => setHoverIndex(i)}
-              onMouseLeave={() => setHoverIndex(null)}
+              onMouseEnter={() => {
+                setHoverIndex(i);
+                onHighlightChange?.(i);
+              }}
+              onMouseLeave={() => {
+                setHoverIndex(null);
+                onHighlightChange?.(null);
+              }}
             >
               <div
                 className="h-3 w-3 flex-shrink-0 rounded"

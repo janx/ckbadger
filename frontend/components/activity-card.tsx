@@ -1,15 +1,16 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type ActivitySummary24h } from '@/lib/api';
-import { PieChart } from '@/components/ui/pie-chart';
 import {
   TerminalPanel,
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
-import { formatCkbCompact } from '@/lib/utils';
-import { CHART_PRIMARY_COLOR } from '@/lib/chart-colors';
+import { formatCkbCompact, cn } from '@/lib/utils';
+import { PieChart } from '@/components/ui/pie-chart';
+import { CHART_PRIMARY_COLOR, getChartPaletteColor } from '@/lib/chart-colors';
 import Link from '@/components/ui/link';
 
 function formatCompact(n: number): string {
@@ -28,8 +29,6 @@ const ACTIVITY_COLORS: Record<string, string> = {
   'Script Call': '#ff8800',
 };
 
-const SCRIPT_COLORS = ['#44ee77', '#ff66aa', '#44bbff', '#00ffaa', '#bb88ff', '#66ff99'];
-
 function buildPieData(stats: ActivitySummary24h) {
   return [
     { label: 'Transfer', value: stats.transferCount, color: ACTIVITY_COLORS.Transfer },
@@ -43,28 +42,24 @@ function buildPieData(stats: ActivitySummary24h) {
     { label: 'Object', value: stats.objectCount, color: ACTIVITY_COLORS.Object },
     { label: 'Identity', value: stats.identityCount, color: ACTIVITY_COLORS.Identity },
     { label: 'Script Call', value: stats.scriptCallCount, color: ACTIVITY_COLORS['Script Call'] },
-  ].filter((s) => s.value > 0);
+  ]
+    .filter((s) => s.value > 0)
+    .sort((a, b) => b.value - a.value);
 }
 
-interface ActivityCardProps {
-  isRealtime?: boolean;
-}
+// ---------------------------------------------------------------------------
+// ActivityBarChartCard — standalone 14-day bar chart
+// ---------------------------------------------------------------------------
 
-export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
-  const { data: dailyStats, isLoading: isDailyLoading } = useQuery({
-    queryKey: ['daily-activity-stats', 14],
-    queryFn: () => api.getDailyActivityStats(14),
+export function ActivityBarChartCard() {
+  const [hoveredBarIdx, setHoveredBarIdx] = useState<number | null>(null);
+
+  const { data: dailyStats, isLoading } = useQuery({
+    queryKey: ['daily-activity-stats', 30],
+    queryFn: () => api.getDailyActivityStats(30),
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
-
-  const { data: summary, isLoading: isSummaryLoading } = useQuery({
-    queryKey: ['activity-summary-24h'],
-    queryFn: () => api.getActivitySummary24h(),
-    refetchInterval: 30000,
-  });
-
-  const isLoading = isDailyLoading || isSummaryLoading;
 
   const barData =
     dailyStats?.map((d) => ({
@@ -82,20 +77,137 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
 
   const maxVal = Math.max(...barData.map((d) => d.total), 1);
 
-  const daoTotal = summary
-    ? summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount
-    : 0;
+  return (
+    <div className="border-base-border bg-base-surface rounded-lg border px-4 py-3">
+      <div className="mb-1.5 flex items-baseline justify-between">
+        <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+          Activity — 30 Day Trend
+        </div>
+        {hoveredBarIdx !== null && barData[hoveredBarIdx] && (
+          <div className="font-mono text-[10px] tabular-nums">
+            <span className="text-text-dim">{barData[hoveredBarIdx].date}</span>{' '}
+            <span className="text-jade font-bold">
+              {barData[hoveredBarIdx].total.toLocaleString()}
+            </span>
+          </div>
+        )}
+      </div>
+      {isLoading || barData.length === 0 ? (
+        <div className="bg-base-elevated h-14 w-full animate-pulse rounded" />
+      ) : (
+        <div className="flex h-14 items-end gap-[1px]" onMouseLeave={() => setHoveredBarIdx(null)}>
+          {barData.map((d, i) => (
+            <div
+              key={d.date}
+              className="flex-1 cursor-crosshair rounded-t-sm transition-opacity duration-100"
+              style={{
+                height: `${Math.max((d.total / maxVal) * 100, 4)}%`,
+                backgroundColor: CHART_PRIMARY_COLOR,
+                opacity: hoveredBarIdx !== null && hoveredBarIdx !== i ? 0.3 : 0.8,
+              }}
+              onMouseEnter={() => setHoveredBarIdx(i)}
+              title={`${d.date}: ${d.total.toLocaleString()}`}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
-  const breakdownItems = summary
-    ? [
-        { label: 'Transfers', value: formatCompact(summary.transferCount) },
-        { label: 'DAO', value: formatCompact(daoTotal) },
-        { label: 'Tokens', value: formatCompact(summary.tokenCount) },
-        { label: 'Objects', value: formatCompact(summary.objectCount) },
-      ]
-    : [];
+// ---------------------------------------------------------------------------
+// PieSection — reusable pie chart + side legend
+// ---------------------------------------------------------------------------
 
-  const pieData = summary ? buildPieData(summary) : [];
+function PieSection({
+  title,
+  data,
+  highlightIndex,
+  onHighlightChange,
+  useExplicitColors,
+}: {
+  title: string;
+  data: { label: string; value: number; color?: string }[];
+  highlightIndex: number | null;
+  onHighlightChange: (idx: number | null) => void;
+  useExplicitColors?: boolean;
+}) {
+  const total = data.reduce((s, x) => s + x.value, 0);
+
+  return (
+    <div className="flex items-start gap-3">
+      <div className="w-1/2 shrink-0">
+        <PieChart
+          data={data}
+          fullWidth
+          showLegend={false}
+          highlightIndex={highlightIndex}
+          onHighlightChange={onHighlightChange}
+        />
+      </div>
+      <div className="flex w-1/2 flex-col justify-center self-stretch overflow-hidden">
+        <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
+          {title}
+        </div>
+        {data.map((d, i) => {
+          const pct = total > 0 ? ((d.value / total) * 100).toFixed(1) : '0';
+          return (
+            <div
+              key={d.label}
+              className={cn(
+                'flex cursor-pointer items-center gap-1.5 py-0.5 font-mono text-[10px] leading-tight transition-opacity',
+                highlightIndex !== null && highlightIndex !== i ? 'opacity-40' : ''
+              )}
+              onMouseEnter={() => onHighlightChange(i)}
+              onMouseLeave={() => onHighlightChange(null)}
+            >
+              <div
+                className="h-1.5 w-1.5 shrink-0 rounded-sm"
+                style={{
+                  backgroundColor: useExplicitColors ? d.color : getChartPaletteColor(i),
+                }}
+              />
+              <span className="text-text-dim min-w-0 truncate">{d.label}</span>
+              <span className="text-text-bright shrink-0 tabular-nums">{pct}%</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ActivityCard — activity types pie + script usage pie + 24h stats
+// ---------------------------------------------------------------------------
+
+interface ActivityCardProps {
+  isRealtime?: boolean;
+}
+
+export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
+  const [hoveredActivityIdx, setHoveredActivityIdx] = useState<number | null>(null);
+  const [hoveredScriptIdx, setHoveredScriptIdx] = useState<number | null>(null);
+
+  const { data: summary, isLoading } = useQuery({
+    queryKey: ['activity-summary-24h'],
+    queryFn: () => api.getActivitySummary24h(),
+    refetchInterval: 30000,
+  });
+
+  const activityPieData = summary ? buildPieData(summary) : [];
+
+  const scriptPieData = useMemo(() => {
+    if (!summary?.scriptCounts) return [];
+    return summary.scriptCounts
+      .filter((s) => s.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8)
+      .map((s) => ({
+        label: s.name || `${s.codeHash.slice(0, 10)}...`,
+        value: s.count,
+      }));
+  }, [summary]);
 
   const headerActions = (
     <Link
@@ -110,143 +222,79 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
     <TerminalPanel variant="default" glow={isRealtime}>
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'} actions={headerActions}>
         <Link href="/charts" className="hover:text-jade transition-colors">
-          Activity
+          Activity Stats (24h)
         </Link>
       </TerminalPanelHeader>
       <TerminalPanelContent padding="md">
-        {/* 14-day bar chart */}
-        <div className="mb-4">
-          {isLoading || barData.length === 0 ? (
-            <div className="bg-base-elevated h-16 w-full animate-pulse rounded" />
-          ) : (
-            <div className="flex h-16 items-end gap-[2px]">
-              {barData.map((d) => (
-                <div
-                  key={d.date}
-                  className="flex-1 rounded-t-sm"
-                  style={{
-                    height: `${Math.max((d.total / maxVal) * 100, 2)}%`,
-                    backgroundColor: CHART_PRIMARY_COLOR,
-                    opacity: 0.8,
-                  }}
-                  title={`${d.date}: ${d.total.toLocaleString()} activities`}
-                />
-              ))}
+        {isLoading ? (
+          <div className="space-y-4">
+            <div className="bg-base-elevated h-6 w-full animate-pulse rounded" />
+            <div className="bg-base-elevated h-36 w-full animate-pulse rounded" />
+            <div className="bg-base-elevated h-36 w-full animate-pulse rounded" />
+          </div>
+        ) : (
+          <div className="space-y-5">
+            {/* 24h stats — top */}
+            <div className="border-base-border/40 divide-base-border/40 flex items-stretch divide-x border-b pb-4">
+              <StatItem
+                label="Activities"
+                value={
+                  summary
+                    ? formatCompact(
+                        summary.transferCount +
+                          summary.daoDepositCount +
+                          summary.daoWithdrawRequestCount +
+                          summary.daoWithdrawCompleteCount +
+                          summary.tokenCount +
+                          summary.objectCount +
+                          summary.identityCount +
+                          summary.scriptCallCount
+                      )
+                    : '\u2014'
+                }
+              />
+              <StatItem
+                label="Addresses"
+                value={summary ? summary.uniqueAddressCount.toLocaleString() : '\u2014'}
+              />
+              <StatItem
+                label="Volume"
+                value={summary ? formatCkbCompact(summary.totalCkbMoved).value + ' CKB' : '\u2014'}
+              />
             </div>
-          )}
-        </div>
 
-        {/* Type breakdown */}
-        {!isLoading && (
-          <div className="mb-4">
-            <div className="text-text-dim flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px]">
-              {breakdownItems.map((item) => (
-                <span key={item.label}>
-                  {item.label}: <span className="text-text-bright">{item.value}</span>
-                </span>
-              ))}
-            </div>
+            {/* Activity types pie */}
+            {activityPieData.length > 0 && (
+              <PieSection
+                title="Activity Types"
+                data={activityPieData}
+                highlightIndex={hoveredActivityIdx}
+                onHighlightChange={setHoveredActivityIdx}
+                useExplicitColors
+              />
+            )}
+
+            {/* Script usage pie */}
+            {scriptPieData.length > 0 && (
+              <PieSection
+                title="Script Usage"
+                data={scriptPieData}
+                highlightIndex={hoveredScriptIdx}
+                onHighlightChange={setHoveredScriptIdx}
+              />
+            )}
           </div>
         )}
-
-        {/* Pie chart */}
-        {!isLoading && pieData.length > 0 && (
-          <div className="mb-4 flex justify-center">
-            <PieChart data={pieData} size={160} formatValue={(v) => v.toLocaleString()} />
-          </div>
-        )}
-
-        {/* Script breakdown */}
-        {!isLoading && summary && summary.scriptCounts.length > 0 && (
-          <div className="mb-4">
-            <div className="text-text-dim mb-1.5 font-mono text-[10px] uppercase tracking-wider">
-              Script Usage (24h)
-            </div>
-            <div className="space-y-1">
-              {summary.scriptCounts
-                .filter((s) => s.count > 0)
-                .sort((a, b) => b.count - a.count)
-                .slice(0, 6)
-                .map((s, i) => {
-                  const maxCount = Math.max(...summary.scriptCounts.map((sc) => sc.count), 1);
-                  const pct = (s.count / maxCount) * 100;
-                  return (
-                    <div key={s.codeHash} className="flex items-center gap-2">
-                      <span className="text-text-dim w-20 truncate font-mono text-[10px]">
-                        {s.name || `${s.codeHash.slice(0, 10)}...`}
-                      </span>
-                      <div className="bg-base-elevated h-1.5 flex-1 overflow-hidden rounded-full">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${pct}%`,
-                            backgroundColor: SCRIPT_COLORS[i % SCRIPT_COLORS.length],
-                          }}
-                        />
-                      </div>
-                      <span className="text-text-dim w-8 text-right font-mono text-[10px] tabular-nums">
-                        {formatCompact(s.count)}
-                      </span>
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
-        )}
-
-        {/* 24h stats */}
-        <div className="grid grid-cols-3 gap-x-4 gap-y-2">
-          <StatItem
-            label="Activities"
-            value={
-              summary
-                ? formatCompact(
-                    summary.transferCount +
-                      summary.daoDepositCount +
-                      summary.daoWithdrawRequestCount +
-                      summary.daoWithdrawCompleteCount +
-                      summary.tokenCount +
-                      summary.objectCount +
-                      summary.identityCount +
-                      summary.scriptCallCount
-                  )
-                : '\u2014'
-            }
-            isLoading={isLoading}
-          />
-          <StatItem
-            label="Addresses"
-            value={summary ? summary.uniqueAddressCount.toLocaleString() : '\u2014'}
-            isLoading={isLoading}
-          />
-          <StatItem
-            label="Volume"
-            value={summary ? formatCkbCompact(summary.totalCkbMoved).value + ' CKB' : '\u2014'}
-            isLoading={isLoading}
-          />
-        </div>
       </TerminalPanelContent>
     </TerminalPanel>
   );
 }
 
-function StatItem({
-  label,
-  value,
-  isLoading,
-}: {
-  label: string;
-  value: string;
-  isLoading: boolean;
-}) {
+function StatItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="text-center">
+    <div className="flex-1 text-center">
       <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">{label}</div>
-      {isLoading ? (
-        <div className="bg-base-elevated mx-auto mt-1 h-4 w-12 animate-pulse rounded" />
-      ) : (
-        <div className="text-emphasis mt-1 font-mono text-sm">{value}</div>
-      )}
+      <div className="text-jade mt-1 font-mono text-base font-bold tabular-nums">{value}</div>
     </div>
   );
 }
