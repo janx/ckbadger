@@ -57,6 +57,15 @@ fn test_config_with_append_only(
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
 ) -> AppConfig {
+    let ckb_db_path = test_ckb_db_path();
+    test_config_with_ckb_db_path(store, append_only_store, ckb_db_path)
+}
+
+fn test_config_with_ckb_db_path(
+    store: Arc<CkbadgerStore>,
+    append_only_store: Arc<CkbadgerStore>,
+    ckb_db_path: String,
+) -> AppConfig {
     AppConfig {
         append_only_store,
         store,
@@ -65,12 +74,36 @@ fn test_config_with_append_only(
         rate_limit_per_second: Some(1000),
         rate_limit_burst: Some(2000),
         start_background_tasks: false,
-        ckb_db_path: test_ckb_db_path(),
+        ckb_db_path,
     }
 }
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
+}
+
+fn insert_ckb_cell_data(ckb_db_path: &str, tx_hash: &[u8; 32], index: u32, data: &[u8]) {
+    let mut db_opts = Options::default();
+    db_opts.create_if_missing(false);
+    let cf_descriptors: Vec<ColumnFamilyDescriptor> = (0..=18)
+        .map(|cf_index| ColumnFamilyDescriptor::new(cf_index.to_string(), Options::default()))
+        .collect();
+    let db = DB::open_cf_descriptors(&db_opts, ckb_db_path, cf_descriptors).unwrap();
+    let cf = db.cf_handle("12").unwrap();
+
+    let mut key = Vec::with_capacity(36);
+    key.extend_from_slice(tx_hash);
+    key.extend_from_slice(&index.to_le_bytes());
+
+    db.put_cf(cf, &key, data).unwrap();
+}
+
+fn compute_blake2b_data_hash(data: &[u8]) -> Vec<u8> {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(data);
+    let mut hash = [0u8; 32];
+    hasher.finalize(&mut hash);
+    hash.to_vec()
 }
 
 fn pending_tx_hash_hex() -> String {
@@ -2727,6 +2760,81 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
 }
 
 #[tokio::test]
+async fn test_unknown_data_hash_script_resolves_code_cell_via_ckb_reader() {
+    let store = test_store();
+    let append_only_store = test_append_only_store();
+    let ckb_db_path = test_ckb_db_path();
+
+    let code_bytes = b"unknown-script-code-cell";
+    let data_hash = compute_blake2b_data_hash(code_bytes);
+    let code_cell_tx_hash = [0xcdu8; 32];
+    let code_cell_output_index = 2u32;
+
+    insert_ckb_cell_data(
+        &ckb_db_path,
+        &code_cell_tx_hash,
+        code_cell_output_index,
+        code_bytes,
+    );
+
+    store
+        .put_script_info_direct(
+            &data_hash,
+            &ScriptInfo {
+                code_hash: data_hash.clone(),
+                hash_type: 0,
+                lock_live_cells_count: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let config = test_config_with_ckb_db_path(store, append_only_store, ckb_db_path);
+    let app = create_router(config).await;
+
+    let data_hash_hex = format!("0x{}", hex::encode(&data_hash));
+    let code_cell_tx_hash_hex = format!("0x{}", hex::encode(code_cell_tx_hash));
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(format!(
+            r#"{{"codeHashes":["{}"]}}"#,
+            data_hash_hex
+        )))
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json[&data_hash_hex]["name"], "Unknown");
+    assert_eq!(json[&data_hash_hex]["hashType"], "data");
+    assert_eq!(
+        json[&data_hash_hex]["codeCellTxHash"],
+        code_cell_tx_hash_hex
+    );
+    assert_eq!(json[&data_hash_hex]["codeCellOutputIndex"], 2);
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/code-cell?code_hash={}&hash_type=data",
+            data_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["txHash"], code_cell_tx_hash_hex);
+    assert_eq!(json["outputIndex"], 2);
+}
+
+#[tokio::test]
 async fn test_cells_by_script_resolves_reference_hash_type_alias() {
     let store = test_store();
 
@@ -3112,6 +3220,21 @@ async fn test_script_capacity_chart_aggregates_deployments() {
         )
         .unwrap();
 
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        300,
+        &CachedBlockHeader {
+            hash: vec![0x03; 32],
+            timestamp: 1_705_536_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
     let config = test_config(store);
     let app = create_router(config).await;
 
@@ -3182,6 +3305,21 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
         )
         .unwrap();
 
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        100,
+        &CachedBlockHeader {
+            hash: vec![0x04; 32],
+            timestamp: 1_705_363_200_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
     let config = test_config(store);
     let app = create_router(config).await;
 
@@ -3202,6 +3340,68 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["values"]["used"], "40");
     assert_eq!(data[0]["values"]["unused"], "60");
+}
+
+#[tokio::test]
+async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_day() {
+    let store = test_store();
+    let code_hash = vec![0x44; 32];
+    let code_hash_hex = format!("0x{}", hex::encode(&code_hash));
+
+    store
+        .put_script_daily_delta(
+            &code_hash,
+            false,
+            20240115,
+            &ScriptDailyDelta {
+                live_capacity_delta: 100,
+                live_used_capacity_delta: 40,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        200,
+        &CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_705_536_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/scripts/charts/capacity-history?code_hash={}&script_kind=lock",
+            code_hash_hex
+        ))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 3);
+    assert_eq!(data[0]["date"], "2024-01-15");
+    assert_eq!(data[0]["values"]["used"], "40");
+    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[1]["date"], "2024-01-16");
+    assert_eq!(data[1]["values"]["used"], "40");
+    assert_eq!(data[1]["values"]["unused"], "60");
+    assert_eq!(data[2]["date"], "2024-01-17");
+    assert_eq!(data[2]["values"]["used"], "40");
+    assert_eq!(data[2]["values"]["unused"], "60");
 }
 
 #[tokio::test]

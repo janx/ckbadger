@@ -183,37 +183,64 @@ fn resolve_code_cell(
     info: &ckbadger_store::ScriptInfo,
     store: &ckbadger_store::CkbadgerStore,
     cells_store: &ckbadger_store::CkbadgerStore,
-) -> (Option<String>, Option<i32>) {
-    // 1. hash_type="type": code_hash IS the type_script_hash
-    // 2. hash_type="data*" with dep_type_hash: look up by type index
-    let type_hash_for_lookup = if info.hash_type == 1 {
-        Some(info.code_hash.as_slice())
-    } else {
-        info.dep_type_hash.as_deref()
-    };
+    ckb_store: Option<&ckb_store_reader::CkbChainReader>,
+) -> Result<(Option<String>, Option<i32>), ApiRouteError> {
+    let (type_ref, data_ref) = deployment_reference_hashes(info);
 
-    if let Some(th) = type_hash_for_lookup {
-        if let Ok(cells) = store.list_cells_by_type(th, 1, None, cells_store) {
-            if let Some((tx_hash, idx, _)) = cells.first() {
-                return (
-                    Some(format!("0x{}", hex::encode(tx_hash))),
-                    Some(*idx as i32),
-                );
-            }
+    if let Some(type_hash) = type_ref.as_deref() {
+        let cells = store
+            .list_cells_by_type(type_hash, 1, None, cells_store)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "failed to resolve code cell by deployment type hash 0x{}: {}",
+                    hex::encode(type_hash),
+                    e
+                ))
+            })?;
+        if let Some((tx_hash, idx, _)) = cells.first() {
+            let output_index = i32::from(*idx);
+            return Ok((
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(output_index),
+            ));
+        }
+    } else if let Some(data_hash) = data_ref.as_deref() {
+        let data_hash_arr: [u8; 32] = data_hash.try_into().map_err(|_| {
+            ApiError::internal(format!(
+                "deployment data hash must be 32 bytes for code-cell resolution: data_hash=0x{}",
+                hex::encode(data_hash)
+            ))
+        })?;
+
+        if let Some((tx_hash, output_index)) =
+            ckb_store.and_then(|reader| reader.find_cell_by_data_hash(&data_hash_arr))
+        {
+            let output_index = i32::try_from(output_index).map_err(|e| {
+                ApiError::internal(format!(
+                    "deployment data lookup returned out-of-range output index: data_hash=0x{}, output_index={}, error={}",
+                    hex::encode(data_hash),
+                    output_index,
+                    e
+                ))
+            })?;
+            return Ok((
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(output_index),
+            ));
         }
     }
 
-    // 3. Fallback: use pre-resolved code cell outpoint (resolved during label import)
+    // Use the imported outpoint when no live deployment cell lookup is available.
     if let (Some(tx_hash), Some(idx)) = (&info.code_cell_tx_hash, info.code_cell_output_index) {
         if !tx_hash.is_empty() {
-            return (
+            return Ok((
                 Some(format!("0x{}", hex::encode(tx_hash))),
                 Some(idx as i32),
-            );
+            ));
         }
     }
 
-    (None, None)
+    Ok((None, None))
 }
 
 fn resolve_deployed_at(
@@ -419,12 +446,15 @@ fn script_info_to_response(
         None
     };
 
-    // Resolve deployment code cell outpoint.
-    // For hash_type="type": code_hash IS the type_script_hash of the deployment cell.
-    // For hash_type="data"/"data1"/"data2": use dep_type_hash, then fall back to
-    // scanning early blocks via dep_data_hash.
-    let (code_cell_tx_hash, code_cell_output_index) =
-        resolve_code_cell(info, &state.store, &state.append_only_store);
+    // Resolve deployment code cell outpoint from the deployment-family references.
+    // Type-referenced deployments use the type index; data-referenced deployments
+    // use the direct CKB cell-data reader by data hash.
+    let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(
+        info,
+        &state.store,
+        &state.append_only_store,
+        state.ckb_store.as_deref(),
+    )?;
     let deployed_at = resolve_deployed_at(
         &state.store,
         &state.append_only_store,
@@ -524,8 +554,12 @@ async fn lookup_scripts(
             let live_used_capacity_sum =
                 (info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum).to_string();
 
-            let (code_cell_tx_hash, code_cell_output_index) =
-                resolve_code_cell(&info, &state.store, &state.append_only_store);
+            let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(
+                &info,
+                &state.store,
+                &state.append_only_store,
+                state.ckb_store.as_deref(),
+            )?;
             let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&info);
 
             result.insert(
@@ -616,8 +650,12 @@ async fn get_code_cell(
             ..Default::default()
         });
 
-    let (tx_hash, output_index) =
-        resolve_code_cell(&script_info, &state.store, &state.append_only_store);
+    let (tx_hash, output_index) = resolve_code_cell(
+        &script_info,
+        &state.store,
+        &state.append_only_store,
+        state.ckb_store.as_deref(),
+    )?;
 
     ok(CodeCellResponse {
         tx_hash,
@@ -910,6 +948,67 @@ fn apply_script_chart_delta(
     .map_err(|e| ApiError::internal(e.to_string()))
 }
 
+fn latest_complete_script_chart_date_from_tip(tip_timestamp_ms: i64) -> Result<u32, ApiRouteError> {
+    let tip_date = ckbadger_common::block_date_from_ms(tip_timestamp_ms);
+    let latest_complete = tip_date
+        .checked_sub_signed(chrono::Duration::days(1))
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "tip timestamp does not have a previous CKB chart day: tip_timestamp_ms={}",
+                tip_timestamp_ms
+            ))
+        })?;
+
+    latest_complete
+        .format("%Y%m%d")
+        .to_string()
+        .parse::<u32>()
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "failed to encode latest complete script chart date: tip_timestamp_ms={}, date={}, error={}",
+                tip_timestamp_ms,
+                latest_complete,
+                e
+            ))
+        })
+}
+
+fn latest_complete_script_chart_date(state: &AppState) -> Result<u32, ApiRouteError> {
+    let (_, header) = state
+        .store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(
+                "script capacity history requires a sync tip block when script daily deltas exist",
+            )
+        })?;
+
+    latest_complete_script_chart_date_from_tip(header.timestamp)
+}
+
+fn resolve_script_capacity_chart_bounds(
+    daily_deltas: &BTreeMap<u32, (i128, i128)>,
+    from_date: Option<u32>,
+    to_date: Option<u32>,
+    default_end_date: Option<u32>,
+    has_history: bool,
+) -> Option<(u32, u32)> {
+    if !has_history {
+        return None;
+    }
+
+    let first_delta_date = daily_deltas.keys().next().copied();
+    let bounds = match (from_date, to_date) {
+        (Some(from), Some(to)) => Some((from, to)),
+        (Some(from), None) => default_end_date.map(|end| (from, end)),
+        (None, Some(to)) => first_delta_date.map(|first| (first, to)),
+        (None, None) => first_delta_date.zip(default_end_date),
+    };
+
+    bounds.filter(|(start, end)| start <= end)
+}
+
 fn build_script_capacity_history_chart(
     state: &AppState,
     targets: Vec<(Vec<u8>, bool)>,
@@ -988,20 +1087,19 @@ fn build_script_capacity_history_chart(
         }
     }
 
-    let chart_bounds = match (from_date, to_date) {
-        (Some(from), Some(to)) => Some((from, to)),
-        (Some(from), None) => daily_deltas
-            .keys()
-            .next_back()
-            .copied()
-            .map(|last| (from, last)),
-        (None, Some(to)) => daily_deltas.keys().next().copied().map(|first| (first, to)),
-        (None, None) => {
-            let first = daily_deltas.keys().next().copied();
-            let last = daily_deltas.keys().next_back().copied();
-            first.zip(last)
-        }
+    let has_history = !daily_deltas.is_empty() || cumulative_capacity != 0 || cumulative_used != 0;
+    let default_end_date = if to_date.is_none() && has_history {
+        Some(latest_complete_script_chart_date(state)?)
+    } else {
+        None
     };
+    let chart_bounds = resolve_script_capacity_chart_bounds(
+        &daily_deltas,
+        from_date,
+        to_date,
+        default_end_date,
+        has_history,
+    );
     let dates = if let Some((start, end)) = chart_bounds {
         date_keys_inclusive(start, end).map_err(ApiError::internal)?
     } else {
@@ -1116,9 +1214,13 @@ async fn get_script_capacity_history_chart_by_code_hash(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_script_chart_delta, checked_capacity_totals};
+    use super::{
+        apply_script_chart_delta, checked_capacity_totals,
+        latest_complete_script_chart_date_from_tip, resolve_script_capacity_chart_bounds,
+    };
     use axum::http::StatusCode;
     use ckbadger_store::ScriptInfo;
+    use std::collections::BTreeMap;
 
     #[test]
     fn apply_script_chart_delta_accepts_delta_beyond_i64() {
@@ -1166,5 +1268,39 @@ mod tests {
              .0
             .message
             .contains("live used capacity exceeds total"));
+    }
+
+    #[test]
+    fn latest_complete_script_chart_date_from_tip_uses_ckb_day_boundary() {
+        assert_eq!(
+            latest_complete_script_chart_date_from_tip(1_705_536_000_000).unwrap(),
+            20240117
+        );
+    }
+
+    #[test]
+    fn resolve_script_capacity_chart_bounds_extends_unbounded_chart_to_latest_complete_day() {
+        let daily_deltas = BTreeMap::from([(20240115, (100, 40))]);
+
+        assert_eq!(
+            resolve_script_capacity_chart_bounds(&daily_deltas, None, None, Some(20240117), true,),
+            Some((20240115, 20240117))
+        );
+    }
+
+    #[test]
+    fn resolve_script_capacity_chart_bounds_preserves_from_only_flat_history() {
+        let daily_deltas = BTreeMap::new();
+
+        assert_eq!(
+            resolve_script_capacity_chart_bounds(
+                &daily_deltas,
+                Some(20240116),
+                None,
+                Some(20240117),
+                true,
+            ),
+            Some((20240116, 20240117))
+        );
     }
 }
