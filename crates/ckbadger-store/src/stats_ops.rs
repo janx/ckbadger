@@ -366,6 +366,20 @@ impl CkbadgerStore {
         }
     }
 
+    pub fn put_dao_top_depositors(&self, top: &DaoTopDepositors) -> anyhow::Result<()> {
+        let key = keys::encode_stats_key(stats_prefix::DAO_TOP_DEPOSITORS, b"latest");
+        let value = bincode::serialize(top)?;
+        self.put_cf(self.cf_stats_dao(), &key, &value)
+    }
+
+    pub fn get_dao_top_depositors(&self) -> anyhow::Result<Option<DaoTopDepositors>> {
+        let key = keys::encode_stats_key(stats_prefix::DAO_TOP_DEPOSITORS, b"latest");
+        match self.get_cf(self.cf_stats_dao(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
     // ---- HODL wave snapshots ----
 
     pub fn put_hodl_wave(&self, date: &str, wave: &DailyHodlWave) -> anyhow::Result<()> {
@@ -1170,6 +1184,28 @@ mod tests {
         // Miner should only account for the positive portion
         assert!(total_miner >= 0);
         assert!(total_dao >= 0);
+    }
+
+    #[test]
+    fn test_dao_top_depositors_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let depositors = DaoTopDepositors {
+            tip_block_number: 100,
+            depositors: vec![DaoTopDepositorEntry {
+                lock_script_hash: vec![0xAA; 32],
+                address: Some("ckb1test".to_string()),
+                total_capacity: 1000_00000000,
+                deposit_count: 3,
+                average_deposit_blocks: 5400.0,
+            }],
+        };
+        store.put_dao_top_depositors(&depositors).unwrap();
+        let loaded = store.get_dao_top_depositors().unwrap().unwrap();
+        assert_eq!(loaded.tip_block_number, 100);
+        assert_eq!(loaded.depositors.len(), 1);
+        assert_eq!(loaded.depositors[0].total_capacity, 1000_00000000);
+        assert_eq!(loaded.depositors[0].deposit_count, 3);
     }
 }
 

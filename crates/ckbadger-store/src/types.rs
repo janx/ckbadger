@@ -190,6 +190,21 @@ pub struct DaoLatestStatistics {
     pub burnt: i128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaoTopDepositorEntry {
+    pub lock_script_hash: Vec<u8>,
+    pub address: Option<String>,
+    pub total_capacity: i128,
+    pub deposit_count: i32,
+    pub average_deposit_blocks: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaoTopDepositors {
+    pub tip_block_number: i64,
+    pub depositors: Vec<DaoTopDepositorEntry>,
+}
+
 // ============================================
 // Group F: Tokens & NFTs
 // ============================================

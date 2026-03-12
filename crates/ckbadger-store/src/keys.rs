@@ -262,6 +262,7 @@ pub mod stats_prefix {
     pub const ACTIVITY_DAILY: u8 = 0x1D;
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
     pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
+    pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
 }
 
 // Flat re-exports for convenience
@@ -297,6 +298,7 @@ pub const STATS_PREFIX_ACTIVITY_DAILY: u8 = stats_prefix::ACTIVITY_DAILY;
 pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
 pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
     stats_prefix::DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
+pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
