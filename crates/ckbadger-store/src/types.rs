@@ -193,7 +193,6 @@ pub struct DaoLatestStatistics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaoTopDepositorEntry {
     pub lock_script_hash: Vec<u8>,
-    pub address: Option<String>,
     pub total_capacity: i128,
     pub deposit_count: i32,
     pub average_deposit_blocks: f64,

@@ -1027,7 +1027,6 @@ impl BatchWriter {
                         };
                         DaoTopDepositorEntry {
                             lock_script_hash: lock_hash,
-                            address: None, // Resolved at API layer
                             total_capacity,
                             deposit_count,
                             average_deposit_blocks: avg_blocks,

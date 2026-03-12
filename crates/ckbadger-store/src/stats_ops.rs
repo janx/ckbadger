@@ -1194,7 +1194,6 @@ mod tests {
             tip_block_number: 100,
             depositors: vec![DaoTopDepositorEntry {
                 lock_script_hash: vec![0xAA; 32],
-                address: Some("ckb1test".to_string()),
                 total_capacity: 1000_00000000,
                 deposit_count: 3,
                 average_deposit_blocks: 5400.0,
