@@ -32,13 +32,6 @@ impl CacheBackend {
         self.inner.delete(key);
     }
 
-    /// hgetall is no longer supported (was Redis-specific).
-    /// Returns an empty Vec. Callers that used this for proposals
-    /// should use the dedicated proposals endpoint instead.
-    pub async fn hgetall<T: DeserializeOwned>(&self, _key: &str) -> Vec<T> {
-        Vec::new()
-    }
-
     /// Get sync status from store queries (no Redis).
     pub async fn get_sync_status_from_store(
         &self,
@@ -125,13 +118,6 @@ impl CacheTtl {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_cache_backend_hgetall_returns_empty_vec() {
-        let cache = CacheBackend::new();
-        let result: Vec<String> = cache.hgetall("any_key").await;
-        assert!(result.is_empty());
-    }
 
     #[tokio::test]
     async fn test_cache_backend_get_returns_none_for_missing() {

@@ -427,19 +427,18 @@ fn create_empty_block(index: u32) -> MempoolBlock {
 async fn get_pending_proposals(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ckbadger_common::PendingProposalsResponse> {
-    use ckbadger_common::{
-        CachedProposal, PendingProposal, PendingProposalsResponse, PENDING_PROPOSALS_CACHE_KEY,
-    };
+    use ckbadger_common::{PendingProposal, PendingProposalsResponse};
 
-    let cached_proposals: Vec<CachedProposal> =
-        state.cache.hgetall(PENDING_PROPOSALS_CACHE_KEY).await;
-
-    // Get tip block number from the store (sync, not async)
     let tip = state
         .store
         .get_sync_status()
         .map(|s| s.tip_block_number)
         .unwrap_or(0);
+
+    let cached_proposals = state
+        .store
+        .get_all_pending_proposals()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let mut proposals: Vec<PendingProposal> = cached_proposals
         .iter()
