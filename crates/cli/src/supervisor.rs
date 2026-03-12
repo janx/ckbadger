@@ -40,6 +40,9 @@ const STABLE_RUNNING_THRESHOLD: Duration = Duration::from_secs(120);
 /// How often to check child process health.
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Time to wait for a child to exit after SIGTERM before sending SIGKILL.
+const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -66,6 +69,44 @@ impl ManagedChild {
 struct SupervisorState {
     children: Vec<ManagedChild>,
     shutdown_requested: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown
+// ---------------------------------------------------------------------------
+
+/// Stop a child process gracefully: SIGTERM -> wait -> SIGKILL fallback.
+async fn stop_child_gracefully(name: &str, child: &mut Child) {
+    let pid = child.id().unwrap_or(0);
+    if pid == 0 {
+        return;
+    }
+
+    // SAFETY: pid is a valid child process ID obtained from tokio::process::Child
+    let sigterm_result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if sigterm_result != 0 {
+        warn!(service = %name, pid, "failed to send SIGTERM, falling back to SIGKILL");
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return;
+    }
+
+    match tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) => {
+            info!(service = %name, pid, ?status, "service stopped gracefully");
+        }
+        Ok(Err(e)) => {
+            warn!(service = %name, pid, error = %e, "error waiting for service, sending SIGKILL");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+        Err(_) => {
+            warn!(service = %name, pid, timeout_secs = GRACEFUL_SHUTDOWN_TIMEOUT.as_secs(),
+                "service did not exit after SIGTERM, sending SIGKILL");
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -175,13 +216,13 @@ pub async fn run_supervisor(
     // Signal shutdown
     let _ = shutdown_tx.send(true);
 
-    // Stop all children
+    // Stop all children gracefully (SIGTERM + timeout + SIGKILL)
     {
         let mut locked = state.lock().await;
         locked.shutdown_requested = true;
         for managed in &mut locked.children {
             info!(service = %managed.name, pid = managed.pid(), "stopping service");
-            let _ = managed.child.kill().await;
+            stop_child_gracefully(&managed.name, &mut managed.child).await;
         }
     }
 

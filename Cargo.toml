@@ -76,6 +76,9 @@ ckb-types = "0.119"
 ckb-jsonrpc-types = "0.119"
 ckb-hash = "0.119"
 
+# System
+libc = "0.2"
+
 # Embedded KV store
 rocksdb = "0.24"
 bincode = "1.3"
