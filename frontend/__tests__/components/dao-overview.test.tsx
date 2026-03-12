@@ -69,9 +69,8 @@ describe('DaoOverview', () => {
     expect(screen.getByText('APC')).toBeInTheDocument();
     expect(screen.getByText('Depositors')).toBeInTheDocument();
 
-    // Header link to nervos-dao page
-    const headerLink = screen.getByRole('link', { name: /nervos dao/i });
-    expect(headerLink).toHaveAttribute('href', '/nervos-dao');
+    // 30-Day Trend label
+    expect(screen.getByText('30-Day Trend')).toBeInTheDocument();
   });
 
   it('shows loading skeleton initially', () => {

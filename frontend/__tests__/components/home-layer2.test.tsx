@@ -73,7 +73,9 @@ describe('KnowledgeSizeTrend', () => {
 
     render(<KnowledgeSizeTrend />);
 
-    expect(screen.getByText('Knowledge Size')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Knowledge Size — 30 Day Trend')).toBeInTheDocument();
+    });
   });
 
   it('renders sparkline after loading', async () => {
