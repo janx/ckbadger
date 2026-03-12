@@ -95,6 +95,32 @@ export function formatNumber(num: number | bigint): string {
   return num.toLocaleString();
 }
 
+export function formatCompactCkbDelta(ckbDelta: string): {
+  compact: string;
+  direction: 'up' | 'down' | 'neutral';
+} {
+  const num = parseFloat(ckbDelta);
+  if (isNaN(num) || num === 0) return { compact: '0', direction: 'neutral' };
+
+  const direction = num > 0 ? 'up' : num < 0 ? 'down' : 'neutral';
+  const abs = Math.abs(num);
+
+  let compact: string;
+  if (abs >= 1_000_000_000) {
+    compact = `${(abs / 1_000_000_000).toFixed(2)}B`;
+  } else if (abs >= 1_000_000) {
+    compact = `${(abs / 1_000_000).toFixed(2)}M`;
+  } else if (abs >= 1_000) {
+    compact = `${(abs / 1_000).toFixed(2)}K`;
+  } else if (abs >= 1) {
+    compact = abs.toFixed(2);
+  } else {
+    compact = abs.toFixed(4);
+  }
+
+  return { compact, direction };
+}
+
 export function hexToBytes(hex: string): Uint8Array {
   const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
   const bytes = new Uint8Array(cleanHex.length / 2);

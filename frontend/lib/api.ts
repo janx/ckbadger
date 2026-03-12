@@ -766,6 +766,10 @@ interface DaoStatistics {
   depositCompensationCkb: string;
   burnt: string;
   burntCkb: string;
+  depositChange24h?: string;
+  depositorsChange24h?: number;
+  claimedCompensationChange24h?: string;
+  unclaimedCompensationChange24h?: string;
 }
 
 interface DaoCalculatorResult {

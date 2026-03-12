@@ -16,7 +16,13 @@ import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, DaoDeposit, ScriptLookupResponse } from '@/lib/api';
-import { formatTimeAgo, formatCkbAmount, formatCkbValue, formatNumber } from '@/lib/utils';
+import {
+  formatTimeAgo,
+  formatCkbAmount,
+  formatCkbValue,
+  formatNumber,
+  formatCompactCkbDelta,
+} from '@/lib/utils';
 
 function ScriptLabel({
   codeHash,
@@ -313,35 +319,104 @@ export default function DaoPage() {
 
         <TerminalPanel className="mb-4" glow>
           <TerminalPanelContent>
-            <div className="mb-4 text-center">
-              <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
-                Total Deposit
-              </div>
-              <div className="text-emphasis font-display mt-2 text-4xl font-bold tabular-nums">
-                {stats
-                  ? (() => {
-                      const f = formatCkbValue(stats.totalDepositedCkb);
-                      return (
-                        <>
-                          {f.integer}
-                          <span className="text-emphasis/50 text-[0.85em]">.{f.decimal}</span>
-                          <span className="text-text-dim ml-2 text-[0.85em]">CKB</span>
-                        </>
-                      );
-                    })()
-                  : '...'}
-              </div>
-            </div>
-            <div className="border-base-border grid gap-6 border-t pt-6 md:grid-cols-3">
+            <div className="grid gap-6 md:grid-cols-3">
               <StatCard
-                label="Depositors"
-                value={stats ? formatNumber(stats.totalDepositors) : '...'}
+                label="Deposit"
+                value={
+                  stats
+                    ? (() => {
+                        const f = formatCkbValue(stats.totalDepositedCkb);
+                        return (
+                          <>
+                            {f.integer}
+                            <span className="text-text-bright/50 text-[0.85em]">.{f.decimal}</span>
+                            <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
+                          </>
+                        );
+                      })()
+                    : '...'
+                }
+                trend={
+                  stats?.depositChange24h
+                    ? (() => {
+                        const d = formatCompactCkbDelta(stats.depositChange24h);
+                        return { direction: d.direction, value: d.compact };
+                      })()
+                    : undefined
+                }
               />
-              <StatCard label="Avg Deposit Time" value={stats?.averageDepositDays || '...'} />
+              <StatCard
+                label="Claimed Compensation"
+                value={
+                  stats
+                    ? (() => {
+                        const f = formatCkbValue(stats.totalCompensationPaidCkb);
+                        return (
+                          <>
+                            {f.integer}
+                            <span className="text-text-bright/50 text-[0.85em]">.{f.decimal}</span>
+                            <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
+                          </>
+                        );
+                      })()
+                    : '...'
+                }
+                trend={
+                  stats?.claimedCompensationChange24h
+                    ? (() => {
+                        const d = formatCompactCkbDelta(stats.claimedCompensationChange24h);
+                        return { direction: d.direction, value: d.compact };
+                      })()
+                    : undefined
+                }
+              />
               <StatCard
                 label="Estimated APC"
                 value={stats?.estimatedApc ? `${stats.estimatedApc}%` : '...'}
                 valueClassName="font-display"
+              />
+              <StatCard
+                label="Addresses"
+                value={stats ? formatNumber(stats.totalDepositors) : '...'}
+                trend={
+                  stats?.depositorsChange24h
+                    ? {
+                        direction:
+                          stats.depositorsChange24h > 0
+                            ? 'up'
+                            : stats.depositorsChange24h < 0
+                              ? 'down'
+                              : 'neutral',
+                        value: Math.abs(stats.depositorsChange24h).toLocaleString(),
+                      }
+                    : undefined
+                }
+              />
+              <StatCard label="Average Deposit Time" value={stats?.averageDepositDays || '...'} />
+              <StatCard
+                label="Unclaimed Compensation"
+                value={
+                  stats
+                    ? (() => {
+                        const f = formatCkbValue(stats.unclaimedCompensationCkb);
+                        return (
+                          <>
+                            {f.integer}
+                            <span className="text-text-bright/50 text-[0.85em]">.{f.decimal}</span>
+                            <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
+                          </>
+                        );
+                      })()
+                    : '...'
+                }
+                trend={
+                  stats?.unclaimedCompensationChange24h
+                    ? (() => {
+                        const d = formatCompactCkbDelta(stats.unclaimedCompensationChange24h);
+                        return { direction: d.direction, value: d.compact };
+                      })()
+                    : undefined
+                }
               />
             </div>
           </TerminalPanelContent>
