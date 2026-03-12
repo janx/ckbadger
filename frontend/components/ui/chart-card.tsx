@@ -124,11 +124,11 @@ export function StatCard({
   };
 
   return (
-    <div className={cn('text-center', className)}>
+    <div className={cn('min-w-0 text-center', className)}>
       <div className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</div>
       <div
         className={cn(
-          'text-text-bright mt-2 font-mono text-2xl font-bold tabular-nums',
+          'text-text-bright mt-2 break-words font-mono text-2xl font-bold tabular-nums',
           valueClassName
         )}
       >

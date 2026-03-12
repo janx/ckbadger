@@ -2,12 +2,9 @@
 
 import Link from '@/components/ui/link';
 import { resolveBuildVersion } from '@/lib/runtime-config';
-import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 
 export function SiteFooter() {
   const buildVersion = resolveBuildVersion();
-  const latestBlock = useRealtimeStore((state) => state.latestBlock);
-  const blockNumber = latestBlock?.number ?? '---';
 
   return (
     <footer className="border-base-border bg-base-void/95 border-t">
@@ -34,9 +31,6 @@ export function SiteFooter() {
 
             <div className="flex flex-wrap items-center gap-3">
               <span className="text-text-ghost hidden sm:inline">|</span>
-              <span className="text-text-dim">tip:</span>
-              <span className="text-jade tabular-nums">{blockNumber}</span>
-              <span className="text-text-ghost">|</span>
               <span className="text-text">{buildVersion}</span>
               <span className="live-dot" />
               <span className="text-text-ghost">|</span>

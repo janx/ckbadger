@@ -545,21 +545,7 @@ export default function DaoPage() {
         </TerminalPanel>
 
         <TerminalPanel>
-          <TerminalPanelHeader
-            indicator="active"
-            actions={
-              activeTab === 'deposits' ? (
-                <FilterButtonGroup
-                  options={filterOptions}
-                  selected={status}
-                  onChange={(v) => {
-                    setStatus(v as number);
-                    depositsPagination.reset();
-                  }}
-                />
-              ) : undefined
-            }
-          >
+          <TerminalPanelHeader indicator="active">
             <div className="flex gap-4">
               <button
                 onClick={() => setActiveTab('deposits')}
@@ -583,6 +569,18 @@ export default function DaoPage() {
               </button>
             </div>
           </TerminalPanelHeader>
+          {activeTab === 'deposits' && (
+            <div className="border-base-border/50 from-base-elevated/30 flex items-center justify-end border-b bg-gradient-to-r to-transparent px-3 py-2">
+              <FilterButtonGroup
+                options={filterOptions}
+                selected={status}
+                onChange={(v) => {
+                  setStatus(v as number);
+                  depositsPagination.reset();
+                }}
+              />
+            </div>
+          )}
           <TerminalPanelContent padding="none">
             {activeTab === 'deposits' ? (
               <>
