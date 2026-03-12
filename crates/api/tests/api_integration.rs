@@ -658,6 +658,7 @@ async fn test_network_stats_includes_hero_metrics_from_dao_snapshot() {
         cum_miner_secondary: 5_000_000_000_000_000,
         cum_dao_compensation: 3_000_000_000_000_000,
         cum_treasury: 2_000_000_000_000_000,
+        unclaimed_compensation: 0,
     };
     let snapshot_key = ckbadger_store::keys::encode_stats_key(
         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,

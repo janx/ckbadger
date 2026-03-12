@@ -3646,6 +3646,7 @@ mod tests {
             cum_miner_secondary: 0,
             cum_dao_compensation: 0,
             cum_treasury: 0,
+            unclaimed_compensation: 0,
         }
     }
 

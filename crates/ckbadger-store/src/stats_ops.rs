@@ -884,6 +884,7 @@ mod tests {
             cum_miner_secondary: 1_000_000_000_000,
             cum_dao_compensation: 2_000_000_000_000,
             cum_treasury: 7_000_000_000_000,
+            unclaimed_compensation: 0,
         };
 
         put_dao_snapshot(&store, "20240115", &snap);
@@ -918,6 +919,7 @@ mod tests {
             cum_miner_secondary: 1,
             cum_dao_compensation: 2,
             cum_treasury: 3,
+            unclaimed_compensation: 0,
         };
         put_dao_snapshot(&store, "20240115", &snap);
 
@@ -986,6 +988,7 @@ mod tests {
             cum_miner_secondary: 500_000_000_000,
             cum_dao_compensation: 1_000_000_000_000,
             cum_treasury: 3_500_000_000_000,
+            unclaimed_compensation: 0,
         };
         put_dao_snapshot(&store, "20240114", &day0);
 
@@ -1039,6 +1042,7 @@ mod tests {
                 cum_miner_secondary: cum_miner,
                 cum_dao_compensation: cum_dao,
                 cum_treasury,
+                unclaimed_compensation: 0,
             };
 
             // Update prev for next iteration (the bug fix)

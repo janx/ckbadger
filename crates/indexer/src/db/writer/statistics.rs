@@ -55,6 +55,8 @@ pub struct DaoSnapshotInput {
     pub cum_dao_compensation: i128,
     /// Cumulative secondary issuance to treasury (shannons).
     pub cum_treasury: i128,
+    /// Unclaimed DAO compensation at this point (shannons).
+    pub unclaimed_compensation: u128,
 }
 
 const DAO_OCCUPIED_CAPACITY: u128 = 102_00000000;
@@ -511,6 +513,7 @@ impl BatchWriter {
             cum_miner_secondary: dao_snapshot.cum_miner_secondary,
             cum_dao_compensation: dao_snapshot.cum_dao_compensation,
             cum_treasury: dao_snapshot.cum_treasury,
+            unclaimed_compensation: dao_snapshot.unclaimed_compensation,
         };
 
         let value = bincode::serialize(&snapshot)?;
@@ -994,6 +997,17 @@ impl BatchWriter {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         let value = bincode::serialize(&latest)?;
         self.store.put_stats_key(&key, &value)?;
+
+        // Update today's dao daily snapshot with the latest unclaimed compensation
+        if let Some(mut today_snapshot) = self.store.get_latest_dao_daily_snapshot()? {
+            today_snapshot.unclaimed_compensation = unclaimed_compensation;
+            let date_key = today_snapshot.date.replace('-', "");
+            let snap_key =
+                keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
+            let snap_value = bincode::serialize(&today_snapshot)?;
+            self.store.put_stats_key(&snap_key, &snap_value)?;
+        }
+
         Ok(())
     }
 }
@@ -1252,6 +1266,7 @@ mod tests {
             cum_miner_secondary: 10_00000000,
             cum_dao_compensation: 20_00000000,
             cum_treasury: 30_00000000,
+            unclaimed_compensation: 0,
         };
         let snapshot_val = bincode::serialize(&snapshot).unwrap();
         seed.put_stats(&snapshot_key, &snapshot_val);

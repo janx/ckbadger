@@ -4752,6 +4752,7 @@ impl Indexer {
                         cum_miner_secondary: running_cum_miner,
                         cum_dao_compensation: running_cum_dao,
                         cum_treasury: running_cum_treasury,
+                        unclaimed_compensation: 0,
                     };
                     self.writer
                         .update_dao_daily_snapshot(*date, &dao_snapshot, batch)?;

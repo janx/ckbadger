@@ -170,6 +170,9 @@ pub struct DaoDailySnapshot {
     /// Cumulative secondary issuance to treasury (shannons).
     #[serde(default)]
     pub cum_treasury: i128,
+    /// Unclaimed DAO compensation at end of day (shannons).
+    #[serde(default)]
+    pub unclaimed_compensation: u128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
