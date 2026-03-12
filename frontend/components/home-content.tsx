@@ -2,16 +2,15 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { SyncBanner } from '@/components/stats-cards';
-import { HeroStatRow } from '@/components/hero-stat-row';
+import { CKBytesCard } from '@/components/ckbytes-card';
 import { HomeCharts } from '@/components/home-charts';
 import { MiniStatsCards } from '@/components/mini-stats-cards';
 import { EpochProgress } from '@/components/chain-wave/epoch-progress';
 import { PipelinePreview } from '@/components/chain-wave/pipeline-preview';
 import { DaoOverview } from '@/components/dao-overview';
 import { KnowledgeSizeTrend } from '@/components/home-layer2';
-import { ActivityTrend } from '@/components/activity-trend';
 import { LatestActivities } from '@/components/latest-activities';
-import { ActivityBreakdown } from '@/components/activity-breakdown';
+import { ActivityCard } from '@/components/activity-card';
 import { LatestBlocks } from '@/components/latest-blocks';
 import { LatestTransactions } from '@/components/latest-transactions';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
@@ -44,12 +43,29 @@ export function HomeContent({ initialData }: HomeContentProps) {
     <main className="container mx-auto px-4 py-4 sm:py-6">
       {stats && <SyncBanner stats={stats} />}
 
-      {/* Hero Stats */}
+      {/* Row 1: CKBytes */}
       <div className="mt-4">
-        <HeroStatRow stats={stats ?? null} />
+        <CKBytesCard stats={stats ?? null} />
       </div>
 
-      {/* Network Charts */}
+      {/* Row 2: Knowledge Size | Nervos DAO (no headers) */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <KnowledgeSizeTrend />
+        <DaoOverview />
+      </div>
+
+      {/* Row 3: Latest Activities | Activity Card */}
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <LatestActivities isRealtime={isConnected} />
+        <ActivityCard isRealtime={isConnected} />
+      </div>
+
+      {/* Row 4: Transaction Pipeline */}
+      <div className="mt-4">
+        <PipelinePreview initialBlocks={initialData.blocks} />
+      </div>
+
+      {/* Row 5: Network Charts */}
       <div className="mt-4">
         <HomeCharts
           stats={stats}
@@ -59,7 +75,7 @@ export function HomeContent({ initialData }: HomeContentProps) {
         />
       </div>
 
-      {/* Epoch + Tx Stats */}
+      {/* Row 6: Epoch + Tx Stats */}
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <EpochProgress
           epochNumber={parseEpochInfo(stats).epochNumber}
@@ -71,25 +87,7 @@ export function HomeContent({ initialData }: HomeContentProps) {
         <MiniStatsCards />
       </div>
 
-      {/* Transaction Pipeline */}
-      <div className="mt-4">
-        <PipelinePreview initialBlocks={initialData.blocks} />
-      </div>
-
-      {/* Domain Insights */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <DaoOverview />
-        <KnowledgeSizeTrend />
-        <ActivityTrend />
-      </div>
-
-      {/* Activities */}
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <LatestActivities isRealtime={isConnected} />
-        <ActivityBreakdown isRealtime={isConnected} />
-      </div>
-
-      {/* Latest Blocks & Transactions */}
+      {/* Row 7: Latest Blocks & Transactions */}
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <LatestBlocks isRealtime={isConnected} initialBlocks={initialData.blocks} />
         <LatestTransactions
