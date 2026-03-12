@@ -65,8 +65,9 @@ describe('SearchBar', () => {
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
 
     expect(input).toBeInTheDocument();
-    expect(screen.getByText('/')).toBeInTheDocument();
-    expect(screen.getByText('?')).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-hints')).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
+    expect(screen.getByTestId('search-shortcut-key-question')).toHaveTextContent('?');
     expect(screen.queryByTestId('home-search-focus-glow')).not.toBeInTheDocument();
     expect(screen.queryByTestId('home-search-focus-border-scan')).not.toBeInTheDocument();
 
@@ -78,18 +79,74 @@ describe('SearchBar', () => {
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
   });
 
-  it('renders a more prominent compact variant without shortcut hints', () => {
+  it('renders a compact terminal-style variant without shortcut hints', () => {
     render(<SearchBar variant="compact" />);
 
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    const prompt = screen.getByTestId('compact-search-prompt');
+    const commandLine = screen.getByTestId('compact-search-command-line');
+    const commandText = screen.getByTestId('compact-search-command-text');
+    const commandCursor = screen.getByTestId('compact-search-cursor');
+
     expect(input).toBeInTheDocument();
-    expect(input.className).toContain('h-10');
-    expect(input.className).toContain('rounded-xl');
-    expect(input.className).toContain('border-jade/40');
-    expect(input.className).toContain('shadow-[0_10px_30px_rgba(6,8,16,0.32)]');
-    expect(screen.queryByText('?')).not.toBeInTheDocument();
+    expect(prompt).toHaveTextContent('>');
+    expect(prompt.className).not.toContain('border-r');
+    expect(prompt.className).toContain('w-4');
+    expect(commandLine.className).toContain('left-4');
+    expect(commandLine.firstElementChild).toBe(commandCursor);
+    expect(commandLine.lastElementChild).toBe(commandText);
+    expect(commandText).toHaveTextContent(SHARED_PLACEHOLDER);
+    expect(commandText.className).toContain('text-text-dim/40');
+    expect(commandCursor.className).toContain('animate-blink-cursor');
+    expect(input.className).toContain('h-8');
+    expect(input.className).toContain('border-0');
+    expect(input.className).toContain('border-b');
+    expect(input.className).toContain('border-jade/18');
+    expect(input.className).toContain('rounded-none');
+    expect(input.className).toContain('pl-0');
+    expect(input.className).toContain('bg-transparent');
+    expect(input.className).toContain('text-transparent');
+    expect(screen.getByTestId('search-shortcut-hints')).toBeInTheDocument();
+    expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
+    expect(screen.getByTestId('search-shortcut-key-question')).toHaveTextContent('?');
     expect(screen.queryByTestId('home-search-focus-glow')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
+  });
+
+  it('moves the compact command-line cursor to the end of the typed query', () => {
+    render(<SearchBar variant="compact" />);
+
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '0xabc123' } });
+
+    const commandLine = screen.getByTestId('compact-search-command-line');
+    const commandText = screen.getByTestId('compact-search-command-text');
+    const commandCursor = screen.getByTestId('compact-search-cursor');
+
+    expect(commandLine.firstElementChild).toBe(commandText);
+    expect(commandLine.lastElementChild).toBe(commandCursor);
+    expect(commandText).toHaveTextContent('0xabc123');
+    expect(commandText).not.toHaveTextContent(SHARED_PLACEHOLDER);
+    expect(commandText).not.toHaveTextContent('[/?]');
+    expect(commandCursor).toBeInTheDocument();
+  });
+
+  it('uses an opaque compact dropdown background', async () => {
+    render(<SearchBar variant="compact" />);
+
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '12' } });
+
+    await waitFor(() => {
+      expect(screen.getByText('Block #12')).toBeInTheDocument();
+    });
+
+    const dropdown = screen.getByTestId('search-results-dropdown');
+    expect(dropdown.className).toContain('bg-[#06090f]');
+    expect(dropdown.className).toContain('border-jade/12');
+    expect(dropdown.className).not.toContain('/98');
   });
 
   it('renders semantic icons for different search result types', async () => {

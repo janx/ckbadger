@@ -16,7 +16,7 @@ const navLinks = [
   { href: '/charts', label: 'Charts' },
 ];
 
-const DESKTOP_CONTENT_OFFSET = 'md:pl-[96px]';
+const DESKTOP_START_COLUMN = 'hidden md:block md:w-[128px] md:shrink-0';
 
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -28,10 +28,15 @@ export function Header() {
 
   return (
     <header className="border-base-border bg-base-bg/95 sticky top-0 z-40 mb-4 overflow-visible border-b backdrop-blur-sm">
-      <div className="container relative mx-auto flex h-[56px] items-center gap-4 px-4">
+      <div className="container relative mx-auto flex h-[56px] items-center gap-4 px-4 md:gap-0">
         <Logo />
+        <div
+          data-testid="desktop-header-start-column"
+          aria-hidden="true"
+          className={DESKTOP_START_COLUMN}
+        />
 
-        <div className={`hidden min-w-0 flex-1 items-center ${DESKTOP_CONTENT_OFFSET} md:flex`}>
+        <div className="hidden min-w-0 flex-1 items-center md:flex">
           <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
             <SearchBar variant="compact" />
           </div>
@@ -88,7 +93,12 @@ export function Header() {
           showStatsBar ? 'h-7 opacity-100' : 'h-0 border-t-0 opacity-0'
         }`}
       >
-        <div className={`container mx-auto flex h-7 items-center px-4 ${DESKTOP_CONTENT_OFFSET}`}>
+        <div className="container mx-auto flex h-7 items-center px-4">
+          <div
+            data-testid="desktop-stats-start-column"
+            aria-hidden="true"
+            className={DESKTOP_START_COLUMN}
+          />
           <GlobalStatsBar />
         </div>
       </div>

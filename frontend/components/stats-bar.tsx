@@ -89,8 +89,6 @@ export function GlobalStatsBar() {
 
   return (
     <div className="flex items-center gap-0 overflow-x-auto font-mono text-[11px] tabular-nums leading-none">
-      <span className="text-jade mr-2 text-xs">&gt;</span>
-
       <Link href={`/blocks/${stats.latestBlock}`} className="group flex items-center">
         <span className="text-jade/50 uppercase tracking-wider">block</span>
         <span className="text-jade group-hover:text-emphasis ml-1.5 font-bold transition-colors">
@@ -127,8 +125,6 @@ export function GlobalStatsBar() {
         <span className="text-jade/50 uppercase tracking-wider">interval</span>
         <span className="text-jade ml-1.5 font-bold">{stats.avgBlockTime}</span>
       </span>
-
-      <span className="text-jade animate-blink-cursor ml-2 inline-block h-3.5 w-[7px]" />
     </div>
   );
 }

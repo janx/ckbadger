@@ -143,11 +143,62 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
 
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
+  const compactVisibleText = query || SEARCH_PLACEHOLDER;
+  const showShortcutHints = isHome || isCompact;
 
   return (
     <div className={cn('relative', className)}>
       <form onSubmit={handleSearch}>
-        <div className={cn('group relative', isHome && 'overflow-hidden rounded-xl')}>
+        <div
+          className={cn(
+            'group relative',
+            isHome && 'overflow-hidden rounded-xl',
+            isCompact && 'overflow-hidden rounded-none'
+          )}
+        >
+          {isCompact && (
+            <span
+              data-testid="compact-search-prompt"
+              className="text-jade/70 pointer-events-none absolute inset-y-0 left-0 z-10 flex w-4 items-center justify-start font-mono text-[11px]"
+            >
+              &gt;
+            </span>
+          )}
+          {isCompact && (
+            <span
+              data-testid="compact-search-command-line"
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-y-0 left-4 right-14 z-10 flex items-center overflow-hidden"
+            >
+              {query ? (
+                <>
+                  <span
+                    data-testid="compact-search-command-text"
+                    className="text-jade/95 min-w-0 truncate whitespace-nowrap font-mono text-[13px] tracking-[0.015em]"
+                  >
+                    {compactVisibleText}
+                  </span>
+                  <span
+                    data-testid="compact-search-cursor"
+                    className="bg-jade/90 animate-blink-cursor ml-1 inline-block h-[1.05em] w-[7px] shrink-0"
+                  />
+                </>
+              ) : (
+                <>
+                  <span
+                    data-testid="compact-search-cursor"
+                    className="bg-jade/90 animate-blink-cursor mr-1 inline-block h-[1.05em] w-[7px] shrink-0"
+                  />
+                  <span
+                    data-testid="compact-search-command-text"
+                    className="text-text-dim/40 min-w-0 truncate whitespace-nowrap font-mono text-[13px] tracking-[0.015em]"
+                  >
+                    {compactVisibleText}
+                  </span>
+                </>
+              )}
+            </span>
+          )}
           <input
             ref={inputRef}
             data-ckbadger-global-search="true"
@@ -166,14 +217,15 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             onKeyDown={handleKeyDown}
             placeholder={SEARCH_PLACEHOLDER}
             className={cn(
-              'focus:border-jade focus:ring-jade border-base-border bg-base-surface placeholder:text-text-dim text-text-bright w-full rounded-lg border font-mono transition-colors focus:outline-none focus:ring-1',
+              'text-text-bright w-full font-mono transition-colors focus:outline-none',
               isHome
-                ? 'border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim h-10 rounded-xl pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade h-10 rounded-xl border pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
-                  ? 'border-jade/40 bg-base-surface/95 h-10 rounded-xl px-4 pr-4 text-sm shadow-[0_10px_30px_rgba(6,8,16,0.32)] focus:ring-2'
-                  : 'px-3 py-2.5 pr-3 text-sm sm:px-4 sm:py-3 sm:text-base'
+                  ? 'border-jade/18 focus:border-jade/42 h-8 rounded-none border-0 border-b bg-transparent pl-0 pr-14 text-[13px] tracking-[0.015em] text-transparent caret-transparent shadow-none placeholder:text-transparent focus:border-0 focus:border-b focus:ring-0'
+                  : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade focus:ring-jade rounded-lg border px-3 py-2.5 pr-3 text-sm focus:ring-1 sm:px-4 sm:py-3 sm:text-base'
             )}
           />
+          {showShortcutHints && <SearchShortcutHints variant={isCompact ? 'compact' : 'home'} />}
           {isHome && isInputFocused && (
             <>
               <span
@@ -188,16 +240,6 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               </span>
             </>
           )}
-          {isHome && (
-            <div className="pointer-events-none absolute inset-y-0 right-3 hidden items-center gap-1 sm:flex">
-              <span className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                /
-              </span>
-              <span className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px]">
-                ?
-              </span>
-            </div>
-          )}
         </div>
       </form>
 
@@ -210,7 +252,13 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       {isOpen && query.trim().length >= 2 && (
         <div
           ref={dropdownRef}
-          className="border-base-border bg-base-surface absolute z-50 mt-1 w-full rounded-lg border shadow-lg"
+          data-testid="search-results-dropdown"
+          className={cn(
+            'absolute z-50 mt-1 w-full border',
+            isCompact
+              ? 'border-jade/12 rounded-none bg-[#06090f] shadow-[0_14px_32px_rgba(0,0,0,0.68)]'
+              : 'border-base-border bg-base-surface rounded-lg shadow-lg'
+          )}
         >
           {isLoading ? (
             <div className="text-text-dim px-4 py-3">Searching...</div>
@@ -223,9 +271,13 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                     onClick={() => handleResultClick(result)}
                     className={cn(
                       'flex w-full items-center gap-3 px-4 py-2 text-left transition-colors',
-                      selectedIndex === index
-                        ? 'text-jade bg-base-elevated'
-                        : 'text-text hover:bg-base-elevated/50'
+                      isCompact
+                        ? selectedIndex === index
+                          ? 'text-jade bg-[#091217]'
+                          : 'text-text hover:bg-[#070e13]'
+                        : selectedIndex === index
+                          ? 'text-jade bg-base-elevated'
+                          : 'text-text hover:bg-base-elevated/50'
                     )}
                   >
                     <SearchResultIcon type={result.resultType} />
@@ -245,6 +297,43 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
+  const isCompact = variant === 'compact';
+
+  return (
+    <div
+      data-testid="search-shortcut-hints"
+      className={cn(
+        'pointer-events-none absolute inset-y-0 z-10 items-center gap-1',
+        isCompact ? 'right-0 flex' : 'right-3 hidden sm:flex'
+      )}
+    >
+      <span
+        data-testid="search-shortcut-key-slash"
+        className={cn(
+          'rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
+          isCompact
+            ? 'border-jade/14 text-text-dim/72 rounded-none bg-[#06090f]'
+            : 'border-base-border/80 bg-base-surface/80 text-text-dim'
+        )}
+      >
+        /
+      </span>
+      <span
+        data-testid="search-shortcut-key-question"
+        className={cn(
+          'rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
+          isCompact
+            ? 'border-jade/14 text-text-dim/72 rounded-none bg-[#06090f]'
+            : 'border-base-border/80 bg-base-surface/80 text-text-dim'
+        )}
+      >
+        ?
+      </span>
     </div>
   );
 }

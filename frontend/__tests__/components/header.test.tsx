@@ -40,12 +40,17 @@ describe('Header', () => {
     const { getByTestId } = render(<Header />);
 
     const search = getByTestId('search-bar');
+    const searchWrapper = search.parentElement?.parentElement;
+    const desktopStartColumn = getByTestId('desktop-header-start-column');
+
     expect(search).toBeInTheDocument();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'compact')).toBeTruthy();
     expect(searchBarMock.mock.calls.some(([props]) => props.variant === 'home')).toBeFalsy();
     expect(search.parentElement?.className).toContain('max-w-[clamp(18rem,36vw,36rem)]');
-    expect(search.parentElement?.parentElement?.className).toContain('flex-1');
-    expect(search.parentElement?.parentElement?.className).toContain('md:pl-[96px]');
+    expect(searchWrapper?.className).toContain('flex-1');
+    expect(searchWrapper?.className).not.toContain('md:pl-[96px]');
+    expect(desktopStartColumn.className).toContain('md:w-[128px]');
+    expect(searchWrapper?.previousElementSibling).toBe(desktopStartColumn);
   });
 
   it('uses compact search variant on non-home pages', () => {
@@ -84,12 +89,16 @@ describe('Header', () => {
     expect(daoLink?.className).toContain('border-transparent');
   });
 
-  it('aligns stats row with the desktop search baseline', () => {
+  it('left-aligns stats row so block starts under the search prompt', () => {
     usePathnameMock.mockReturnValue('/blocks');
     const { getByTestId } = render(<Header />);
 
     const stats = getByTestId('global-stats-bar');
-    expect(stats.parentElement?.className).toContain('md:pl-[96px]');
+    const statsStartColumn = getByTestId('desktop-stats-start-column');
+    expect(stats.parentElement?.className).not.toContain('md:pl-[96px]');
+    expect(stats.parentElement?.className).not.toContain('justify-end');
+    expect(statsStartColumn.className).toContain('md:w-[128px]');
+    expect(stats.previousElementSibling).toBe(statsStartColumn);
   });
 
   it('right-aligns mobile menu links below the compact search bar', () => {
