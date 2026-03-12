@@ -978,28 +978,28 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(
-        json["occupiedCapacity"],
+        json["usedCapacity"],
         serde_json::Value::from(138_00000000i64)
     );
     assert_eq!(json["type"]["args"], serde_json::Value::from("0xaabb"));
     assert_eq!(
-        json["occupiedCapacityBreakdown"]["capacityFieldBytes"],
+        json["usedCapacityBreakdown"]["capacityFieldBytes"],
         serde_json::Value::from(8)
     );
     assert_eq!(
-        json["occupiedCapacityBreakdown"]["lockScriptBytes"],
+        json["usedCapacityBreakdown"]["lockScriptBytes"],
         serde_json::Value::from(53)
     );
     assert_eq!(
-        json["occupiedCapacityBreakdown"]["typeScriptBytes"],
+        json["usedCapacityBreakdown"]["typeScriptBytes"],
         serde_json::Value::from(35)
     );
     assert_eq!(
-        json["occupiedCapacityBreakdown"]["dataBytes"],
+        json["usedCapacityBreakdown"]["dataBytes"],
         serde_json::Value::from(42)
     );
     assert_eq!(
-        json["occupiedCapacityBreakdown"]["totalBytes"],
+        json["usedCapacityBreakdown"]["totalBytes"],
         serde_json::Value::from(138)
     );
 }

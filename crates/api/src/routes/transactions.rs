@@ -414,9 +414,9 @@ pub struct PreviousOutput {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionOutputResponse {
     pub capacity: String,
-    pub occupied_capacity: i64,
+    pub used_capacity: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub virtual_occupied_capacity: Option<String>,
+    pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
     pub lock: Option<ScriptResponse>,
@@ -442,8 +442,8 @@ pub struct TransactionDetailResponse {
     pub timestamp: String,
     pub inputs_capacity: String,
     pub outputs_capacity: String,
-    pub inputs_occupied_capacity: String,
-    pub outputs_occupied_capacity: String,
+    pub inputs_used_capacity: String,
+    pub outputs_used_capacity: String,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,
     pub witnesses: Vec<String>,
@@ -725,8 +725,8 @@ async fn get_transaction_detail(
         timestamp,
         inputs_capacity: inputs_capacity.to_string(),
         outputs_capacity: outputs_capacity.to_string(),
-        inputs_occupied_capacity: inputs_occupied_capacity.to_string(),
-        outputs_occupied_capacity: outputs_occupied_capacity.to_string(),
+        inputs_used_capacity: inputs_occupied_capacity.to_string(),
+        outputs_used_capacity: outputs_occupied_capacity.to_string(),
         inputs,
         outputs,
         witnesses,
@@ -965,8 +965,8 @@ fn build_inputs_outputs_from_ckb(
 
                 Ok(TransactionOutputResponse {
                     capacity: cap.to_string(),
-                    occupied_capacity: occ as i64,
-                    virtual_occupied_capacity,
+                    used_capacity: occ as i64,
+                    virtual_used_capacity: virtual_occupied_capacity,
                     cell_type,
                     lock: Some(lock_resp),
                     r#type: type_resp,
@@ -1714,8 +1714,8 @@ mod tests {
             timestamp: "2024-01-01T00:00:00Z".to_string(),
             inputs_capacity: "100".to_string(),
             outputs_capacity: "58".to_string(),
-            inputs_occupied_capacity: "10".to_string(),
-            outputs_occupied_capacity: "9".to_string(),
+            inputs_used_capacity: "10".to_string(),
+            outputs_used_capacity: "9".to_string(),
             inputs: vec![],
             outputs: vec![],
             witnesses: vec!["0x".to_string(), "0x1234".to_string()],

@@ -1417,7 +1417,7 @@ pub struct CellResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub virtual_occupied_capacity: Option<String>,
+    pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udt_amount: Option<String>,
 }
@@ -1478,10 +1478,10 @@ pub struct CellDetailResponse {
     pub tx_hash: String,
     pub output_index: i32,
     pub capacity: String,
-    pub occupied_capacity: i64,
-    pub occupied_capacity_breakdown: OccupiedCapacityBreakdown,
+    pub used_capacity: i64,
+    pub used_capacity_breakdown: OccupiedCapacityBreakdown,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub virtual_occupied_capacity: Option<String>,
+    pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<String>,
     pub lock_script_hash: String,
@@ -1652,7 +1652,7 @@ fn cell_info_to_response(
         } else {
             None
         },
-        virtual_occupied_capacity: if is_special_burn {
+        virtual_used_capacity: if is_special_burn {
             Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string())
         } else {
             None
@@ -2426,9 +2426,9 @@ async fn get_cell(
         tx_hash: format!("0x{}", hex::encode(&hash_bytes)),
         output_index: output_idx as i32,
         capacity: info.capacity.to_string(),
-        occupied_capacity,
-        occupied_capacity_breakdown,
-        virtual_occupied_capacity,
+        used_capacity: occupied_capacity,
+        used_capacity_breakdown: occupied_capacity_breakdown,
+        virtual_used_capacity: virtual_occupied_capacity,
         cell_type,
         lock_script_hash: format!("0x{}", hex::encode(&info.lock_script_hash)),
         address,
@@ -3080,7 +3080,7 @@ mod tests {
         assert_eq!(resp.output_index, 0);
         assert_eq!(resp.capacity, "10000000000");
         assert!(resp.cell_type.is_none());
-        assert!(resp.virtual_occupied_capacity.is_none());
+        assert!(resp.virtual_used_capacity.is_none());
         assert!(resp.udt_amount.is_none());
     }
 
