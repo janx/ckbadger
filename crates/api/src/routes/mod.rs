@@ -14,6 +14,7 @@ mod spore;
 pub(crate) mod statistics;
 mod tokens;
 mod transactions;
+mod tx_lookup;
 
 use axum::Router;
 use std::sync::Arc;

@@ -182,6 +182,18 @@ body {
     animation: byte-breathe 1.15s ease-in-out infinite;
   }
 
+  .status-marquee-shine {
+    display: inline-block;
+    background-image: linear-gradient(90deg, #606880 0%, #dee2ec 45%, #606880 100%);
+    background-size: 220% 100%;
+    background-position: 220% 0;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: cycles-marquee-shine 2.8s linear infinite;
+  }
+
   .cycles-calculating-marquee {
     display: inline-block;
     background-image: linear-gradient(90deg, #606880 0%, #dee2ec 45%, #606880 100%);

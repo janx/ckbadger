@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
+use crate::routes::tx_lookup::fetch_transaction_lookup;
 use crate::utils::{address_to_lock_script_hash, is_ckb_address};
 use crate::warmup::{
     CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
@@ -304,6 +305,20 @@ async fn search(
                         url: format!("/tx/{}", hash_query),
                         match_kind: "exact_hash".to_string(),
                     });
+                } else if let Some(tx_lookup) =
+                    fetch_transaction_lookup(&state.ckb_rpc_url, &hash_query)
+                        .await
+                        .map_err(ApiError::internal)?
+                {
+                    if tx_lookup.is_pending_like() {
+                        results.push(SearchResult {
+                            result_type: "transaction".to_string(),
+                            id: hash_query.clone(),
+                            label: tx_lookup.pending_label().to_string(),
+                            url: format!("/tx/{}", hash_query),
+                            match_kind: "exact_hash".to_string(),
+                        });
+                    }
                 }
             }
 

@@ -18,14 +18,22 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Capacity } from '@/components/ui/capacity';
 import { Address } from '@/components/ui/address';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { api, type CellDep, type GraphNode, type ScriptLookupResponse } from '@/lib/api';
+import {
+  api,
+  type CellDep,
+  type GraphNode,
+  type ScriptLookupResponse,
+  type TransactionDetail,
+} from '@/lib/api';
 import { getScriptRefBadgeLabel, getScriptRefQueryHashType } from '@/lib/script-ref';
 import { formatTimeAgo, formatCkbAmount } from '@/lib/utils';
 import { analyzeWitness, buildScriptGroupLens } from '@/lib/witness-analysis';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
+
 type TxGraphView = 'flow' | 'graph';
 const SECTION_TAB_VALUES = ['io', 'scripts', 'celldeps', 'graph'] as const;
 type SectionTab = (typeof SECTION_TAB_VALUES)[number];
+const DETAIL_PENDING_REFETCH_INTERVAL_MS = 3000;
 const SECTION_TAB_TITLES: Record<SectionTab, string> = {
   io: 'Inputs/Outputs',
   scripts: 'Scripts',
@@ -127,6 +135,39 @@ function getErrorMessage(error: unknown): string | null {
   }
   return null;
 }
+function isPendingTransactionStatus(
+  status: TransactionDetail['status'] | undefined
+): status is 'pending' | 'proposed' {
+  return status === 'pending' || status === 'proposed';
+}
+function getTransactionStatusLabel(status: TransactionDetail['status']): string {
+  return status === 'proposed' ? 'Proposed' : status === 'pending' ? 'Pending' : 'Committed';
+}
+function requireTransactionField<T>(
+  value: T | null | undefined,
+  hash: string,
+  fieldName: string
+): T {
+  if (value === null || value === undefined) {
+    throw new Error(`Transaction ${hash} missing required field "${fieldName}"`);
+  }
+  return value;
+}
+function PendingValue({ text = 'pending...' }: { text?: string }) {
+  return <span className="status-marquee-shine italic">{text}</span>;
+}
+function PendingSectionPlaceholder({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-[220px] items-center justify-center p-6 text-center">
+      <div className="space-y-2">
+        <div className="text-text-bright font-mono text-sm uppercase tracking-[0.2em]">{label}</div>
+        <p className="text-text-dim text-sm">
+          <PendingValue /> available after this transaction is committed.
+        </p>
+      </div>
+    </div>
+  );
+}
 export default function TransactionDetailPage() {
   const params = useParams();
   const pathname = usePathname();
@@ -141,32 +182,39 @@ export default function TransactionDetailPage() {
     data: tx,
     isLoading,
     error,
-  } = useQuery({
+  } = useQuery<TransactionDetail>({
     queryKey: ['transaction', hash],
     queryFn: () => api.getTransactionDetail(hash),
+    refetchInterval: (query) =>
+      isPendingTransactionStatus(query.state.data?.status)
+        ? DETAIL_PENDING_REFETCH_INTERVAL_MS
+        : false,
+    refetchIntervalInBackground: true,
   });
   const errorMessage = getErrorMessage(error);
   const isNotFoundError = errorMessage?.startsWith('API error: 404') ?? false;
+  const isPendingTransaction = isPendingTransactionStatus(tx?.status);
+  const statusLabel = tx ? getTransactionStatusLabel(tx.status) : null;
   const { cycles, hasCycles, isCalculating, hasFailed } = useCyclesCalculation(
     hash,
     tx?.cycles,
-    tx?.isCellbase ?? false
+    (tx?.isCellbase ?? false) || isPendingTransaction
   );
   const { data: graphData } = useQuery({
     queryKey: ['txGraph', hash],
     queryFn: () => api.getTransactionGraph(hash),
-    enabled: !!hash,
+    enabled: !!hash && !!tx && !isPendingTransaction,
   });
   const [txGraphView, setTxGraphView] = useState<TxGraphView>('flow');
   const { data: cellDeps, isLoading: cellDepsLoading } = useQuery({
     queryKey: ['txCellDeps', hash],
     queryFn: () => api.getTransactionCellDeps(hash),
-    enabled: !!hash,
+    enabled: !!hash && !!tx && !isPendingTransaction,
   });
   const { data: lifecycle } = useQuery({
     queryKey: ['txLifecycle', hash],
     queryFn: () => api.getTransactionLifecycle(hash),
-    enabled: !!hash && !!tx && !tx.isCellbase,
+    enabled: !!hash && !!tx && !isPendingTransaction && !tx.isCellbase,
   });
   const codeHashes = useMemo(() => {
     if (!tx) return [];
@@ -360,6 +408,35 @@ export default function TransactionDetailPage() {
       </div>
     );
   }
+  const committedBlockNumber = isPendingTransaction
+    ? null
+    : requireTransactionField(tx.blockNumber, tx.hash, 'blockNumber');
+  const committedTimestamp = isPendingTransaction
+    ? null
+    : requireTransactionField(tx.timestamp, tx.hash, 'timestamp');
+  const committedConfirmations = isPendingTransaction
+    ? null
+    : requireTransactionField(tx.confirmations, tx.hash, 'confirmations');
+  const carriedCapacity = isPendingTransaction
+    ? null
+    : (
+        BigInt(requireTransactionField(tx.outputsCapacity, tx.hash, 'outputsCapacity')) +
+        BigInt(tx.fee)
+      ).toString();
+  const usedCapacityChange = isPendingTransaction
+    ? null
+    : (() => {
+        const inputUsed = BigInt(
+          requireTransactionField(tx.inputsUsedCapacity, tx.hash, 'inputsUsedCapacity')
+        );
+        const outputUsed = BigInt(
+          requireTransactionField(tx.outputsUsedCapacity, tx.hash, 'outputsUsedCapacity')
+        );
+        return outputUsed - inputUsed;
+      })();
+  const committedUsedCapacityChange = isPendingTransaction
+    ? null
+    : requireTransactionField(usedCapacityChange, tx.hash, 'usedCapacityChange');
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -367,19 +444,39 @@ export default function TransactionDetailPage() {
         <PageHeader
           title="Transaction"
           hash={tx.hash}
-          badge={<Badge variant="green">{tx.confirmations.toLocaleString()} Confirmations</Badge>}
+          badge={
+            isPendingTransaction ? (
+              <Badge variant={tx.status === 'proposed' ? 'gold' : 'blue'}>{statusLabel}</Badge>
+            ) : (
+              <Badge variant="green">
+                {requireTransactionField(
+                  committedConfirmations,
+                  tx.hash,
+                  'confirmations'
+                ).toLocaleString()}{' '}
+                Confirmations
+              </Badge>
+            )
+          }
         />
         <TerminalPanel className="mb-8" glow>
           <TerminalPanelHeader indicator="active">Overview</TerminalPanelHeader>
           <TerminalPanelContent>
             <DataGrid>
               <DataField label="Block">
-                {tx.isCellbase ? (
+                {isPendingTransaction ? (
+                  <PendingValue />
+                ) : tx.isCellbase ? (
                   <Link
-                    href={`/blocks/${tx.blockNumber}`}
+                    href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
                     className="text-interactive hover:underline"
                   >
-                    #{tx.blockNumber.toLocaleString()}
+                    #
+                    {requireTransactionField(
+                      committedBlockNumber,
+                      tx.hash,
+                      'blockNumber'
+                    ).toLocaleString()}
                   </Link>
                 ) : lifecycle?.proposedIn ? (
                   <div className="flex items-center gap-3">
@@ -396,10 +493,15 @@ export default function TransactionDetailPage() {
                     <div className="flex items-center gap-1.5">
                       <span className="text-text-dim text-xs">Committed</span>
                       <Link
-                        href={`/blocks/${tx.blockNumber}`}
+                        href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
                         className="text-interactive font-medium hover:underline"
                       >
-                        #{tx.blockNumber.toLocaleString()}
+                        #
+                        {requireTransactionField(
+                          committedBlockNumber,
+                          tx.hash,
+                          'blockNumber'
+                        ).toLocaleString()}
                       </Link>
                     </div>
                     {lifecycle.commitmentDistance !== null && (
@@ -418,16 +520,47 @@ export default function TransactionDetailPage() {
                   </div>
                 ) : (
                   <Link
-                    href={`/blocks/${tx.blockNumber}`}
+                    href={`/blocks/${requireTransactionField(committedBlockNumber, tx.hash, 'blockNumber')}`}
                     className="text-interactive hover:underline"
                   >
-                    #{tx.blockNumber.toLocaleString()}
+                    #
+                    {requireTransactionField(
+                      committedBlockNumber,
+                      tx.hash,
+                      'blockNumber'
+                    ).toLocaleString()}
                   </Link>
                 )}
               </DataField>
-              <DataField label="Timestamp" copyValue={new Date(tx.timestamp).toISOString()}>
-                {new Date(tx.timestamp).toLocaleString()} ({formatTimeAgo(tx.timestamp)})
+              <DataField
+                label="Timestamp"
+                copyValue={
+                  committedTimestamp ? new Date(committedTimestamp).toISOString() : undefined
+                }
+              >
+                {isPendingTransaction ? (
+                  <PendingValue />
+                ) : (
+                  <>
+                    {new Date(
+                      requireTransactionField(committedTimestamp, tx.hash, 'timestamp')
+                    ).toLocaleString()}{' '}
+                    (
+                    {formatTimeAgo(
+                      requireTransactionField(committedTimestamp, tx.hash, 'timestamp')
+                    )}
+                    )
+                  </>
+                )}
               </DataField>
+              {isPendingTransaction && tx.pendingSince && (
+                <DataField
+                  label="Pending Since"
+                  copyValue={new Date(tx.pendingSince).toISOString()}
+                >
+                  {new Date(tx.pendingSince).toLocaleString()} ({formatTimeAgo(tx.pendingSince)})
+                </DataField>
+              )}
               <DataField label="Type">
                 {tx.isCellbase ? (
                   <Badge variant="neutral">Cellbase (Mining Reward)</Badge>
@@ -464,6 +597,8 @@ export default function TransactionDetailPage() {
                       <span className="border-base-border inline-block h-3 w-3 animate-spin rounded-full border-2 border-t-transparent" />
                       <span className="cycles-calculating-marquee">Calculating ...</span>
                     </span>
+                  ) : isPendingTransaction ? (
+                    <PendingValue />
                   ) : hasFailed ? (
                     <span className="text-negative italic">Calculation failed</span>
                   ) : (
@@ -472,45 +607,55 @@ export default function TransactionDetailPage() {
                 </DataField>
               )}
               <DataField label="Carried Capacity">
-                <Capacity
-                  value={(BigInt(tx.outputsCapacity || '0') + BigInt(tx.fee)).toString()}
-                  className="text-text-bright"
-                />
+                {isPendingTransaction ? (
+                  <PendingValue />
+                ) : (
+                  <Capacity
+                    value={requireTransactionField(carriedCapacity, tx.hash, 'carriedCapacity')}
+                    className="text-text-bright"
+                  />
+                )}
               </DataField>
               <DataField label="Used Capacity Change">
-                {(() => {
-                  const inputUsed = BigInt(tx.inputsUsedCapacity || '0');
-                  const outputUsed = BigInt(tx.outputsUsedCapacity || '0');
-                  const change = outputUsed - inputUsed;
-                  const zero = BigInt(0);
-                  const isIncrease = change > zero;
-                  const isDecrease = change < zero;
-                  const absChange = change < zero ? -change : change;
-                  const f = formatCkbAmount(absChange);
-                  return (
-                    <div className="flex items-center justify-end gap-2">
-                      {isIncrease && (
-                        <span className="border-positive/30 bg-positive/10 text-positive inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
-                          +{f.integer}
-                          <span className="text-positive/60 text-[0.85em]">.{f.decimal}</span>
-                          <span className="ml-1 text-[0.85em]">CKB</span>
-                        </span>
-                      )}
-                      {isDecrease && (
-                        <span className="border-negative/30 bg-negative/10 text-negative inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
-                          -{f.integer}
-                          <span className="text-negative/60 text-[0.85em]">.{f.decimal}</span>
-                          <span className="ml-1 text-[0.85em]">CKB</span>
-                        </span>
-                      )}
-                      {!isIncrease && !isDecrease && (
-                        <span className="border-base-border bg-base-elevated text-text inline-flex items-center rounded border px-2 py-1 text-sm">
-                          No change
-                        </span>
-                      )}
-                    </div>
-                  );
-                })()}
+                {isPendingTransaction ? (
+                  <PendingValue />
+                ) : (
+                  (() => {
+                    const change = requireTransactionField(
+                      committedUsedCapacityChange,
+                      tx.hash,
+                      'usedCapacityChange'
+                    );
+                    const zero = BigInt(0);
+                    const isIncrease = change > zero;
+                    const isDecrease = change < zero;
+                    const absChange = change < zero ? -change : change;
+                    const f = formatCkbAmount(absChange);
+                    return (
+                      <div className="flex items-center justify-end gap-2">
+                        {isIncrease && (
+                          <span className="border-positive/30 bg-positive/10 text-positive inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
+                            +{f.integer}
+                            <span className="text-positive/60 text-[0.85em]">.{f.decimal}</span>
+                            <span className="ml-1 text-[0.85em]">CKB</span>
+                          </span>
+                        )}
+                        {isDecrease && (
+                          <span className="border-negative/30 bg-negative/10 text-negative inline-flex items-center rounded border px-2 py-1 font-mono text-sm tabular-nums">
+                            -{f.integer}
+                            <span className="text-negative/60 text-[0.85em]">.{f.decimal}</span>
+                            <span className="ml-1 text-[0.85em]">CKB</span>
+                          </span>
+                        )}
+                        {!isIncrease && !isDecrease && (
+                          <span className="border-base-border bg-base-elevated text-text inline-flex items-center rounded border px-2 py-1 text-sm">
+                            No change
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()
+                )}
               </DataField>
             </DataGrid>
           </TerminalPanelContent>
@@ -546,114 +691,122 @@ export default function TransactionDetailPage() {
                 <ScriptsSummaryTab tx={tx} scriptLookup={scriptLookup} />
               </TabsContent>
               <TabsContent value="celldeps" className="mt-0 p-0">
-                <CellDepsTab cellDeps={cellDeps} isLoading={cellDepsLoading} />
+                <CellDepsTab
+                  cellDeps={cellDeps}
+                  isLoading={cellDepsLoading}
+                  isPending={isPendingTransaction}
+                />
               </TabsContent>
               <TabsContent
                 value="graph"
                 className="border-base-border/80 bg-base-surface/40 mt-0 rounded border p-4"
               >
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="border-base-border/70 bg-base-surface/60 inline-flex rounded border p-1">
-                      <button
-                        type="button"
-                        className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                          txGraphView === 'flow'
-                            ? 'bg-emphasis/15 text-emphasis'
-                            : 'text-text hover:text-text-bright'
-                        }`}
-                        onClick={() => setTxGraphView('flow')}
-                      >
-                        Flow View
-                      </button>
-                      <button
-                        type="button"
-                        className={`rounded px-2.5 py-1 text-xs transition-colors ${
-                          txGraphView === 'graph'
-                            ? 'bg-emphasis/15 text-emphasis'
-                            : 'text-text hover:text-text-bright'
-                        }`}
-                        onClick={() => setTxGraphView('graph')}
-                      >
-                        Graph View
-                      </button>
+                {isPendingTransaction ? (
+                  <PendingSectionPlaceholder label="Graph" />
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="border-base-border/70 bg-base-surface/60 inline-flex rounded border p-1">
+                        <button
+                          type="button"
+                          className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                            txGraphView === 'flow'
+                              ? 'bg-emphasis/15 text-emphasis'
+                              : 'text-text hover:text-text-bright'
+                          }`}
+                          onClick={() => setTxGraphView('flow')}
+                        >
+                          Flow View
+                        </button>
+                        <button
+                          type="button"
+                          className={`rounded px-2.5 py-1 text-xs transition-colors ${
+                            txGraphView === 'graph'
+                              ? 'bg-emphasis/15 text-emphasis'
+                              : 'text-text hover:text-text-bright'
+                          }`}
+                          onClick={() => setTxGraphView('graph')}
+                        >
+                          Graph View
+                        </button>
+                      </div>
+                      {graphInsights.nodeCount > 0 && (
+                        <span className="text-text-dim text-xs">
+                          {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
+                        </span>
+                      )}
                     </div>
-                    {graphInsights.nodeCount > 0 && (
-                      <span className="text-text-dim text-xs">
-                        {graphInsights.nodeCount} nodes / {graphInsights.linkCount} links
-                      </span>
+                    {txGraphView === 'flow' ? (
+                      <div data-testid="tx-relationship-flow" className="space-y-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                            <div className="text-text text-xs uppercase tracking-wide">
+                              Inputs in Graph
+                            </div>
+                            <div className="text-text-bright mt-1 font-mono text-lg">
+                              {graphInsights.inputLinkCount}
+                            </div>
+                          </div>
+                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                            <div className="text-text text-xs uppercase tracking-wide">
+                              Outputs in Graph
+                            </div>
+                            <div className="text-text-bright mt-1 font-mono text-lg">
+                              {graphInsights.outputNodes.length}
+                            </div>
+                          </div>
+                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                            <div className="text-text text-xs uppercase tracking-wide">
+                              Live Outputs
+                            </div>
+                            <div className="text-emphasis mt-1 font-mono text-lg">
+                              {
+                                graphInsights.outputNodes.filter((node) => node.status === 'live')
+                                  .length
+                              }
+                            </div>
+                          </div>
+                          <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                            <div className="text-text text-xs uppercase tracking-wide">
+                              Dead Outputs
+                            </div>
+                            <div className="text-negative mt-1 font-mono text-lg">
+                              {
+                                graphInsights.outputNodes.filter((node) => node.status === 'dead')
+                                  .length
+                              }
+                            </div>
+                          </div>
+                        </div>
+                        <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
+                          <div className="text-text text-xs uppercase tracking-wide">
+                            Transaction Flow Snapshot
+                          </div>
+                          <div className="text-text mt-2 text-sm">
+                            Inputs:{' '}
+                            <span className="text-text-bright font-mono">{tx.inputsCount}</span>{' '}
+                            {'->'} Outputs:{' '}
+                            <span className="text-text-bright font-mono">{tx.outputsCount}</span> |
+                            Graph Edges:{' '}
+                            <span className="text-text-bright font-mono">
+                              {graphInsights.outputLinkCount}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ) : graphData && graphData.nodes.length > 0 ? (
+                      <DeferredCellGraph
+                        nodes={graphData.nodes}
+                        links={graphData.links}
+                        onNodeClick={handleGraphNodeClick}
+                        width={undefined}
+                        height={graphInsights.graphHeight}
+                      />
+                    ) : (
+                      <p className="text-text-dim py-8 text-center">Loading graph...</p>
                     )}
                   </div>
-                  {txGraphView === 'flow' ? (
-                    <div data-testid="tx-relationship-flow" className="space-y-3">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text text-xs uppercase tracking-wide">
-                            Inputs in Graph
-                          </div>
-                          <div className="text-text-bright mt-1 font-mono text-lg">
-                            {graphInsights.inputLinkCount}
-                          </div>
-                        </div>
-                        <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text text-xs uppercase tracking-wide">
-                            Outputs in Graph
-                          </div>
-                          <div className="text-text-bright mt-1 font-mono text-lg">
-                            {graphInsights.outputNodes.length}
-                          </div>
-                        </div>
-                        <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text text-xs uppercase tracking-wide">
-                            Live Outputs
-                          </div>
-                          <div className="text-emphasis mt-1 font-mono text-lg">
-                            {
-                              graphInsights.outputNodes.filter((node) => node.status === 'live')
-                                .length
-                            }
-                          </div>
-                        </div>
-                        <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                          <div className="text-text text-xs uppercase tracking-wide">
-                            Dead Outputs
-                          </div>
-                          <div className="text-negative mt-1 font-mono text-lg">
-                            {
-                              graphInsights.outputNodes.filter((node) => node.status === 'dead')
-                                .length
-                            }
-                          </div>
-                        </div>
-                      </div>
-                      <div className="border-base-border/70 bg-base-surface/70 rounded border p-3">
-                        <div className="text-text text-xs uppercase tracking-wide">
-                          Transaction Flow Snapshot
-                        </div>
-                        <div className="text-text mt-2 text-sm">
-                          Inputs:{' '}
-                          <span className="text-text-bright font-mono">{tx.inputsCount}</span>{' '}
-                          {'->'} Outputs:{' '}
-                          <span className="text-text-bright font-mono">{tx.outputsCount}</span> |
-                          Graph Edges:{' '}
-                          <span className="text-text-bright font-mono">
-                            {graphInsights.outputLinkCount}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ) : graphData && graphData.nodes.length > 0 ? (
-                    <DeferredCellGraph
-                      nodes={graphData.nodes}
-                      links={graphData.links}
-                      onNodeClick={handleGraphNodeClick}
-                      width={undefined}
-                      height={graphInsights.graphHeight}
-                    />
-                  ) : (
-                    <p className="text-text-dim py-8 text-center">Loading graph...</p>
-                  )}
-                </div>
+                )}
               </TabsContent>
             </TerminalPanelContent>
           </Tabs>
@@ -1782,8 +1935,12 @@ function ScriptsSummaryTab({ tx, scriptLookup }: TabProps) {
 interface CellDepsTabProps {
   cellDeps?: CellDep[];
   isLoading: boolean;
+  isPending: boolean;
 }
-function CellDepsTab({ cellDeps, isLoading }: CellDepsTabProps) {
+function CellDepsTab({ cellDeps, isLoading, isPending }: CellDepsTabProps) {
+  if (isPending) {
+    return <PendingSectionPlaceholder label="Cell deps" />;
+  }
   if (isLoading) {
     return <p className="text-text-dim py-8 text-center">Loading cell deps...</p>;
   }

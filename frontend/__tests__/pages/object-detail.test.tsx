@@ -126,6 +126,8 @@ describe('SporeDetailPage', () => {
     vi.mocked(api.getSporeObjectDecoded).mockRejectedValue(new Error('API error: 404'));
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: mockSpore.txHash,
+      status: 'committed',
+      pendingSince: null,
       blockNumber: 123456,
       blockHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       index: 0,

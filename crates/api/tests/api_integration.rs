@@ -5,6 +5,8 @@ use rocksdb::{ColumnFamilyDescriptor, Options, DB};
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wiremock::matchers::{body_partial_json, method};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
@@ -68,6 +70,109 @@ fn test_config_with_append_only(
 
 fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
+}
+
+fn pending_tx_hash_hex() -> String {
+    format!("0x{}", "ab".repeat(32))
+}
+
+fn pending_previous_output_hash_hex() -> String {
+    format!("0x{}", "cd".repeat(32))
+}
+
+fn pending_tx_pool_timestamp_hex() -> &'static str {
+    "0x18bcfe5687b"
+}
+
+fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "transaction": {
+                "hash": hash,
+                "version": "0x0",
+                "cell_deps": [],
+                "header_deps": [],
+                "inputs": [
+                    {
+                        "previous_output": {
+                            "tx_hash": pending_previous_output_hash_hex(),
+                            "index": "0x0"
+                        },
+                        "since": "0x0"
+                    }
+                ],
+                "outputs": [
+                    {
+                        "capacity": "0x174876e800",
+                        "lock": {
+                            "code_hash": format!("0x{}", "11".repeat(32)),
+                            "hash_type": "type",
+                            "args": format!("0x{}", "22".repeat(20))
+                        },
+                        "type": null
+                    }
+                ],
+                "outputs_data": ["0x"],
+                "witnesses": ["0x5500000010000000550000004100000000000000"]
+            },
+            "cycles": "0x5208",
+            "fee": "0x174",
+            "time_added_to_pool": pending_tx_pool_timestamp_hex(),
+            "min_replace_fee": "0x175",
+            "tx_status": {
+                "status": status,
+                "block_hash": null,
+                "block_number": null,
+                "reason": null
+            }
+        }
+    })
+}
+
+async fn mount_pending_transaction_rpc(server: &MockServer, hash: &str, status: &str) {
+    Mock::given(method("POST"))
+        .and(body_partial_json(serde_json::json!({
+            "method": "get_transaction"
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(pending_transaction_rpc_response(hash, status)),
+        )
+        .mount(server)
+        .await;
+}
+
+fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        321,
+        &CachedBlockHeader {
+            hash: vec![0x44; 32],
+            timestamp: 1_700_000_123_456,
+            epoch_number: 1,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    batch.put_tx_hash_map(tx_hash, 321, 0);
+    batch.put_tx_index(
+        321,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_123_456,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 1234,
+            tx_size: 222,
+            cycles: Some(333),
+        },
+    );
+    batch.commit().unwrap();
 }
 
 #[tokio::test]
@@ -1152,6 +1257,177 @@ async fn test_search_hash_without_0x_returns_ambiguous_block_and_transaction() {
         .collect();
     assert!(result_types.contains(&"block"));
     assert!(result_types.contains(&"transaction"));
+}
+
+#[tokio::test]
+async fn test_search_pending_transaction_hash_returns_transaction_result() {
+    let store = test_store();
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/search?q={hash}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let results = json["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["resultType"], "transaction");
+    assert_eq!(results[0]["id"], hash);
+    assert_eq!(results[0]["url"], format!("/tx/{hash}"));
+    assert_eq!(results[0]["label"], "Pending Transaction");
+    assert_eq!(results[0]["matchKind"], "exact_hash");
+    assert_eq!(json["ambiguous"], false);
+}
+
+#[tokio::test]
+async fn test_transaction_detail_returns_pending_mempool_transaction() {
+    let store = test_store();
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/transactions/{hash}/detail"))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["hash"], hash);
+    assert_eq!(json["status"], "pending");
+    assert!(json["pendingSince"].as_str().is_some());
+    assert_eq!(json["blockNumber"], serde_json::Value::Null);
+    assert_eq!(json["blockHash"], serde_json::Value::Null);
+    assert_eq!(json["index"], serde_json::Value::Null);
+    assert_eq!(json["confirmations"], serde_json::Value::Null);
+    assert_eq!(json["timestamp"], serde_json::Value::Null);
+    assert_eq!(json["inputsCount"], 1);
+    assert_eq!(json["outputsCount"], 1);
+    assert_eq!(json["fee"], "372");
+    assert!(json["txSize"].as_i64().unwrap() > 0);
+    assert_eq!(json["cycles"], 21000);
+    assert_eq!(json["witnessesAvailable"], true);
+    assert_eq!(
+        json["witnesses"][0],
+        "0x5500000010000000550000004100000000000000"
+    );
+    assert_eq!(
+        json["inputs"][0]["previousOutput"]["txHash"],
+        pending_previous_output_hash_hex()
+    );
+    assert_eq!(json["outputs"][0]["capacity"], "100000000000");
+}
+
+#[tokio::test]
+async fn test_transaction_detail_prefers_committed_store_over_mempool() {
+    let store = test_store();
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap()).unwrap();
+    insert_committed_transaction(&store, &hash_bytes);
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let request = Request::builder()
+        .uri(format!("/api/v1/transactions/{hash}/detail"))
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["hash"], hash);
+    assert_eq!(json["status"], "committed");
+    assert_eq!(json["blockNumber"], 321);
+    assert_eq!(json["fee"], "1234");
+    assert_eq!(json["txSize"], 222);
+    assert_eq!(json["cycles"], 333);
+}
+
+#[tokio::test]
+async fn test_pending_transaction_committed_only_routes_return_explicit_error() {
+    let store = test_store();
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let cell_deps_request = Request::builder()
+        .uri(format!("/api/v1/transactions/{hash}/cell-deps"))
+        .body(Body::empty())
+        .unwrap();
+    let cell_deps_response = app.clone().oneshot(cell_deps_request).await.unwrap();
+    assert_eq!(cell_deps_response.status(), StatusCode::BAD_REQUEST);
+    let cell_deps_body = cell_deps_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let cell_deps_json: serde_json::Value = serde_json::from_slice(&cell_deps_body).unwrap();
+    assert!(cell_deps_json["message"]
+        .as_str()
+        .unwrap()
+        .contains("pending"));
+
+    let lifecycle_request = Request::builder()
+        .uri(format!("/api/v1/transactions/{hash}/lifecycle"))
+        .body(Body::empty())
+        .unwrap();
+    let lifecycle_response = app.clone().oneshot(lifecycle_request).await.unwrap();
+    assert_eq!(lifecycle_response.status(), StatusCode::BAD_REQUEST);
+    let lifecycle_body = lifecycle_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let lifecycle_json: serde_json::Value = serde_json::from_slice(&lifecycle_body).unwrap();
+    assert!(lifecycle_json["message"]
+        .as_str()
+        .unwrap()
+        .contains("pending"));
+
+    let graph_request = Request::builder()
+        .uri(format!("/api/v1/graph/transaction/{hash}"))
+        .body(Body::empty())
+        .unwrap();
+    let graph_response = app.oneshot(graph_request).await.unwrap();
+    assert_eq!(graph_response.status(), StatusCode::BAD_REQUEST);
+    let graph_body = graph_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let graph_json: serde_json::Value = serde_json::from_slice(&graph_body).unwrap();
+    assert!(graph_json["message"].as_str().unwrap().contains("pending"));
 }
 
 #[tokio::test]

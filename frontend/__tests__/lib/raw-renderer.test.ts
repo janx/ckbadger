@@ -31,6 +31,8 @@ describe('renderRawPage', () => {
   it('renders tx raw with default profile', async () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: `0x${'a'.repeat(64)}`,
+      status: 'committed',
+      pendingSince: null,
       blockNumber: 123,
       blockHash: `0x${'b'.repeat(64)}`,
       index: 0,
@@ -86,6 +88,8 @@ describe('renderRawPage', () => {
 
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash: txHash,
+      status: 'committed',
+      pendingSince: null,
       blockNumber: 123,
       blockHash: `0x${'b'.repeat(64)}`,
       index: 0,
