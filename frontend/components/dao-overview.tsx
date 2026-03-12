@@ -75,9 +75,12 @@ export function DaoOverview() {
 
         {/* Daily delta bar chart */}
         {isLoading || deltaData.length === 0 ? (
-          <div className="bg-base-elevated h-10 w-full animate-pulse rounded" />
+          <div className="bg-base-elevated h-10 w-full animate-pulse rounded lg:h-14" />
         ) : (
-          <div className="flex h-10 items-end gap-[1px]" onMouseLeave={() => setHoveredIdx(null)}>
+          <div
+            className="flex h-10 items-end gap-[1px] lg:h-14"
+            onMouseLeave={() => setHoveredIdx(null)}
+          >
             {deltaData.map((d, i) => (
               <div
                 key={d.date}
@@ -96,7 +99,7 @@ export function DaoOverview() {
 
         {/* Stats grid */}
         {!isLoading && daoStats && (
-          <div className="border-base-border/40 divide-base-border/40 mt-2 grid grid-cols-2 divide-x divide-y border-t">
+          <div className="border-base-border/40 divide-base-border/40 mt-2 grid grid-cols-2 divide-x divide-y border-t lg:flex-1 lg:grid-rows-2">
             <DaoStat label="Estimated APC" value={`${daoStats.estimatedApc}%`} highlight />
             <DaoStat label="Depositors" value={daoStats.totalDepositors.toLocaleString()} />
             <DaoStat label="Active Deposits" value={daoStats.activeDeposits.toLocaleString()} />
@@ -121,7 +124,7 @@ function DaoStat({
   highlight?: boolean;
 }) {
   return (
-    <div className="px-3 py-2 text-center">
+    <div className="px-3 py-2 text-center lg:flex lg:min-h-0 lg:flex-col lg:justify-center">
       <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">{label}</div>
       <div
         className={`mt-0.5 font-mono text-sm font-bold tabular-nums ${highlight ? 'text-jade' : 'text-text-bright'}`}
