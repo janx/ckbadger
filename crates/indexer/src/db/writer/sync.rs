@@ -217,7 +217,7 @@ impl BatchWriter {
             start_block,
             next_block, force_cleanup, has_partial_data, cleanup_reason, "Startup cleanup decision"
         );
-        if force_cleanup || has_partial_data {
+        if has_partial_data {
             info!(
                 start_block,
                 next_block,
@@ -227,7 +227,6 @@ impl BatchWriter {
                 "Cleaning up partial data before sync start"
             );
 
-            // Use the store's rollback mechanism to clean up everything
             let rollback_target =
                 if start_block >= 0 && self.store.get_block_header(start_block)?.is_none() {
                     warn!(
@@ -243,6 +242,15 @@ impl BatchWriter {
             info!(
                 start_block,
                 rollback_target, next_block, cleanup_reason, "Startup cleanup complete"
+            );
+        } else if force_cleanup {
+            info!(
+                start_block,
+                next_block,
+                force_cleanup,
+                has_partial_data,
+                cleanup_reason,
+                "Skipping rollback cleanup: force_cleanup requested but no partial data detected (atomic WriteBatch guarantees consistency)"
             );
         } else {
             info!(
@@ -535,14 +543,47 @@ mod tests {
     #[test]
     fn test_init_sync_start_forces_cleanup_without_partial_data() {
         let (_dir, store, append_store, writer) = setup();
+        let lock_hash = vec![0xCC; 32];
 
+        // Write some addr_balance data that would be wiped by a full rollback to -1
+        store
+            .put_addr_balance_direct(
+                &lock_hash,
+                &AddressBalance {
+                    balance: 789,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // force_cleanup=true but no partial data → should skip rollback, data preserved
         writer
             .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
             .unwrap();
 
-        // Force cleanup runs rollback even without partial data; verify sync metadata is initialized
+        // addr_balance should survive because no rollback was executed
+        assert!(store.get_addr_balance(&lock_hash).unwrap().is_some());
         let status = store.get_sync_status().unwrap();
         assert!(status.sync_started_at.is_some());
+    }
+
+    #[test]
+    fn test_init_sync_start_forces_cleanup_with_partial_data() {
+        let (_dir, store, append_store, writer) = setup();
+
+        // Write block headers at 0 and 1, then init from block 0 with force_cleanup
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &make_header(0x60, 1_700_000_000_000));
+        batch.put_block_header(1, &make_header(0x61, 1_700_000_010_000));
+        batch.commit().unwrap();
+
+        // force_cleanup=true AND partial data (block 1 beyond start_block 0) → cleanup runs
+        writer
+            .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
+            .unwrap();
+
+        // Block 1 should be cleaned up
+        assert!(store.get_block_header(1).unwrap().is_none());
     }
 
     #[test]
