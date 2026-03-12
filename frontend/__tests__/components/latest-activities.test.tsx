@@ -161,4 +161,49 @@ describe('LatestActivities', () => {
       expect(screen.getByText('DAO deposit')).toBeInTheDocument();
     });
   });
+
+  it('renders five activity groups and hides any additional groups', async () => {
+    const txHashes = ['0xtx-1', '0xtx-2', '0xtx-3', '0xtx-4', '0xtx-5', '0xtx-6'];
+
+    vi.mocked(api.getLatestActivities).mockResolvedValue(
+      txHashes.map((txHash, index) =>
+        makeActivity({
+          address: `ckb1qgroup${index}11111111111111111111111111111111111111`,
+          txHash,
+          blockNumber: 11_000 - index,
+          timestamp: String(1_700_000_000 - index),
+          ckbDelta: '100000000',
+        })
+      )
+    );
+
+    const { container } = render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('a[href^="/tx/"]')).toHaveLength(5);
+    });
+
+    expect(container.querySelector('a[href="/tx/0xtx-5"]')).toBeTruthy();
+    expect(container.querySelector('a[href="/tx/0xtx-6"]')).toBeNull();
+  });
+
+  it('uses a locked-height overflow-hidden content container', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qcontent11111111111111111111111111111111111111',
+        txHash: '0xtx-content',
+        ckbDelta: '100000000',
+      }),
+    ]);
+
+    const { container } = render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="latest-activities-content"]')).toBeTruthy();
+    });
+
+    expect(container.querySelector('[data-testid="latest-activities-content"]')).toHaveClass(
+      'overflow-hidden'
+    );
+  });
 });

@@ -80,6 +80,8 @@ interface LatestActivitiesProps {
   isRealtime?: boolean;
 }
 
+const MAX_ACTIVITY_GROUPS = 5;
+
 export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) {
   const [newActivityKey, setNewActivityKey] = useState<string | null>(null);
   const prevKeysRef = useRef<string[]>([]);
@@ -96,7 +98,9 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
 
   const itemCount = activities?.length ?? 0;
   const showSkeleton = isLoading || (itemCount === 0 && isFetching);
-  const groups = activities ? groupLatestActivitiesByTx(activities).slice(0, 4) : [];
+  const groups = activities
+    ? groupLatestActivitiesByTx(activities).slice(0, MAX_ACTIVITY_GROUPS)
+    : [];
 
   useEffect(() => {
     if (groups.length > 0) {
@@ -125,149 +129,151 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   );
 
   return (
-    <TerminalPanel variant="default" glow={isRealtime}>
+    <TerminalPanel variant="default" glow={isRealtime} className="flex h-[44rem] flex-col">
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'} actions={headerActions}>
         Latest Activities
       </TerminalPanelHeader>
-      <TerminalPanelContent padding="none">
-        {showSkeleton
-          ? Array.from({ length: 4 }).map((_, i) => (
-              <TerminalRow key={i} hoverable={false}>
-                <div className="animate-pulse space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="bg-base-elevated h-4 w-28 rounded" />
-                    <div className="flex items-center gap-2">
-                      <div className="bg-base-elevated h-4 w-16 rounded" />
-                      <div className="bg-base-elevated h-3 w-14 rounded" />
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="bg-base-elevated h-3 w-24 rounded" />
-                    <div className="bg-base-elevated h-3 w-20 rounded" />
-                  </div>
-                </div>
-              </TerminalRow>
-            ))
-          : groups.map((group) => {
-              const visibleParticipants = group.participants.slice(0, 3);
-              const hiddenParticipantCount = Math.max(
-                group.participantCount - visibleParticipants.length,
-                0
-              );
-              const summary = buildLatestActivityGroupSummary(group);
-              return (
-                <TerminalRow
-                  key={group.txHash}
-                  className={cn(
-                    'transition-all duration-500',
-                    newActivityKey === group.txHash && 'bg-jade/10 shadow-glow-jade'
-                  )}
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <Link href={`/tx/${group.txHash}`} className="group min-w-0 flex-1">
-                        <HexDisplay
-                          value={group.txHash}
-                          truncate
-                          startChars={8}
-                          endChars={6}
-                          color="aqua"
-                          size="sm"
-                          showGroupHighlight={false}
-                        />
-                      </Link>
-                      <div className="flex shrink-0 flex-col items-end gap-0.5">
-                        <Link
-                          href={`/blocks/${group.blockNumber}`}
-                          className="text-text-dim hover:text-aqua font-mono text-[10px] transition-colors"
-                        >
-                          #{group.blockNumber.toLocaleString()}
-                        </Link>
-                        <span className="text-text-dim font-mono text-[10px]">
-                          {formatTimeAgo(group.timestamp)}
-                        </span>
+      <TerminalPanelContent padding="none" className="min-h-0 flex-1">
+        <div data-testid="latest-activities-content" className="h-full overflow-hidden">
+          {showSkeleton
+            ? Array.from({ length: MAX_ACTIVITY_GROUPS }).map((_, i) => (
+                <TerminalRow key={i} hoverable={false}>
+                  <div className="animate-pulse space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="bg-base-elevated h-4 w-28 rounded" />
+                      <div className="flex items-center gap-2">
+                        <div className="bg-base-elevated h-4 w-16 rounded" />
+                        <div className="bg-base-elevated h-3 w-14 rounded" />
                       </div>
                     </div>
-                    <div className="text-text font-mono text-[11px] leading-tight">{summary}</div>
-                    <div className="space-y-1.5">
-                      {visibleParticipants.map((participant) => {
-                        const delta = BigInt(participant.ckbDelta);
-                        const usedDelta = BigInt(participant.usedDelta);
-                        const isCkbAddress =
-                          participant.address.startsWith('ckb1') ||
-                          participant.address.startsWith('ckt1');
-                        const hiddenAssetCount = Math.max(participant.assetChanges.length - 2, 0);
-
-                        return (
-                          <div
-                            key={`${group.txHash}:${participant.address}`}
-                            className="border-base-border/40 bg-base-elevated/30 rounded border px-2 py-1.5"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <Link
-                                  href={`/address/${participant.address}`}
-                                  className="text-text font-mono text-xs transition-opacity hover:opacity-80"
-                                >
-                                  {isCkbAddress ? (
-                                    truncateAddress(participant.address)
-                                  ) : (
-                                    <HexDisplay
-                                      value={participant.address}
-                                      truncate
-                                      startChars={8}
-                                      endChars={6}
-                                      size="sm"
-                                      showGroupHighlight={false}
-                                    />
-                                  )}
-                                </Link>
-                                {participant.assetChanges.length > 0 && (
-                                  <div className="mt-1 flex flex-wrap items-center gap-1">
-                                    {participant.assetChanges.slice(0, 2).map((change, idx) => (
-                                      <AssetBadge key={idx} change={change} />
-                                    ))}
-                                    {hiddenAssetCount > 0 && (
-                                      <span className="text-text-dim font-mono text-[10px]">
-                                        +{hiddenAssetCount} assets
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-                                <span
-                                  className={cn(
-                                    'font-mono text-xs tabular-nums',
-                                    delta > BigInt(0) && 'text-positive',
-                                    delta < BigInt(0) && 'text-negative',
-                                    delta === BigInt(0) && 'text-text-dim'
-                                  )}
-                                >
-                                  {delta > BigInt(0) ? '+' : ''}
-                                  {formatCkbAmount(participant.ckbDelta).full} CKB
-                                </span>
-                                {usedDelta !== BigInt(0) && (
-                                  <span className="text-jade/60 font-mono text-[10px] tabular-nums">
-                                    {usedDelta > BigInt(0) ? '+' : ''}
-                                    {formatCkbAmount(participant.usedDelta).integer} KB
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {hiddenParticipantCount > 0 && (
-                        <div className="text-text-dim font-mono text-[10px]">
-                          +{hiddenParticipantCount} more
-                        </div>
-                      )}
+                    <div className="flex items-center justify-between">
+                      <div className="bg-base-elevated h-3 w-24 rounded" />
+                      <div className="bg-base-elevated h-3 w-20 rounded" />
                     </div>
                   </div>
                 </TerminalRow>
-              );
-            })}
+              ))
+            : groups.map((group) => {
+                const visibleParticipants = group.participants.slice(0, 3);
+                const hiddenParticipantCount = Math.max(
+                  group.participantCount - visibleParticipants.length,
+                  0
+                );
+                const summary = buildLatestActivityGroupSummary(group);
+                return (
+                  <TerminalRow
+                    key={group.txHash}
+                    className={cn(
+                      'transition-all duration-500',
+                      newActivityKey === group.txHash && 'bg-jade/10 shadow-glow-jade'
+                    )}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <Link href={`/tx/${group.txHash}`} className="group min-w-0 flex-1">
+                          <HexDisplay
+                            value={group.txHash}
+                            truncate
+                            startChars={8}
+                            endChars={6}
+                            color="aqua"
+                            size="sm"
+                            showGroupHighlight={false}
+                          />
+                        </Link>
+                        <div className="flex shrink-0 flex-col items-end gap-0.5">
+                          <Link
+                            href={`/blocks/${group.blockNumber}`}
+                            className="text-text-dim hover:text-aqua font-mono text-[10px] transition-colors"
+                          >
+                            #{group.blockNumber.toLocaleString()}
+                          </Link>
+                          <span className="text-text-dim font-mono text-[10px]">
+                            {formatTimeAgo(group.timestamp)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-text font-mono text-[11px] leading-tight">{summary}</div>
+                      <div className="space-y-1.5">
+                        {visibleParticipants.map((participant) => {
+                          const delta = BigInt(participant.ckbDelta);
+                          const usedDelta = BigInt(participant.usedDelta);
+                          const isCkbAddress =
+                            participant.address.startsWith('ckb1') ||
+                            participant.address.startsWith('ckt1');
+                          const hiddenAssetCount = Math.max(participant.assetChanges.length - 2, 0);
+
+                          return (
+                            <div
+                              key={`${group.txHash}:${participant.address}`}
+                              className="border-base-border/40 bg-base-elevated/30 rounded border px-2 py-1.5"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <Link
+                                    href={`/address/${participant.address}`}
+                                    className="text-text font-mono text-xs transition-opacity hover:opacity-80"
+                                  >
+                                    {isCkbAddress ? (
+                                      truncateAddress(participant.address)
+                                    ) : (
+                                      <HexDisplay
+                                        value={participant.address}
+                                        truncate
+                                        startChars={8}
+                                        endChars={6}
+                                        size="sm"
+                                        showGroupHighlight={false}
+                                      />
+                                    )}
+                                  </Link>
+                                  {participant.assetChanges.length > 0 && (
+                                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                                      {participant.assetChanges.slice(0, 2).map((change, idx) => (
+                                        <AssetBadge key={idx} change={change} />
+                                      ))}
+                                      {hiddenAssetCount > 0 && (
+                                        <span className="text-text-dim font-mono text-[10px]">
+                                          +{hiddenAssetCount} assets
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
+                                  <span
+                                    className={cn(
+                                      'font-mono text-xs tabular-nums',
+                                      delta > BigInt(0) && 'text-positive',
+                                      delta < BigInt(0) && 'text-negative',
+                                      delta === BigInt(0) && 'text-text-dim'
+                                    )}
+                                  >
+                                    {delta > BigInt(0) ? '+' : ''}
+                                    {formatCkbAmount(participant.ckbDelta).full} CKB
+                                  </span>
+                                  {usedDelta !== BigInt(0) && (
+                                    <span className="text-jade/60 font-mono text-[10px] tabular-nums">
+                                      {usedDelta > BigInt(0) ? '+' : ''}
+                                      {formatCkbAmount(participant.usedDelta).integer} KB
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {hiddenParticipantCount > 0 && (
+                          <div className="text-text-dim font-mono text-[10px]">
+                            +{hiddenParticipantCount} more
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </TerminalRow>
+                );
+              })}
+        </div>
       </TerminalPanelContent>
     </TerminalPanel>
   );
