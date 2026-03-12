@@ -3,7 +3,8 @@
 import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, type ActivityAssetChange } from '@/lib/api';
+import { api, type ActivityAssetChange, type ActivityScriptCall } from '@/lib/api';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 import {
   buildLatestActivityGroupSummary,
   groupLatestActivitiesByTx,
@@ -70,6 +71,47 @@ function AssetBadge({ change }: { change: ActivityAssetChange }) {
     default:
       return null;
   }
+}
+
+function truncateHex(value: string, startChars = 10, endChars = 8): string {
+  if (value.length <= startChars + endChars + 3) {
+    return value;
+  }
+  return `${value.slice(0, startChars)}...${value.slice(-endChars)}`;
+}
+
+function scriptCallLabel(change: ActivityScriptCall): string {
+  const name = change.scriptName?.trim();
+  if (name) {
+    return name;
+  }
+  return truncateHex(change.typeCodeHash);
+}
+
+function ScriptCallItem({ change }: { change: ActivityScriptCall }) {
+  return (
+    <div className="border-base-border/60 bg-base-elevated/50 rounded border px-1.5 py-1">
+      <div className="flex items-center gap-1.5">
+        <Link
+          href={getScriptDetailHref({
+            name: change.scriptName,
+            codeHash: change.typeCodeHash,
+            hashType: change.typeHashType,
+            scriptKind: 'type',
+          })}
+          className="text-gold hover:text-gold-bright font-mono text-[10px] transition-colors"
+        >
+          {scriptCallLabel(change)}
+        </Link>
+        <span className="border-base-border/60 text-text-dim rounded border px-1 py-0.5 font-mono text-[9px] uppercase">
+          {change.typeHashType}
+        </span>
+      </div>
+      <div className="text-text-dim mt-0.5 font-mono text-[10px]">
+        args {truncateHex(change.typeArgs)}
+      </div>
+    </div>
+  );
 }
 
 function truncateAddress(addr: string): string {
@@ -201,7 +243,13 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                           const isCkbAddress =
                             participant.address.startsWith('ckb1') ||
                             participant.address.startsWith('ckt1');
+                          const visibleAssetChanges = participant.assetChanges.slice(0, 2);
                           const hiddenAssetCount = Math.max(participant.assetChanges.length - 2, 0);
+                          const visibleScriptCalls = participant.scriptCalls.slice(0, 1);
+                          const hiddenScriptCallCount = Math.max(
+                            participant.scriptCalls.length - visibleScriptCalls.length,
+                            0
+                          );
 
                           return (
                             <div
@@ -228,15 +276,37 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                                     )}
                                   </Link>
                                   {participant.assetChanges.length > 0 && (
-                                    <div className="mt-1 flex flex-wrap items-center gap-1">
-                                      {participant.assetChanges.slice(0, 2).map((change, idx) => (
-                                        <AssetBadge key={idx} change={change} />
-                                      ))}
-                                      {hiddenAssetCount > 0 && (
-                                        <span className="text-text-dim font-mono text-[10px]">
-                                          +{hiddenAssetCount} assets
-                                        </span>
-                                      )}
+                                    <div className="mt-1.5 space-y-1">
+                                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                                        Assets
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        {visibleAssetChanges.map((change, idx) => (
+                                          <AssetBadge key={idx} change={change} />
+                                        ))}
+                                        {hiddenAssetCount > 0 && (
+                                          <span className="text-text-dim font-mono text-[10px]">
+                                            +{hiddenAssetCount} assets
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {participant.scriptCalls.length > 0 && (
+                                    <div className="mt-1.5 space-y-1">
+                                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                                        Scripts
+                                      </div>
+                                      <div className="space-y-1">
+                                        {visibleScriptCalls.map((change, idx) => (
+                                          <ScriptCallItem key={idx} change={change} />
+                                        ))}
+                                        {hiddenScriptCallCount > 0 && (
+                                          <div className="text-text-dim font-mono text-[10px]">
+                                            +{hiddenScriptCallCount} scripts
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
                                   )}
                                 </div>

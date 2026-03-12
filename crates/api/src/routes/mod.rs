@@ -1,4 +1,4 @@
-mod activities;
+pub(crate) mod activities;
 pub mod assets;
 mod blocks;
 mod cells;

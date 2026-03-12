@@ -122,6 +122,7 @@ mod tests {
                 is_cellbase: false,
                 has_type_script: false,
                 asset_changes: vec![],
+                script_calls: None,
                 peers: vec![],
             },
         }
@@ -206,6 +207,7 @@ mod tests {
                 is_cellbase: false,
                 has_type_script: false,
                 asset_changes: vec![],
+                script_calls: None,
                 peers: vec![],
             },
         )];
@@ -235,6 +237,7 @@ mod tests {
                     is_cellbase: true,
                     has_type_script: false,
                     asset_changes: vec![],
+                    script_calls: None,
                     peers: vec![],
                 },
             ),
@@ -252,6 +255,7 @@ mod tests {
                     is_cellbase: false,
                     has_type_script: false,
                     asset_changes: vec![],
+                    script_calls: None,
                     peers: vec![],
                 },
             ),

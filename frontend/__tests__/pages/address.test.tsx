@@ -299,6 +299,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
+          scriptCalls: [],
           assetChanges: [
             {
               type: 'token',
@@ -504,6 +505,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
+          scriptCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -540,6 +542,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
+          scriptCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -561,5 +564,57 @@ describe('AddressDetailPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Mint did:ckb')[0]).toBeInTheDocument();
     });
+  });
+
+  it('shows script calls in a dedicated activity section with script metadata', async () => {
+    vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
+    vi.mocked(api.getAddressActivities).mockResolvedValue({
+      data: [
+        {
+          txHash: '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+          blockNumber: 999,
+          txIndex: 0,
+          timestamp: '2026-02-22T00:00:00Z',
+          ckbDelta: '0',
+          usedDelta: '0',
+          isCellbase: false,
+          peers: [],
+          assetChanges: [
+            {
+              type: 'token',
+              typeScriptHash: '0xtokenhash',
+              delta: '100000000',
+              symbol: 'SEAL',
+              decimals: 8,
+            },
+          ],
+          scriptCalls: [
+            {
+              typeCodeHash: '0xcodehash',
+              typeHashType: 'type',
+              typeArgs: '0x1234abcd',
+              scriptHash: '0xscript-hash',
+              scriptName: 'RGB++ Lock',
+            },
+          ],
+        },
+      ],
+      total: 1,
+      limit: 20,
+      hasMore: false,
+      nextCursor: null,
+    });
+
+    render(<AddressDetailPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('RGB++ Lock').length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getAllByText('Scripts')[0]).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'RGB++ Lock' })[0]).toHaveAttribute(
+      'href',
+      '/scripts/RGB%2B%2B%20Lock'
+    );
   });
 });

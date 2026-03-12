@@ -1,9 +1,9 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
-use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange};
+use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange, ScriptCallEntry};
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
@@ -81,6 +81,7 @@ pub struct InputCellView {
     pub capacity: i64,
     pub occupied_capacity: i64,
     pub type_code_hash: Option<Vec<u8>>,
+    pub type_hash_type: Option<i16>,
     pub type_script_hash: Option<Vec<u8>>,
     pub type_args: Option<Vec<u8>>,
     pub udt_amount: Option<u128>,
@@ -156,8 +157,8 @@ struct OwnerAccum {
     involved_scripts: HashSet<Vec<u8>>,
     /// Whether any cell for this owner has a type script
     has_type_script: bool,
-    /// Unrecognized type script code_hashes
-    unrecognized_scripts: HashSet<Vec<u8>>,
+    /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
+    unrecognized_script_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
@@ -185,6 +186,7 @@ fn build_tx_activities(
             classify_input(
                 accum,
                 type_code_hash,
+                input.type_hash_type,
                 input.type_script_hash.as_deref(),
                 input.type_args.as_deref(),
                 input.udt_amount,
@@ -218,6 +220,7 @@ fn build_tx_activities(
             classify_output(
                 accum,
                 type_code_hash,
+                cell.type_hash_type,
                 cell.type_script_hash.as_deref(),
                 cell.type_args.as_deref(),
                 &cell.data,
@@ -315,12 +318,19 @@ fn build_tx_activities(
             &mut asset_changes,
         );
 
-        // Unrecognized type script calls → ScriptCall
-        for code_hash in &accum.unrecognized_scripts {
-            asset_changes.push(AssetChange::ScriptCall {
-                type_code_hash: code_hash.clone(),
-            });
-        }
+        let script_calls = (!accum.unrecognized_script_calls.is_empty()).then(|| {
+            accum
+                .unrecognized_script_calls
+                .iter()
+                .map(
+                    |(type_code_hash, type_hash_type, type_args)| ScriptCallEntry {
+                        type_code_hash: type_code_hash.clone(),
+                        type_hash_type: *type_hash_type,
+                        type_args: type_args.clone(),
+                    },
+                )
+                .collect()
+        });
 
         let entry = ActivityEntry {
             tx_hash: tx.tx_hash.to_vec(),
@@ -333,6 +343,7 @@ fn build_tx_activities(
             is_cellbase: tx.is_cellbase,
             has_type_script: accum.has_type_script,
             asset_changes,
+            script_calls,
             peers,
         };
 
@@ -346,6 +357,7 @@ fn build_tx_activities(
 fn classify_input(
     accum: &mut OwnerAccum,
     type_code_hash: &[u8],
+    type_hash_type: Option<i16>,
     type_script_hash: Option<&[u8]>,
     type_args: Option<&[u8]>,
     udt_amount: Option<u128>,
@@ -396,7 +408,7 @@ fn classify_input(
             }
         }
         None => {
-            accum.unrecognized_scripts.insert(type_code_hash.to_vec());
+            record_script_call(accum, type_code_hash, type_hash_type, type_args);
         }
     }
 }
@@ -404,6 +416,7 @@ fn classify_input(
 fn classify_output(
     accum: &mut OwnerAccum,
     type_code_hash: &[u8],
+    type_hash_type: Option<i16>,
     type_script_hash: Option<&[u8]>,
     type_args: Option<&[u8]>,
     cell_data: &[u8],
@@ -465,9 +478,32 @@ fn classify_output(
             }
         }
         None => {
-            accum.unrecognized_scripts.insert(type_code_hash.to_vec());
+            record_script_call(accum, type_code_hash, type_hash_type, type_args);
         }
     }
+}
+
+fn record_script_call(
+    accum: &mut OwnerAccum,
+    type_code_hash: &[u8],
+    type_hash_type: Option<i16>,
+    type_args: Option<&[u8]>,
+) {
+    let hash_type = type_hash_type.unwrap_or_else(|| {
+        panic!(
+            "missing type_hash_type while recording script call: type_code_hash=0x{}",
+            hex::encode(type_code_hash)
+        )
+    });
+    let args = type_args.unwrap_or_else(|| {
+        panic!(
+            "missing type_args while recording script call: type_code_hash=0x{}",
+            hex::encode(type_code_hash)
+        )
+    });
+    accum
+        .unrecognized_script_calls
+        .insert((type_code_hash.to_vec(), hash_type, args.to_vec()));
 }
 
 fn resolve_dotbit_account_id(type_args: Option<&[u8]>, cell_data: &[u8]) -> Option<Vec<u8>> {
@@ -600,6 +636,7 @@ mod tests {
             capacity,
             occupied_capacity: occupied,
             type_code_hash: None,
+            type_hash_type: None,
             type_script_hash: None,
             type_args: None,
             udt_amount: None,
@@ -1126,19 +1163,25 @@ mod tests {
         let alice = 0xAA;
         let bob = 0xBB;
         let unknown_code_hash = vec![0xFF; 32];
+        let alice_type_args = vec![0xAB; 20];
+        let bob_type_args = vec![0xEE; 20];
 
         let mut alice_input = make_input(alice, 200_00000000, 61_00000000);
         alice_input.type_code_hash = Some(unknown_code_hash.clone());
         alice_input.type_script_hash = Some(vec![0xDD; 32]);
+        alice_input.type_hash_type = Some(1);
+        alice_input.type_args = Some(alice_type_args.clone());
 
         let outputs = vec![make_output(
             bob,
             200_00000000,
             Some(unknown_code_hash.clone()),
             Some(vec![0xDD; 32]),
-            Some(vec![0xEE; 20]),
+            Some(bob_type_args.clone()),
             vec![],
         )];
+        let mut outputs = outputs;
+        outputs[0].type_hash_type = Some(1);
 
         let tx = TxView {
             tx_hash: &[0x0A; 32],
@@ -1159,17 +1202,15 @@ mod tests {
             .map(|(_, _, e)| e)
             .unwrap();
         assert!(alice_act.has_type_script);
-        let script_call = alice_act
-            .asset_changes
-            .iter()
-            .find(|c| matches!(c, AssetChange::ScriptCall { .. }))
-            .expect("should have ScriptCall for unrecognized type script");
-        match script_call {
-            AssetChange::ScriptCall { type_code_hash } => {
-                assert_eq!(type_code_hash, &vec![0xFF; 32]);
-            }
-            _ => unreachable!(),
-        }
+        assert!(alice_act.asset_changes.is_empty());
+        let alice_script_calls = alice_act
+            .script_calls
+            .as_ref()
+            .expect("should have script calls for unrecognized type script");
+        assert_eq!(alice_script_calls.len(), 1);
+        assert_eq!(alice_script_calls[0].type_code_hash, vec![0xFF; 32]);
+        assert_eq!(alice_script_calls[0].type_hash_type, 1);
+        assert_eq!(alice_script_calls[0].type_args, alice_type_args);
 
         let bob_act = activities
             .iter()
@@ -1177,10 +1218,15 @@ mod tests {
             .map(|(_, _, e)| e)
             .unwrap();
         assert!(bob_act.has_type_script);
-        assert!(bob_act
-            .asset_changes
-            .iter()
-            .any(|c| matches!(c, AssetChange::ScriptCall { .. })));
+        assert!(bob_act.asset_changes.is_empty());
+        let bob_script_calls = bob_act
+            .script_calls
+            .as_ref()
+            .expect("bob should have script calls");
+        assert_eq!(bob_script_calls.len(), 1);
+        assert_eq!(bob_script_calls[0].type_code_hash, vec![0xFF; 32]);
+        assert_eq!(bob_script_calls[0].type_hash_type, 1);
+        assert_eq!(bob_script_calls[0].type_args, bob_type_args);
     }
 
     #[test]
@@ -1241,6 +1287,8 @@ mod tests {
                 vec![],
             ),
         ];
+        let mut outputs = outputs;
+        outputs[1].type_hash_type = Some(1);
 
         let tx = TxView {
             tx_hash: &[0x0C; 32],
@@ -1260,9 +1308,13 @@ mod tests {
             .asset_changes
             .iter()
             .any(|c| matches!(c, AssetChange::Token { .. })));
-        assert!(entry
-            .asset_changes
-            .iter()
-            .any(|c| matches!(c, AssetChange::ScriptCall { .. })));
+        let script_calls = entry
+            .script_calls
+            .as_ref()
+            .expect("script calls should exist");
+        assert_eq!(script_calls.len(), 1);
+        assert_eq!(script_calls[0].type_code_hash, unknown_code_hash);
+        assert_eq!(script_calls[0].type_hash_type, 1);
+        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
     }
 }

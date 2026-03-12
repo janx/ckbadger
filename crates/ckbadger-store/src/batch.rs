@@ -1197,6 +1197,7 @@ mod tests {
             is_cellbase: tx_idx == 0,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         }
     }
@@ -1562,6 +1563,7 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         };
         let overwrite_entry = ActivityEntry {
@@ -1575,6 +1577,7 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         };
 

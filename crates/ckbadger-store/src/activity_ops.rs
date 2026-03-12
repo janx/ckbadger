@@ -127,9 +127,9 @@ impl CkbadgerStore {
                 )
             }),
             Some("script_call") => entry
-                .asset_changes
-                .iter()
-                .any(|c| matches!(c, AssetChange::ScriptCall { .. })),
+                .script_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty()),
             Some(_) => false,
         }
     }
@@ -153,6 +153,7 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         }
     }

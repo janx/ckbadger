@@ -947,8 +947,16 @@ pub struct ActivityEntry {
     #[serde(default)]
     pub has_type_script: bool,
     pub asset_changes: Vec<AssetChange>,
+    pub script_calls: Option<Vec<ScriptCallEntry>>,
     /// Lock hashes of other parties in this transaction.
     pub peers: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScriptCallEntry {
+    pub type_code_hash: Vec<u8>,
+    pub type_hash_type: i16,
+    pub type_args: Vec<u8>,
 }
 
 /// A single activity item for the global latest-activities feed.
@@ -990,9 +998,6 @@ pub enum AssetChange {
     DaoWithdrawComplete {
         capacity: i64,
         compensation: i64,
-    },
-    ScriptCall {
-        type_code_hash: Vec<u8>,
     },
 }
 
@@ -1360,6 +1365,7 @@ mod tests {
                     capacity: 1_000_000_000_000,
                 },
             ],
+            script_calls: None,
             peers: vec![vec![0xBB; 32], vec![0xCC; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1412,17 +1418,24 @@ mod tests {
                     capacity: 700,
                     compensation: 42,
                 },
-                AssetChange::ScriptCall {
-                    type_code_hash: vec![0xDD; 32],
-                },
             ],
+            script_calls: Some(vec![ScriptCallEntry {
+                type_code_hash: vec![0xDD; 32],
+                type_hash_type: 1,
+                type_args: vec![0xEE; 20],
+            }]),
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded.asset_changes.len(), 7);
+        assert_eq!(decoded.asset_changes.len(), 6);
         assert!(decoded.is_cellbase);
         assert!(decoded.peers.is_empty());
+        let script_calls = decoded.script_calls.expect("script calls should exist");
+        assert_eq!(script_calls.len(), 1);
+        assert_eq!(script_calls[0].type_code_hash, vec![0xDD; 32]);
+        assert_eq!(script_calls[0].type_hash_type, 1);
+        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
 
         // Verify each variant survived roundtrip
         match &decoded.asset_changes[1] {
@@ -1459,12 +1472,14 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
         assert_eq!(decoded.ckb_delta, 0);
         assert!(decoded.asset_changes.is_empty());
+        assert!(decoded.script_calls.is_none());
         assert!(decoded.peers.is_empty());
     }
 
@@ -1480,21 +1495,80 @@ mod tests {
             used_delta: 0,
             is_cellbase: false,
             has_type_script: true,
-            asset_changes: vec![AssetChange::ScriptCall {
+            asset_changes: vec![],
+            script_calls: Some(vec![ScriptCallEntry {
                 type_code_hash: vec![0xDD; 32],
-            }],
+                type_hash_type: 1,
+                type_args: vec![0xEE; 20],
+            }]),
             peers: vec![vec![0xEE; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
         let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
         assert!(decoded.has_type_script);
+        let script_calls = decoded.script_calls.expect("script calls should exist");
+        assert_eq!(script_calls.len(), 1);
+        assert_eq!(script_calls[0].type_code_hash, vec![0xDD; 32]);
+        assert_eq!(script_calls[0].type_hash_type, 1);
+        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
+        assert!(decoded.asset_changes.is_empty());
+    }
+
+    #[test]
+    fn test_activity_entry_script_calls_none_roundtrip() {
+        let entry = ActivityEntry {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0xF1; 32],
+            block_number: 501,
+            tx_index: 2,
+            timestamp: 1_700_000_010,
+            ckb_delta: 0,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: false,
+            asset_changes: vec![],
+            script_calls: None,
+            peers: vec![],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
+        assert!(decoded.script_calls.is_none());
+        assert!(decoded.asset_changes.is_empty());
+    }
+
+    #[test]
+    fn test_activity_entry_script_calls_some_roundtrip() {
+        let entry = ActivityEntry {
+            tx_hash: vec![0x12; 32],
+            block_hash: vec![0xF2; 32],
+            block_number: 502,
+            tx_index: 3,
+            timestamp: 1_700_000_020,
+            ckb_delta: -100,
+            used_delta: 200,
+            is_cellbase: false,
+            has_type_script: true,
+            asset_changes: vec![AssetChange::Token {
+                type_script_hash: vec![0xAA; 32],
+                delta: 42,
+                symbol: Some("SEAL".to_string()),
+                decimals: Some(8),
+            }],
+            script_calls: Some(vec![ScriptCallEntry {
+                type_code_hash: vec![0xDD; 32],
+                type_hash_type: 1,
+                type_args: vec![0xEE; 20],
+            }]),
+            peers: vec![vec![0xFF; 32]],
+        };
+        let bytes = bincode::serialize(&entry).unwrap();
+        let decoded: ActivityEntry = bincode::deserialize(&bytes).unwrap();
+        let script_calls = decoded.script_calls.expect("script calls should exist");
+        assert_eq!(script_calls.len(), 1);
+        assert_eq!(script_calls[0].type_code_hash, vec![0xDD; 32]);
+        assert_eq!(script_calls[0].type_hash_type, 1);
+        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
         assert_eq!(decoded.asset_changes.len(), 1);
-        match &decoded.asset_changes[0] {
-            AssetChange::ScriptCall { type_code_hash } => {
-                assert_eq!(type_code_hash, &vec![0xDD; 32]);
-            }
-            _ => panic!("expected ScriptCall variant"),
-        }
     }
 
     // ---- ObjectStandard ----

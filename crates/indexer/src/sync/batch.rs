@@ -151,6 +151,7 @@ fn build_activity_input_views(
                 capacity: info.capacity,
                 occupied_capacity: info.occupied_capacity,
                 type_code_hash: info.type_code_hash.clone(),
+                type_hash_type: info.type_hash_type,
                 type_script_hash: info.type_script_hash.clone(),
                 type_args: info.type_args.clone(),
                 udt_amount: info.udt_amount,

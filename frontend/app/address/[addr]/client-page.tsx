@@ -23,7 +23,9 @@ import {
   type DaoDeposit,
   type Activity,
   type ActivityAssetChange,
+  type ActivityScriptCall,
 } from '@/lib/api';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 import { useParams } from '@/src/navigation';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
@@ -298,6 +300,36 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           </span>
         );
     }
+  };
+  const scriptCallLabel = (change: ActivityScriptCall) => {
+    const name = change.scriptName?.trim();
+    if (name) return name;
+    return shortHash(change.typeCodeHash);
+  };
+  const ScriptCallBadge = ({ change }: { change: ActivityScriptCall }) => {
+    return (
+      <div className="border-base-border/60 bg-base-elevated/70 rounded border px-2 py-1">
+        <div className="flex items-center gap-1.5">
+          <Link
+            href={getScriptDetailHref({
+              name: change.scriptName,
+              codeHash: change.typeCodeHash,
+              hashType: change.typeHashType,
+              scriptKind: 'type',
+            })}
+            className="text-gold hover:text-gold-bright font-mono text-xs transition-colors"
+          >
+            {scriptCallLabel(change)}
+          </Link>
+          <span className="border-base-border/60 text-text-dim rounded border px-1 py-0.5 font-mono text-[10px] uppercase">
+            {change.typeHashType}
+          </span>
+        </div>
+        <div className="text-text-dim mt-1 font-mono text-[10px]">
+          args {shortHash(change.typeArgs)}
+        </div>
+      </div>
+    );
   };
   return (
     <div className="bg-base-bg min-h-screen">
@@ -824,10 +856,31 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 {formatCkbAmount(activity.ckbDelta).full} CKB
                               </span>
                             </div>
-                            <div className="flex w-32 min-w-0 flex-wrap items-center justify-end gap-1 lg:w-48">
-                              {activity.assetChanges.map((change, i) => (
-                                <AssetChangeBadge key={i} change={change} />
-                              ))}
+                            <div className="flex w-32 min-w-0 flex-col items-end gap-2 lg:w-56">
+                              {activity.assetChanges.length > 0 && (
+                                <div className="flex min-w-0 flex-col items-end gap-1">
+                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                                    Assets
+                                  </div>
+                                  <div className="flex flex-wrap items-center justify-end gap-1">
+                                    {activity.assetChanges.map((change, i) => (
+                                      <AssetChangeBadge key={i} change={change} />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {activity.scriptCalls.length > 0 && (
+                                <div className="flex min-w-0 flex-col items-end gap-1">
+                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                                    Scripts
+                                  </div>
+                                  <div className="flex min-w-0 flex-col items-end gap-1">
+                                    {activity.scriptCalls.map((change, i) => (
+                                      <ScriptCallBadge key={i} change={change} />
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                             <div className="text-text-dim w-20 text-right text-sm">
                               {formatTimeAgo(Number(activity.timestamp))}
@@ -871,10 +924,27 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                               </span>
                             </div>
                             {activity.assetChanges.length > 0 && (
-                              <div className="flex flex-wrap gap-1">
-                                {activity.assetChanges.map((change, i) => (
-                                  <AssetChangeBadge key={i} change={change} />
-                                ))}
+                              <div className="space-y-1">
+                                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                                  Assets
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                  {activity.assetChanges.map((change, i) => (
+                                    <AssetChangeBadge key={i} change={change} />
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {activity.scriptCalls.length > 0 && (
+                              <div className="space-y-1">
+                                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
+                                  Scripts
+                                </div>
+                                <div className="space-y-1">
+                                  {activity.scriptCalls.map((change, i) => (
+                                    <ScriptCallBadge key={i} change={change} />
+                                  ))}
+                                </div>
                               </div>
                             )}
                           </div>

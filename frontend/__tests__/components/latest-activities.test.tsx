@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { LatestActivities } from '@/components/latest-activities';
-import { api, type ActivityAssetChange, type GlobalActivity } from '@/lib/api';
+import {
+  api,
+  type ActivityAssetChange,
+  type ActivityScriptCall,
+  type GlobalActivity,
+} from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -22,6 +27,7 @@ function makeActivity(
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
+    scriptCalls: overrides.scriptCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -33,6 +39,16 @@ function tokenChange(delta: string): ActivityAssetChange {
     delta,
     symbol: 'SEAL',
     decimals: 8,
+  };
+}
+
+function scriptCall(name = 'RGB++ Lock'): ActivityScriptCall {
+  return {
+    typeCodeHash: '0xcodehash',
+    typeHashType: 'type',
+    typeArgs: '0x1234abcd',
+    scriptHash: '0xscript-hash',
+    scriptName: name,
   };
 }
 
@@ -138,6 +154,31 @@ describe('LatestActivities', () => {
     await waitFor(() => {
       expect(screen.getByText('2 sent · 1 received · 2 asset events')).toBeInTheDocument();
     });
+  });
+
+  it('renders script calls in a dedicated section separate from asset badges', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qscript1111111111111111111111111111111111111111',
+        txHash: '0xtx-script-call',
+        ckbDelta: '-100000000',
+        assetChanges: [tokenChange('-500')],
+        scriptCalls: [scriptCall()],
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText('1 sent · 0 received · 1 asset event · 1 script call')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Assets')).toBeInTheDocument();
+    expect(screen.getByText('Scripts')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'RGB++ Lock' })).toHaveAttribute(
+      'href',
+      '/scripts/RGB%2B%2B%20Lock'
+    );
   });
 
   it('renders dao summaries instead of structural fallback text', async () => {

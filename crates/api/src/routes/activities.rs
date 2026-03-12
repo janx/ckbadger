@@ -4,7 +4,9 @@ use axum::{
     Router,
 };
 use ckbadger_store::{
-    types::{ActivityEntry, AssetAction, AssetChange},
+    types::{
+        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, ScriptCallEntry, ScriptInfo,
+    },
     CkbadgerStore,
 };
 use serde::{Deserialize, Serialize};
@@ -12,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::address::{address_to_lock_script_hash, script_to_address};
+use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
 use crate::AppState;
 
 type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
@@ -46,6 +48,7 @@ pub struct ActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
+    pub script_calls: Vec<ScriptCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -83,8 +86,16 @@ pub enum AssetChangeResponse {
         capacity: String,
         compensation: String,
     },
-    #[serde(rename = "scriptCall", rename_all = "camelCase")]
-    ScriptCall { type_code_hash: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptCallResponse {
+    pub type_code_hash: String,
+    pub type_hash_type: String,
+    pub type_args: String,
+    pub script_hash: String,
+    pub script_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,6 +110,7 @@ pub struct GlobalActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
+    pub script_calls: Vec<ScriptCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -171,10 +183,150 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
             capacity: capacity.to_string(),
             compensation: compensation.to_string(),
         },
-        AssetChange::ScriptCall { type_code_hash } => AssetChangeResponse::ScriptCall {
-            type_code_hash: format!("0x{}", hex::encode(type_code_hash)),
-        },
     }
+}
+
+fn hash_type_to_string(hash_type: i16) -> anyhow::Result<&'static str> {
+    match hash_type {
+        0 => Ok("data"),
+        1 => Ok("type"),
+        2 => Ok("data1"),
+        4 => Ok("data2"),
+        other => Err(anyhow::anyhow!(
+            "unsupported script hash_type {} in activity script_call",
+            other
+        )),
+    }
+}
+
+fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
+    info.and_then(|item| item.name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("unknown"))
+        .map(|name| name.to_string())
+}
+
+fn resolve_script_info_cached<'a>(
+    store: &CkbadgerStore,
+    cache: &'a mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    type_code_hash: &[u8],
+) -> anyhow::Result<Option<&'a ScriptInfo>> {
+    if !cache.contains_key(type_code_hash) {
+        cache.insert(
+            type_code_hash.to_vec(),
+            store.get_script_info(type_code_hash)?,
+        );
+    }
+
+    Ok(cache.get(type_code_hash).and_then(Option::as_ref))
+}
+
+fn convert_script_call(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    call: &ScriptCallEntry,
+) -> anyhow::Result<ScriptCallResponse> {
+    let hash_type = hash_type_to_string(call.type_hash_type)?;
+    let script_hash = compute_script_hash(
+        &call.type_code_hash,
+        call.type_hash_type as u8,
+        &call.type_args,
+    );
+    let script_info = resolve_script_info_cached(store, cache, &call.type_code_hash)?;
+
+    Ok(ScriptCallResponse {
+        type_code_hash: format!("0x{}", hex::encode(&call.type_code_hash)),
+        type_hash_type: hash_type.to_string(),
+        type_args: format!("0x{}", hex::encode(&call.type_args)),
+        script_hash: format!("0x{}", hex::encode(script_hash)),
+        script_name: normalized_script_name(script_info),
+    })
+}
+
+fn convert_script_calls(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    calls: Option<&Vec<ScriptCallEntry>>,
+) -> anyhow::Result<Vec<ScriptCallResponse>> {
+    calls
+        .into_iter()
+        .flatten()
+        .map(|call| convert_script_call(store, cache, call))
+        .collect()
+}
+
+pub(crate) fn build_activity_response(
+    store: &CkbadgerStore,
+    entry: &ActivityEntry,
+    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+) -> anyhow::Result<ActivityResponse> {
+    Ok(ActivityResponse {
+        tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
+        block_number: entry.block_number,
+        tx_index: entry.tx_index,
+        timestamp: entry.timestamp.to_string(),
+        ckb_delta: entry.ckb_delta.to_string(),
+        used_delta: entry.used_delta.to_string(),
+        is_cellbase: entry.is_cellbase,
+        asset_changes: entry
+            .asset_changes
+            .iter()
+            .map(convert_asset_change)
+            .collect(),
+        script_calls: convert_script_calls(store, script_info_cache, entry.script_calls.as_ref())?,
+        peers: entry
+            .peers
+            .iter()
+            .map(|h| format!("0x{}", hex::encode(h)))
+            .collect(),
+    })
+}
+
+pub(crate) fn build_global_activity_response(
+    store: &CkbadgerStore,
+    network: &str,
+    item: &LatestActivityItem,
+    script_info_cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+) -> anyhow::Result<GlobalActivityResponse> {
+    let address = if !item.lock_code_hash.is_empty() {
+        script_to_address(
+            &item.lock_code_hash,
+            item.lock_hash_type,
+            &item.lock_args,
+            network,
+        )
+        .unwrap_or_else(|_| format!("0x{}", hex::encode(&item.lock_hash)))
+    } else {
+        format!("0x{}", hex::encode(&item.lock_hash))
+    };
+
+    Ok(GlobalActivityResponse {
+        address,
+        tx_hash: format!("0x{}", hex::encode(&item.entry.tx_hash)),
+        block_number: item.entry.block_number,
+        tx_index: item.entry.tx_index,
+        timestamp: item.entry.timestamp.to_string(),
+        ckb_delta: item.entry.ckb_delta.to_string(),
+        used_delta: item.entry.used_delta.to_string(),
+        is_cellbase: item.entry.is_cellbase,
+        asset_changes: item
+            .entry
+            .asset_changes
+            .iter()
+            .map(convert_asset_change)
+            .collect(),
+        script_calls: convert_script_calls(
+            store,
+            script_info_cache,
+            item.entry.script_calls.as_ref(),
+        )?,
+        peers: item
+            .entry
+            .peers
+            .iter()
+            .map(|h| format!("0x{}", hex::encode(h)))
+            .collect(),
+    })
 }
 
 const ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
@@ -316,28 +468,14 @@ async fn get_address_activities(
         None
     };
 
+    let mut script_info_cache = HashMap::new();
     let activities: Vec<ActivityResponse> = page
         .into_iter()
-        .map(|(_, _, entry)| ActivityResponse {
-            tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-            block_number: entry.block_number,
-            tx_index: entry.tx_index,
-            timestamp: entry.timestamp.to_string(),
-            ckb_delta: entry.ckb_delta.to_string(),
-            used_delta: entry.used_delta.to_string(),
-            is_cellbase: entry.is_cellbase,
-            asset_changes: entry
-                .asset_changes
-                .iter()
-                .map(convert_asset_change)
-                .collect(),
-            peers: entry
-                .peers
-                .iter()
-                .map(|h| format!("0x{}", hex::encode(h)))
-                .collect(),
+        .map(|(_, _, entry)| {
+            build_activity_response(state.store.as_ref(), &entry, &mut script_info_cache)
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(CursorPaginatedResponse::without_total(
         activities,
@@ -357,46 +495,20 @@ async fn get_latest_activities(
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let network = &state.ckb_network;
+    let mut script_info_cache = HashMap::new();
     let activities: Vec<GlobalActivityResponse> = items
         .into_iter()
         .take(limit)
         .map(|item| {
-            let address = if !item.lock_code_hash.is_empty() {
-                script_to_address(
-                    &item.lock_code_hash,
-                    item.lock_hash_type,
-                    &item.lock_args,
-                    network,
-                )
-                .unwrap_or_else(|_| format!("0x{}", hex::encode(&item.lock_hash)))
-            } else {
-                format!("0x{}", hex::encode(&item.lock_hash))
-            };
-
-            GlobalActivityResponse {
-                address,
-                tx_hash: format!("0x{}", hex::encode(&item.entry.tx_hash)),
-                block_number: item.entry.block_number,
-                tx_index: item.entry.tx_index,
-                timestamp: item.entry.timestamp.to_string(),
-                ckb_delta: item.entry.ckb_delta.to_string(),
-                used_delta: item.entry.used_delta.to_string(),
-                is_cellbase: item.entry.is_cellbase,
-                asset_changes: item
-                    .entry
-                    .asset_changes
-                    .iter()
-                    .map(convert_asset_change)
-                    .collect(),
-                peers: item
-                    .entry
-                    .peers
-                    .iter()
-                    .map(|h| format!("0x{}", hex::encode(h)))
-                    .collect(),
-            }
+            build_global_activity_response(
+                state.store.as_ref(),
+                network,
+                &item,
+                &mut script_info_cache,
+            )
         })
-        .collect();
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     ok(activities)
 }
@@ -436,6 +548,7 @@ mod tests {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         }
     }

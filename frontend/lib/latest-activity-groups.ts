@@ -1,4 +1,4 @@
-import type { ActivityAssetChange, GlobalActivity } from '@/lib/api';
+import type { ActivityAssetChange, ActivityScriptCall, GlobalActivity } from '@/lib/api';
 
 export interface LatestActivityGroup {
   txHash: string;
@@ -35,9 +35,12 @@ function compareParticipants(
     return absDeltaDiff > BigInt(0) ? 1 : -1;
   }
 
-  const assetDiff = right.item.assetChanges.length - left.item.assetChanges.length;
-  if (assetDiff !== 0) {
-    return assetDiff;
+  const eventDiff =
+    right.item.assetChanges.length +
+    right.item.scriptCalls.length -
+    (left.item.assetChanges.length + left.item.scriptCalls.length);
+  if (eventDiff !== 0) {
+    return eventDiff;
   }
 
   return left.index - right.index;
@@ -59,8 +62,17 @@ function collectAssetChanges(group: LatestActivityGroup): ActivityAssetChange[] 
   return group.participants.flatMap((participant) => participant.assetChanges);
 }
 
+function collectScriptCalls(group: LatestActivityGroup): ActivityScriptCall[] {
+  return group.participants.flatMap((participant) => participant.scriptCalls);
+}
+
+function formatEventCount(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 export function buildLatestActivityGroupSummary(group: LatestActivityGroup): string {
   const assetChanges = collectAssetChanges(group);
+  const scriptCalls = collectScriptCalls(group);
 
   if (assetChanges.some((change) => change.type === 'daoDeposit')) {
     return 'DAO deposit';
@@ -89,13 +101,21 @@ export function buildLatestActivityGroupSummary(group: LatestActivityGroup): str
     (participant) => BigInt(participant.ckbDelta) > BigInt(0)
   ).length;
   const assetEventCount = assetChanges.length;
+  const scriptCallCount = scriptCalls.length;
 
   const summary = `${sentCount} sent · ${receivedCount} received`;
-  if (assetEventCount === 0) {
+  if (assetEventCount === 0 && scriptCallCount === 0) {
     return summary;
   }
 
-  return `${summary} · ${assetEventCount} asset events`;
+  const parts = [summary];
+  if (assetEventCount > 0) {
+    parts.push(formatEventCount(assetEventCount, 'asset event', 'asset events'));
+  }
+  if (scriptCallCount > 0) {
+    parts.push(formatEventCount(scriptCallCount, 'script call', 'script calls'));
+  }
+  return parts.join(' · ');
 }
 
 export function groupLatestActivitiesByTx(activities: GlobalActivity[]): LatestActivityGroup[] {

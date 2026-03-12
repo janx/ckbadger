@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ActivityAssetChange, GlobalActivity } from '@/lib/api';
+import type { ActivityAssetChange, ActivityScriptCall, GlobalActivity } from '@/lib/api';
 import {
   buildLatestActivityGroupSummary,
   groupLatestActivitiesByTx,
@@ -18,6 +18,7 @@ function makeActivity(
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
+    scriptCalls: overrides.scriptCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -29,6 +30,16 @@ function tokenChange(delta: string, symbol = 'SEAL'): ActivityAssetChange {
     delta,
     symbol,
     decimals: 8,
+  };
+}
+
+function scriptCall(name = 'RGB++ Lock'): ActivityScriptCall {
+  return {
+    typeCodeHash: '0xcodehash',
+    typeHashType: 'type',
+    typeArgs: '0x1234',
+    scriptHash: '0xscript-hash',
+    scriptName: name,
   };
 }
 
@@ -182,5 +193,29 @@ describe('latest activity groups', () => {
     const [group] = groupLatestActivitiesByTx(activities);
 
     expect(buildLatestActivityGroupSummary(group)).toBe('2 sent · 1 received · 2 asset events');
+  });
+
+  it('counts script calls separately from asset events in fallback summaries', () => {
+    const activities: GlobalActivity[] = [
+      makeActivity({
+        address: 'ckb1sender-a',
+        txHash: '0xtx-script-call',
+        ckbDelta: '-10000000000',
+        assetChanges: [tokenChange('-500')],
+        scriptCalls: [scriptCall()],
+      }),
+      makeActivity({
+        address: 'ckb1receiver',
+        txHash: '0xtx-script-call',
+        ckbDelta: '10000000000',
+        assetChanges: [tokenChange('500')],
+      }),
+    ];
+
+    const [group] = groupLatestActivitiesByTx(activities);
+
+    expect(buildLatestActivityGroupSummary(group)).toBe(
+      '1 sent · 1 received · 2 asset events · 1 script call'
+    );
   });
 });

@@ -551,7 +551,10 @@ impl BatchWriter {
         let mut has_token = false;
         let mut has_object = false;
         let mut has_identity = false;
-        let mut has_script_call = false;
+        let has_script_call = entry
+            .script_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty());
 
         for change in &entry.asset_changes {
             match change {
@@ -575,9 +578,6 @@ impl BatchWriter {
                 }
                 AssetChange::Identity { .. } => {
                     has_identity = true;
-                }
-                AssetChange::ScriptCall { .. } => {
-                    has_script_call = true;
                 }
             }
         }
@@ -1605,7 +1605,9 @@ mod activity_stats_tests {
     use super::*;
     use std::sync::Arc;
 
-    use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange, DailyActivityStats};
+    use ckbadger_store::types::{
+        ActivityEntry, AssetAction, AssetChange, DailyActivityStats, ScriptCallEntry,
+    };
     use ckbadger_store::CkbadgerStore;
 
     fn make_entry(
@@ -1625,6 +1627,7 @@ mod activity_stats_tests {
             is_cellbase,
             has_type_script,
             asset_changes: changes,
+            script_calls: None,
             peers: vec![],
         }
     }
@@ -1922,14 +1925,24 @@ mod activity_stats_tests {
     fn test_script_call_classified_correctly() {
         let mut stats = DailyActivityStats::default();
         let scripts = vec![vec![0xFF; 32]];
-        let entry = make_entry(
-            -50_00000000,
-            false,
-            true,
-            vec![AssetChange::ScriptCall {
+        let entry = ActivityEntry {
+            tx_hash: vec![0; 32],
+            block_hash: vec![0; 32],
+            block_number: 100,
+            tx_index: 0,
+            timestamp: 1700000000000,
+            ckb_delta: -50_00000000,
+            used_delta: 0,
+            is_cellbase: false,
+            has_type_script: true,
+            asset_changes: vec![],
+            script_calls: Some(vec![ScriptCallEntry {
                 type_code_hash: vec![0xFF; 32],
-            }],
-        );
+                type_hash_type: 1,
+                type_args: vec![0xEE; 20],
+            }]),
+            peers: vec![],
+        };
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);
         assert_eq!(stats.script_call_count, 1);
         assert_eq!(stats.transfer_count, 0);

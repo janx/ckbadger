@@ -12,12 +12,13 @@ use ckbadger_api::utils::address::compute_script_hash;
 use ckbadger_api::{create_router, AppConfig};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    ActivityEntry, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
-    DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry, DeepForkInfo, EpochStats,
-    HourlyStats, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
-    LiveCellInfo, MinerStats, ObjectCollectionActivityEntry, ObjectCollectionAggregate,
-    ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard, ReorgEvent, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
+    ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
+    DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
+    IdentityExtra, IdentityStandard, LatestActivityItem, LiveCellInfo, MinerStats,
+    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
+    ObjectExtra, ObjectStandard, ReorgEvent, ScriptCallEntry, ScriptDailyDelta, ScriptInfo,
+    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -6678,6 +6679,7 @@ async fn test_address_activities_reads_from_derived_store() {
         is_cellbase: false,
         has_type_script: false,
         asset_changes: vec![],
+        script_calls: None,
         peers: vec![],
     };
 
@@ -6776,6 +6778,187 @@ async fn test_address_activities_rejects_unknown_filter() {
         .as_str()
         .unwrap()
         .contains("invalid activity filter"));
+}
+
+#[tokio::test]
+async fn test_address_activities_return_script_calls_separately_and_support_script_call_filter() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let lock_hash = vec![0x12; 32];
+    let tx_hash = vec![0x34; 32];
+    let block_hash = vec![0x56; 32];
+    let type_code_hash = vec![0x78; 32];
+    let type_args = vec![0x9A; 20];
+    let expected_script_hash = format!(
+        "0x{}",
+        hex::encode(compute_script_hash(&type_code_hash, 1, &type_args))
+    );
+
+    let activity = ActivityEntry {
+        tx_hash: tx_hash.clone(),
+        block_hash: block_hash.clone(),
+        block_number: 88,
+        tx_index: 0,
+        timestamp: 1_700_000_888,
+        ckb_delta: 0,
+        used_delta: 0,
+        is_cellbase: false,
+        has_type_script: true,
+        asset_changes: vec![],
+        script_calls: Some(vec![ScriptCallEntry {
+            type_code_hash: type_code_hash.clone(),
+            type_hash_type: 1,
+            type_args: type_args.clone(),
+        }]),
+        peers: vec![],
+    };
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_activity(&lock_hash, 88, 0, &activity);
+    core_batch.put_tx_hash_map(&tx_hash, 88, 0);
+    core_batch.put_tx_index(
+        88,
+        0,
+        &TxIndexEntry {
+            is_cellbase: false,
+            timestamp: 1_700_000_888_000,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 120,
+            cycles: None,
+        },
+    );
+    core_batch.put_block_header(
+        88,
+        &CachedBlockHeader {
+            hash: block_hash,
+            timestamp: 1_700_000_888_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        },
+    );
+    core_batch.put_script_info(
+        &type_code_hash,
+        &ScriptInfo {
+            code_hash: type_code_hash.clone(),
+            hash_type: 1,
+            name: Some("RGB++ Lock".to_string()),
+            ..Default::default()
+        },
+    );
+    core_batch.commit().unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri(format!(
+            "/api/v1/addresses/0x{}/activities?filter=script_call",
+            hex::encode(&lock_hash)
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let data = json["data"].as_array().unwrap();
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["assetChanges"].as_array().unwrap().len(), 0);
+    let script_calls = data[0]["scriptCalls"].as_array().unwrap();
+    assert_eq!(script_calls.len(), 1);
+    assert_eq!(
+        script_calls[0]["typeCodeHash"],
+        format!("0x{}", hex::encode(&type_code_hash))
+    );
+    assert_eq!(script_calls[0]["typeHashType"], "type");
+    assert_eq!(
+        script_calls[0]["typeArgs"],
+        format!("0x{}", hex::encode(&type_args))
+    );
+    assert_eq!(script_calls[0]["scriptHash"], expected_script_hash);
+    assert_eq!(script_calls[0]["scriptName"], "RGB++ Lock");
+}
+
+#[tokio::test]
+async fn test_latest_activities_return_asset_changes_and_script_calls_as_separate_lists() {
+    let core_store = test_store();
+    let append_only_store = test_append_only_store();
+    let lock_hash = vec![0x13; 32];
+    let lock_code_hash = vec![0x24; 32];
+    let lock_args = vec![0x35; 20];
+    let type_code_hash = vec![0x46; 32];
+    let type_args = vec![0x57; 20];
+    let expected_script_hash = format!(
+        "0x{}",
+        hex::encode(compute_script_hash(&type_code_hash, 1, &type_args))
+    );
+
+    let entry = ActivityEntry {
+        tx_hash: vec![0x68; 32],
+        block_hash: vec![0x79; 32],
+        block_number: 99,
+        tx_index: 1,
+        timestamp: 1_700_000_999,
+        ckb_delta: -30000,
+        used_delta: 0,
+        is_cellbase: false,
+        has_type_script: true,
+        asset_changes: vec![AssetChange::DaoDeposit {
+            capacity: 102_00000000,
+        }],
+        script_calls: Some(vec![ScriptCallEntry {
+            type_code_hash: type_code_hash.clone(),
+            type_hash_type: 1,
+            type_args: type_args.clone(),
+        }]),
+        peers: vec![],
+    };
+
+    let mut core_batch = StoreBatch::new(core_store.as_ref());
+    core_batch.put_script_info(
+        &type_code_hash,
+        &ScriptInfo {
+            code_hash: type_code_hash.clone(),
+            hash_type: 1,
+            name: Some("RGB++ Lock".to_string()),
+            ..Default::default()
+        },
+    );
+    core_batch.commit().unwrap();
+    core_store
+        .put_latest_activities(&[LatestActivityItem {
+            lock_hash,
+            lock_code_hash,
+            lock_hash_type: 1,
+            lock_args,
+            entry,
+        }])
+        .unwrap();
+
+    let config = test_config_with_append_only(core_store, append_only_store);
+    let app = create_router(config).await;
+    let request = Request::builder()
+        .uri("/api/v1/activities/latest?limit=1")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let items = json.as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["assetChanges"].as_array().unwrap().len(), 1);
+    let script_calls = items[0]["scriptCalls"].as_array().unwrap();
+    assert_eq!(script_calls.len(), 1);
+    assert_eq!(script_calls[0]["typeHashType"], "type");
+    assert_eq!(script_calls[0]["scriptHash"], expected_script_hash);
+    assert_eq!(script_calls[0]["scriptName"], "RGB++ Lock");
 }
 
 #[tokio::test]

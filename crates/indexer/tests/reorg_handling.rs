@@ -406,6 +406,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
             is_cellbase: false,
             has_type_script: false,
             asset_changes: vec![],
+            script_calls: None,
             peers: vec![],
         };
         domain_batch.put_activity(&lock_hash, block, 0, &entry);

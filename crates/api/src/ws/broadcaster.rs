@@ -1,11 +1,13 @@
 use ckb_store_reader::CkbChainReader;
 use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
 use ckbadger_store::CkbadgerStore;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::{debug, error, info};
 
 use super::manager::{BroadcastMessage, SyncStatus, WsManager};
+use crate::routes::activities::build_global_activity_response;
 use crate::utils::format_duration;
 
 pub(crate) const FAST_SYNC_THRESHOLD: i64 = 100;
@@ -247,73 +249,37 @@ fn broadcast_block_transactions(
 fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager>) {
     match store.get_latest_activities() {
         Ok(items) if !items.is_empty() => {
+            let mut script_info_cache = HashMap::new();
             let activities: Vec<serde_json::Value> = items
                 .into_iter()
                 .take(8)
-                .map(|item| {
-                    let address = if !item.lock_code_hash.is_empty() {
-                        crate::utils::address::script_to_address(
-                            &item.lock_code_hash,
-                            item.lock_hash_type,
-                            &item.lock_args,
-                            "mainnet", // TODO: derive from config if needed
-                        )
-                        .unwrap_or_else(|_| format!("0x{}", hex::encode(&item.lock_hash)))
-                    } else {
-                        format!("0x{}", hex::encode(&item.lock_hash))
-                    };
-                    serde_json::json!({
-                        "address": address,
-                        "txHash": format!("0x{}", hex::encode(&item.entry.tx_hash)),
-                        "blockNumber": item.entry.block_number,
-                        "txIndex": item.entry.tx_index,
-                        "timestamp": item.entry.timestamp.to_string(),
-                        "ckbDelta": item.entry.ckb_delta.to_string(),
-                        "usedDelta": item.entry.used_delta.to_string(),
-                        "isCellbase": item.entry.is_cellbase,
-                        "assetChanges": item.entry.asset_changes.iter().map(|c| {
-                            match c {
-                                ckbadger_store::types::AssetChange::Token { type_script_hash, delta, symbol, decimals } => {
-                                    serde_json::json!({
-                                        "type": "token",
-                                        "typeScriptHash": format!("0x{}", hex::encode(type_script_hash)),
-                                        "delta": delta.to_string(),
-                                        "symbol": symbol,
-                                        "decimals": decimals,
-                                    })
-                                },
-                                ckbadger_store::types::AssetChange::Object { object_id, standard, action } => {
-                                    serde_json::json!({
-                                        "type": "object",
-                                        "objectId": format!("0x{}", hex::encode(object_id)),
-                                        "standard": standard,
-                                        "action": format!("{:?}", action).to_lowercase(),
-                                    })
-                                },
-                                ckbadger_store::types::AssetChange::Identity { identity_id, standard, action } => {
-                                    serde_json::json!({
-                                        "type": "identity",
-                                        "identityId": format!("0x{}", hex::encode(identity_id)),
-                                        "standard": standard,
-                                        "action": format!("{:?}", action).to_lowercase(),
-                                    })
-                                },
-                                ckbadger_store::types::AssetChange::DaoDeposit { capacity } => {
-                                    serde_json::json!({"type": "daoDeposit", "capacity": capacity.to_string()})
-                                },
-                                ckbadger_store::types::AssetChange::DaoWithdrawRequest { capacity, deposit_block } => {
-                                    serde_json::json!({"type": "daoWithdrawRequest", "capacity": capacity.to_string(), "depositBlock": deposit_block})
-                                },
-                                ckbadger_store::types::AssetChange::DaoWithdrawComplete { capacity, compensation } => {
-                                    serde_json::json!({"type": "daoWithdrawComplete", "capacity": capacity.to_string(), "compensation": compensation.to_string()})
-                                },
-                                ckbadger_store::types::AssetChange::ScriptCall { type_code_hash } => {
-                                    serde_json::json!({"type": "scriptCall", "typeCodeHash": format!("0x{}", hex::encode(type_code_hash))})
-                                },
+                .filter_map(|item| {
+                    match build_global_activity_response(
+                        store,
+                        "mainnet", // TODO: derive from config if needed
+                        &item,
+                        &mut script_info_cache,
+                    ) {
+                        Ok(activity) => match serde_json::to_value(activity) {
+                            Ok(value) => Some(value),
+                            Err(e) => {
+                                error!(
+                                    "Failed to encode latest activity broadcast for tx=0x{}: {}",
+                                    hex::encode(&item.entry.tx_hash),
+                                    e
+                                );
+                                None
                             }
-                        }).collect::<Vec<_>>(),
-                        "peers": item.entry.peers.iter().map(|h| format!("0x{}", hex::encode(h))).collect::<Vec<_>>(),
-                    })
+                        },
+                        Err(e) => {
+                            error!(
+                                "Failed to serialize latest activity broadcast for tx=0x{}: {}",
+                                hex::encode(&item.entry.tx_hash),
+                                e
+                            );
+                            None
+                        }
+                    }
                 })
                 .collect();
             ws_manager.broadcast_activities(BroadcastMessage::LatestActivities { activities });
