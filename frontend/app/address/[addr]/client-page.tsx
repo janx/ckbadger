@@ -45,7 +45,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const cellsPagination = useCursorPagination();
   const txPagination = useCursorPagination();
   const daoPagination = useCursorPagination();
-  const { data: address, isLoading } = useQuery({
+  const {
+    data: address,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
   });
@@ -169,7 +173,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
       </div>
     );
   }
-  if (!address) {
+  if (error || !address) {
     return (
       <div className="bg-base-bg min-h-screen">
         <Header />

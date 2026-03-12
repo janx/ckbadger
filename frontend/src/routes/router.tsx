@@ -3,6 +3,7 @@ import type { RouteObject } from 'react-router-dom';
 import { Outlet, useParams } from 'react-router-dom';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { NotFoundPage } from '@/components/not-found-page';
+import { RouteErrorBoundary } from '@/components/route-error-boundary';
 import dynamic from '@/lib/dynamic-client';
 
 type PageModule<TProps extends object = object> = {
@@ -161,6 +162,7 @@ export function createAppRouter(): RouteObject[] {
     {
       path: '/',
       element: <AppFrame />,
+      errorElement: <RouteErrorBoundary />,
       children: [
         {
           index: true,
