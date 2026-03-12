@@ -1,23 +1,16 @@
 use ckbadger_common::{CachedProposal, MemoryStatsData, SyncProgressData, SyncStatusData};
 use ckbadger_store::CkbadgerStore;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{info, warn};
-
-use ckbadger_common::PROPOSAL_WINDOW_FARTHEST;
 
 #[derive(Clone)]
 pub struct CacheInvalidator {
     store: Arc<CkbadgerStore>,
-    proposals: Arc<Mutex<HashMap<String, CachedProposal>>>,
 }
 
 impl CacheInvalidator {
     pub fn new(store: Arc<CkbadgerStore>) -> Self {
-        Self {
-            store,
-            proposals: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { store }
     }
 
     /// Chart cache invalidation is now a no-op.
@@ -85,61 +78,51 @@ impl CacheInvalidator {
     }
 
     pub async fn cache_proposals(&self, proposals: &[CachedProposal]) {
-        if proposals.is_empty() {
-            return;
-        }
-
-        if let Ok(mut map) = self.proposals.lock() {
-            for proposal in proposals {
-                map.insert(proposal.proposal_id.clone(), proposal.clone());
+        for proposal in proposals {
+            if let Err(e) = self.store.put_pending_proposal(proposal) {
+                warn!(
+                    "Failed to write pending proposal {}: {}",
+                    proposal.proposal_id, e
+                );
             }
         }
     }
 
     pub async fn remove_committed_proposals(&self, proposal_ids: &[String]) {
-        if proposal_ids.is_empty() {
-            return;
-        }
-
-        if let Ok(mut map) = self.proposals.lock() {
-            for proposal_id in proposal_ids {
-                map.remove(proposal_id);
+        for proposal_id in proposal_ids {
+            if let Err(e) = self.store.delete_pending_proposal(proposal_id) {
+                warn!("Failed to delete committed proposal {}: {}", proposal_id, e);
             }
         }
     }
 
     pub async fn cleanup_expired_proposals(&self, current_tip: i64) {
-        if let Ok(mut map) = self.proposals.lock() {
-            let expired: Vec<String> = map
-                .iter()
-                .filter(|(_, cached)| {
-                    let expiry_block = cached.proposed_at_block + PROPOSAL_WINDOW_FARTHEST as i64;
-                    current_tip > expiry_block
-                })
-                .map(|(id, _)| id.clone())
-                .collect();
-
-            if !expired.is_empty() {
-                info!("Cleaning up {} expired proposals", expired.len());
-                for id in &expired {
-                    map.remove(id);
-                }
+        match self.store.delete_expired_proposals(current_tip) {
+            Ok(count) if count > 0 => {
+                info!("Cleaned up {} expired proposals", count);
             }
+            Err(e) => {
+                warn!("Failed to cleanup expired proposals: {}", e);
+            }
+            _ => {}
         }
     }
 
     pub async fn get_pending_proposals(&self) -> Vec<CachedProposal> {
-        let Ok(map) = self.proposals.lock() else {
-            return Vec::new();
-        };
-
-        let mut result: Vec<CachedProposal> = map.values().cloned().collect();
-        result.sort_by(|a, b| {
-            b.proposed_at_block
-                .cmp(&a.proposed_at_block)
-                .then(a.proposed_at_index.cmp(&b.proposed_at_index))
-        });
-        result
+        match self.store.get_all_pending_proposals() {
+            Ok(mut proposals) => {
+                proposals.sort_by(|a, b| {
+                    b.proposed_at_block
+                        .cmp(&a.proposed_at_block)
+                        .then(a.proposed_at_index.cmp(&b.proposed_at_index))
+                });
+                proposals
+            }
+            Err(e) => {
+                warn!("Failed to read pending proposals: {}", e);
+                Vec::new()
+            }
+        }
     }
 
     pub async fn publish_memory_stats(&self, data: &MemoryStatsData) {
