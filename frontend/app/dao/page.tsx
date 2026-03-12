@@ -15,7 +15,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { StatCard, FilterButtonGroup } from '@/components/ui/chart-card';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, DaoDeposit, ScriptLookupResponse } from '@/lib/api';
+import { api, DaoDeposit, DaoTopDepositor, ScriptLookupResponse } from '@/lib/api';
 import {
   formatTimeAgo,
   formatCkbAmount,
@@ -121,6 +121,7 @@ function InteractivePieChart({
 export default function DaoPage() {
   const depositsPagination = useCursorPagination();
   const [status, setStatus] = useState<number>(0);
+  const [activeTab, setActiveTab] = useState<'deposits' | 'depositors'>('deposits');
   const [secondaryHover, setSecondaryHover] = useState<number | null>(null);
   const [compensationHover, setCompensationHover] = useState<number | null>(null);
 
@@ -149,6 +150,12 @@ export default function DaoPage() {
     queryFn: () => api.lookupScripts(codeHashes),
     enabled: codeHashes.length > 0,
     staleTime: Infinity,
+  });
+
+  const { data: topDepositors, isLoading: isLoadingDepositors } = useQuery({
+    queryKey: ['dao-top-depositors'],
+    queryFn: () => api.getDaoTopDepositors(),
+    enabled: activeTab === 'depositors',
   });
 
   const getSecondaryIssuanceData = () => {
@@ -207,9 +214,6 @@ export default function DaoPage() {
     { label: 'Withdraw Request', value: 1 },
     { label: 'Withdrawn', value: 2 },
   ];
-  const selectedFilterLabel =
-    filterOptions.find((option) => option.value === status)?.label ?? 'Active Deposits';
-
   const renderReferenceCell = (deposit: DaoDeposit) => {
     const depositCellHref = `/cell/${deposit.txHash}-${deposit.outputIndex}`;
     const depositCellLabel = `${deposit.txHash}:${deposit.outputIndex}`;
@@ -544,94 +548,185 @@ export default function DaoPage() {
           <TerminalPanelHeader
             indicator="active"
             actions={
-              <FilterButtonGroup
-                options={filterOptions}
-                selected={status}
-                onChange={(v) => {
-                  setStatus(v as number);
-                  depositsPagination.reset();
-                }}
-              />
+              activeTab === 'deposits' ? (
+                <FilterButtonGroup
+                  options={filterOptions}
+                  selected={status}
+                  onChange={(v) => {
+                    setStatus(v as number);
+                    depositsPagination.reset();
+                  }}
+                />
+              ) : undefined
             }
           >
-            {selectedFilterLabel}
+            <div className="flex gap-4">
+              <button
+                onClick={() => setActiveTab('deposits')}
+                className={`font-mono text-sm transition-colors ${
+                  activeTab === 'deposits'
+                    ? 'text-text-bright border-emphasis border-b-2 pb-1'
+                    : 'text-text-dim hover:text-text pb-1'
+                }`}
+              >
+                Deposits
+              </button>
+              <button
+                onClick={() => setActiveTab('depositors')}
+                className={`font-mono text-sm transition-colors ${
+                  activeTab === 'depositors'
+                    ? 'text-text-bright border-emphasis border-b-2 pb-1'
+                    : 'text-text-dim hover:text-text pb-1'
+                }`}
+              >
+                Depositors
+              </button>
+            </div>
           </TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            {isLoading ? (
-              <div className="text-text-dim py-8 text-center">Loading...</div>
-            ) : deposits?.data?.length ? (
+            {activeTab === 'deposits' ? (
               <>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-base-border text-text-dim border-b text-left font-mono text-xs uppercase">
-                        <th className="px-4 py-3">Reference</th>
-                        <th className="px-4 py-3">Address</th>
-                        <th className="px-4 py-3 text-right">Amount</th>
-                        <th className="px-4 py-3 text-right">Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {deposits.data.map((deposit: DaoDeposit) => (
-                        <tr
-                          key={`${deposit.txHash}-${deposit.outputIndex}`}
-                          className="hover:bg-base-elevated/50 border-base-border/50 border-b transition-colors"
-                        >
-                          <td className="px-4 py-3">{renderReferenceCell(deposit)}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              {deposit.address ? (
-                                <Address address={deposit.address} />
+                {isLoading ? (
+                  <div className="text-text-dim py-8 text-center">Loading...</div>
+                ) : deposits?.data?.length ? (
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className="border-base-border text-text-dim border-b text-left font-mono text-xs uppercase">
+                            <th className="px-4 py-3">Reference</th>
+                            <th className="px-4 py-3">Address</th>
+                            <th className="px-4 py-3 text-right">Amount</th>
+                            <th className="px-4 py-3 text-right">Time</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {deposits.data.map((deposit: DaoDeposit) => (
+                            <tr
+                              key={`${deposit.txHash}-${deposit.outputIndex}`}
+                              className="hover:bg-base-elevated/50 border-base-border/50 border-b transition-colors"
+                            >
+                              <td className="px-4 py-3">{renderReferenceCell(deposit)}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {deposit.address ? (
+                                    <Address address={deposit.address} />
+                                  ) : (
+                                    <Link href={`/address/${deposit.lockScriptHash}`}>
+                                      <Hash
+                                        hash={deposit.lockScriptHash}
+                                        className="hover:text-emphasis text-text"
+                                      />
+                                    </Link>
+                                  )}
+                                  <ScriptLabel
+                                    codeHash={deposit.lockCodeHash}
+                                    scriptLookup={scriptLookup}
+                                  />
+                                </div>
+                              </td>
+                              <td className="text-text-bright px-4 py-3 text-right font-mono tabular-nums">
+                                {(() => {
+                                  const f = formatCkbAmount(deposit.capacity);
+                                  return (
+                                    <>
+                                      {f.integer}
+                                      <span className="text-text-dim text-[0.85em]">
+                                        .{f.decimal}
+                                      </span>
+                                      <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
+                                    </>
+                                  );
+                                })()}
+                              </td>
+                              <td className="text-text-dim px-4 py-3 text-right text-sm">
+                                {formatTimeAgo(deposit.depositTimestamp)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="border-base-border border-t px-4 py-3">
+                      <CursorPagination
+                        total={deposits.total ?? undefined}
+                        totalLabel="deposits"
+                        pageSize={20}
+                        page={depositsPagination.page}
+                        currentCount={deposits.data.length}
+                        hasMore={deposits.hasMore}
+                        hasPrevious={depositsPagination.hasPrevious}
+                        onNext={() => depositsPagination.goToNext(deposits.nextCursor)}
+                        onPrevious={depositsPagination.goToPrevious}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-text-dim py-8 text-center">No deposits found</div>
+                )}
+              </>
+            ) : (
+              <>
+                {isLoadingDepositors ? (
+                  <div className="text-text-dim py-8 text-center">Loading...</div>
+                ) : topDepositors?.depositors?.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-base-border text-text-dim border-b text-left font-mono text-xs uppercase">
+                          <th className="px-4 py-3 text-center">Rank</th>
+                          <th className="px-4 py-3">Address</th>
+                          <th className="px-4 py-3 text-right">Deposit Capacity</th>
+                          <th className="px-4 py-3 text-right">Deposit Time(Day)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topDepositors.depositors.map((depositor: DaoTopDepositor) => (
+                          <tr
+                            key={depositor.lockScriptHash}
+                            className="hover:bg-base-elevated/50 border-base-border/50 border-b transition-colors"
+                          >
+                            <td className="text-text-dim px-4 py-3 text-center font-mono">
+                              {depositor.rank}
+                            </td>
+                            <td className="px-4 py-3">
+                              {depositor.address ? (
+                                <Address address={depositor.address} />
                               ) : (
-                                <Link href={`/address/${deposit.lockScriptHash}`}>
+                                <Link href={`/address/${depositor.lockScriptHash}`}>
                                   <Hash
-                                    hash={deposit.lockScriptHash}
+                                    hash={depositor.lockScriptHash}
                                     className="hover:text-emphasis text-text"
                                   />
                                 </Link>
                               )}
-                              <ScriptLabel
-                                codeHash={deposit.lockCodeHash}
-                                scriptLookup={scriptLookup}
-                              />
-                            </div>
-                          </td>
-                          <td className="text-text-bright px-4 py-3 text-right font-mono tabular-nums">
-                            {(() => {
-                              const f = formatCkbAmount(deposit.capacity);
-                              return (
-                                <>
-                                  {f.integer}
-                                  <span className="text-text-dim text-[0.85em]">.{f.decimal}</span>
-                                  <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
-                                </>
-                              );
-                            })()}
-                          </td>
-                          <td className="text-text-dim px-4 py-3 text-right text-sm">
-                            {formatTimeAgo(deposit.depositTimestamp)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="border-base-border border-t px-4 py-3">
-                  <CursorPagination
-                    total={deposits.total ?? undefined}
-                    totalLabel="deposits"
-                    pageSize={20}
-                    page={depositsPagination.page}
-                    currentCount={deposits.data.length}
-                    hasMore={deposits.hasMore}
-                    hasPrevious={depositsPagination.hasPrevious}
-                    onNext={() => depositsPagination.goToNext(deposits.nextCursor)}
-                    onPrevious={depositsPagination.goToPrevious}
-                  />
-                </div>
+                            </td>
+                            <td className="text-text-bright px-4 py-3 text-right font-mono tabular-nums">
+                              {(() => {
+                                const f = formatCkbAmount(depositor.totalCapacity);
+                                return (
+                                  <>
+                                    {f.integer}
+                                    <span className="text-text-dim text-[0.85em]">
+                                      .{f.decimal}
+                                    </span>
+                                    <span className="text-text-dim ml-1 text-[0.85em]">CKB</span>
+                                  </>
+                                );
+                              })()}
+                            </td>
+                            <td className="text-text-dim px-4 py-3 text-right font-mono tabular-nums">
+                              {depositor.averageDepositDays}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-text-dim py-8 text-center">No depositors found</div>
+                )}
               </>
-            ) : (
-              <div className="text-text-dim py-8 text-center">No deposits found</div>
             )}
           </TerminalPanelContent>
         </TerminalPanel>

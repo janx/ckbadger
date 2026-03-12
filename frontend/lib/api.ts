@@ -772,6 +772,20 @@ interface DaoStatistics {
   unclaimedCompensationChange24h?: string;
 }
 
+interface DaoTopDepositor {
+  rank: number;
+  lockScriptHash: string;
+  address: string | null;
+  totalCapacity: string;
+  totalCapacityCkb: string;
+  depositCount: number;
+  averageDepositDays: string;
+}
+
+interface DaoTopDepositorsResponse {
+  depositors: DaoTopDepositor[];
+}
+
 interface DaoCalculatorResult {
   capacity: string;
   capacityCkb: string;
@@ -1301,6 +1315,8 @@ export type {
   DaoDeposit,
   AddressDaoSummary,
   DaoStatistics,
+  DaoTopDepositor,
+  DaoTopDepositorsResponse,
   DaoCalculatorResult,
   SporeCluster,
   SporeNft,
@@ -1672,6 +1688,10 @@ export const api = {
 
   getDaoStatistics: (): Promise<DaoStatistics> => {
     return fetchApi('/dao/statistics');
+  },
+
+  getDaoTopDepositors: (): Promise<DaoTopDepositorsResponse> => {
+    return fetchApi('/dao/top-depositors');
   },
 
   calculateDaoCompensation: (
