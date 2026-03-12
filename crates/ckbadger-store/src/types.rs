@@ -32,6 +32,86 @@ pub struct LiveCellInfo {
     pub udt_amount: Option<u128>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CellPayload {
+    pub capacity: i64,
+    pub lock_script_hash: Vec<u8>,
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
+    pub type_script_hash: Option<Vec<u8>>,
+    pub type_code_hash: Option<Vec<u8>>,
+    #[serde(default)]
+    pub type_hash_type: Option<i16>,
+    #[serde(default)]
+    pub type_args: Option<Vec<u8>>,
+    pub data_size: i32,
+    #[serde(default)]
+    pub occupied_capacity: i64,
+    #[serde(default)]
+    pub udt_amount: Option<u128>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveCellMarker {
+    pub created_at_block: i64,
+}
+
+impl LiveCellInfo {
+    pub fn to_payload(&self) -> CellPayload {
+        CellPayload::from(self)
+    }
+}
+
+impl CellPayload {
+    pub fn into_live_cell_info(self, created_at_block: i64) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: self.capacity,
+            created_at_block,
+            lock_script_hash: self.lock_script_hash,
+            lock_code_hash: self.lock_code_hash,
+            lock_hash_type: self.lock_hash_type,
+            lock_args: self.lock_args,
+            type_script_hash: self.type_script_hash,
+            type_code_hash: self.type_code_hash,
+            type_hash_type: self.type_hash_type,
+            type_args: self.type_args,
+            data_size: self.data_size,
+            occupied_capacity: self.occupied_capacity,
+            udt_amount: self.udt_amount,
+        }
+    }
+
+    pub fn to_live_cell_info(&self, created_at_block: i64) -> LiveCellInfo {
+        self.clone().into_live_cell_info(created_at_block)
+    }
+}
+
+impl From<&LiveCellInfo> for CellPayload {
+    fn from(value: &LiveCellInfo) -> Self {
+        Self {
+            capacity: value.capacity,
+            lock_script_hash: value.lock_script_hash.clone(),
+            lock_code_hash: value.lock_code_hash.clone(),
+            lock_hash_type: value.lock_hash_type,
+            lock_args: value.lock_args.clone(),
+            type_script_hash: value.type_script_hash.clone(),
+            type_code_hash: value.type_code_hash.clone(),
+            type_hash_type: value.type_hash_type,
+            type_args: value.type_args.clone(),
+            data_size: value.data_size,
+            occupied_capacity: value.occupied_capacity,
+            udt_amount: value.udt_amount,
+        }
+    }
+}
+
+impl From<LiveCellInfo> for CellPayload {
+    fn from(value: LiveCellInfo) -> Self {
+        Self::from(&value)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsumedCellInfo {
     pub cell: LiveCellInfo,
@@ -39,8 +119,9 @@ pub struct ConsumedCellInfo {
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsumedCellMeta {
+    pub created_at_block: i64,
     pub consumed_at_block: i64,
     pub consumed_by_tx: Option<Vec<u8>>,
 }
@@ -70,6 +151,11 @@ impl ConsumedCellInfo {
 /// Decode consumed cell metadata from the canonical schema.
 pub fn decode_consumed_cell_meta(value: &[u8]) -> Option<ConsumedCellMeta> {
     bincode::deserialize::<ConsumedCellMeta>(value).ok()
+}
+
+/// Decode live cell metadata from the canonical schema.
+pub fn decode_live_cell_marker(value: &[u8]) -> Option<LiveCellMarker> {
+    bincode::deserialize::<LiveCellMarker>(value).ok()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1067,13 +1153,25 @@ mod tests {
         let consumed =
             ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 999, Some(&[0xAA; 32]));
         let meta = ConsumedCellMeta {
+            created_at_block: info.created_at_block,
             consumed_at_block: consumed.consumed_at_block,
             consumed_by_tx: consumed.consumed_by_tx.clone(),
         };
         let bytes = bincode::serialize(&meta).unwrap();
         let decoded = decode_consumed_cell_meta(&bytes).unwrap();
+        assert_eq!(decoded.created_at_block, info.created_at_block);
         assert_eq!(decoded.consumed_at_block, 999);
         assert_eq!(decoded.consumed_by_tx, Some(vec![0xAA; 32]));
+    }
+
+    #[test]
+    fn test_decode_live_cell_marker_current_schema() {
+        let marker = LiveCellMarker {
+            created_at_block: 123,
+        };
+        let bytes = bincode::serialize(&marker).unwrap();
+        let decoded = decode_live_cell_marker(&bytes).unwrap();
+        assert_eq!(decoded.created_at_block, 123);
     }
 
     #[test]

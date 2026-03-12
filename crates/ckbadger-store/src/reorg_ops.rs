@@ -183,6 +183,10 @@ fn put_cell_index_entries(
     }
 }
 
+fn encode_live_cell_marker(created_at_block: i64) -> Vec<u8> {
+    bincode::serialize(&LiveCellMarker { created_at_block }).expect("serialize LiveCellMarker")
+}
+
 /// Accumulate derived-CF deltas for a cell changing live state during rollback.
 /// `sign` is -1 when removing from live (cell created after rollback_to),
 /// +1 when restoring to live (cell consumed after rollback_to).
@@ -731,13 +735,15 @@ impl CkbadgerStore {
                     );
                 }
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
-                let info = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+                let info = self
+                    .get_live_cell_by_outpoint_key(&key, cells_store)?
+                    .ok_or_else(|| {
                     anyhow::anyhow!(
                         "missing canonical cell for live outpoint during rollback fallback: outpoint=0x{}:{}",
                         bytes_to_hex(&tx_hash),
                         output_index
                     )
-                })?;
+                    })?;
                 if info.created_at_block > rollback_to {
                     batch.delete_cf(self.cf_live_cells(), &key);
                     delete_cell_index_entries(self, &mut batch, &info, &tx_hash, output_index);
@@ -784,15 +790,22 @@ impl CkbadgerStore {
 
                 let (tx_hash, output_index) = keys::decode_outpoint(&key);
                 batch.delete_cf(self.cf_consumed_cells(), &key);
-                let info = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
+                let info = cells_store
+                    .get_cell_payload_by_outpoint_key(&key)?
+                    .ok_or_else(|| {
                     anyhow::anyhow!(
                         "missing canonical cell for consumed outpoint during rollback fallback: outpoint=0x{}:{}",
                         bytes_to_hex(&tx_hash),
                         output_index
                     )
-                })?;
+                    })?
+                    .into_live_cell_info(meta.created_at_block);
                 if info.created_at_block <= rollback_to {
-                    batch.put_cf(self.cf_live_cells(), &key, []);
+                    batch.put_cf(
+                        self.cf_live_cells(),
+                        &key,
+                        encode_live_cell_marker(info.created_at_block),
+                    );
                     put_cell_index_entries(self, &mut batch, &info, &tx_hash, output_index);
                     cells_restored += 1;
                     accumulate_cell_deltas(
@@ -833,13 +846,15 @@ impl CkbadgerStore {
                     })?;
                     let outpoint_key = keys::encode_outpoint(&ctx.tx_hash, output_index);
                     if self.get_cf(self.cf_live_cells(), &outpoint_key)?.is_some() {
-                        let info = cells_store.get_cell_by_outpoint_key(&outpoint_key)?.ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "missing canonical cell for live tx output during rollback: outpoint=0x{}:{}",
-                                bytes_to_hex(&ctx.tx_hash),
-                                output_index
-                            )
-                        })?;
+                        let info = self
+                            .get_live_cell_by_outpoint_key(&outpoint_key, cells_store)?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "missing canonical cell for live tx output during rollback: outpoint=0x{}:{}",
+                                    bytes_to_hex(&ctx.tx_hash),
+                                    output_index
+                                )
+                            })?;
                         batch.delete_cf(self.cf_live_cells(), outpoint_key);
                         delete_cell_index_entries(
                             self,
@@ -913,7 +928,11 @@ impl CkbadgerStore {
                             }
                             batch.delete_cf(self.cf_consumed_cells(), outpoint_key);
                             if consumed.cell.created_at_block <= rollback_to {
-                                batch.put_cf(self.cf_live_cells(), outpoint_key, []);
+                                batch.put_cf(
+                                    self.cf_live_cells(),
+                                    outpoint_key,
+                                    encode_live_cell_marker(consumed.cell.created_at_block),
+                                );
                                 put_cell_index_entries(
                                     self,
                                     &mut batch,

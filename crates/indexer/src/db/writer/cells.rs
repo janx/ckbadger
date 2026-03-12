@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::types::LiveCellInfo;
+use ckbadger_store::types::{decode_live_cell_marker, CellPayload, LiveCellInfo, LiveCellMarker};
 
 use crate::parser::cell::ParsedCell;
 
@@ -140,7 +140,7 @@ impl BatchWriter {
             // Cell payload -> append-only batch
             cells_batch.put_cell_payload(&raw_key, &info);
             // Live marker -> domain batch
-            domain_batch.put_live_cell_marker(&raw_key);
+            domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
             if !skip_cell_indices {
                 domain_batch.put_cell_by_lock(
                     &info.lock_script_hash,
@@ -198,15 +198,39 @@ impl BatchWriter {
         let marker_results = self.store.multi_get_cf(marker_refs);
 
         let mut present_positions = Vec::new();
+        let mut live_markers = Vec::new();
         let mut cell_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
         for (idx, marker) in marker_results.into_iter().enumerate() {
-            if matches!(marker, Ok(Some(_))) {
-                present_positions.push(idx);
-                // Read cell payloads from append-only store
-                cell_refs.push((
-                    self.append_only_store.cf_cells(),
-                    encoded_keys[idx].as_slice(),
-                ));
+            match marker {
+                Ok(Some(marker_bytes)) => {
+                    let marker: LiveCellMarker =
+                        decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
+                            let (tx_hash, output_index, ..) = consumptions[idx];
+                            anyhow!(
+                                "failed to decode live cell marker during consumption: outpoint=0x{}:{}, marker_len={}",
+                                hex::encode(tx_hash),
+                                output_index,
+                                marker_bytes.len()
+                            )
+                        })?;
+                    present_positions.push(idx);
+                    live_markers.push(marker);
+                    // Read cell payloads from append-only store
+                    cell_refs.push((
+                        self.append_only_store.cf_cells(),
+                        encoded_keys[idx].as_slice(),
+                    ));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let (tx_hash, output_index, ..) = consumptions[idx];
+                    bail!(
+                        "failed to read live marker during consumption: outpoint=0x{}:{}, error={}",
+                        hex::encode(tx_hash),
+                        output_index,
+                        e
+                    );
+                }
             }
         }
         let cell_results = self.append_only_store.multi_get_cf(cell_refs);
@@ -216,15 +240,16 @@ impl BatchWriter {
             let (tx_hash, output_index, ..) = consumptions[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
+                    let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
+                        anyhow!(
+                            "failed to deserialize live cell payload during consumption: outpoint=0x{}:{}, error={}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            e
+                        )
+                    })?;
                     let info =
-                        bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
-                            anyhow!(
-                                "failed to deserialize live cell info during consumption: outpoint=0x{}:{}, error={}",
-                                hex::encode(tx_hash),
-                                output_index,
-                                e
-                            )
-                        })?;
+                        payload.into_live_cell_info(live_markers[batch_idx].created_at_block);
                     infos_by_pos.insert(outpoint_idx, info);
                 }
                 Ok(None) => {
@@ -264,6 +289,7 @@ impl BatchWriter {
             // Write consumed metadata to domain (NOT the cell payload -- already in append-only)
             domain_batch.put_consumed_cell_meta_raw_key(
                 &raw_key,
+                info.created_at_block,
                 *consumed_at_block,
                 Some(*consumed_by_tx),
             );
@@ -378,11 +404,22 @@ impl BatchWriter {
         let marker_results = self.store.multi_get_cf(marker_refs);
 
         let mut present_positions = Vec::new();
+        let mut live_markers = Vec::new();
         let mut cell_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
         for (idx, marker) in marker_results.into_iter().enumerate() {
             match marker {
-                Ok(Some(_)) => {
+                Ok(Some(marker_bytes)) => {
+                    let marker: LiveCellMarker =
+                        decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
+                            anyhow!(
+                                "failed to decode live cell marker: outpoint=0x{}:{}, marker_len={}",
+                                hex::encode(outpoints[idx].0),
+                                outpoints[idx].1,
+                                marker_bytes.len()
+                            )
+                        })?;
                     present_positions.push(idx);
+                    live_markers.push(marker);
                     // Read cell payloads from append-only store
                     cell_refs.push((
                         self.append_only_store.cf_cells(),
@@ -408,14 +445,16 @@ impl BatchWriter {
             let (tx_hash, output_index) = outpoints[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
                         anyhow!(
-                            "failed to decode live cell info: outpoint=0x{}:{}, error={}",
+                            "failed to decode live cell payload: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),
                             output_index,
                             e
                         )
                     })?;
+                    let info =
+                        payload.into_live_cell_info(live_markers[batch_idx].created_at_block);
                     validate_input_cell_occupied_capacity(&info, tx_hash, output_index, "live")?;
                     result.insert((tx_hash.to_vec(), output_index), info);
                 }
@@ -492,6 +531,7 @@ impl BatchWriter {
             // Write consumed metadata to domain (NOT the cell payload -- already in append-only)
             domain_batch.put_consumed_cell_meta_raw_key(
                 &raw_key,
+                info.created_at_block,
                 *consumed_at_block,
                 Some(*consumed_by_tx),
             );
@@ -694,10 +734,14 @@ mod tests {
 
         let tx_hash = vec![0xCC; 32];
         let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+        let marker = bincode::serialize(&LiveCellMarker {
+            created_at_block: 1,
+        })
+        .unwrap();
 
         // Write a live marker and corrupt canonical data
         store
-            .put_cf(store.cf_live_cells(), &outpoint_key, &[1])
+            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
             .unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &[0xFF, 0xAA, 0x10])
@@ -713,7 +757,7 @@ mod tests {
             .unwrap_err();
         assert!(
             err.to_string()
-                .contains("failed to deserialize live cell info"),
+                .contains("failed to deserialize live cell payload"),
             "expected deserialization error, got: {}",
             err
         );

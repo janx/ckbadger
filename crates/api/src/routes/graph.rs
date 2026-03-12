@@ -449,7 +449,7 @@ async fn get_tx_graph(
             let output_index = i16::from_be_bytes([key[32], key[33]]);
             let Some(info) = state
                 .store
-                .get_cell_by_outpoint_key(&key)
+                .get_live_cell_by_outpoint_key(&key, &state.append_only_store)
                 .map_err(|e| ApiError::internal(e.to_string()))?
             else {
                 continue;

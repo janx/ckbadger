@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use crate::keys;
 use crate::store::CkbadgerStore;
-use crate::types::{decode_consumed_cell_meta, ConsumedCellInfo, ConsumedCellMeta, LiveCellInfo};
+use crate::types::{
+    decode_consumed_cell_meta, decode_live_cell_marker, CellPayload, ConsumedCellInfo,
+    ConsumedCellMeta, LiveCellInfo, LiveCellMarker,
+};
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -25,12 +28,21 @@ pub struct TokenCellStats {
 }
 
 impl CkbadgerStore {
-    pub fn get_cell_by_outpoint_key(
+    pub fn get_cell_payload_by_outpoint_key(
         &self,
         outpoint_key: &[u8],
-    ) -> anyhow::Result<Option<LiveCellInfo>> {
+    ) -> anyhow::Result<Option<CellPayload>> {
         match self.get_cf(self.cf_cells(), outpoint_key)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            Some(value) => {
+                let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
+                        bytes_to_hex(outpoint_key),
+                        e
+                    )
+                })?;
+                Ok(Some(payload))
+            }
             None => Ok(None),
         }
     }
@@ -40,10 +52,24 @@ impl CkbadgerStore {
         outpoint_key: &[u8],
         cells_store: &CkbadgerStore,
     ) -> anyhow::Result<Option<LiveCellInfo>> {
-        if self.get_cf(self.cf_live_cells(), outpoint_key)?.is_none() {
+        let Some(marker_bytes) = self.get_cf(self.cf_live_cells(), outpoint_key)? else {
             return Ok(None);
-        }
-        cells_store.get_cell_by_outpoint_key(outpoint_key)
+        };
+        let marker = decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
+            anyhow::anyhow!(
+                "failed to decode live cell marker: outpoint=0x{}",
+                bytes_to_hex(outpoint_key)
+            )
+        })?;
+        let payload = cells_store
+            .get_cell_payload_by_outpoint_key(outpoint_key)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing canonical cell for live marker: outpoint=0x{}",
+                    bytes_to_hex(outpoint_key)
+                )
+            })?;
+        Ok(Some(payload.into_live_cell_info(marker.created_at_block)))
     }
 
     pub fn get_cell(
@@ -75,11 +101,20 @@ impl CkbadgerStore {
         let live_values = self.multi_get_cf(live_cf_keys);
 
         let mut present_indices = Vec::new();
+        let mut created_at_blocks = Vec::new();
         let mut cell_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
         for (i, marker_result) in live_values.into_iter().enumerate() {
             match marker_result {
-                Ok(Some(_)) => {
+                Ok(Some(marker_bytes)) => {
+                    let marker: LiveCellMarker =
+                        decode_live_cell_marker(&marker_bytes).ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "failed to decode live cell marker in get_cells_batch: outpoint=0x{}",
+                                bytes_to_hex(&keys[i])
+                            )
+                        })?;
                     present_indices.push(i);
+                    created_at_blocks.push(marker.created_at_block);
                     cell_cf_keys.push((cells_cf, keys[i].as_slice()));
                 }
                 Ok(None) => {}
@@ -99,13 +134,14 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
                         anyhow::anyhow!(
-                            "failed to deserialize canonical cell in get_cells_batch: outpoint=0x{}, error={}",
+                            "failed to deserialize canonical cell payload in get_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
                             e
                         )
                     })?;
+                    let info = payload.into_live_cell_info(created_at_blocks[batch_idx]);
                     let (tx_hash, idx) = outpoints[outpoint_idx];
                     result.insert((tx_hash.to_vec(), idx), info);
                 }
@@ -156,13 +192,16 @@ impl CkbadgerStore {
                 output_index
             )
         })?;
-        let cell = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing canonical cell for consumed outpoint: outpoint=0x{}:{}",
-                bytes_to_hex(tx_hash),
-                output_index
-            )
-        })?;
+        let cell = cells_store
+            .get_cell_payload_by_outpoint_key(&key)?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing canonical cell for consumed outpoint: outpoint=0x{}:{}",
+                    bytes_to_hex(tx_hash),
+                    output_index
+                )
+            })?
+            .into_live_cell_info(meta.created_at_block);
         Ok(Some(ConsumedCellInfo {
             cell,
             consumed_at_block: meta.consumed_at_block,
@@ -193,16 +232,18 @@ impl CkbadgerStore {
         let consumed_values = self.multi_get_cf(consumed_cf_keys);
 
         let mut present_indices = Vec::new();
+        let mut metas: Vec<Option<ConsumedCellMeta>> = vec![None; keys.len()];
         let mut cell_cf_keys: Vec<(&rocksdb::ColumnFamily, &[u8])> = Vec::new();
         for (i, value_result) in consumed_values.into_iter().enumerate() {
             match value_result {
                 Ok(Some(value)) => {
-                    decode_consumed_cell_meta(&value).ok_or_else(|| {
+                    let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
                         anyhow::anyhow!(
                             "failed to decode consumed cell meta in get_consumed_cells_batch: outpoint=0x{}",
                             bytes_to_hex(&keys[i])
                         )
                     })?;
+                    metas[i] = Some(meta);
                     present_indices.push(i);
                     cell_cf_keys.push((cells_cf, keys[i].as_slice()));
                 }
@@ -223,13 +264,23 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let payload = bincode::deserialize::<CellPayload>(&value).map_err(|e| {
                         anyhow::anyhow!(
-                            "failed to deserialize canonical cell in get_consumed_cells_batch: outpoint=0x{}, error={}",
+                            "failed to deserialize canonical cell payload in get_consumed_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
                             e
                         )
                     })?;
+                    let created_at_block = metas[outpoint_idx]
+                        .as_ref()
+                        .map(|meta| meta.created_at_block)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "missing decoded consumed cell meta in get_consumed_cells_batch: outpoint=0x{}",
+                                bytes_to_hex(outpoint_key)
+                            )
+                        })?;
+                    let info = payload.into_live_cell_info(created_at_block);
                     let (tx_hash, idx) = outpoints[outpoint_idx];
                     result.insert((tx_hash.to_vec(), idx), info);
                 }
@@ -618,12 +669,16 @@ mod tests {
     ) {
         // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(cell).unwrap();
+        let value = bincode::serialize(&cell.to_payload()).unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &value)
             .unwrap();
+        let marker = bincode::serialize(&LiveCellMarker {
+            created_at_block: cell.created_at_block,
+        })
+        .unwrap();
         store
-            .put_cf(store.cf_live_cells(), &outpoint_key, &[])
+            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
             .unwrap();
 
         // Write to cell_by_type index
@@ -744,8 +799,12 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_hash = [0xAB; 32];
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
+        let marker = bincode::serialize(&LiveCellMarker {
+            created_at_block: 100,
+        })
+        .unwrap();
         store
-            .put_cf(store.cf_live_cells(), &outpoint_key, b"")
+            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
             .unwrap();
 
         let refs: Vec<(&[u8], i16)> = vec![(&tx_hash, 0)];
@@ -859,7 +918,7 @@ mod tests {
             .put_cf(
                 store.cf_cells(),
                 &outpoint_key,
-                &bincode::serialize(&cell).unwrap(),
+                &bincode::serialize(&cell.to_payload()).unwrap(),
             )
             .unwrap();
         store

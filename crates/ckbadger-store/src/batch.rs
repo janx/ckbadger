@@ -242,17 +242,17 @@ impl<'a> StoreBatch<'a> {
     /// separate batches: `put_cell_payload` on append-only batch +
     /// `put_live_cell_marker` on domain batch.
     pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        let value = bincode::serialize(&info.to_payload()).expect("serialize CellPayload");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
         self.put_cf(self.store.cf_cells(), raw_key, &value);
-        self.put_cf(self.store.cf_live_cells(), raw_key, []);
+        self.put_live_cell_marker(raw_key, info.created_at_block);
     }
 
     // ---- Split cell methods for cross-store writes ----
 
     /// Write cell payload to CF_CELLS. Call on append-only store batch.
     pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        let value = bincode::serialize(&info.to_payload()).expect("serialize CellPayload");
         self.put_cf(self.store.cf_cells(), raw_key, &value);
     }
 
@@ -268,14 +268,21 @@ impl<'a> StoreBatch<'a> {
     }
 
     /// Write live cell marker to CF_LIVE_CELLS. Call on domain store batch.
-    pub fn put_live_cell_marker(&mut self, raw_key: &[u8]) {
-        self.put_cf(self.store.cf_live_cells(), raw_key, []);
+    pub fn put_live_cell_marker(&mut self, raw_key: &[u8], created_at_block: i64) {
+        let marker = LiveCellMarker { created_at_block };
+        let value = bincode::serialize(&marker).expect("serialize LiveCellMarker");
+        self.put_cf(self.store.cf_live_cells(), raw_key, &value);
     }
 
     /// Write live cell marker using tx_hash + output_index. Call on domain store batch.
-    pub fn put_live_cell_marker_by_outpoint(&mut self, tx_hash: &[u8], output_index: i16) {
+    pub fn put_live_cell_marker_by_outpoint(
+        &mut self,
+        tx_hash: &[u8],
+        output_index: i16,
+        created_at_block: i64,
+    ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.put_live_cell_marker(&key);
+        self.put_live_cell_marker(&key, created_at_block);
     }
 
     pub fn delete_cell(&mut self, tx_hash: &[u8], output_index: i16) {
@@ -328,9 +335,10 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
-        let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
+        let cell_value = bincode::serialize(&info.to_payload()).expect("serialize CellPayload");
         self.put_cf(self.store.cf_cells(), raw_key, &cell_value);
         let consumed = ConsumedCellMeta {
+            created_at_block: info.created_at_block,
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
@@ -345,11 +353,17 @@ impl<'a> StoreBatch<'a> {
         &mut self,
         tx_hash: &[u8],
         output_index: i16,
+        created_at_block: i64,
         consumed_at_block: i64,
         consumed_by_tx: Option<&[u8]>,
     ) {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.put_consumed_cell_meta_raw_key(&key, consumed_at_block, consumed_by_tx);
+        self.put_consumed_cell_meta_raw_key(
+            &key,
+            created_at_block,
+            consumed_at_block,
+            consumed_by_tx,
+        );
     }
 
     /// Write consumed cell metadata using pre-encoded outpoint key to CF_CONSUMED_CELLS.
@@ -357,10 +371,12 @@ impl<'a> StoreBatch<'a> {
     pub fn put_consumed_cell_meta_raw_key(
         &mut self,
         raw_key: &[u8],
+        created_at_block: i64,
         consumed_at_block: i64,
         consumed_by_tx: Option<&[u8]>,
     ) {
         let consumed = ConsumedCellMeta {
+            created_at_block,
             consumed_at_block,
             consumed_by_tx: consumed_by_tx.map(|tx| tx.to_vec()),
         };
@@ -1088,6 +1104,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let decoded: ConsumedCellMeta = bincode::deserialize(&meta).unwrap();
+        assert_eq!(decoded.created_at_block, 1);
         assert_eq!(decoded.consumed_at_block, 22);
         assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
     }
@@ -1475,6 +1492,43 @@ mod tests {
     }
 
     #[test]
+    fn test_append_only_cell_payload_ignores_created_at_block_differences() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+
+        let info = LiveCellInfo {
+            capacity: 10000,
+            created_at_block: 1,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+
+        let mut first_batch = StoreBatch::new(&store);
+        first_batch.put_cell_payload_by_outpoint(&[0xB1; 32], 0, &info);
+        first_batch.commit().unwrap();
+
+        let mut replay = info.clone();
+        replay.created_at_block = 99;
+        let mut replay_batch = StoreBatch::new(&store);
+        replay_batch.put_cell_payload_by_outpoint(&[0xB1; 32], 0, &replay);
+        replay_batch.commit().unwrap();
+
+        let key = keys::encode_outpoint(&[0xB1; 32], 0);
+        let stored = store.get_cf(store.cf_cells(), &key).unwrap().unwrap();
+        let payload: CellPayload = bincode::deserialize(&stored).unwrap();
+        assert_eq!(payload, info.to_payload());
+    }
+
+    #[test]
     fn test_append_only_bulk_sync_skips_existing_probe_on_conflicting_key() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -1683,14 +1737,15 @@ mod tests {
             .unwrap()
             .unwrap();
         let meta: ConsumedCellMeta = bincode::deserialize(&meta_bytes).unwrap();
+        assert_eq!(meta.created_at_block, 5);
         assert_eq!(meta.consumed_at_block, 10);
         assert_eq!(meta.consumed_by_tx, Some(consumed_by.to_vec()));
 
         // Verify canonical cell payload is still present in CF_CELLS
         let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();
-        let cell: LiveCellInfo = bincode::deserialize(&cell_bytes).unwrap();
+        let cell: CellPayload = bincode::deserialize(&cell_bytes).unwrap();
         assert_eq!(cell.capacity, 20000);
-        assert_eq!(cell.created_at_block, 5);
+        assert_eq!(cell.lock_script_hash, info.lock_script_hash);
     }
 
     #[test]

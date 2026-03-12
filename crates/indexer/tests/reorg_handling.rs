@@ -103,7 +103,7 @@ fn insert_full_block(
         let mut cells_batch = StoreBatch::new(cs);
         cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell);
         cells_batch.commit().unwrap();
-        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0);
+        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
         // Unified test store: combined write
         domain_batch.put_cell(&tx_hash, 0, &cell);
@@ -144,6 +144,60 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
     batch.put_script_info(&lock_code_hash, &lock_si);
 
     batch.commit().unwrap();
+}
+
+#[test]
+fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
+    let (domain, append) = setup_split_stores();
+    let tx_hash = vec![0xAB; 32];
+    let lock_hash = vec![0xCD; 32];
+    let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
+
+    let original = make_cell(100, &lock_hash);
+    let mut original_cells_batch = StoreBatch::new(&append);
+    original_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &original);
+    original_cells_batch.commit().unwrap();
+
+    let mut original_domain_batch = StoreBatch::new(&domain);
+    original_domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, original.created_at_block);
+    original_domain_batch.put_cell_by_lock(&lock_hash, original.created_at_block, &tx_hash, 0);
+    original_domain_batch.commit().unwrap();
+
+    let live_before = domain.get_cell(&tx_hash, 0, &append).unwrap().unwrap();
+    assert_eq!(live_before.created_at_block, 100);
+
+    let mut rollback_batch = StoreBatch::new(&domain);
+    rollback_batch.delete_cell_raw_key(&outpoint_key);
+    rollback_batch.delete_cell_by_lock(&lock_hash, original.created_at_block, &tx_hash, 0);
+    rollback_batch.commit().unwrap();
+
+    let mut reorged = make_cell(101, &lock_hash);
+    reorged.capacity = original.capacity;
+    reorged.lock_script_hash = original.lock_script_hash.clone();
+    reorged.lock_code_hash = original.lock_code_hash.clone();
+    reorged.lock_hash_type = original.lock_hash_type;
+    reorged.lock_args = original.lock_args.clone();
+    reorged.type_script_hash = original.type_script_hash.clone();
+    reorged.type_code_hash = original.type_code_hash.clone();
+    reorged.type_hash_type = original.type_hash_type;
+    reorged.type_args = original.type_args.clone();
+    reorged.data_size = original.data_size;
+    reorged.occupied_capacity = original.occupied_capacity;
+    reorged.udt_amount = original.udt_amount;
+
+    let mut reorg_cells_batch = StoreBatch::new(&append);
+    reorg_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &reorged);
+    reorg_cells_batch.commit().unwrap();
+
+    let mut reorg_domain_batch = StoreBatch::new(&domain);
+    reorg_domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, reorged.created_at_block);
+    reorg_domain_batch.put_cell_by_lock(&lock_hash, reorged.created_at_block, &tx_hash, 0);
+    reorg_domain_batch.commit().unwrap();
+
+    let live_after = domain.get_cell(&tx_hash, 0, &append).unwrap().unwrap();
+    assert_eq!(live_after.created_at_block, 101);
+    assert_eq!(live_after.capacity, original.capacity);
+    assert_eq!(live_after.lock_script_hash, original.lock_script_hash);
 }
 
 #[test]
@@ -420,7 +474,7 @@ fn insert_udt_cell(
         let mut cells_batch = StoreBatch::new(cs);
         cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell);
         cells_batch.commit().unwrap();
-        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0);
+        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
         domain_batch.put_cell(&tx_hash, 0, &cell);
     }
