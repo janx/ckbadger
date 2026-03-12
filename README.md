@@ -122,7 +122,7 @@ on localhost deployments:
 | **Visualization** | react-force-graph-2d, D3.js                             | Cell relationship graphs        |
 | **API**           | Rust (Axum)                                             | High-performance REST/WebSocket |
 | **Indexer**       | Rust (3-stage pipeline)                                 | Block parsing, cell tracking    |
-| **Storage**       | RocksDB (43 domain + 1 append-only CFs, ckbadger-store) | Embedded dual-store data engine |
+| **Storage**       | RocksDB (44 domain + 1 append-only CFs, ckbadger-store) | Embedded dual-store data engine |
 | **Cache**         | In-memory LRU                                           | API response cache              |
 | **IPC**           | Unix domain sockets                                     | Inter-process communication     |
 
@@ -575,7 +575,7 @@ ckbadger/
 │   │   └── src/
 │   │       ├── routes/     # HTTP handlers (blocks, tx, cells, tokens, spore, assets, DAO, scripts, graph, etc.)
 │   │       └── ws/         # WebSocket handlers
-│   ├── ckbadger-store/     # Embedded RocksDB storage engine (43 domain + 1 append-only CFs)
+│   ├── ckbadger-store/     # Embedded RocksDB storage engine (44 domain + 1 append-only CFs)
 │   ├── ckb-store-reader/   # Read-only CKB RocksDB reader (optional direct read mode)
 │   └── tui/                # Terminal monitoring UI (library)
 ├── frontend/               # Vite + React SPA

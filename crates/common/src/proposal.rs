@@ -10,12 +10,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Cache key for pending proposals (used by in-memory cache).
-pub const PENDING_PROPOSALS_CACHE_KEY: &str = "proposals:pending";
-
-/// TTL for proposal entries (5 minutes = ~30 blocks)
-pub const PROPOSAL_CACHE_TTL_SECS: u64 = 300;
-
 /// CKB Two-Step Confirmation window constants
 pub const PROPOSAL_WINDOW_CLOSEST: u64 = 2; // Minimum blocks before commit allowed
 pub const PROPOSAL_WINDOW_FARTHEST: u64 = 10; // Maximum blocks before proposal expires
