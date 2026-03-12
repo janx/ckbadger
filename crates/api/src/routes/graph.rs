@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
+use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -335,7 +336,21 @@ async fn get_tx_graph(
 
     let (block_number, _tx_idx, tx_entry) = match tx_result {
         Some(info) => info,
-        None => return Err(ApiError::not_found("Transaction not found")),
+        None => {
+            if let Some(tx_lookup) = fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
+                .await
+                .map_err(ApiError::internal)?
+            {
+                if tx_lookup.is_pending_like() {
+                    return Err(ApiError::bad_request(pending_transaction_resource_error(
+                        &hash,
+                        tx_lookup.status_str(),
+                        "Graph data",
+                    )));
+                }
+            }
+            return Err(ApiError::not_found("Transaction not found"));
+        }
     };
 
     let tx_id = format!("tx-{}", hash);

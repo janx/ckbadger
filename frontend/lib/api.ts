@@ -66,6 +66,8 @@ interface Transaction {
   timestamp: string;
 }
 
+type TransactionStatus = 'committed' | 'pending' | 'proposed';
+
 interface SyncStatus {
   isSyncing: boolean;
   syncedBlock: number;
@@ -212,15 +214,24 @@ interface Script {
   args: string;
 }
 
-interface TransactionDetail extends Transaction {
+interface TransactionDetail extends Omit<
+  Transaction,
+  'blockNumber' | 'blockHash' | 'index' | 'timestamp'
+> {
+  status: TransactionStatus;
+  pendingSince: string | null;
+  blockNumber: number | null;
+  blockHash: string | null;
+  index: number | null;
   feeRate?: string;
   txSize?: number;
   cycles?: number;
-  confirmations: number;
-  inputsCapacity: string;
-  outputsCapacity: string;
-  inputsUsedCapacity: string;
-  outputsUsedCapacity: string;
+  timestamp: string | null;
+  confirmations: number | null;
+  inputsCapacity: string | null;
+  outputsCapacity: string | null;
+  inputsUsedCapacity: string | null;
+  outputsUsedCapacity: string | null;
   inputs?: Array<{
     previousOutput?: {
       txHash: string;
@@ -1292,6 +1303,7 @@ export type {
   CellDep,
   CodeCellScript,
   Transaction,
+  TransactionStatus,
   TransactionDetail,
   Block,
   NetworkStats,

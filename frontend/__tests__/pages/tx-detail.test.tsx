@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
@@ -13,6 +13,85 @@ const mockReplace = vi.fn((url: string) => {
   const query = url.includes('?') ? url.split('?')[1] : '';
   mockSearchParams = new URLSearchParams(query);
 });
+
+function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTransactionDetail>> {
+  return {
+    hash: TX_HASH,
+    status: 'committed',
+    pendingSince: null,
+    blockNumber: 18661531,
+    blockHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    index: 0,
+    inputsCount: 1,
+    outputsCount: 1,
+    fee: '58803',
+    feeRate: '52130',
+    txSize: 1128,
+    isCellbase: false,
+    timestamp: '2026-02-20T16:46:12Z',
+    confirmations: 4,
+    inputsCapacity: '55500000000',
+    outputsCapacity: '55499941197',
+    inputsUsedCapacity: '6100000000',
+    outputsUsedCapacity: '6100000650',
+    inputs: [
+      {
+        previousOutput: {
+          txHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          index: 0,
+        },
+        capacity: '55500000000',
+        lock: {
+          codeHash: LOCK_CODE_HASH,
+          hashType: 'type',
+          args: '0x1111111111111111111111111111111111111111',
+        },
+        type: {
+          codeHash: TYPE_CODE_HASH,
+          hashType: 'type',
+          args: '0x',
+        },
+        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+      },
+    ],
+    outputs: [
+      {
+        capacity: '55499941197',
+        usedCapacity: 61,
+        lock: {
+          codeHash: LOCK_CODE_HASH,
+          hashType: 'type',
+          args: '0x2222222222222222222222222222222222222222',
+        },
+        type: {
+          codeHash: TYPE_CODE_HASH,
+          hashType: 'type',
+          args: '0x',
+        },
+        address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
+      },
+    ],
+    witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
+    witnessesAvailable: true,
+  } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+}
+
+function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTransactionDetail>> {
+  return {
+    ...createCommittedTransactionDetail(),
+    status: 'pending',
+    pendingSince: '2026-03-12T12:00:00Z',
+    blockNumber: null,
+    blockHash: null,
+    index: null,
+    timestamp: null,
+    confirmations: null,
+    inputsCapacity: null,
+    outputsCapacity: null,
+    inputsUsedCapacity: null,
+    outputsUsedCapacity: null,
+  } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+}
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -54,63 +133,7 @@ describe('TransactionDetailPage', () => {
     vi.clearAllMocks();
     mockSearchParams = new URLSearchParams();
 
-    vi.mocked(api.getTransactionDetail).mockResolvedValue({
-      hash: TX_HASH,
-      blockNumber: 18661531,
-      blockHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-      index: 0,
-      inputsCount: 1,
-      outputsCount: 1,
-      fee: '58803',
-      feeRate: '52130',
-      txSize: 1128,
-      isCellbase: false,
-      timestamp: '2026-02-20T16:46:12Z',
-      confirmations: 4,
-      inputsCapacity: '55500000000',
-      outputsCapacity: '55499941197',
-      inputsUsedCapacity: '6100000000',
-      outputsUsedCapacity: '6100000650',
-      inputs: [
-        {
-          previousOutput: {
-            txHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-            index: 0,
-          },
-          capacity: '55500000000',
-          lock: {
-            codeHash: LOCK_CODE_HASH,
-            hashType: 'type',
-            args: '0x1111111111111111111111111111111111111111',
-          },
-          type: {
-            codeHash: TYPE_CODE_HASH,
-            hashType: 'type',
-            args: '0x',
-          },
-          address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
-        },
-      ],
-      outputs: [
-        {
-          capacity: '55499941197',
-          usedCapacity: 61,
-          lock: {
-            codeHash: LOCK_CODE_HASH,
-            hashType: 'type',
-            args: '0x2222222222222222222222222222222222222222',
-          },
-          type: {
-            codeHash: TYPE_CODE_HASH,
-            hashType: 'type',
-            args: '0x',
-          },
-          address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
-        },
-      ],
-      witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
-      witnessesAvailable: true,
-    });
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(createCommittedTransactionDetail());
 
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [LOCK_CODE_HASH]: {
@@ -153,6 +176,55 @@ describe('TransactionDetailPage', () => {
       confirmations: 4,
     });
   });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('renders pending placeholders and keeps committed-only queries disabled', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValueOnce(createPendingTransactionDetail());
+
+    render(<TransactionDetailPage />);
+
+    expect(await screen.findByText('Pending')).toBeInTheDocument();
+    expect(screen.getAllByText('pending...').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Cell Deps' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Graph' })).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(api.getTransactionDetail).toHaveBeenCalledWith(TX_HASH);
+    });
+
+    expect(api.getTransactionGraph).not.toHaveBeenCalled();
+    expect(api.getTransactionCellDeps).not.toHaveBeenCalled();
+    expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+  });
+
+  it('polls pending transaction detail until committed and then loads chain-derived sections', async () => {
+    vi.mocked(api.getTransactionDetail)
+      .mockResolvedValueOnce(createPendingTransactionDetail())
+      .mockResolvedValueOnce(createCommittedTransactionDetail());
+
+    render(<TransactionDetailPage />);
+
+    expect(await screen.findByText('Pending')).toBeInTheDocument();
+    expect(api.getTransactionGraph).not.toHaveBeenCalled();
+    expect(api.getTransactionCellDeps).not.toHaveBeenCalled();
+    expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
+
+    await waitFor(
+      () => {
+        expect(api.getTransactionDetail).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 5000 }
+    );
+    expect(await screen.findByText('4 Confirmations')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
+    });
+    expect(api.getTransactionCellDeps).toHaveBeenCalledWith(TX_HASH);
+    expect(api.getTransactionLifecycle).toHaveBeenCalledWith(TX_HASH);
+  }, 10000);
 
   it('links unknown type script to code-hash detail page', async () => {
     render(<TransactionDetailPage />);

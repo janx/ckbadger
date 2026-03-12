@@ -17,6 +17,7 @@ use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
     decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
 };
+use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -34,6 +35,19 @@ type TxIoBundle = (
     Vec<String>,
     bool,
 );
+
+#[derive(Debug, Clone)]
+struct PendingTxIoBundle {
+    inputs: Vec<TransactionInputResponse>,
+    outputs: Vec<TransactionOutputResponse>,
+    inputs_capacity: Option<u128>,
+    outputs_capacity: u128,
+    inputs_used_capacity: Option<u128>,
+    outputs_used_capacity: u128,
+    computed_fee: Option<u128>,
+    witnesses: Vec<String>,
+    witnesses_available: bool,
+}
 const DAO_TYPE_CODE_HASH_HEX: &str =
     "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const TX_BLOCK_HASHES_CACHE_TTL: StdDuration = StdDuration::from_secs(30);
@@ -428,22 +442,34 @@ pub struct TransactionOutputResponse {
 #[serde(rename_all = "camelCase")]
 pub struct TransactionDetailResponse {
     pub hash: String,
-    pub block_number: i64,
-    pub block_hash: String,
-    pub index: i32,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_number: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<i32>,
     pub inputs_count: i32,
     pub outputs_count: i32,
     pub fee: String,
     pub fee_rate: Option<String>,
     pub tx_size: Option<i32>,
     pub cycles: Option<i64>,
-    pub confirmations: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmations: Option<i64>,
     pub is_cellbase: bool,
-    pub timestamp: String,
-    pub inputs_capacity: String,
-    pub outputs_capacity: String,
-    pub inputs_used_capacity: String,
-    pub outputs_used_capacity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs_capacity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs_capacity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs_used_capacity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs_used_capacity: Option<String>,
     pub inputs: Vec<TransactionInputResponse>,
     pub outputs: Vec<TransactionOutputResponse>,
     pub witnesses: Vec<String>,
@@ -613,13 +639,90 @@ async fn get_transaction_detail(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let (block_number, tx_idx, entry) = match tx_result {
-        Some(result) => result,
-        None => {
+    let Some((block_number, tx_idx, entry)) = tx_result else {
+        let tx_lookup = fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
+            .await
+            .map_err(ApiError::internal)?;
+
+        let Some(tx_lookup) = tx_lookup else {
+            let ckb_block_number =
+                lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
+            return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
+        };
+
+        if !tx_lookup.is_pending_like() {
             let ckb_block_number =
                 lookup_tx_block_number_in_ckb_store(state.ckb_store.as_ref(), &hash_bytes);
             return Err(missing_tx_lookup_error(&hash_bytes, ckb_block_number));
         }
+
+        let Some(rpc_tx) = tx_lookup.transaction.as_ref() else {
+            return Err(ApiError::internal(format!(
+                "pending transaction {} missing JSON transaction body from RPC",
+                hash
+            )));
+        };
+
+        let io = build_inputs_outputs_from_rpc_pending(
+            rpc_tx,
+            &state.store,
+            &state.append_only_store,
+            &state.store,
+            &state.ckb_network,
+            0,
+        )?;
+
+        let pending_since = tx_lookup.time_added_to_pool.and_then(|timestamp| {
+            chrono::DateTime::from_timestamp_millis(timestamp as i64).map(|dt| dt.to_rfc3339())
+        });
+
+        let fee = tx_lookup
+            .fee
+            .map(|value| value.to_string())
+            .or_else(|| io.computed_fee.map(|value| value.to_string()))
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "pending transaction {} missing fee from RPC and local computation",
+                    hash
+                ))
+            })?;
+
+        let fee_rate = tx_lookup.tx_size.and_then(|size| {
+            if size <= 0 {
+                return None;
+            }
+            let fee_value: u128 = fee.parse().ok()?;
+            Some(((fee_value * 1000) / size as u128).to_string())
+        });
+
+        return ok(TransactionDetailResponse {
+            hash: format!("0x{}", hex::encode(&hash_bytes)),
+            status: tx_lookup.status_str().to_string(),
+            pending_since,
+            block_number: None,
+            block_hash: None,
+            index: None,
+            inputs_count: rpc_tx.inputs.len() as i32,
+            outputs_count: rpc_tx.outputs.len() as i32,
+            fee,
+            fee_rate,
+            tx_size: tx_lookup.tx_size,
+            cycles: tx_lookup.cycles.map(|value| value as i64),
+            confirmations: None,
+            is_cellbase: rpc_tx.inputs.first().is_some_and(|input| {
+                input.previous_output.tx_hash
+                    == "0x0000000000000000000000000000000000000000000000000000000000000000"
+            }),
+            timestamp: None,
+            inputs_capacity: io.inputs_capacity.map(|value| value.to_string()),
+            outputs_capacity: Some(io.outputs_capacity.to_string()),
+            inputs_used_capacity: io.inputs_used_capacity.map(|value| value.to_string()),
+            outputs_used_capacity: Some(io.outputs_used_capacity.to_string()),
+            inputs: io.inputs,
+            outputs: io.outputs,
+            witnesses: io.witnesses,
+            witnesses_available: io.witnesses_available,
+        });
     };
 
     let tx_hash_hex = format!("0x{}", hex::encode(&hash_bytes));
@@ -711,22 +814,24 @@ async fn get_transaction_detail(
 
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
-        block_number,
-        block_hash: format!("0x{}", hex::encode(&block_hash)),
-        index: tx_idx,
+        status: "committed".to_string(),
+        pending_since: None,
+        block_number: Some(block_number),
+        block_hash: Some(format!("0x{}", hex::encode(&block_hash))),
+        index: Some(tx_idx),
         inputs_count,
         outputs_count,
         fee,
         fee_rate,
         tx_size: final_tx_size,
         cycles,
-        confirmations,
+        confirmations: Some(confirmations),
         is_cellbase,
-        timestamp,
-        inputs_capacity: inputs_capacity.to_string(),
-        outputs_capacity: outputs_capacity.to_string(),
-        inputs_used_capacity: inputs_occupied_capacity.to_string(),
-        outputs_used_capacity: outputs_occupied_capacity.to_string(),
+        timestamp: Some(timestamp),
+        inputs_capacity: Some(inputs_capacity.to_string()),
+        outputs_capacity: Some(outputs_capacity.to_string()),
+        inputs_used_capacity: Some(inputs_occupied_capacity.to_string()),
+        outputs_used_capacity: Some(outputs_occupied_capacity.to_string()),
         inputs,
         outputs,
         witnesses,
@@ -736,6 +841,286 @@ async fn get_transaction_detail(
 
 fn empty_inputs_outputs() -> TxIoBundle {
     (vec![], vec![], 0, 0, 0, 0, 0, vec![], false)
+}
+
+fn build_inputs_outputs_from_rpc_pending(
+    rpc_tx: &ckb_store_reader::RpcTransactionView,
+    core_store: &ckbadger_store::CkbadgerStore,
+    cells_store: &ckbadger_store::CkbadgerStore,
+    store: &ckbadger_store::CkbadgerStore,
+    network: &str,
+    block_number: i64,
+) -> Result<PendingTxIoBundle, RouteError> {
+    if rpc_tx.outputs.len() != rpc_tx.outputs_data.len() {
+        return Err(ApiError::internal(format!(
+            "pending transaction outputs mismatch: tx_hash={}, outputs={}, outputs_data={}",
+            rpc_tx.hash,
+            rpc_tx.outputs.len(),
+            rpc_tx.outputs_data.len()
+        )));
+    }
+
+    let tx_hash = decode_hex_bytes_with_context(
+        &rpc_tx.hash,
+        "transaction.hash",
+        "building pending transaction detail",
+        Some(32),
+    )?;
+    let tx_hash_hex = format!("0x{}", hex::encode(&tx_hash));
+
+    let mut inputs_capacity: u128 = 0;
+    let mut inputs_occupied_capacity: u128 = 0;
+    let mut inputs_complete = true;
+    let mut has_dao_type_input = false;
+
+    let inputs = rpc_tx
+        .inputs
+        .iter()
+        .map(|input| -> Result<TransactionInputResponse, RouteError> {
+            let prev_tx_hash_hex = &input.previous_output.tx_hash;
+            let prev_index_hex = &input.previous_output.index;
+            let input_context = format!(
+                "building pending input for tx={} prev_outpoint=({}, {})",
+                tx_hash_hex, prev_tx_hash_hex, prev_index_hex
+            );
+            let prev_index = u32::from_str_radix(
+                prev_index_hex.strip_prefix("0x").unwrap_or(prev_index_hex),
+                16,
+            )
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "invalid previous_output.index while {}: value='{}', error={}",
+                    input_context, prev_index_hex, e
+                ))
+            })?;
+
+            let prev_tx_hash_bytes = decode_hex_bytes_with_context(
+                prev_tx_hash_hex,
+                "input.previous_output.tx_hash",
+                &input_context,
+                Some(32),
+            )?;
+
+            let cell_info = core_store
+                .get_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                .ok()
+                .flatten()
+                .or_else(|| {
+                    core_store
+                        .get_consumed_cell(&prev_tx_hash_bytes, prev_index as i16, cells_store)
+                        .ok()
+                        .flatten()
+                });
+
+            let (capacity, lock, type_script, address) = match cell_info {
+                Some(info) => {
+                    let cap = info.capacity as u128;
+                    inputs_capacity += cap;
+
+                    let occ = occupied_capacity_bytes(
+                        info.lock_args.len(),
+                        info.type_code_hash
+                            .as_ref()
+                            .map(|_| info.type_args.as_deref().unwrap_or(&[]).len()),
+                        info.data_size as usize,
+                    );
+                    inputs_occupied_capacity += occ as u128;
+
+                    let lock_resp = ScriptResponse {
+                        code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+                        hash_type: hash_type_to_string(info.lock_hash_type),
+                        args: format!("0x{}", hex::encode(&info.lock_args)),
+                    };
+                    let type_resp = info
+                        .type_code_hash
+                        .as_ref()
+                        .map(|type_code_hash| -> Result<ScriptResponse, RouteError> {
+                            Ok(ScriptResponse {
+                                code_hash: format!("0x{}", hex::encode(type_code_hash)),
+                                hash_type: resolve_stored_input_type_hash_type(
+                                    core_store,
+                                    store,
+                                    info.type_script_hash.as_deref(),
+                                    type_code_hash,
+                                )?,
+                                args: format!(
+                                    "0x{}",
+                                    hex::encode(info.type_args.as_deref().unwrap_or(&[]))
+                                ),
+                            })
+                        })
+                        .transpose()?;
+
+                    let addr = script_to_address(
+                        &info.lock_code_hash,
+                        info.lock_hash_type,
+                        &info.lock_args,
+                        network,
+                    )
+                    .ok();
+
+                    (Some(cap.to_string()), Some(lock_resp), type_resp, addr)
+                }
+                None => {
+                    inputs_complete = false;
+                    (None, None, None, None)
+                }
+            };
+
+            if type_script
+                .as_ref()
+                .is_some_and(|script| is_dao_type_code_hash_hex(&script.code_hash))
+            {
+                has_dao_type_input = true;
+            }
+
+            Ok(TransactionInputResponse {
+                previous_output: Some(PreviousOutput {
+                    tx_hash: prev_tx_hash_hex.clone(),
+                    index: prev_index as i32,
+                }),
+                since: input.since.clone(),
+                capacity,
+                lock,
+                r#type: type_script,
+                address,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut outputs_capacity: u128 = 0;
+    let mut outputs_occupied_capacity: u128 = 0;
+    let outputs = rpc_tx
+        .outputs
+        .iter()
+        .enumerate()
+        .map(
+            |(output_idx, output)| -> Result<TransactionOutputResponse, RouteError> {
+                let output_context = format!(
+                    "building pending output for tx={} output_index={}",
+                    tx_hash_hex, output_idx
+                );
+                let cap = parse_u64_hex_field_with_context(
+                    &output.capacity,
+                    "output.capacity",
+                    &output_context,
+                )?;
+                outputs_capacity += cap as u128;
+
+                let code_hash_bytes = decode_hex_bytes_with_context(
+                    &output.lock.code_hash,
+                    "output.lock.code_hash",
+                    &output_context,
+                    Some(32),
+                )?;
+                let hash_type = parse_hash_type_label_to_i16(&output.lock.hash_type)?;
+                let args_bytes = decode_hex_bytes_with_context(
+                    &output.lock.args,
+                    "output.lock.args",
+                    &output_context,
+                    None,
+                )?;
+
+                let lock_resp = ScriptResponse {
+                    code_hash: output.lock.code_hash.clone(),
+                    hash_type: output.lock.hash_type.clone(),
+                    args: output.lock.args.clone(),
+                };
+
+                let address =
+                    script_to_address(&code_hash_bytes, hash_type, &args_bytes, network).ok();
+
+                let type_resp = output.type_.as_ref().map(|script| ScriptResponse {
+                    code_hash: script.code_hash.clone(),
+                    hash_type: script.hash_type.clone(),
+                    args: script.args.clone(),
+                });
+
+                let type_args_len = output
+                    .type_
+                    .as_ref()
+                    .map(|script| {
+                        decode_hex_bytes_with_context(
+                            &script.args,
+                            "output.type.args",
+                            &output_context,
+                            None,
+                        )
+                        .map(|bytes| bytes.len())
+                    })
+                    .transpose()?;
+
+                let output_data = rpc_tx.outputs_data.get(output_idx).ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "missing output data while {}: output_index={}",
+                        output_context, output_idx
+                    ))
+                })?;
+                let data_size = decode_hex_bytes_with_context(
+                    output_data,
+                    "output.data",
+                    &output_context,
+                    None,
+                )?
+                .len();
+
+                let occ = occupied_capacity_bytes(args_bytes.len(), type_args_len, data_size);
+                outputs_occupied_capacity += occ as u128;
+
+                let is_satoshi = is_genesis_special_burn_cell(&args_bytes, block_number);
+                let (cell_type, virtual_occupied_capacity) = if is_satoshi {
+                    (
+                        Some("genesis_special_burn".to_string()),
+                        Some(GENESIS_SPECIAL_BURN_CELL_VIRTUAL_OCCUPIED.to_string()),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                Ok(TransactionOutputResponse {
+                    capacity: cap.to_string(),
+                    used_capacity: occ as i64,
+                    virtual_used_capacity: virtual_occupied_capacity,
+                    cell_type,
+                    lock: Some(lock_resp),
+                    r#type: type_resp,
+                    address,
+                })
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let is_cellbase = rpc_tx.inputs.first().is_some_and(|input| {
+        input.previous_output.tx_hash
+            == "0x0000000000000000000000000000000000000000000000000000000000000000"
+    });
+
+    let computed_fee = if is_cellbase {
+        Some(0)
+    } else if inputs_complete {
+        Some(compute_tx_fee_from_io(
+            inputs_capacity,
+            outputs_capacity,
+            false,
+            has_dao_type_input,
+            block_number,
+            &tx_hash,
+        )?)
+    } else {
+        None
+    };
+
+    Ok(PendingTxIoBundle {
+        inputs,
+        outputs,
+        inputs_capacity: inputs_complete.then_some(inputs_capacity),
+        outputs_capacity,
+        inputs_used_capacity: inputs_complete.then_some(inputs_occupied_capacity),
+        outputs_used_capacity: outputs_occupied_capacity,
+        computed_fee,
+        witnesses: rpc_tx.witnesses.clone(),
+        witnesses_available: true,
+    })
 }
 
 /// Build inputs/outputs from CKB node's RocksDB transaction view.
@@ -1044,6 +1429,19 @@ async fn get_cell_deps(
                     .collect();
                 return ok(cell_deps);
             }
+        }
+    }
+
+    if let Some(tx_lookup) = fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        if tx_lookup.is_pending_like() {
+            return Err(ApiError::bad_request(pending_transaction_resource_error(
+                &hash,
+                tx_lookup.status_str(),
+                "Cell deps",
+            )));
         }
     }
 
@@ -1379,6 +1777,18 @@ async fn get_transaction_lifecycle(
     let (commit_block_number, is_cellbase, commit_timestamp) = match tx_result {
         Some((block_num, _, entry)) => (block_num, entry.is_cellbase, entry.timestamp),
         None => {
+            if let Some(tx_lookup) = fetch_transaction_lookup(&state.ckb_rpc_url, &hash)
+                .await
+                .map_err(ApiError::internal)?
+            {
+                if tx_lookup.is_pending_like() {
+                    return Err(ApiError::bad_request(pending_transaction_resource_error(
+                        &hash,
+                        tx_lookup.status_str(),
+                        "Lifecycle data",
+                    )));
+                }
+            }
             return ok(TransactionLifecycleResponse {
                 hash: format!("0x{}", hex::encode(&hash_bytes)),
                 phase: LifecyclePhase::Pending,
@@ -1700,22 +2110,24 @@ mod tests {
     fn test_transaction_detail_response_serializes_witness_fields() {
         let detail = TransactionDetailResponse {
             hash: "0xabc".to_string(),
-            block_number: 100,
-            block_hash: "0xdef".to_string(),
-            index: 0,
+            status: "committed".to_string(),
+            pending_since: None,
+            block_number: Some(100),
+            block_hash: Some("0xdef".to_string()),
+            index: Some(0),
             inputs_count: 1,
             outputs_count: 1,
             fee: "42".to_string(),
             fee_rate: Some("1000".to_string()),
             tx_size: Some(123),
             cycles: Some(456),
-            confirmations: 7,
+            confirmations: Some(7),
             is_cellbase: false,
-            timestamp: "2024-01-01T00:00:00Z".to_string(),
-            inputs_capacity: "100".to_string(),
-            outputs_capacity: "58".to_string(),
-            inputs_used_capacity: "10".to_string(),
-            outputs_used_capacity: "9".to_string(),
+            timestamp: Some("2024-01-01T00:00:00Z".to_string()),
+            inputs_capacity: Some("100".to_string()),
+            outputs_capacity: Some("58".to_string()),
+            inputs_used_capacity: Some("10".to_string()),
+            outputs_used_capacity: Some("9".to_string()),
             inputs: vec![],
             outputs: vec![],
             witnesses: vec!["0x".to_string(), "0x1234".to_string()],
@@ -1723,6 +2135,7 @@ mod tests {
         };
 
         let json = serde_json::to_value(&detail).unwrap();
+        assert_eq!(json["status"], "committed");
         assert_eq!(json["witnessesAvailable"], true);
         assert_eq!(json["witnesses"][0], "0x");
         assert_eq!(json["witnesses"][1], "0x1234");

@@ -289,6 +289,8 @@ describe('renderMarkdownPage', () => {
     const hash = `0x${'1'.repeat(64)}`;
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash,
+      status: 'committed',
+      pendingSince: null,
       blockNumber: 100,
       blockHash: `0x${'2'.repeat(64)}`,
       index: 0,
