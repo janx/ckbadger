@@ -3,7 +3,11 @@
 import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, type GlobalActivity, type ActivityAssetChange } from '@/lib/api';
+import { api, type ActivityAssetChange } from '@/lib/api';
+import {
+  buildLatestActivityGroupSummary,
+  groupLatestActivitiesByTx,
+} from '@/lib/latest-activity-groups';
 import { formatTimeAgo, cn } from '@/lib/utils';
 import {
   TerminalPanel,
@@ -13,32 +17,6 @@ import {
 } from '@/components/ui/terminal-panel';
 import { HexDisplay } from '@/components/ui/hex-display';
 import { formatCkbAmount } from '@/lib/utils';
-
-function getTypeBadge(activity: GlobalActivity): { label: string; className: string } {
-  if (activity.isCellbase) {
-    return {
-      label: 'Coinbase',
-      className: 'bg-lavender/10 text-lavender border border-lavender-dim/50',
-    };
-  }
-  const delta = BigInt(activity.ckbDelta);
-  if (delta > BigInt(0)) {
-    return {
-      label: 'Received',
-      className: 'bg-positive/10 text-positive border border-positive/30',
-    };
-  }
-  if (delta < BigInt(0)) {
-    return {
-      label: 'Sent',
-      className: 'bg-negative/10 text-negative border border-negative/30',
-    };
-  }
-  return {
-    label: 'Self',
-    className: 'bg-base-elevated text-text-dim border border-base-border/50',
-  };
-}
 
 function AssetBadge({ change }: { change: ActivityAssetChange }) {
   switch (change.type) {
@@ -112,16 +90,17 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
     isFetching,
   } = useQuery({
     queryKey: ['latest-activities'],
-    queryFn: () => api.getLatestActivities(6),
+    queryFn: () => api.getLatestActivities(16),
     refetchInterval: 10000,
   });
 
   const itemCount = activities?.length ?? 0;
   const showSkeleton = isLoading || (itemCount === 0 && isFetching);
+  const groups = activities ? groupLatestActivitiesByTx(activities).slice(0, 4) : [];
 
   useEffect(() => {
-    if (activities) {
-      const currentKeys = activities.map((a) => `${a.blockNumber}:${a.txIndex}:${a.address}`);
+    if (groups.length > 0) {
+      const currentKeys = groups.map((group) => group.txHash);
       const prevKeys = prevKeysRef.current;
 
       if (prevKeys.length > 0) {
@@ -134,7 +113,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
 
       prevKeysRef.current = currentKeys;
     }
-  }, [activities]);
+  }, [groups]);
 
   const headerActions = (
     <Link
@@ -169,125 +148,122 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                 </div>
               </TerminalRow>
             ))
-          : activities?.slice(0, 6).map((activity) => {
-              const activityKey = `${activity.blockNumber}:${activity.txIndex}:${activity.address}`;
-              const badge = getTypeBadge(activity);
-              const delta = BigInt(activity.ckbDelta);
-              const usedDelta = BigInt(activity.usedDelta);
-              const isCkbAddress =
-                activity.address.startsWith('ckb1') || activity.address.startsWith('ckt1');
-              const hasFinancial = delta !== BigInt(0) || usedDelta !== BigInt(0);
-
+          : groups.map((group) => {
+              const visibleParticipants = group.participants.slice(0, 3);
+              const hiddenParticipantCount = Math.max(
+                group.participantCount - visibleParticipants.length,
+                0
+              );
+              const summary = buildLatestActivityGroupSummary(group);
               return (
                 <TerminalRow
-                  key={activityKey}
+                  key={group.txHash}
                   className={cn(
                     'transition-all duration-500',
-                    newActivityKey === activityKey && 'bg-jade/10 shadow-glow-jade'
+                    newActivityKey === group.txHash && 'bg-jade/10 shadow-glow-jade'
                   )}
                 >
-                  {/* Line 1: Address + Peers | Badge + Time */}
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <Link
-                        href={`/address/${activity.address}`}
-                        className="text-text font-mono text-sm transition-opacity hover:opacity-80"
-                      >
-                        {isCkbAddress ? (
-                          truncateAddress(activity.address)
-                        ) : (
-                          <HexDisplay
-                            value={activity.address}
-                            truncate
-                            startChars={8}
-                            endChars={6}
-                            size="sm"
-                            showGroupHighlight={false}
-                          />
-                        )}
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <Link href={`/tx/${group.txHash}`} className="group min-w-0 flex-1">
+                        <HexDisplay
+                          value={group.txHash}
+                          truncate
+                          startChars={8}
+                          endChars={6}
+                          color="aqua"
+                          size="sm"
+                          showGroupHighlight={false}
+                        />
                       </Link>
-                      {activity.peers.length > 0 && (
-                        <div className="mt-0.5 flex items-center gap-1 font-mono text-[10px]">
-                          <span className="text-text-dim">
-                            {delta < BigInt(0) ? '→' : delta > BigInt(0) ? '←' : '↔'}
-                          </span>
-                          {activity.peers.slice(0, 3).map((peer, idx) => (
-                            <span key={peer} className="flex items-center">
-                              {idx > 0 && <span className="text-text-dim mr-1">,</span>}
-                              <Link
-                                href={`/address/${peer}`}
-                                className="text-text-dim hover:text-text transition-colors"
-                              >
-                                {truncateAddress(peer)}
-                              </Link>
-                            </span>
-                          ))}
-                          {activity.peers.length > 3 && (
-                            <span className="text-text-dim">+{activity.peers.length - 3}</span>
-                          )}
+                      <div className="flex shrink-0 flex-col items-end gap-0.5">
+                        <Link
+                          href={`/blocks/${group.blockNumber}`}
+                          className="text-text-dim hover:text-aqua font-mono text-[10px] transition-colors"
+                        >
+                          #{group.blockNumber.toLocaleString()}
+                        </Link>
+                        <span className="text-text-dim font-mono text-[10px]">
+                          {formatTimeAgo(group.timestamp)}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-text font-mono text-[11px] leading-tight">{summary}</div>
+                    <div className="space-y-1.5">
+                      {visibleParticipants.map((participant) => {
+                        const delta = BigInt(participant.ckbDelta);
+                        const usedDelta = BigInt(participant.usedDelta);
+                        const isCkbAddress =
+                          participant.address.startsWith('ckb1') ||
+                          participant.address.startsWith('ckt1');
+                        const hiddenAssetCount = Math.max(participant.assetChanges.length - 2, 0);
+
+                        return (
+                          <div
+                            key={`${group.txHash}:${participant.address}`}
+                            className="border-base-border/40 bg-base-elevated/30 rounded border px-2 py-1.5"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <Link
+                                  href={`/address/${participant.address}`}
+                                  className="text-text font-mono text-xs transition-opacity hover:opacity-80"
+                                >
+                                  {isCkbAddress ? (
+                                    truncateAddress(participant.address)
+                                  ) : (
+                                    <HexDisplay
+                                      value={participant.address}
+                                      truncate
+                                      startChars={8}
+                                      endChars={6}
+                                      size="sm"
+                                      showGroupHighlight={false}
+                                    />
+                                  )}
+                                </Link>
+                                {participant.assetChanges.length > 0 && (
+                                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                                    {participant.assetChanges.slice(0, 2).map((change, idx) => (
+                                      <AssetBadge key={idx} change={change} />
+                                    ))}
+                                    {hiddenAssetCount > 0 && (
+                                      <span className="text-text-dim font-mono text-[10px]">
+                                        +{hiddenAssetCount} assets
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
+                                <span
+                                  className={cn(
+                                    'font-mono text-xs tabular-nums',
+                                    delta > BigInt(0) && 'text-positive',
+                                    delta < BigInt(0) && 'text-negative',
+                                    delta === BigInt(0) && 'text-text-dim'
+                                  )}
+                                >
+                                  {delta > BigInt(0) ? '+' : ''}
+                                  {formatCkbAmount(participant.ckbDelta).full} CKB
+                                </span>
+                                {usedDelta !== BigInt(0) && (
+                                  <span className="text-jade/60 font-mono text-[10px] tabular-nums">
+                                    {usedDelta > BigInt(0) ? '+' : ''}
+                                    {formatCkbAmount(participant.usedDelta).integer} KB
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {hiddenParticipantCount > 0 && (
+                        <div className="text-text-dim font-mono text-[10px]">
+                          +{hiddenParticipantCount} more
                         </div>
                       )}
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-0.5">
-                      <span
-                        className={cn(
-                          'rounded px-1.5 py-0.5 font-mono text-[10px]',
-                          badge.className
-                        )}
-                      >
-                        {badge.label}
-                      </span>
-                      <span className="text-text-dim text-[10px]">
-                        {formatTimeAgo(activity.timestamp)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Line 2: CKB delta + Used delta + Asset badges */}
-                  {(hasFinancial || activity.assetChanges.length > 0) && (
-                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                      {delta !== BigInt(0) && (
-                        <span
-                          className={cn(
-                            'font-mono text-xs font-bold tabular-nums',
-                            delta > BigInt(0) ? 'text-positive' : 'text-negative'
-                          )}
-                        >
-                          {delta > BigInt(0) ? '+' : ''}
-                          {formatCkbAmount(activity.ckbDelta).full} CKB
-                        </span>
-                      )}
-                      {usedDelta !== BigInt(0) && (
-                        <span className="text-jade/60 font-mono text-[10px] tabular-nums">
-                          {usedDelta > BigInt(0) ? '+' : ''}
-                          {formatCkbAmount(activity.usedDelta).integer} KB
-                        </span>
-                      )}
-                      {activity.assetChanges.map((change, idx) => (
-                        <AssetBadge key={idx} change={change} />
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Line 3: TX + Block (compact metadata) */}
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <Link href={`/tx/${activity.txHash}`} className="group block">
-                      <HexDisplay
-                        value={activity.txHash}
-                        truncate
-                        startChars={8}
-                        endChars={6}
-                        color="aqua"
-                        size="sm"
-                        showGroupHighlight={false}
-                      />
-                    </Link>
-                    <Link
-                      href={`/blocks/${activity.blockNumber}`}
-                      className="text-text-dim hover:text-aqua shrink-0 font-mono text-[10px] transition-colors"
-                    >
-                      #{activity.blockNumber.toLocaleString()}
-                    </Link>
                   </div>
                 </TerminalRow>
               );
