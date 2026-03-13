@@ -1,12 +1,12 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::OnceLock;
 
 #[cfg(test)]
 use ckbadger_store::types::ActivityEntry;
 use ckbadger_store::types::{
-    AssetAction, AssetChange, OwnerActivityDelta, TxActivityBundle, TypeCallEntry,
+    AssetAction, AssetChange, LockCallEntry, OwnerActivityDelta, TxActivityBundle, TypeCallEntry,
 };
 
 use crate::parser::cell::ParsedCell;
@@ -39,7 +39,8 @@ enum AssetKind {
 
 /// Pre-computed code hashes for asset detection via HashMap lookup.
 struct CodeHashes {
-    lookup: HashMap<Vec<u8>, AssetKind>,
+    type_lookup: HashMap<Vec<u8>, AssetKind>,
+    standard_locks: HashSet<Vec<u8>>,
 }
 
 impl CodeHashes {
@@ -71,7 +72,7 @@ impl CodeHashes {
             (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
         ];
 
-        let mut lookup: HashMap<Vec<u8>, AssetKind> = entries
+        let mut type_lookup: HashMap<Vec<u8>, AssetKind> = entries
             .iter()
             .map(|(hex, kind)| (parse_hex_to_bytes(hex), *kind))
             .collect();
@@ -81,14 +82,62 @@ impl CodeHashes {
             .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
         for hex_str in &extra {
             let bytes = parse_hex_to_bytes(hex_str);
-            lookup.entry(bytes).or_insert(AssetKind::Udt);
+            type_lookup.entry(bytes).or_insert(AssetKind::Udt);
         }
 
-        Self { lookup }
+        // Standard lock code_hashes (access-control only, no protocol semantics)
+        let standard_lock_hashes: &[&str] = &[
+            // secp256k1-blake160
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            // secp256k1-multisig (mainnet)
+            "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+            // secp256k1-multisig (mainnet legacy)
+            "0xd1a9f877aed3f5e07cb9c52b61ab96d06f250ae6883cc7f0a2423db0976fc821",
+            // secp256k1-multisig (testnet)
+            "0x765b3ed6ae264b335d07e73ac332bf2c0f38f8d3340ed521cb447b4c42dd5f09",
+            // secp256k1-multisig (v2)
+            "0x36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29",
+            // anyone-can-pay (mainnet)
+            "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354",
+            // anyone-can-pay (testnet)
+            "0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356",
+            // anyone-can-pay (testnet deprecated)
+            "0x86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b",
+            // omni-lock v2 (mainnet)
+            "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26",
+            // omni-lock v1 (mainnet)
+            "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d",
+            // omni-lock v2 (testnet)
+            "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb",
+            // omni-lock v1 (testnet)
+            "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e",
+            // PW-lock (mainnet)
+            "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc",
+            // PW-lock (testnet)
+            "0x58c5f491aba6d61678b7cf7edf4910b1f5e00ec0cde2f42e0abb4fd9aff25a63",
+            // JoyID (mainnet)
+            "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            // JoyID (testnet)
+            "0xd23761b364210735c19c60561d213fb3beae2fd6172743719eff6920e020baac",
+        ];
+
+        let standard_locks: HashSet<Vec<u8>> = standard_lock_hashes
+            .iter()
+            .map(|hex| parse_hex_to_bytes(hex))
+            .collect();
+
+        Self {
+            type_lookup,
+            standard_locks,
+        }
     }
 
     fn classify(&self, code_hash: &[u8]) -> Option<AssetKind> {
-        self.lookup.get(code_hash).copied()
+        self.type_lookup.get(code_hash).copied()
+    }
+
+    fn is_standard_lock(&self, code_hash: &[u8]) -> bool {
+        self.standard_locks.contains(code_hash)
     }
 }
 
@@ -191,6 +240,8 @@ struct OwnerAccum {
     has_type_script: bool,
     /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
     unrecognized_type_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
+    /// Non-standard lock scripts seen on output cells in this tx, keyed by (code_hash, hash_type, args)
+    unrecognized_lock_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
@@ -308,6 +359,25 @@ fn build_tx_activity_bundle(
         }
     }
 
+    // Detect non-standard output locks and record as lock_calls for sending owners
+    for cell in tx.outputs {
+        if !hashes.is_standard_lock(&cell.lock_code_hash) {
+            // Record on all owners who are sending CKB (input_capacity > 0)
+            // and who are NOT the output cell's owner
+            for (lock_hash, accum) in owners.iter_mut() {
+                if lock_hash.as_slice() != cell.lock_script_hash.as_slice()
+                    && accum.input_capacity > 0
+                {
+                    accum.unrecognized_lock_calls.insert((
+                        cell.lock_code_hash.clone(),
+                        cell.lock_hash_type,
+                        cell.lock_args.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
     let mut owner_hashes: Vec<Vec<u8>> = owners.keys().cloned().collect();
     owner_hashes.sort();
 
@@ -416,6 +486,20 @@ fn build_tx_activity_bundle(
                 .collect()
         });
 
+        let lock_calls = (!accum.unrecognized_lock_calls.is_empty()).then(|| {
+            accum
+                .unrecognized_lock_calls
+                .iter()
+                .map(
+                    |(lock_code_hash, lock_hash_type, lock_args)| LockCallEntry {
+                        lock_code_hash: lock_code_hash.clone(),
+                        lock_hash_type: *lock_hash_type,
+                        lock_args: lock_args.clone(),
+                    },
+                )
+                .collect()
+        });
+
         bundle_owners.push(OwnerActivityDelta {
             lock_hash: lock_hash.clone(),
             lock_code_hash: accum
@@ -435,7 +519,7 @@ fn build_tx_activity_bundle(
             involved_script_code_hashes: accum.involved_scripts.iter().cloned().collect(),
             asset_changes,
             type_calls,
-            lock_calls: None,
+            lock_calls,
             peers,
         });
     }
@@ -1595,5 +1679,82 @@ mod tests {
             has_token_change,
             "xudt_compatible should produce Token asset change"
         );
+    }
+
+    #[test]
+    fn test_non_standard_output_lock_recorded_as_lock_call() {
+        // Alice (standard lock) sends CKB to an output with a non-standard lock
+        let alice = 0xAA;
+        let non_standard_lock_code_hash = vec![0xDD; 32]; // not in standard_locks
+        let non_standard_lock_args = vec![0x01, 0x02, 0x03];
+
+        let mut output = make_output(0xCC, 50_00000000, None, None, None, vec![]);
+        output.lock_code_hash = non_standard_lock_code_hash.clone();
+        output.lock_hash_type = 1;
+        output.lock_args = non_standard_lock_args.clone();
+
+        let outputs = vec![output];
+
+        let tx = TxView {
+            tx_hash: &[0x30; 32],
+            block_hash: &[0xB0; 32],
+            tx_index: 0,
+            block_number: 2000,
+            timestamp: 1_700_100_000,
+            is_cellbase: false,
+            inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
+            outputs: &outputs,
+        };
+
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        let alice_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![alice; 32])
+            .expect("alice should be in owners");
+
+        let lock_calls = alice_delta
+            .lock_calls
+            .as_ref()
+            .expect("should have lock_calls");
+        assert_eq!(lock_calls.len(), 1);
+        assert_eq!(lock_calls[0].lock_code_hash, non_standard_lock_code_hash);
+        assert_eq!(lock_calls[0].lock_hash_type, 1);
+        assert_eq!(lock_calls[0].lock_args, non_standard_lock_args);
+    }
+
+    #[test]
+    fn test_standard_lock_output_not_recorded_as_lock_call() {
+        // Alice sends to Bob who uses standard secp256k1 lock — no lock_call
+        let alice = 0xAA;
+        let secp_code_hash = crate::rpc::parse_hex_to_bytes(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        );
+
+        let mut output = make_output(0xBB, 50_00000000, None, None, None, vec![]);
+        output.lock_code_hash = secp_code_hash;
+        output.lock_hash_type = 1;
+
+        let outputs = vec![output];
+
+        let tx = TxView {
+            tx_hash: &[0x31; 32],
+            block_hash: &[0xB1; 32],
+            tx_index: 0,
+            block_number: 2001,
+            timestamp: 1_700_100_010,
+            is_cellbase: false,
+            inputs: vec![make_input(alice, 100_00000000, 61_00000000)],
+            outputs: &outputs,
+        };
+
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        let alice_delta = bundles[0]
+            .owners
+            .iter()
+            .find(|o| o.lock_hash == vec![alice; 32])
+            .expect("alice should be in owners");
+
+        assert!(alice_delta.lock_calls.is_none());
     }
 }
