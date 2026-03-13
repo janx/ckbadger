@@ -13,7 +13,7 @@ function shannonsToCkb(shannons: string): number {
 }
 
 function formatCkbPrecise(ckb: number): string {
-  return ckb.toLocaleString(undefined, { maximumFractionDigits: 8 });
+  return ckb.toLocaleString(undefined, { minimumFractionDigits: 8, maximumFractionDigits: 8 });
 }
 
 function formatCkbCompact(ckb: number): string {
@@ -46,7 +46,9 @@ export function CKBytesCard({ stats }: CKBytesCardProps) {
   if (!stats?.circulatingSupply || !stats?.knowledgeSize || !stats?.daoLocked) {
     return (
       <div className="rounded-lg p-4">
-        <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">CKBytes</div>
+        <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">
+          CKBytes Circulation
+        </div>
         <div className="bg-base-elevated h-6 w-full animate-pulse rounded-full" />
       </div>
     );
@@ -88,8 +90,20 @@ export function CKBytesCard({ stats }: CKBytesCardProps) {
     <Link href="/charts/total-supply" className="block">
       <div className="rounded-lg p-4">
         <div className="text-text-dim mb-3 font-mono text-xs uppercase tracking-wider">
-          CKBytes{' '}
-          <span className="text-text-bright font-bold">{formatCkbPrecise(circulating)} CKB</span>
+          CKBytes Circulation{' '}
+          <span className="text-text-bright font-bold">
+            {(() => {
+              const formatted = formatCkbPrecise(circulating);
+              const dotIndex = formatted.indexOf('.');
+              if (dotIndex === -1) return <>{formatted}</>;
+              return (
+                <>
+                  {formatted.slice(0, dotIndex)}
+                  <span className="text-text-dim font-normal">{formatted.slice(dotIndex)}</span>
+                </>
+              );
+            })()}
+          </span>
         </div>
 
         {/* Stacked progress bar */}
