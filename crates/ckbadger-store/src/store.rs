@@ -284,6 +284,8 @@ pub const CF_DAO_BY_LOCK_BLOCK: &str = "dao_by_lock_block";
 pub const CF_DAO_BY_STATUS_BLOCK: &str = "dao_by_status_block";
 pub const CF_TOKENS: &str = "tokens";
 pub const CF_TOKEN_HOLDERS: &str = "token_holders";
+pub const CF_TOKEN_HOLDERS_BY_BALANCE: &str = "token_holders_by_balance";
+pub const CF_ADDR_TOKENS_BY_BALANCE: &str = "addr_tokens_by_balance";
 pub const CF_SPORE_DATA: &str = "spore_data";
 pub const CF_OBJECT_DATA: &str = "object_data";
 pub const CF_OBJECT_BY_COLLECTION: &str = "object_by_collection";
@@ -351,6 +353,8 @@ pub const ALL_CFS: &[&str] = &[
     CF_DAO_BY_STATUS_BLOCK,
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
+    CF_TOKEN_HOLDERS_BY_BALANCE,
+    CF_ADDR_TOKENS_BY_BALANCE,
     CF_SPORE_DATA,
     CF_OBJECT_DATA,
     CF_OBJECT_BY_COLLECTION,
@@ -400,6 +404,8 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_DAO_BY_STATUS_BLOCK,
     CF_TOKENS,
     CF_TOKEN_HOLDERS,
+    CF_TOKEN_HOLDERS_BY_BALANCE,
+    CF_ADDR_TOKENS_BY_BALANCE,
     CF_SPORE_DATA,
     CF_OBJECT_DATA,
     CF_OBJECT_BY_COLLECTION,
@@ -1113,6 +1119,12 @@ impl CkbadgerStore {
     }
     pub fn cf_token_holders(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_HOLDERS)
+    }
+    pub fn cf_token_holders_by_balance(&self) -> &ColumnFamily {
+        self.cf(CF_TOKEN_HOLDERS_BY_BALANCE)
+    }
+    pub fn cf_addr_tokens_by_balance(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_TOKENS_BY_BALANCE)
     }
     pub fn cf_spore_data(&self) -> &ColumnFamily {
         self.cf(CF_SPORE_DATA)

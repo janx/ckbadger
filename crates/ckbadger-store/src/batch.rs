@@ -683,6 +683,31 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_token_holders(), key, balance.to_le_bytes());
     }
 
+    pub fn put_token_holder_by_balance(
+        &mut self,
+        type_hash: &[u8],
+        lock_hash: &[u8],
+        balance: i128,
+    ) {
+        assert!(
+            balance > 0,
+            "put_token_holder_by_balance expects positive balance, got {}",
+            balance
+        );
+        let key = keys::encode_token_holder_balance_key(type_hash, balance, lock_hash);
+        self.put_cf(self.store.cf_token_holders_by_balance(), key, []);
+    }
+
+    pub fn put_addr_token_by_balance(&mut self, lock_hash: &[u8], type_hash: &[u8], balance: i128) {
+        assert!(
+            balance > 0,
+            "put_addr_token_by_balance expects positive balance, got {}",
+            balance
+        );
+        let key = keys::encode_addr_token_balance_key(lock_hash, balance, type_hash);
+        self.put_cf(self.store.cf_addr_tokens_by_balance(), key, []);
+    }
+
     pub fn put_token_transfers_count(&mut self, type_hash: &[u8], count: i64) {
         let key = keys::encode_token_transfers_key(type_hash);
         self.put_cf(self.store.cf_stats_token(), key, count.to_le_bytes());
@@ -794,6 +819,26 @@ impl<'a> StoreBatch<'a> {
     pub fn delete_token_holder(&mut self, type_hash: &[u8], lock_hash: &[u8]) {
         let key = keys::encode_token_holder_key(type_hash, lock_hash);
         self.delete_cf(self.store.cf_token_holders(), key);
+    }
+
+    pub fn delete_token_holder_by_balance(
+        &mut self,
+        type_hash: &[u8],
+        lock_hash: &[u8],
+        balance: i128,
+    ) {
+        let key = keys::encode_token_holder_balance_key(type_hash, balance, lock_hash);
+        self.delete_cf(self.store.cf_token_holders_by_balance(), key);
+    }
+
+    pub fn delete_addr_token_by_balance(
+        &mut self,
+        lock_hash: &[u8],
+        type_hash: &[u8],
+        balance: i128,
+    ) {
+        let key = keys::encode_addr_token_balance_key(lock_hash, balance, type_hash);
+        self.delete_cf(self.store.cf_addr_tokens_by_balance(), key);
     }
 
     pub fn put_token_transfer(

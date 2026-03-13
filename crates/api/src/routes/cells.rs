@@ -24,8 +24,7 @@ use crate::utils::{
     resolve_code_hash_for_hash_type, script_to_address, shannon_to_ckb,
 };
 use crate::warmup::{
-    CachedAddressEntry, CachedAssetEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP,
-    CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
+    CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
 use ckbadger_store::{keys, CkbadgerStore};
@@ -1625,6 +1624,23 @@ pub struct AddressTokenResponse {
     pub balance: String,
 }
 
+fn parse_address_token_cursor(
+    cursor: &str,
+) -> Result<(i128, Vec<u8>), (axum::http::StatusCode, axum::Json<ApiError>)> {
+    let (balance, type_hash_hex) = cursor
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request("Invalid address token cursor"))?;
+    let balance = balance
+        .parse::<i128>()
+        .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
+    let type_hash = hex::decode(type_hash_hex.strip_prefix("0x").unwrap_or(type_hash_hex))
+        .map_err(|_| ApiError::bad_request("Invalid address token cursor"))?;
+    if type_hash.len() != 32 {
+        return Err(ApiError::bad_request("Invalid address token cursor"));
+    }
+    Ok((balance, type_hash))
+}
+
 /// Helper to convert a LiveCellInfo into a CellResponse.
 fn cell_info_to_response(
     tx_hash: &[u8],
@@ -2878,60 +2894,71 @@ async fn get_address_tokens(
     };
 
     let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(parse_address_token_cursor)
+        .transpose()?;
 
-    let cached_tokens = state
-        .mem_cache
-        .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN)
-        .ok_or_else(|| ApiError::internal("token cache unavailable; warmup in progress"))?;
-
-    let mut token_balances: Vec<(String, CachedAssetEntry, i128)> = Vec::new();
-
-    for token_info in cached_tokens {
-        let type_hash = hex::decode(
-            token_info
-                .id
-                .strip_prefix("0x")
-                .unwrap_or(token_info.id.as_str()),
-        )
-        .map_err(|_| {
-            ApiError::internal(format!(
-                "invalid token hash in warmup cache: {}",
-                token_info.id
-            ))
-        })?;
-        if let Ok(Some(balance)) = state.store.get_token_holder_balance(&type_hash, &lock_hash) {
-            if balance > 0 {
-                token_balances.push((token_info.id.clone(), token_info, balance));
-            }
-        }
-    }
-
-    // Sort by balance descending
-    token_balances.sort_by(|a, b| b.2.cmp(&a.2));
+    let mut token_balances = state
+        .store
+        .list_address_tokens_by_balance(&lock_hash, limit + 1, cursor)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = token_balances.len() > limit;
-    let token_balances: Vec<_> = token_balances.into_iter().take(limit).collect();
+    if has_more {
+        token_balances.truncate(limit);
+    }
+
+    let token_type_hashes: Vec<Vec<u8>> = token_balances
+        .iter()
+        .map(|(type_hash, _)| type_hash.clone())
+        .collect();
+    let token_infos = state
+        .store
+        .get_tokens_batch(&token_type_hashes)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let token_info_by_hash: HashMap<Vec<u8>, ckbadger_store::TokenInfo> = token_infos
+        .into_iter()
+        .map(|(type_hash, info)| match info {
+            Some(info) => Ok((type_hash, info)),
+            None => Err(ApiError::internal(format!(
+                "missing token metadata for addr token index: lock_hash=0x{}, type_hash=0x{}",
+                hex::encode(&lock_hash),
+                hex::encode(&type_hash)
+            ))),
+        })
+        .collect::<Result<_, _>>()?;
 
     let next_cursor: Option<String> = if has_more {
         token_balances
             .last()
-            .map(|(type_hash, _, balance)| format!("{}:{}", balance, type_hash))
+            .map(|(type_hash, balance)| format!("{}:{}", balance, hex::encode(type_hash)))
     } else {
         None
     };
 
     let tokens: Vec<AddressTokenResponse> = token_balances
         .into_iter()
-        .map(|(type_hash, token_info, balance)| AddressTokenResponse {
-            type_script_hash: type_hash,
-            standard: token_info.standard,
-            name: token_info.name,
-            symbol: token_info.symbol,
-            decimals: token_info.decimals.unwrap_or(0),
-            icon_url: token_info.icon_url,
-            balance: balance.to_string(),
+        .map(|(type_hash, balance)| {
+            let token_info = token_info_by_hash.get(&type_hash).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "missing batch token metadata after lookup: lock_hash=0x{}, type_hash=0x{}",
+                    hex::encode(&lock_hash),
+                    hex::encode(&type_hash)
+                ))
+            })?;
+            Ok(AddressTokenResponse {
+                type_script_hash: format!("0x{}", hex::encode(&type_hash)),
+                standard: token_info.standard.clone(),
+                name: token_info.name.clone(),
+                symbol: token_info.symbol.clone(),
+                decimals: token_info.decimals.unwrap_or(0) as i16,
+                icon_url: token_info.icon_url.clone(),
+                balance: balance.to_string(),
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     ok(CursorPaginatedResponse::without_total(
         tokens,
@@ -3763,5 +3790,18 @@ mod tests {
             cells.get(&(tx_consumed.to_vec(), 0)).map(|c| c.capacity),
             Some(99_00000000)
         );
+    }
+
+    #[test]
+    fn test_parse_address_token_cursor_valid() {
+        let cursor = format!("200:{}", "bb".repeat(32));
+        let (balance, type_hash) = super::parse_address_token_cursor(&cursor).unwrap();
+        assert_eq!(balance, 200);
+        assert_eq!(type_hash, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn test_parse_address_token_cursor_rejects_wrong_length_hash() {
+        assert!(super::parse_address_token_cursor("200:aabbcc").is_err());
     }
 }

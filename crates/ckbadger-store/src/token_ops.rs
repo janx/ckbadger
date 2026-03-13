@@ -769,6 +769,142 @@ impl CkbadgerStore {
         }
         Ok(results)
     }
+
+    /// List holders for a token ordered by balance DESC, lock_hash ASC.
+    ///
+    /// Optionally start after the given `(balance, lock_hash)` cursor.
+    pub fn list_token_holders_by_balance(
+        &self,
+        type_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i128, Vec<u8>)>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i128)>> {
+        if type_hash.len() != 32 {
+            anyhow::bail!(
+                "list_token_holders_by_balance expects 32-byte type_hash, got {} bytes",
+                type_hash.len()
+            );
+        }
+        if let Some((_, ref lock_hash)) = cursor {
+            if lock_hash.len() != 32 {
+                anyhow::bail!(
+                    "list_token_holders_by_balance cursor expects 32-byte lock_hash, got {} bytes",
+                    lock_hash.len()
+                );
+            }
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let start_key = match cursor {
+            Some((balance, lock_hash)) => {
+                keys::encode_token_holder_balance_seek_after_key(type_hash, balance, &lock_hash)
+            }
+            None => type_hash.to_vec(),
+        };
+
+        let iter = self.iterator_cf(
+            self.cf_token_holders_by_balance(),
+            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_holders_by_balance in list_token_holders_by_balance: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(type_hash) {
+                break;
+            }
+            if key.len() == keys::TOKEN_HOLDER_BALANCE_KEY_SIZE {
+                if !value.is_empty() {
+                    anyhow::bail!(
+                        "token_holders_by_balance value must be empty in list_token_holders_by_balance: type_hash=0x{}, value_len={}",
+                        bytes_to_hex(type_hash),
+                        value.len()
+                    );
+                }
+                let (_, balance, lock_hash) = keys::decode_token_holder_balance_key(&key);
+                results.push((lock_hash, balance));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// List tokens held by an address ordered by balance DESC, type_hash ASC.
+    ///
+    /// Optionally start after the given `(balance, type_hash)` cursor.
+    pub fn list_address_tokens_by_balance(
+        &self,
+        lock_hash: &[u8],
+        limit: usize,
+        cursor: Option<(i128, Vec<u8>)>,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i128)>> {
+        if lock_hash.len() != 32 {
+            anyhow::bail!(
+                "list_address_tokens_by_balance expects 32-byte lock_hash, got {} bytes",
+                lock_hash.len()
+            );
+        }
+        if let Some((_, ref type_hash)) = cursor {
+            if type_hash.len() != 32 {
+                anyhow::bail!(
+                    "list_address_tokens_by_balance cursor expects 32-byte type_hash, got {} bytes",
+                    type_hash.len()
+                );
+            }
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let start_key = match cursor {
+            Some((balance, type_hash)) => {
+                keys::encode_addr_token_balance_seek_after_key(lock_hash, balance, &type_hash)
+            }
+            None => lock_hash.to_vec(),
+        };
+
+        let iter = self.iterator_cf(
+            self.cf_addr_tokens_by_balance(),
+            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut results = Vec::new();
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate addr_tokens_by_balance in list_address_tokens_by_balance: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(lock_hash) {
+                break;
+            }
+            if key.len() == keys::ADDR_TOKEN_BALANCE_KEY_SIZE {
+                if !value.is_empty() {
+                    anyhow::bail!(
+                        "addr_tokens_by_balance value must be empty in list_address_tokens_by_balance: lock_hash=0x{}, value_len={}",
+                        bytes_to_hex(lock_hash),
+                        value.len()
+                    );
+                }
+                let (_, balance, type_hash) = keys::decode_addr_token_balance_key(&key);
+                results.push((type_hash, balance));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -1351,6 +1487,49 @@ mod tests {
 
         assert_eq!(store.count_token_holders(&type_a).unwrap(), 2);
         assert_eq!(store.count_token_holders(&type_b).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_list_token_holders_by_balance_keeps_equal_balances_with_cursor() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x11u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_token_holder_by_balance(&type_hash, &[0x01; 32], 100);
+        batch.put_token_holder_by_balance(&type_hash, &[0x02; 32], 100);
+        batch.put_token_holder_by_balance(&type_hash, &[0x03; 32], 50);
+        batch.commit().unwrap();
+
+        let first = store
+            .list_token_holders_by_balance(&type_hash, 1, None)
+            .unwrap();
+        assert_eq!(first, vec![(vec![0x01; 32], 100)]);
+
+        let second = store
+            .list_token_holders_by_balance(&type_hash, 1, Some((100, vec![0x01; 32])))
+            .unwrap();
+        assert_eq!(second, vec![(vec![0x02; 32], 100)]);
+    }
+
+    #[test]
+    fn test_list_address_tokens_by_balance_advances_cursor() {
+        let (_dir, store) = test_store();
+        let lock_hash = [0x22u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_token_by_balance(&lock_hash, &[0x11; 32], 200);
+        batch.put_addr_token_by_balance(&lock_hash, &[0x22; 32], 100);
+        batch.commit().unwrap();
+
+        let first = store
+            .list_address_tokens_by_balance(&lock_hash, 1, None)
+            .unwrap();
+        assert_eq!(first, vec![(vec![0x11; 32], 200)]);
+
+        let second = store
+            .list_address_tokens_by_balance(&lock_hash, 1, Some((200, vec![0x11; 32])))
+            .unwrap();
+        assert_eq!(second, vec![(vec![0x22; 32], 100)]);
     }
 
     // ---- list_token_activities ----

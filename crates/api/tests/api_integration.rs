@@ -3451,7 +3451,7 @@ async fn test_get_token_includes_maximum_supply() {
 }
 
 #[tokio::test]
-async fn test_get_token_errors_when_token_cache_unavailable() {
+async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_cache() {
     let store = test_store();
     let type_hash = vec![0x78; 32];
     let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
@@ -3464,28 +3464,16 @@ async fn test_get_token_errors_when_token_cache_unavailable() {
                 hash_type: 1,
                 type_args: vec![0x66; 20],
                 standard: "xudt".to_string(),
-                name: Some("Broken Cache Token".to_string()),
-                symbol: Some("BCT".to_string()),
+                name: None,
+                symbol: None,
                 decimals: Some(8),
                 total_supply: Some(500_00000000),
                 max_supply: None,
                 holders_count: 0,
                 first_seen_block: 0,
                 icon_url: None,
-                description: None,
+                description: Some("Store-backed token detail".to_string()),
                 transfers_count: 0,
-            },
-        )
-        .unwrap();
-
-    // Make warmup fail so token cache key is absent.
-    store
-        .put_token_daily_delta(
-            &type_hash,
-            20240115,
-            &TokenDailyDelta {
-                live_capacity_delta: 100,
-                live_used_capacity_delta: 120,
             },
         )
         .unwrap();
@@ -3498,14 +3486,223 @@ async fn test_get_token_errors_when_token_cache_unavailable() {
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"], "internal_error");
-    assert!(json["message"]
-        .as_str()
+    assert_eq!(json["typeScriptHash"], type_hash_hex);
+    assert!(json["name"].is_null());
+    assert!(json["symbol"].is_null());
+    assert_eq!(json["description"], "Store-backed token detail");
+    assert_eq!(json["totalSupply"], "50000000000");
+}
+
+#[tokio::test]
+async fn test_get_token_holders_preserves_equal_balance_pagination() {
+    let store = test_store();
+    let type_hash = vec![0x79; 32];
+    store
+        .put_token_direct(
+            &type_hash,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Paged Holders".to_string()),
+                symbol: Some("PH".to_string()),
+                decimals: Some(8),
+                total_supply: Some(300),
+                max_supply: None,
+                holders_count: 3,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&type_hash, &[0x01; 32], 100);
+    batch.put_token_holder(&type_hash, &[0x02; 32], 100);
+    batch.put_token_holder(&type_hash, &[0x03; 32], 50);
+    batch.put_token_holder_by_balance(&type_hash, &[0x01; 32], 100);
+    batch.put_token_holder_by_balance(&type_hash, &[0x02; 32], 100);
+    batch.put_token_holder_by_balance(&type_hash, &[0x03; 32], 50);
+    batch.put_addr_token_by_balance(&[0x01; 32], &type_hash, 100);
+    batch.put_addr_token_by_balance(&[0x02; 32], &type_hash, 100);
+    batch.put_addr_token_by_balance(&[0x03; 32], &type_hash, 50);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let type_hash_hex = format!("0x{}", hex::encode(&type_hash));
+
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/tokens/{type_hash_hex}/holders?limit=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
         .unwrap()
-        .contains("token asset cache unavailable; warmup in progress"));
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    let next_cursor = first_json["nextCursor"]
+        .as_str()
+        .expect("first page should have next cursor")
+        .to_string();
+    assert_eq!(
+        first_json["data"][0]["lockScriptHash"],
+        format!("0x{}", "01".repeat(32))
+    );
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/tokens/{type_hash_hex}/holders?limit=1&cursor={next_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(
+        second_json["data"][0]["lockScriptHash"],
+        format!("0x{}", "02".repeat(32))
+    );
+}
+
+#[tokio::test]
+async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cache() {
+    let store = test_store();
+    let lock_hash = vec![0x88; 32];
+    let token_a = vec![0x81; 32];
+    let token_b = vec![0x82; 32];
+
+    store
+        .put_token_direct(
+            &token_a,
+            &TokenInfo {
+                type_code_hash: vec![0x55; 32],
+                hash_type: 1,
+                type_args: vec![0x66; 20],
+                standard: "xudt".to_string(),
+                name: Some("Alpha".to_string()),
+                symbol: Some("ALP".to_string()),
+                decimals: Some(8),
+                total_supply: Some(500),
+                max_supply: None,
+                holders_count: 1,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+    store
+        .put_token_direct(
+            &token_b,
+            &TokenInfo {
+                type_code_hash: vec![0x56; 32],
+                hash_type: 1,
+                type_args: vec![0x67; 20],
+                standard: "sudt".to_string(),
+                name: Some("Beta".to_string()),
+                symbol: Some("BET".to_string()),
+                decimals: Some(4),
+                total_supply: Some(300),
+                max_supply: None,
+                holders_count: 1,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+            },
+        )
+        .unwrap();
+
+    let mut batch = StoreBatch::new(&store);
+    batch.put_token_holder(&token_a, &lock_hash, 200);
+    batch.put_token_holder(&token_b, &lock_hash, 100);
+    batch.put_token_holder_by_balance(&token_a, &lock_hash, 200);
+    batch.put_token_holder_by_balance(&token_b, &lock_hash, 100);
+    batch.put_addr_token_by_balance(&lock_hash, &token_a, 200);
+    batch.put_addr_token_by_balance(&lock_hash, &token_b, 100);
+    batch.commit().unwrap();
+
+    let config = test_config(store);
+    let app = create_router(config).await;
+    let lock_hash_hex = format!("0x{}", hex::encode(&lock_hash));
+
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/addresses/{lock_hash_hex}/tokens?limit=1"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    assert_eq!(
+        first_json["data"][0]["typeScriptHash"],
+        format!("0x{}", hex::encode(&token_a))
+    );
+    let next_cursor = first_json["nextCursor"]
+        .as_str()
+        .expect("first page should have next cursor")
+        .to_string();
+
+    let second_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/addresses/{lock_hash_hex}/tokens?limit=1&cursor={next_cursor}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(
+        second_json["data"][0]["typeScriptHash"],
+        format!("0x{}", hex::encode(&token_b))
+    );
 }
 
 #[tokio::test]

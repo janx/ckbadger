@@ -142,6 +142,19 @@ fn decode_desc_tx_idx(bytes: &[u8]) -> i32 {
     i32::MAX - i32::from_be_bytes(bytes.try_into().unwrap())
 }
 
+fn encode_desc_u128(value: u128) -> [u8; 16] {
+    (u128::MAX - value).to_be_bytes()
+}
+
+fn decode_desc_u128(bytes: &[u8]) -> u128 {
+    assert!(
+        bytes.len() == 16,
+        "decode_desc_u128: expected 16 bytes, got {}",
+        bytes.len()
+    );
+    u128::MAX - u128::from_be_bytes(bytes.try_into().unwrap())
+}
+
 /// Encode a cell-by-lock/type index key:
 /// lock_hash(32B) + block_num(8B BE) + outpoint(34B) = 74 bytes
 pub fn encode_cell_index_key(
@@ -219,6 +232,126 @@ pub fn encode_token_holder_key(type_hash: &[u8], lock_hash: &[u8]) -> [u8; 64] {
     key[..32].copy_from_slice(&type_hash[..32]);
     key[32..64].copy_from_slice(&lock_hash[..32]);
     key
+}
+
+/// Token holder ranked index key:
+/// type_hash(32B) + balance_desc(16B BE) + lock_hash(32B) = 80 bytes
+pub const TOKEN_HOLDER_BALANCE_KEY_SIZE: usize = 80;
+
+pub fn encode_token_holder_balance_key(
+    type_hash: &[u8],
+    balance: i128,
+    lock_hash: &[u8],
+) -> [u8; TOKEN_HOLDER_BALANCE_KEY_SIZE] {
+    assert!(
+        type_hash.len() >= 32,
+        "encode_token_holder_balance_key: type_hash must be >= 32 bytes, got {}",
+        type_hash.len()
+    );
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_token_holder_balance_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    assert!(
+        balance >= 0,
+        "encode_token_holder_balance_key: expected non-negative balance, got {}",
+        balance
+    );
+    let mut key = [0u8; TOKEN_HOLDER_BALANCE_KEY_SIZE];
+    key[..32].copy_from_slice(&type_hash[..32]);
+    key[32..48].copy_from_slice(&encode_desc_u128(balance as u128));
+    key[48..80].copy_from_slice(&lock_hash[..32]);
+    key
+}
+
+pub fn encode_token_holder_balance_seek_after_key(
+    type_hash: &[u8],
+    balance: i128,
+    lock_hash: &[u8],
+) -> Vec<u8> {
+    let mut key = Vec::with_capacity(TOKEN_HOLDER_BALANCE_KEY_SIZE + 1);
+    key.extend_from_slice(&encode_token_holder_balance_key(
+        type_hash, balance, lock_hash,
+    ));
+    key.push(0xFF);
+    key
+}
+
+pub fn decode_token_holder_balance_key(key: &[u8]) -> (Vec<u8>, i128, Vec<u8>) {
+    assert!(
+        key.len() == TOKEN_HOLDER_BALANCE_KEY_SIZE,
+        "decode_token_holder_balance_key: expected {} bytes, got {}",
+        TOKEN_HOLDER_BALANCE_KEY_SIZE,
+        key.len()
+    );
+    let balance = decode_desc_u128(&key[32..48]);
+    assert!(
+        balance <= i128::MAX as u128,
+        "decode_token_holder_balance_key: balance exceeds i128::MAX: {}",
+        balance
+    );
+    (key[..32].to_vec(), balance as i128, key[48..80].to_vec())
+}
+
+/// Address-token ranked index key:
+/// lock_hash(32B) + balance_desc(16B BE) + type_hash(32B) = 80 bytes
+pub const ADDR_TOKEN_BALANCE_KEY_SIZE: usize = 80;
+
+pub fn encode_addr_token_balance_key(
+    lock_hash: &[u8],
+    balance: i128,
+    type_hash: &[u8],
+) -> [u8; ADDR_TOKEN_BALANCE_KEY_SIZE] {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_addr_token_balance_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    assert!(
+        type_hash.len() >= 32,
+        "encode_addr_token_balance_key: type_hash must be >= 32 bytes, got {}",
+        type_hash.len()
+    );
+    assert!(
+        balance >= 0,
+        "encode_addr_token_balance_key: expected non-negative balance, got {}",
+        balance
+    );
+    let mut key = [0u8; ADDR_TOKEN_BALANCE_KEY_SIZE];
+    key[..32].copy_from_slice(&lock_hash[..32]);
+    key[32..48].copy_from_slice(&encode_desc_u128(balance as u128));
+    key[48..80].copy_from_slice(&type_hash[..32]);
+    key
+}
+
+pub fn encode_addr_token_balance_seek_after_key(
+    lock_hash: &[u8],
+    balance: i128,
+    type_hash: &[u8],
+) -> Vec<u8> {
+    let mut key = Vec::with_capacity(ADDR_TOKEN_BALANCE_KEY_SIZE + 1);
+    key.extend_from_slice(&encode_addr_token_balance_key(
+        lock_hash, balance, type_hash,
+    ));
+    key.push(0xFF);
+    key
+}
+
+pub fn decode_addr_token_balance_key(key: &[u8]) -> (Vec<u8>, i128, Vec<u8>) {
+    assert!(
+        key.len() == ADDR_TOKEN_BALANCE_KEY_SIZE,
+        "decode_addr_token_balance_key: expected {} bytes, got {}",
+        ADDR_TOKEN_BALANCE_KEY_SIZE,
+        key.len()
+    );
+    let balance = decode_desc_u128(&key[32..48]);
+    assert!(
+        balance <= i128::MAX as u128,
+        "decode_addr_token_balance_key: balance exceeds i128::MAX: {}",
+        balance
+    );
+    (key[..32].to_vec(), balance as i128, key[48..80].to_vec())
 }
 
 /// Stats key: prefix(1B) + variable key

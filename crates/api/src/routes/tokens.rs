@@ -9,9 +9,14 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
-use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
+use crate::utils::{
+    accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive,
+    parse_chart_date_range,
+};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
+
+type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -200,6 +205,62 @@ fn max_supply_status(
     }
 }
 
+fn parse_token_list_cursor(cursor: &str) -> Result<(i64, &str), ApiRouteError> {
+    let (holders_count, token_id) = cursor
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request("Invalid token cursor"))?;
+    if token_id.is_empty() {
+        return Err(ApiError::bad_request("Invalid token cursor"));
+    }
+    let holders_count = holders_count
+        .parse::<i64>()
+        .map_err(|_| ApiError::bad_request("Invalid token cursor"))?;
+    Ok((holders_count, token_id))
+}
+
+fn parse_token_holder_cursor(cursor: &str) -> Result<(i128, Vec<u8>), ApiRouteError> {
+    let (balance, lock_hash_hex) = cursor
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request("Invalid token holders cursor"))?;
+    let balance = balance
+        .parse::<i128>()
+        .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
+    let lock_hash = hex::decode(lock_hash_hex.strip_prefix("0x").unwrap_or(lock_hash_hex))
+        .map_err(|_| ApiError::bad_request("Invalid token holders cursor"))?;
+    if lock_hash.len() != 32 {
+        return Err(ApiError::bad_request("Invalid token holders cursor"));
+    }
+    Ok((balance, lock_hash))
+}
+
+fn load_token_live_capacity(
+    state: &AppState,
+    type_hash: &[u8],
+) -> Result<(Option<i128>, Option<i128>), ApiRouteError> {
+    let deltas = state
+        .store
+        .list_token_daily_deltas(type_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if deltas.is_empty() {
+        return Ok((None, None));
+    }
+
+    let (live_capacity, live_used_capacity) = accumulate_live_capacity(
+        deltas
+            .into_iter()
+            .map(|(_, delta)| (delta.live_capacity_delta, delta.live_used_capacity_delta)),
+    )
+    .map_err(|e| {
+        ApiError::internal(format!(
+            "invalid token daily deltas for type_hash=0x{}: {}",
+            hex::encode(type_hash),
+            e
+        ))
+    })?;
+
+    Ok((Some(live_capacity), Some(live_used_capacity)))
+}
+
 async fn list_tokens(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListParams>,
@@ -258,23 +319,19 @@ fn serve_tokens_from_cache(
 
     // Already sorted by transfers_24h DESC, holders_count DESC from cache
     // But we need to sort by holders_count for the tokens endpoint
-    filtered.sort_by(|a, b| b.holders_count.cmp(&a.holders_count));
-
-    // Apply cursor
-    let cursor_holders = params.cursor.as_ref().and_then(|c| {
-        let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() >= 2 {
-            parts[1].parse::<i64>().ok()
-        } else {
-            c.parse::<i64>().ok()
-        }
+    filtered.sort_by(|a, b| {
+        b.holders_count
+            .cmp(&a.holders_count)
+            .then_with(|| a.id.cmp(&b.id))
     });
 
-    let start_idx = if let Some(ch) = cursor_holders {
+    let start_idx = if let Some(cursor) = params.cursor.as_deref() {
+        let (cursor_holders_count, cursor_token_id) = parse_token_list_cursor(cursor)?;
         filtered
             .iter()
-            .position(|e| e.holders_count < ch)
-            .unwrap_or(filtered.len())
+            .position(|e| e.holders_count == cursor_holders_count && e.id == cursor_token_id)
+            .map(|idx| idx + 1)
+            .ok_or_else(|| ApiError::bad_request("Invalid token cursor"))?
     } else {
         0
     };
@@ -284,7 +341,7 @@ fn serve_tokens_from_cache(
     let page: Vec<_> = page.into_iter().take(limit).collect();
 
     let next_cursor = if has_more {
-        page.last().map(|e| format!("0:{}:0", e.holders_count))
+        page.last().map(|e| format!("{}:{}", e.holders_count, e.id))
     } else {
         None
     };
@@ -354,29 +411,12 @@ async fn get_token(
 
     match info {
         Some(info) => {
-            let hash_hex = format!("0x{}", hex::encode(&hash));
             let transfers_count = info.transfers_count;
-
-            // Try warmup cache first (refreshed every 30s)
-            let cached = state
-                .mem_cache
-                .get::<Vec<CachedAssetEntry>>(CACHE_KEY_ASSETS_TOKEN);
-            let cache_hit = cached
-                .as_ref()
-                .and_then(|entries| entries.iter().find(|e| e.id == hash_hex));
-
-            let entry = cache_hit.ok_or_else(|| {
-                ApiError::internal("token asset cache unavailable; warmup in progress")
-            })?;
-            let transfers_24h = entry.transfers_24h;
-            let live_capacity = entry
-                .live_capacity
-                .as_ref()
-                .and_then(|s| s.parse::<i128>().ok());
-            let live_used_capacity = entry
-                .live_used_capacity
-                .as_ref()
-                .and_then(|s| s.parse::<i128>().ok());
+            let transfers_24h = state
+                .store
+                .get_token_24h_transfers(&hash, chrono::Utc::now().timestamp_millis())
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let (live_capacity, live_used_capacity) = load_token_live_capacity(&state, &hash)?;
 
             ok(token_info_to_response(
                 &hash,
@@ -399,57 +439,41 @@ async fn get_token_holders(
     let hash = hex::decode(type_hash.strip_prefix("0x").unwrap_or(&type_hash))
         .map_err(|_| ApiError::bad_request("Invalid type script hash"))?;
 
-    // Verify the token exists.
-    let token_exists = state
+    let token = state
         .store
         .get_token(&hash)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .is_some();
-    if !token_exists {
-        return Err(ApiError::not_found("Token not found"));
+        .ok_or_else(|| ApiError::not_found("Token not found"))?;
+    if token.holders_count < 0 {
+        return Err(ApiError::internal(format!(
+            "invalid token holders_count: type_hash=0x{}, holders_count={}",
+            hex::encode(&hash),
+            token.holders_count
+        )));
     }
 
     let limit = params.limit.clamp(1, 100) as usize;
+    let cursor = params
+        .cursor
+        .as_deref()
+        .map(parse_token_holder_cursor)
+        .transpose()?;
 
-    let all_holders = state
+    let mut page = state
         .store
-        .list_token_holders(&hash, 10000)
+        .list_token_holders_by_balance(&hash, limit + 1, cursor)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-
-    let mut sorted_holders: Vec<_> = all_holders
-        .into_iter()
-        .filter(|(_, balance)| *balance > 0)
-        .collect();
-    sorted_holders.sort_by(|a, b| b.1.cmp(&a.1));
-
-    let holders_count = sorted_holders.len() as i64;
-
-    let cursor_balance = params.cursor.as_ref().and_then(|c| {
-        let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() == 2 {
-            parts[0].parse::<i128>().ok()
-        } else {
-            None
-        }
-    });
-
-    let start_idx = if let Some(cb) = cursor_balance {
-        sorted_holders
-            .iter()
-            .position(|(_, balance)| *balance < cb)
-            .unwrap_or(sorted_holders.len())
-    } else {
-        0
-    };
-
-    let page: Vec<_> = sorted_holders
-        .iter()
-        .skip(start_idx)
-        .take(limit + 1)
-        .collect();
-
+    if params.cursor.is_none() && token.holders_count > 0 && page.is_empty() {
+        return Err(ApiError::internal(format!(
+            "missing ranked token holder index entries: type_hash=0x{}, holders_count={}",
+            hex::encode(&hash),
+            token.holders_count
+        )));
+    }
     let has_more = page.len() > limit;
-    let page: Vec<_> = page.into_iter().take(limit).collect();
+    if has_more {
+        page.truncate(limit);
+    }
 
     let next_cursor = if has_more {
         page.last()
@@ -469,7 +493,7 @@ async fn get_token_holders(
 
     ok(CursorPaginatedResponse::new(
         holders,
-        holders_count,
+        token.holders_count,
         limit as i64,
         next_cursor,
     ))
@@ -1015,5 +1039,133 @@ mod tests {
         let sd = by_symbol.get("SD").unwrap();
         assert!(sd.maximum_supply.is_none());
         assert_eq!(sd.maximum_supply_status, "unlimited");
+    }
+
+    #[test]
+    fn test_serve_tokens_from_cache_cursor_preserves_equal_holder_counts() {
+        let cached = vec![
+            CachedAssetEntry {
+                id: "0x01".to_string(),
+                asset_type: "token".to_string(),
+                standard: "xudt".to_string(),
+                name: Some("Alpha".to_string()),
+                symbol: Some("A".to_string()),
+                icon_url: None,
+                holders_count: 10,
+                transfers_count: 0,
+                transfers_24h: 0,
+                decimals: Some(8),
+                total_supply: Some("1".to_string()),
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
+                storage_tier: None,
+                fully_onchain_ratio: None,
+                fully_onchain_count: None,
+                type_code_hash: Some("0xaaa".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some("0x11".to_string()),
+                description: None,
+            },
+            CachedAssetEntry {
+                id: "0x02".to_string(),
+                asset_type: "token".to_string(),
+                standard: "xudt".to_string(),
+                name: Some("Beta".to_string()),
+                symbol: Some("B".to_string()),
+                icon_url: None,
+                holders_count: 10,
+                transfers_count: 0,
+                transfers_24h: 0,
+                decimals: Some(8),
+                total_supply: Some("1".to_string()),
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
+                storage_tier: None,
+                fully_onchain_ratio: None,
+                fully_onchain_count: None,
+                type_code_hash: Some("0xbbb".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some("0x22".to_string()),
+                description: None,
+            },
+            CachedAssetEntry {
+                id: "0x03".to_string(),
+                asset_type: "token".to_string(),
+                standard: "xudt".to_string(),
+                name: Some("Gamma".to_string()),
+                symbol: Some("C".to_string()),
+                icon_url: None,
+                holders_count: 9,
+                transfers_count: 0,
+                transfers_24h: 0,
+                decimals: Some(8),
+                total_supply: Some("1".to_string()),
+                maximum_supply: None,
+                content_type: None,
+                content_size: None,
+                cluster_id: None,
+                cluster_name: None,
+                live_capacity: Some("1".to_string()),
+                live_used_capacity: Some("1".to_string()),
+                storage_tier: None,
+                fully_onchain_ratio: None,
+                fully_onchain_count: None,
+                type_code_hash: Some("0xccc".to_string()),
+                type_hash_type: Some("type".to_string()),
+                type_args: Some("0x33".to_string()),
+                description: None,
+            },
+        ];
+
+        let first_params = super::ListParams {
+            limit: 1,
+            standard: None,
+            cursor: None,
+            search: None,
+        };
+        let axum::Json(first_page) =
+            super::serve_tokens_from_cache(cached.clone(), &first_params, 1).unwrap();
+        assert_eq!(first_page.data.len(), 1);
+        assert_eq!(first_page.data[0].type_script_hash, "0x01");
+        let next_cursor = first_page.next_cursor.clone().expect("next cursor");
+
+        let second_params = super::ListParams {
+            limit: 2,
+            standard: None,
+            cursor: Some(next_cursor),
+            search: None,
+        };
+        let axum::Json(second_page) =
+            super::serve_tokens_from_cache(cached, &second_params, 2).unwrap();
+
+        let hashes: Vec<_> = second_page
+            .data
+            .iter()
+            .map(|row| row.type_script_hash.as_str())
+            .collect();
+        assert_eq!(hashes, vec!["0x02", "0x03"]);
+    }
+
+    #[test]
+    fn test_parse_token_holder_cursor_valid() {
+        let cursor = format!("100:{}", "aa".repeat(32));
+        let (balance, lock_hash) = super::parse_token_holder_cursor(&cursor).unwrap();
+        assert_eq!(balance, 100);
+        assert_eq!(lock_hash, vec![0xAA; 32]);
+    }
+
+    #[test]
+    fn test_parse_token_holder_cursor_rejects_wrong_length_hash() {
+        assert!(super::parse_token_holder_cursor("100:aabbcc").is_err());
     }
 }

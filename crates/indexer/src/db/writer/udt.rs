@@ -444,6 +444,11 @@ impl BatchWriter {
                 );
             }
 
+            if old_balance > 0 {
+                batch.delete_token_holder_by_balance(type_hash, lock_hash, old_balance);
+                batch.delete_addr_token_by_balance(lock_hash, type_hash, old_balance);
+            }
+
             if old_balance == 0 && new_balance > 0 {
                 // New holder
                 *holder_count_changes.entry(type_hash.clone()).or_default() += 1;
@@ -454,6 +459,8 @@ impl BatchWriter {
 
             if new_balance > 0 {
                 batch.put_token_holder(type_hash, lock_hash, new_balance);
+                batch.put_token_holder_by_balance(type_hash, lock_hash, new_balance);
+                batch.put_addr_token_by_balance(lock_hash, type_hash, new_balance);
             } else {
                 batch.delete_token_holder(type_hash, lock_hash);
             }
@@ -1010,6 +1017,87 @@ mod tests {
         assert_eq!(updated.transfers_count, 1);
         assert_eq!(updated.holders_count, 1);
         assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_process_udt_transfers_batch_updates_ranked_holder_indexes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let type_hash = vec![0xAE; 32];
+        let lock_a = vec![0x31; 32];
+        let lock_b = vec![0x32; 32];
+        store
+            .put_token_direct(
+                &type_hash,
+                &TokenInfo {
+                    type_code_hash: vec![0xCD; 32],
+                    hash_type: 1,
+                    type_args: vec![0x11; 20],
+                    standard: "sudt".to_string(),
+                    name: None,
+                    symbol: None,
+                    decimals: Some(8),
+                    total_supply: Some(100),
+                    max_supply: None,
+                    holders_count: 1,
+                    first_seen_block: 100,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 0,
+                },
+            )
+            .unwrap();
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_token_holder(&type_hash, &lock_a, 100);
+        seed.put_token_holder_by_balance(&type_hash, &lock_a, 100);
+        seed.put_addr_token_by_balance(&lock_a, &type_hash, 100);
+        seed.commit().unwrap();
+
+        let transfer = ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: Some(lock_a.clone()),
+            to_lock_hash: lock_b.clone(),
+            amount: 40u128,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: false,
+            is_burn: false,
+        };
+
+        let tx_hash = [0xEE; 32];
+        let mut block_timestamps = HashMap::new();
+        block_timestamps.insert(101i64, 1_700_000_000_000i64);
+        let transfers = vec![(&transfer, tx_hash.as_slice(), 101i64)];
+
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .process_udt_transfers_batch(&transfers, &HashMap::new(), &block_timestamps, &mut batch)
+            .unwrap();
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store
+                .list_token_holders_by_balance(&type_hash, 10, None)
+                .unwrap(),
+            vec![(lock_a.clone(), 60), (lock_b.clone(), 40)]
+        );
+        assert_eq!(
+            store
+                .list_address_tokens_by_balance(&lock_a, 10, None)
+                .unwrap(),
+            vec![(type_hash.clone(), 60)]
+        );
+        assert_eq!(
+            store
+                .list_address_tokens_by_balance(&lock_b, 10, None)
+                .unwrap(),
+            vec![(type_hash.clone(), 40)]
+        );
     }
 
     #[test]

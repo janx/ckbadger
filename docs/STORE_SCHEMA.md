@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (45 total: 44 domain + 1 append-only)
+# ckbadger-store Column Families (47 total: 46 domain + 1 append-only)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 44 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 46 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode. Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
@@ -32,6 +32,8 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `dao_by_status_block`            | status (2B BE) + block_desc (8B BE) + outpoint (34B)  | empty                   | DAO index by status + deposit block DESC                     |
 | `tokens`                         | type_script_hash (32B)                                | TokenInfo               | UDT token metadata                                           |
 | `token_holders`                  | type_hash + lock_hash                                 | balance                 | Token holder balances                                        |
+| `token_holders_by_balance`       | type_hash + balance_desc + lock_hash                  | empty                   | Token holders ranked by balance DESC                         |
+| `addr_tokens_by_balance`         | lock_hash + balance_desc + type_hash                  | empty                   | Address token balances ranked by balance DESC                |
 | `token_transfers`                | type_hash + block + tx_index                          | TransferInfo            | Token transfer records                                       |
 | `spore_data`                     | spore_id (32B)                                        | SporeData               | Spore NFT metadata                                           |
 | `spore_by_cluster`               | cluster_id + spore_id                                 | empty                   | Spore index by cluster                                       |
