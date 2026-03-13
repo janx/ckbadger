@@ -49,6 +49,7 @@ fn bundle_owner_to_activity_entry(
         has_type_script: owner.has_type_script,
         asset_changes: owner.asset_changes.clone(),
         type_calls: owner.type_calls.clone(),
+        lock_calls: owner.lock_calls.clone(),
         peers: owner.peers.clone(),
     }
 }
@@ -352,6 +353,7 @@ mod tests {
                     involved_script_code_hashes: vec![vec![0x33; 32]],
                     asset_changes: vec![],
                     type_calls: None,
+                    lock_calls: None,
                     peers: vec![],
                 })
                 .collect(),
@@ -382,6 +384,7 @@ mod tests {
                 involved_script_code_hashes: vec![vec![0x33; 32]],
                 asset_changes: vec![],
                 type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         }

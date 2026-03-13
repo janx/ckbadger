@@ -228,6 +228,7 @@ fn make_single_owner_bundle(lock_hash: &[u8], activity: &ActivityEntry) -> TxAct
             involved_script_code_hashes: vec![vec![0x11; 32]],
             asset_changes: activity.asset_changes.clone(),
             type_calls: activity.type_calls.clone(),
+            lock_calls: activity.lock_calls.clone(),
             peers: activity.peers.clone(),
         }],
     }
@@ -7101,6 +7102,7 @@ async fn test_address_activities_reads_from_derived_store() {
         has_type_script: false,
         asset_changes: vec![],
         type_calls: None,
+        lock_calls: None,
         peers: vec![],
     };
 
@@ -7233,6 +7235,7 @@ async fn test_address_activities_return_type_calls_separately_and_support_script
             type_hash_type: 1,
             type_args: type_args.clone(),
         }]),
+        lock_calls: None,
         peers: vec![],
     };
 
@@ -7341,6 +7344,7 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
             type_hash_type: 1,
             type_args: type_args.clone(),
         }]),
+        lock_calls: None,
         peers: vec![],
     };
 
@@ -7372,6 +7376,7 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
             involved_script_code_hashes: vec![vec![0x24; 32], type_code_hash.clone()],
             asset_changes: entry.asset_changes.clone(),
             type_calls: entry.type_calls.clone(),
+            lock_calls: entry.lock_calls.clone(),
             peers: entry.peers.clone(),
         }],
     });

@@ -999,6 +999,8 @@ pub struct ActivityEntry {
     pub has_type_script: bool,
     pub asset_changes: Vec<AssetChange>,
     pub type_calls: Option<Vec<TypeCallEntry>>,
+    #[serde(default)]
+    pub lock_calls: Option<Vec<LockCallEntry>>,
     /// Lock hashes of other parties in this transaction.
     pub peers: Vec<Vec<u8>>,
 }
@@ -1008,6 +1010,13 @@ pub struct TypeCallEntry {
     pub type_code_hash: Vec<u8>,
     pub type_hash_type: i16,
     pub type_args: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockCallEntry {
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1022,6 +1031,8 @@ pub struct OwnerActivityDelta {
     pub involved_script_code_hashes: Vec<Vec<u8>>,
     pub asset_changes: Vec<AssetChange>,
     pub type_calls: Option<Vec<TypeCallEntry>>,
+    #[serde(default)]
+    pub lock_calls: Option<Vec<LockCallEntry>>,
     pub peers: Vec<Vec<u8>>,
 }
 
@@ -1443,6 +1454,7 @@ mod tests {
                 },
             ],
             type_calls: None,
+            lock_calls: None,
             peers: vec![vec![0xBB; 32], vec![0xCC; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1501,6 +1513,7 @@ mod tests {
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1550,6 +1563,7 @@ mod tests {
             has_type_script: false,
             asset_changes: vec![],
             type_calls: None,
+            lock_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1578,6 +1592,7 @@ mod tests {
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![vec![0xEE; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1605,6 +1620,7 @@ mod tests {
             has_type_script: false,
             asset_changes: vec![],
             type_calls: None,
+            lock_calls: None,
             peers: vec![],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1636,6 +1652,7 @@ mod tests {
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![vec![0xFF; 32]],
         };
         let bytes = bincode::serialize(&entry).unwrap();
@@ -1668,6 +1685,7 @@ mod tests {
                 involved_script_code_hashes: vec![vec![0xDD; 32]],
                 asset_changes: vec![],
                 type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         };

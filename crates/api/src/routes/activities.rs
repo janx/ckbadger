@@ -581,6 +581,7 @@ mod tests {
                 involved_script_code_hashes: vec![vec![0x33; 32]],
                 asset_changes: vec![],
                 type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         }

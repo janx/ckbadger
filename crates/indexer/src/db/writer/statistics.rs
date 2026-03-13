@@ -1662,6 +1662,7 @@ mod activity_stats_tests {
             has_type_script,
             asset_changes: changes,
             type_calls: None,
+            lock_calls: None,
             peers: vec![],
         }
     }
@@ -1682,6 +1683,7 @@ mod activity_stats_tests {
             involved_script_code_hashes: vec![vec![0x11; 32]],
             asset_changes: changes,
             type_calls: None,
+            lock_calls: None,
             peers: vec![],
         }
     }
@@ -2008,6 +2010,7 @@ mod activity_stats_tests {
                 type_hash_type: 1,
                 type_args: vec![0xEE; 20],
             }]),
+            lock_calls: None,
             peers: vec![],
         };
         BatchWriter::accumulate_activity_stats(&entry, &scripts, &mut stats);

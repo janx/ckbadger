@@ -416,6 +416,7 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
                 involved_script_code_hashes: vec![vec![0x11; 32]],
                 asset_changes: vec![],
                 type_calls: None,
+                lock_calls: None,
                 peers: vec![],
             }],
         };
