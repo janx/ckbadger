@@ -46,7 +46,6 @@ pub(crate) fn should_consume_dotbit_account(
 
 /// Returns true if the spore should be consumed in this batch.
 /// If the spore was re-created later in the same batch (transfer), skip consumption.
-#[allow(dead_code)] // will be called from T6a batch processing
 pub(crate) fn should_consume_spore(
     latest_create_tx_index: Option<usize>,
     consume_tx_index: usize,
@@ -59,7 +58,6 @@ pub(crate) fn should_consume_spore(
 
 /// Returns true if the mNFT token should be consumed in this batch.
 /// If the token was re-created later in the same batch (transfer), skip consumption.
-#[allow(dead_code)] // will be called from T6b batch processing
 pub(crate) fn should_consume_mnft_token(
     latest_create_tx_index: Option<usize>,
     consume_tx_index: usize,

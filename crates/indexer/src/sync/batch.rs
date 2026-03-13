@@ -2153,6 +2153,7 @@ impl Indexer {
                         let mut spore_activity_acc = ObjectCollectionActivityAccumulator::new();
                         let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
                         let mut identity_activity_batch = StoreBatch::new(store);
+                        let mut batch_spore_latest_create: HashMap<Vec<u8>, usize> = HashMap::new();
                         let mut block_tx_idx = 0usize;
                         for (block_idx, _block_response) in blocks.iter().enumerate() {
                             let parsed = &all_parsed_blocks[block_idx];
@@ -2195,6 +2196,10 @@ impl Indexer {
                                         &mut batch,
                                         &mut spore_state,
                                     )?;
+                                    batch_spore_latest_create
+                                        .entry(spore.spore_id.clone())
+                                        .and_modify(|idx| *idx = (*idx).max(tx_global_index))
+                                        .or_insert(tx_global_index);
                                     if spore.is_did {
                                         identity_activity_acc.record(
                                             &DID_CKB_SENTINEL_COLLECTION,
@@ -2226,6 +2231,50 @@ impl Indexer {
                             }
                             block_tx_idx += tx_count_for_block;
                         }
+
+                        // Build tx metadata lookup for consumption processing
+                        let mut tx_lookup: Vec<(usize, i64, i64, Vec<u8>)> =
+                            Vec::with_capacity(all_tx_data.len());
+                        for parsed in all_parsed_blocks.iter().take(blocks.len()) {
+                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let ts_ms = parsed.timestamp.timestamp_millis();
+                            for tx_idx in 0..tx_count_for_block {
+                                tx_lookup.push((tx_idx, parsed.number, ts_ms, parsed.hash.clone()));
+                            }
+                        }
+
+                        // Phase 2: Spore consumption from pre-identified events
+                        for event in &pre_parsed_nft_data.consumed_spore {
+                            let should_consume = should_consume_spore(
+                                batch_spore_latest_create.get(&event.spore_id).copied(),
+                                event.tx_global_index,
+                            );
+                            if should_consume {
+                                if let Some(collection_id) = writer.consume_spore(
+                                    &event.spore_id,
+                                    event.block_number,
+                                    &event.consuming_tx_hash,
+                                    &mut batch,
+                                    &mut spore_state,
+                                )? {
+                                    let (tx_idx, _, ts_ms, ref block_hash) =
+                                        tx_lookup[event.tx_global_index];
+                                    spore_activity_acc.record(
+                                        &collection_id,
+                                        &event.consuming_tx_hash,
+                                        &event.spore_id,
+                                        block_hash,
+                                        event.block_number,
+                                        checked_usize_to_i32(tx_idx, "tx_idx"),
+                                        ts_ms,
+                                        false, // is_creation = false for consumption
+                                    );
+                                }
+                                // Note: consume_spore returns None for did:ckb identity spores
+                                // (consumption is handled internally, no activity via accumulator — matches live sync behavior)
+                            }
+                        }
+
                         spore_activity_acc.flush(&mut activity_batch);
                         let identity_inserted =
                             identity_activity_acc.flush_identity(&mut identity_activity_batch);
@@ -2416,6 +2465,43 @@ impl Indexer {
                                     }
                                 });
                             activity.consumed_account_ids.insert(event.account_id.clone());
+                        }
+                    }
+
+                    // Phase 2b: mNFT token consumption from pre-identified events
+                    let mut batch_mnft_latest_create: HashMap<Vec<u8>, usize> = HashMap::new();
+                    for &(tx_gi, _, ref token) in &pre_parsed_nft_data.mnft_tokens {
+                        batch_mnft_latest_create
+                            .entry(token.token_id.clone())
+                            .and_modify(|idx| *idx = (*idx).max(tx_gi))
+                            .or_insert(tx_gi);
+                    }
+
+                    for event in &pre_parsed_nft_data.consumed_mnft {
+                        let should_consume = should_consume_mnft_token(
+                            batch_mnft_latest_create.get(&event.token_id).copied(),
+                            event.tx_global_index,
+                        );
+                        if should_consume {
+                            if let Some(collection_id) = writer.consume_mnft_token_with_state(
+                                &event.token_id,
+                                event.block_number,
+                                &event.consuming_tx_hash,
+                                &mut batch,
+                                &mut mnft_state,
+                            )? {
+                                let (tx_idx, _, ts_ms, ref block_hash) = tx_lookup[event.tx_global_index];
+                                object_activity_acc.record(
+                                    &collection_id,
+                                    &event.consuming_tx_hash,
+                                    &event.token_id,
+                                    block_hash,
+                                    event.block_number,
+                                    checked_usize_to_i32(tx_idx, "tx_idx"),
+                                    ts_ms,
+                                    false, // is_creation = false for consumption
+                                );
+                            }
                         }
                     }
 
