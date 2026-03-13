@@ -958,6 +958,16 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Activities ----
 
+    pub fn put_tx_activity_bundle(&mut self, bundle: &TxActivityBundle) {
+        let key = keys::encode_tx_activity_bundle_key(
+            bundle.block_number,
+            bundle.tx_index,
+            &bundle.tx_hash,
+        );
+        let value = bincode::serialize(bundle).expect("serialize TxActivityBundle");
+        self.put_cf(self.store.cf_activities(), key, &value);
+    }
+
     pub fn put_activity(
         &mut self,
         lock_hash: &[u8],
@@ -1247,6 +1257,32 @@ mod tests {
         }
     }
 
+    fn make_tx_activity_bundle(block_num: i64, tx_idx: i32, owners: usize) -> TxActivityBundle {
+        TxActivityBundle {
+            tx_hash: vec![block_num as u8; 32],
+            block_hash: vec![0x80 | (block_num as u8); 32],
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            is_cellbase: tx_idx == 0,
+            owners: (0..owners)
+                .map(|i| OwnerActivityDelta {
+                    lock_hash: vec![i as u8; 32],
+                    lock_code_hash: vec![0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0x22; 20],
+                    ckb_delta: i as i128,
+                    used_delta: 0,
+                    has_type_script: false,
+                    involved_script_code_hashes: vec![vec![0x33; 32]],
+                    asset_changes: vec![],
+                    script_calls: None,
+                    peers: vec![],
+                })
+                .collect(),
+        }
+    }
+
     #[allow(dead_code)]
     fn make_nft_collection_activity(tx_hash_byte: u8) -> ObjectCollectionActivityEntry {
         ObjectCollectionActivityEntry {
@@ -1278,6 +1314,25 @@ mod tests {
         assert_eq!(results[1].2.ckb_delta, -300);
         assert_eq!(results[2].0, 100);
         assert_eq!(results[2].2.ckb_delta, 500);
+    }
+
+    #[test]
+    fn test_put_tx_activity_bundle_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let bundle = make_tx_activity_bundle(100, 0, 2);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_activity_bundle(&bundle);
+        batch.commit().unwrap();
+
+        let loaded = store
+            .get_tx_activity_bundle(100, 0, &bundle.tx_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.block_number, 100);
+        assert_eq!(loaded.tx_index, 0);
+        assert_eq!(loaded.owners.len(), 2);
     }
 
     #[test]

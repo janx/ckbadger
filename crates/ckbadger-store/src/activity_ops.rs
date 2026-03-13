@@ -14,7 +14,97 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
+fn validate_tx_activity_bundle_identity(
+    bundle: &TxActivityBundle,
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash_from_key: &[u8],
+) -> anyhow::Result<()> {
+    if bundle.block_number != block_num || bundle.tx_index != tx_idx {
+        anyhow::bail!(
+            "tx activity bundle key/value location mismatch: key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
+            block_num,
+            bundle.block_number,
+            tx_idx,
+            bundle.tx_index
+        );
+    }
+    if bundle.tx_hash != tx_hash_from_key {
+        anyhow::bail!(
+            "tx activity bundle key/value tx_hash mismatch: block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+            block_num,
+            tx_idx,
+            bytes_to_hex(tx_hash_from_key),
+            bytes_to_hex(&bundle.tx_hash)
+        );
+    }
+    Ok(())
+}
+
 impl CkbadgerStore {
+    pub fn get_tx_activity_bundle(
+        &self,
+        block_num: i64,
+        tx_idx: i32,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Option<TxActivityBundle>> {
+        let key = keys::encode_tx_activity_bundle_key(block_num, tx_idx, tx_hash);
+        match self.get_cf(self.cf_activities(), &key)? {
+            Some(value) => {
+                let bundle: TxActivityBundle = bincode::deserialize(&value)?;
+                validate_tx_activity_bundle_identity(&bundle, block_num, tx_idx, tx_hash)?;
+                Ok(Some(bundle))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_tx_activity_bundles_recent(
+        &self,
+        limit: usize,
+        cursor: Option<(i64, i32)>,
+    ) -> anyhow::Result<Vec<TxActivityBundle>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let start_key = cursor.map(|(block_num, tx_idx)| {
+            keys::encode_tx_activity_bundle_seek_after_key(block_num, tx_idx)
+        });
+
+        let iter = match start_key.as_ref() {
+            Some(key) => self.iterator_cf(
+                self.cf_activities(),
+                rocksdb::IteratorMode::From(key, rocksdb::Direction::Forward),
+            ),
+            None => self.iterator_cf(self.cf_activities(), rocksdb::IteratorMode::Start),
+        };
+
+        let mut results = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate tx activity bundles in list_tx_activity_bundles_recent: {}",
+                    e
+                )
+            })?;
+            if key.len() != keys::TX_ACTIVITY_BUNDLE_KEY_SIZE {
+                continue;
+            }
+
+            let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_activity_bundle_key(&key);
+            let bundle: TxActivityBundle = bincode::deserialize(&value)?;
+            validate_tx_activity_bundle_identity(&bundle, block_num, tx_idx, &tx_hash_from_key)?;
+
+            results.push(bundle);
+            if results.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
     /// List activities for an address (lock_hash), newest first.
     ///
     /// Optionally start after the given `(block_num, tx_idx)` cursor.
@@ -162,6 +252,32 @@ mod tests {
         make_activity_with_hash(&[block_num as u8; 32], block_num, tx_idx)
     }
 
+    fn make_bundle(block_num: i64, tx_idx: i32, owner_count: usize) -> TxActivityBundle {
+        TxActivityBundle {
+            tx_hash: vec![block_num as u8; 32],
+            block_hash: vec![0x40 | (block_num as u8); 32],
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            is_cellbase: false,
+            owners: (0..owner_count)
+                .map(|i| OwnerActivityDelta {
+                    lock_hash: vec![i as u8; 32],
+                    lock_code_hash: vec![0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0x22; 20],
+                    ckb_delta: i as i128,
+                    used_delta: 0,
+                    has_type_script: false,
+                    involved_script_code_hashes: vec![vec![0x33; 32]],
+                    asset_changes: vec![],
+                    script_calls: None,
+                    peers: vec![],
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn test_list_activities_limit_zero_returns_empty() {
         let dir = TempDir::new().unwrap();
@@ -220,5 +336,23 @@ mod tests {
         assert_eq!(next[0].0, 99);
         assert_eq!(next[0].1, 3);
         assert_eq!(next[0].2.tx_hash, vec![0x30; 32]);
+    }
+
+    #[test]
+    fn test_list_tx_activity_bundles_recent_orders_newest_first() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_activity_bundle(&make_bundle(300, 0, 1));
+        batch.put_tx_activity_bundle(&make_bundle(200, 1, 1));
+        batch.put_tx_activity_bundle(&make_bundle(100, 2, 1));
+        batch.commit().unwrap();
+
+        let rows = store.list_tx_activity_bundles_recent(10, None).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].block_number, 300);
+        assert_eq!(rows[1].block_number, 200);
+        assert_eq!(rows[2].block_number, 100);
     }
 }
