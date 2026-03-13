@@ -763,10 +763,10 @@ fn run_exact_i128_explorer_check_with_offset(
 
     if checked == 0 {
         return CheckResult {
-            passed: true,
+            passed: false,
             items_checked: 0,
             items_failed: 0,
-            detail: None,
+            detail: Some("no overlapping dates found between local and explorer data".to_string()),
             findings: vec![Finding {
                 entity: "overlap".to_string(),
                 details: vec![
@@ -852,18 +852,18 @@ fn run_tolerance_explorer_check_internal(
                 {
                     findings.push(f);
                 }
+                checked += 1;
             }
-            checked += 1;
         }
         progress.inc(1);
     }
 
     if checked == 0 {
         return CheckResult {
-            passed: true,
+            passed: false,
             items_checked: 0,
             items_failed: 0,
-            detail: None,
+            detail: Some("no overlapping dates found between local and explorer data".to_string()),
             findings: vec![Finding {
                 entity: "overlap".to_string(),
                 details: vec![

@@ -750,6 +750,11 @@ async fn get_transaction_detail(
     let confirmations = if tip_block >= block_number {
         tip_block - block_number + 1
     } else {
+        tracing::warn!(
+            tip_block,
+            block_number,
+            "tip_block < block_number for committed tx; secondary reader may be stale"
+        );
         0
     };
 
@@ -1829,6 +1834,11 @@ async fn get_transaction_lifecycle(
         if tip >= block_num {
             tip - block_num + 1
         } else {
+            tracing::warn!(
+                tip,
+                block_num,
+                "tip < block_num for committed tx; secondary reader may be stale"
+            );
             0
         }
     };

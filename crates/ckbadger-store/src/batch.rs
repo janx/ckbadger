@@ -200,8 +200,9 @@ impl<'a> StoreBatch<'a> {
                 key: key_ref.to_vec(),
                 value: Some(value_ref.to_vec()),
             });
+        } else {
+            self.batch.put_cf(cf, key_ref, value_ref);
         }
-        self.batch.put_cf(cf, key_ref, value_ref);
     }
 
     fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K) {
@@ -221,8 +222,9 @@ impl<'a> StoreBatch<'a> {
                 key: key_ref.to_vec(),
                 value: None,
             });
+        } else {
+            self.batch.delete_cf(cf, key_ref);
         }
-        self.batch.delete_cf(cf, key_ref);
     }
 
     // ---- Live cells ----
@@ -2075,5 +2077,40 @@ mod tests {
         let mut a = StoreBatch::new(&store_a);
         let b = StoreBatch::new(&store_b);
         a.merge_from(b);
+    }
+
+    #[test]
+    fn test_append_only_batch_len_no_double_counting() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+
+        let info = LiveCellInfo {
+            capacity: 10000,
+            lock_script_hash: vec![1u8; 32],
+            lock_code_hash: vec![2u8; 32],
+            lock_hash_type: 1,
+            lock_args: vec![3u8; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 0,
+            udt_amount: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        assert_eq!(batch.len(), 0);
+        assert!(batch.is_empty());
+
+        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        assert_eq!(batch.len(), 1);
+        assert!(!batch.is_empty());
+
+        batch.put_cell_payload_by_outpoint(&[0xA2; 32], 0, &info);
+        assert_eq!(batch.len(), 2);
+
+        batch.put_cell_payload_by_outpoint(&[0xA3; 32], 0, &info);
+        assert_eq!(batch.len(), 3);
     }
 }

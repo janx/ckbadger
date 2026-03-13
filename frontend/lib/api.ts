@@ -2083,7 +2083,9 @@ export const api = {
   },
 
   getMempoolTransactions: (): Promise<MempoolTransaction[]> => {
-    return fetchApi('/mempool/transactions');
+    return fetchApi<{ transactions: MempoolTransaction[]; total: number }>(
+      '/mempool/transactions'
+    ).then((res) => res.transactions);
   },
 
   getMempoolBlocks: (): Promise<MempoolBlocksResponse> => {
