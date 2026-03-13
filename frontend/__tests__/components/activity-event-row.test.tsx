@@ -107,6 +107,30 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/Script call/).length).toBeGreaterThan(0);
   });
 
+  it('renders protocol name instead of Script call when protocolName is set', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          scriptCalls: [
+            {
+              typeCodeHash: '0xcode',
+              typeHashType: 'type',
+              typeArgs: '0x1234',
+              scriptHash: '0xhash',
+              scriptName: 'Pool',
+              protocolName: 'Stable++',
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/Stable\+\+/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Pool/).length).toBeGreaterThan(0);
+    // Should NOT show "Script call" when protocol name is present
+    expect(screen.queryByText(/Script call/)).not.toBeInTheDocument();
+  });
+
   it('renders multiple event types in one activity', () => {
     render(
       <ActivityEventGroup

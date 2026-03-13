@@ -117,6 +117,34 @@ describe('LatestActivities stream', () => {
     });
   });
 
+  it('renders protocol name for script calls with protocolName', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qprotocol111111111111111111111111111111111111111',
+        txHash: '0xtx-protocol',
+        scriptCalls: [
+          {
+            typeCodeHash: '0xcode',
+            typeHashType: 'type',
+            typeArgs: '0x1234',
+            scriptHash: '0xhash',
+            scriptName: 'Pool',
+            protocolName: 'Stable++',
+          },
+        ],
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Stable++')).toBeInTheDocument();
+      expect(screen.getByText(/Pool/)).toBeInTheDocument();
+      // Should NOT show "Script call" text when protocol name is present
+      expect(screen.queryByText(/Script call/)).not.toBeInTheDocument();
+    });
+  });
+
   it('renders CKB transfer for activities with no assets and no script calls', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
