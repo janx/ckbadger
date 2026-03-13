@@ -233,23 +233,18 @@ mod tests {
     }
 
     #[test]
-    fn test_next_undo_seq_scoped_prevents_cross_phase_collisions() {
-        let mut tx_scope_map = HashMap::new();
-        let mut addr_scope_map = HashMap::new();
+    fn test_next_undo_seq_scoped_increments_correctly() {
+        let mut scope_map = HashMap::new();
         let block_num = 42;
 
-        let tx_seq = next_undo_seq(&mut tx_scope_map, block_num, UndoSeqScope::TxContext);
-        let addr_seq = next_undo_seq(&mut addr_scope_map, block_num, UndoSeqScope::AppendAddrTx);
+        let seq1 = next_undo_seq(&mut scope_map, block_num, UndoSeqScope::TxContext);
+        let seq2 = next_undo_seq(&mut scope_map, block_num, UndoSeqScope::TxContext);
 
-        assert_ne!(tx_seq, addr_seq);
-        assert_eq!(
-            tx_seq >> UNDO_SEQ_SCOPE_SHIFT,
-            UndoSeqScope::TxContext as u64
-        );
-        assert_eq!(
-            addr_seq >> UNDO_SEQ_SCOPE_SHIFT,
-            UndoSeqScope::AppendAddrTx as u64
-        );
+        assert_ne!(seq1, seq2);
+        assert_eq!(seq1 >> UNDO_SEQ_SCOPE_SHIFT, UndoSeqScope::TxContext as u64);
+        assert_eq!(seq2 >> UNDO_SEQ_SCOPE_SHIFT, UndoSeqScope::TxContext as u64);
+        // Second call should have local seq = 1
+        assert_eq!(seq2 & UNDO_SEQ_LOCAL_MAX, 1);
     }
 
     #[test]
@@ -277,7 +272,7 @@ mod tests {
         put_append_delete_undo_entry(
             &mut domain_batch,
             &mut undo_seq_by_block,
-            UndoSeqScope::AppendAddrTx, // scope is just for sequence partitioning
+            UndoSeqScope::TxContext, // scope is just for sequence partitioning
             20,
             ckbadger_store::CF_CELLS,
             &cell_key_drop,

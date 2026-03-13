@@ -4,7 +4,7 @@ use ckbadger_store::types::SporeMediaProfile;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
-use super::bytes_to_pg_string;
+use super::bytes_to_safe_string;
 use super::script::ScriptParser;
 
 // Mainnet Spore v2 (latest)
@@ -159,14 +159,7 @@ impl SporeParser {
     }
 
     pub fn parse_spores(tx: &TransactionView) -> Vec<ParsedSporeCell> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing spores: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -175,14 +168,7 @@ impl SporeParser {
     }
 
     pub fn parse_clusters(tx: &TransactionView) -> Vec<ParsedClusterCell> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing spore clusters: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -209,7 +195,7 @@ impl SporeParser {
         let offset_cluster_id = u32::from_le_bytes(data[12..16].try_into().ok()?) as usize;
 
         let content_type = Self::read_bytes_field(data, offset_content_type, offset_content)?;
-        let content_type_str = bytes_to_pg_string(&content_type);
+        let content_type_str = bytes_to_safe_string(&content_type);
 
         let content = Self::read_bytes_field(data, offset_content, offset_cluster_id)?;
 
@@ -250,10 +236,10 @@ impl SporeParser {
         };
 
         let name = Self::read_bytes_field(data, offset_name, offset_description)
-            .map(|b| bytes_to_pg_string(&b));
+            .map(|b| bytes_to_safe_string(&b));
 
         let description = Self::read_bytes_field(data, offset_description, end_of_description)
-            .map(|b| bytes_to_pg_string(&b));
+            .map(|b| bytes_to_safe_string(&b));
 
         Some(ClusterData { name, description })
     }
@@ -306,16 +292,8 @@ struct ClusterData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellOutput, Script, TransactionView};
-
-    fn create_lock_script() -> Script {
-        Script {
-            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                .to_string(),
-            hash_type: "type".to_string(),
-            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-        }
-    }
 
     fn create_spore_type_script(spore_id: &str) -> Script {
         Script {
@@ -621,7 +599,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "transaction outputs mismatch while parsing spores")]
+    #[should_panic(expected = "outputs/outputs_data length mismatch")]
     fn test_parse_spores_panics_on_outputs_data_length_mismatch() {
         let tx = TransactionView {
             hash: "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
@@ -641,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "transaction outputs mismatch while parsing spore clusters")]
+    #[should_panic(expected = "outputs/outputs_data length mismatch")]
     fn test_parse_clusters_panics_on_outputs_data_length_mismatch() {
         let tx = TransactionView {
             hash: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),

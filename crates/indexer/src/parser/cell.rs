@@ -57,7 +57,7 @@ impl CellParser {
             };
 
         Ok(ParsedCell {
-            capacity: Self::parse_capacity_i64(&output.capacity),
+            capacity: super::parse_capacity_i64(&output.capacity),
             lock_code_hash: parse_hex_to_bytes(&output.lock.code_hash),
             lock_hash_type: ScriptParser::hash_type_to_i16(&output.lock.hash_type)?,
             lock_args: parse_hex_to_bytes(&output.lock.args),
@@ -67,22 +67,8 @@ impl CellParser {
             type_args,
             type_script_hash,
             data_hash,
-            data_size: data.len() as i32,
+            data_size: i32::try_from(data.len()).expect("cell data size exceeds i32::MAX"),
             data,
-        })
-    }
-
-    fn parse_capacity_i64(capacity_hex: &str) -> i64 {
-        let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        let parsed = u64::from_str_radix(hex, 16)
-            .unwrap_or_else(|e| panic!("invalid cell capacity hex '{}': {}", capacity_hex, e));
-        i64::try_from(parsed).unwrap_or_else(|_| {
-            panic!(
-                "cell capacity over i64 range '{}': {} (max={})",
-                capacity_hex,
-                parsed,
-                i64::MAX
-            )
         })
     }
 }
@@ -90,18 +76,11 @@ impl CellParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
 
     const SECP256K1_CODE_HASH: &str =
         "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
-
-    fn create_lock_script() -> Script {
-        Script {
-            code_hash: SECP256K1_CODE_HASH.to_string(),
-            hash_type: "type".to_string(),
-            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-        }
-    }
 
     fn create_type_script() -> Script {
         Script {
@@ -145,38 +124,6 @@ mod tests {
             outputs_data: vec!["0x".to_string(), "0xdeadbeef".to_string()],
             witnesses: vec![],
         }
-    }
-
-    #[test]
-    fn test_parse_capacity_i64_with_prefix() {
-        assert_eq!(
-            CellParser::parse_capacity_i64("0x174876e800"),
-            100_000_000_000
-        );
-        assert_eq!(
-            CellParser::parse_capacity_i64("0x2540be400"),
-            10_000_000_000
-        );
-    }
-
-    #[test]
-    fn test_parse_capacity_i64_without_prefix() {
-        assert_eq!(
-            CellParser::parse_capacity_i64("174876e800"),
-            100_000_000_000
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid cell capacity hex")]
-    fn test_parse_capacity_i64_invalid_panics() {
-        let _ = CellParser::parse_capacity_i64("invalid");
-    }
-
-    #[test]
-    #[should_panic(expected = "cell capacity over i64 range")]
-    fn test_parse_capacity_i64_overflow_panics() {
-        let _ = CellParser::parse_capacity_i64("0x8000000000000000");
     }
 
     #[test]

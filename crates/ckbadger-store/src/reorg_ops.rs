@@ -97,6 +97,15 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow:
         keys::STATS_PREFIX_ACTIVITY_HOURLY => {
             Ok(suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd)
         }
+        // non-date-scoped outpoint/index entries: always delete for replay
+        keys::STATS_PREFIX_SPORE_OUTPOINT
+        | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID
+        | keys::STATS_PREFIX_SPORE_TYPE_INDEX
+        | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
+        | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
+        | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
+        | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
+        | keys::STATS_PREFIX_NFT_TYPE_INDEX => Ok(true),
         _ => Ok(false),
     }
 }
@@ -2300,6 +2309,52 @@ mod tests {
 
         let old_key = crate::keys::encode_nft_daily_key(&collection_id, 20260209);
         assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_outpoint_and_index_prefixes_always_deleted() {
+        let cutoff = b"20260210";
+        let tx_hash = [0xAA; 32];
+        let output_index: i16 = 0;
+        let spore_id = [0xBB; 32];
+        let account_id = [0xCC; 20];
+        let type_script_hash = [0xDD; 32];
+
+        // STATS_PREFIX_SPORE_OUTPOINT
+        let key = crate::keys::encode_spore_outpoint_key(&tx_hash, output_index);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_SPORE_OUTPOINT_BY_ID
+        let key = crate::keys::encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, output_index);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_SPORE_TYPE_INDEX
+        let key = crate::keys::encode_spore_type_index_key(&type_script_hash);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_MNFT_CLASS_OUTPOINT
+        let key = crate::keys::encode_mnft_class_outpoint_key(&tx_hash, output_index);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_MNFT_TOKEN_OUTPOINT
+        let key = crate::keys::encode_mnft_token_outpoint_key(&tx_hash, output_index);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
+        let key = crate::keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
+        let key = crate::keys::encode_dotbit_outpoint_by_account_id_key(
+            &account_id,
+            &tx_hash,
+            output_index,
+        );
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+
+        // STATS_PREFIX_NFT_TYPE_INDEX
+        let key = crate::keys::encode_nft_type_index_key(&type_script_hash);
+        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
     }
 
     #[test]

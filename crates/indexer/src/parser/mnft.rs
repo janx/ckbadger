@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
-use super::bytes_to_pg_string;
+use super::bytes_to_safe_string;
 use super::cell::ParsedCell;
 use super::script::ScriptParser;
 
@@ -266,14 +266,7 @@ impl MnftParser {
     }
 
     pub fn parse_issuers(tx: &TransactionView) -> Vec<ParsedMnftIssuer> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing mNFT issuers: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -284,14 +277,7 @@ impl MnftParser {
     pub fn parse_classes_with_output_indices(
         tx: &TransactionView,
     ) -> Vec<(usize, ParsedMnftClass)> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing mNFT classes: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -303,14 +289,7 @@ impl MnftParser {
     }
 
     pub fn parse_tokens_with_output_indices(tx: &TransactionView) -> Vec<(usize, ParsedMnftToken)> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing mNFT tokens: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -406,13 +385,13 @@ impl MnftParser {
             return None;
         }
 
-        let text = bytes_to_pg_string(&data[*offset..*offset + size]);
+        let text = bytes_to_safe_string(&data[*offset..*offset + size]);
         *offset += size;
         Some(text)
     }
 
     fn extract_json_field(data: &[u8], field: &str) -> Option<String> {
-        let text = bytes_to_pg_string(data);
+        let text = bytes_to_safe_string(data);
         let key = format!("\"{}\"", field);
         let start = text.find(&key)?;
         let colon_pos = text[start..].find(':')?;
@@ -453,16 +432,8 @@ struct TokenData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellDep, CellInput, CellOutput, Script, TransactionView};
-
-    fn create_lock_script() -> Script {
-        Script {
-            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                .to_string(),
-            hash_type: "type".to_string(),
-            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-        }
-    }
 
     fn create_issuer_type_script(type_id: &str) -> Script {
         Script {
@@ -874,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "transaction outputs mismatch while parsing mNFT issuers")]
+    #[should_panic(expected = "outputs/outputs_data length mismatch")]
     fn test_parse_issuers_panics_on_outputs_data_length_mismatch() {
         let tx = create_dummy_tx(
             vec![CellOutput {

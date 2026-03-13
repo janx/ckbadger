@@ -16,19 +16,11 @@ pub(crate) const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 #[repr(u16)]
 pub(crate) enum UndoSeqScope {
     TxContext = 0x0001,
-    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
-    AppendAddrTx = 0x0002,
-    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
-    AppendActivity = 0x0003,
-    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
-    AppendObjectCollectionActivity = 0x0004,
-    #[allow(dead_code)] // Kept for backward compat; activity CFs now use domain rollback
-    AppendIdentityCollectionActivity = 0x0005,
 }
 
 // ── Sync / Reorg action enums ──────────────────────────────────────────
 
-#[allow(dead_code)]
+#[allow(dead_code)] // ReorgResult fields are informational; matched as _ in pipeline
 pub(crate) enum ReorgAction {
     Handled(ReorgResult),
     DeepForkPaused,
@@ -94,7 +86,7 @@ pub(crate) struct CachedCellInfo {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // fields written to cache but read back from DB via get_udt_cells_info_batch
 pub(crate) struct CachedUdtCellInfo {
     pub(crate) type_script_hash: Vec<u8>,
     pub(crate) type_code_hash: Vec<u8>,

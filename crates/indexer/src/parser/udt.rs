@@ -113,14 +113,7 @@ impl UdtParser {
     }
 
     pub fn parse_udt_cells(tx: &TransactionView) -> Vec<ParsedUdtCell> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing UDT cells: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -328,6 +321,7 @@ impl UdtParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellOutput, Script};
 
     fn create_sudt_type_script() -> Script {
@@ -341,15 +335,6 @@ mod tests {
     fn create_xudt_type_script() -> Script {
         Script {
             code_hash: XUDT_CODE_HASH_TYPE.to_string(),
-            hash_type: "type".to_string(),
-            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-        }
-    }
-
-    fn create_lock_script() -> Script {
-        Script {
-            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                .to_string(),
             hash_type: "type".to_string(),
             args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
         }
@@ -626,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "transaction outputs mismatch while parsing UDT cells")]
+    #[should_panic(expected = "outputs/outputs_data length mismatch")]
     fn test_parse_udt_cells_panics_on_outputs_data_length_mismatch() {
         use crate::rpc::TransactionView;
 

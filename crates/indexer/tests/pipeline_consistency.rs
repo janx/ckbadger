@@ -110,9 +110,7 @@ fn test_cell_info_lookup_returns_all_fields() {
 
     insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
-    let result = writer
-        .get_cells_info_batch(&[(&tx_hash, 0)], false)
-        .unwrap();
+    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
 
     assert_eq!(result.len(), 1);
     let (capacity, created_at_block, lock_script_hash, data_size) =
@@ -148,7 +146,7 @@ fn test_cell_info_batch_lookup_multiple_cells() {
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)], false)
+        .get_cells_info_batch(&[(&tx1, 0), (&tx2, 0), (&tx3, 0)])
         .unwrap();
 
     assert_eq!(result.len(), 3);
@@ -190,9 +188,7 @@ fn test_full_cells_info_returns_lock_and_type() {
 
     insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
-    let result = writer
-        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
-        .unwrap();
+    let result = writer.get_full_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
 
     assert_eq!(result.len(), 1);
     let info = result.get(&(tx_hash.clone(), 0)).unwrap();
@@ -224,9 +220,7 @@ fn test_full_cells_info_no_type_script() {
 
     insert_cells_for_test(&store, &writer, &[(&tx_hash, 0, &cell, 1000)], false);
 
-    let result = writer
-        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
-        .unwrap();
+    let result = writer.get_full_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
 
     assert_eq!(result.len(), 1);
     let info = result.get(&(tx_hash.clone(), 0)).unwrap();
@@ -260,7 +254,7 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
     batch.commit().unwrap();
 
     let err = writer
-        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
+        .get_full_cells_info_batch(&[(&tx_hash, 0)])
         .unwrap_err();
     assert!(err.to_string().contains("invalid occupied capacity"));
 }
@@ -290,7 +284,7 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
     batch.commit().unwrap();
 
     let err = writer
-        .get_full_cells_info_batch(&[(&tx_hash, 0)], false)
+        .get_full_cells_info_batch(&[(&tx_hash, 0)])
         .unwrap_err();
     assert!(err.to_string().contains("missing type_args"));
 }
@@ -316,9 +310,7 @@ fn test_same_batch_cell_consumption() {
     batch.commit().unwrap();
 
     // Cell should no longer be in live cells
-    let result = writer
-        .get_cells_info_batch(&[(&creating_tx, 0)], false)
-        .unwrap();
+    let result = writer.get_cells_info_batch(&[(&creating_tx, 0)]).unwrap();
 
     // get_cells_info_batch also checks consumed_cells, so it should still find it
     assert_eq!(result.len(), 1);
@@ -554,7 +546,7 @@ fn test_multiple_outputs_same_tx() {
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)], false)
+        .get_cells_info_batch(&[(&tx_hash, 0), (&tx_hash, 1), (&tx_hash, 2)])
         .unwrap();
 
     assert_eq!(result.len(), 3);
@@ -585,9 +577,7 @@ fn test_consumed_cell_not_in_live_cells() {
     batch.commit().unwrap();
 
     // get_cells_info_batch checks both live and consumed, so consumed cell is still found
-    let result = writer
-        .get_cells_info_batch(&[(&tx_hash, 0)], false)
-        .unwrap();
+    let result = writer.get_cells_info_batch(&[(&tx_hash, 0)]).unwrap();
     // Should find it in consumed cells
     assert_eq!(result.len(), 1);
 }
@@ -610,7 +600,7 @@ fn test_cell_lookup_across_height_ranges() {
     );
 
     let result = writer
-        .get_cells_info_batch(&[(&tx_low_height, 0), (&tx_high_height, 0)], false)
+        .get_cells_info_batch(&[(&tx_low_height, 0), (&tx_high_height, 0)])
         .unwrap();
 
     assert_eq!(result.len(), 2);

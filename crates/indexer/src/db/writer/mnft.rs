@@ -499,35 +499,39 @@ impl BatchWriter {
     pub fn consume_mnft_token(
         &self,
         token_id: &[u8],
-        _block_number: i64,
-        _tx_hash: &[u8],
+        block_number: i64,
+        tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
         let mut state = self.new_mnft_batch_state();
-        self.consume_mnft_token_with_state(token_id, _block_number, _tx_hash, batch, &mut state)
+        self.consume_mnft_token_with_state(token_id, block_number, tx_hash, batch, &mut state)
     }
 
     pub(crate) fn consume_mnft_token_with_state(
         &self,
         token_id: &[u8],
-        _block_number: i64,
-        _tx_hash: &[u8],
+        block_number: i64,
+        tx_hash: &[u8],
         batch: &mut StoreBatch,
         state: &mut MnftBatchState,
     ) -> Result<Option<Vec<u8>>> {
         if let Some(mut entry) = state.get_token(self.store.as_ref(), token_id)? {
             if !entry.is_live {
                 bail!(
-                    "mnft token already consumed: token_id=0x{}",
-                    hex::encode(token_id)
+                    "mnft token already consumed: token_id=0x{}, block={}, tx=0x{}",
+                    hex::encode(token_id),
+                    block_number,
+                    hex::encode(tx_hash)
                 );
             }
             let collection_id = entry.collection_id.clone();
             let old_owner = entry.owner_lock_hash.clone();
             if old_owner.is_none() {
                 bail!(
-                    "mnft live token missing owner_lock_hash during consume: token_id=0x{}",
-                    hex::encode(token_id)
+                    "mnft live token missing owner_lock_hash during consume: token_id=0x{}, block={}, tx=0x{}",
+                    hex::encode(token_id),
+                    block_number,
+                    hex::encode(tx_hash)
                 );
             }
             entry.is_live = false;
@@ -540,16 +544,20 @@ impl BatchWriter {
                 let Some(mut agg) = state.get_collection_aggregate(self.store.as_ref(), cid)?
                 else {
                     bail!(
-                        "mnft collection aggregate missing: class_id=0x{}, token_id=0x{}",
+                        "mnft collection aggregate missing: class_id=0x{}, token_id=0x{}, block={}, tx=0x{}",
                         hex::encode(cid),
-                        hex::encode(token_id)
+                        hex::encode(token_id),
+                        block_number,
+                        hex::encode(tx_hash)
                     );
                 };
                 if agg.live_count <= 0 {
                     bail!(
-                        "mnft collection live_count underflow: class_id=0x{}, live_count={}",
+                        "mnft collection live_count underflow: class_id=0x{}, live_count={}, block={}, tx=0x{}",
                         hex::encode(cid),
-                        agg.live_count
+                        agg.live_count,
+                        block_number,
+                        hex::encode(tx_hash)
                     );
                 }
                 agg.live_count -= 1;
@@ -564,8 +572,10 @@ impl BatchWriter {
                 state.put_collection_aggregate(cid, agg, batch);
             } else {
                 bail!(
-                    "mnft token missing class_id: token_id=0x{}",
-                    hex::encode(token_id)
+                    "mnft token missing class_id: token_id=0x{}, block={}, tx=0x{}",
+                    hex::encode(token_id),
+                    block_number,
+                    hex::encode(tx_hash)
                 );
             }
             return Ok(collection_id);

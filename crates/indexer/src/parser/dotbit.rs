@@ -506,16 +506,8 @@ fn parse_molecule_dynvec_items(data: &[u8]) -> Option<Vec<&[u8]>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::test_helpers::create_lock_script;
     use crate::rpc::{CellDep, CellInput, CellOutput, OutPoint, Script, TransactionView};
-
-    fn create_lock_script() -> Script {
-        Script {
-            code_hash: "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
-                .to_string(),
-            hash_type: "type".to_string(),
-            args: "0x927f3e74dceb87c81ba65a19da4f098b4de75a0d".to_string(),
-        }
-    }
 
     fn create_account_cell_type_script_with_args(args: &[u8]) -> Script {
         Script {

@@ -37,9 +37,8 @@ fn dao_cache_entry_to_row(
     tx_hash: Vec<u8>,
     output_index: i16,
     entry: DaoDepositCacheEntry,
-) -> (i64, Vec<u8>, i16, String, i64, i16) {
+) -> (Vec<u8>, i16, String, i64, i16) {
     (
-        0,
         tx_hash,
         output_index,
         entry.capacity.to_string(),
@@ -49,7 +48,7 @@ fn dao_cache_entry_to_row(
 }
 
 pub trait DaoWithdrawalContextTrait {
-    fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)];
+    fn consumed_deposits(&self) -> &[(Vec<u8>, i16, String, i64, i16)];
     fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)];
     fn block_number(&self) -> i64;
     fn consuming_tx_hash(&self) -> &[u8];
@@ -64,7 +63,7 @@ pub trait DaoWithdrawalContextTrait {
 
 #[derive(Clone)]
 pub struct DaoWithdrawalContext {
-    pub consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+    pub consumed_deposits: Vec<(Vec<u8>, i16, String, i64, i16)>,
     pub new_dao_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
     pub tx_inputs: Vec<(Vec<u8>, i16)>,
     pub candidate_withdraw_to_outputs: Vec<(i16, Vec<u8>)>,
@@ -74,7 +73,7 @@ pub struct DaoWithdrawalContext {
 }
 
 impl DaoWithdrawalContextTrait for DaoWithdrawalContext {
-    fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+    fn consumed_deposits(&self) -> &[(Vec<u8>, i16, String, i64, i16)] {
         &self.consumed_deposits
     }
 
@@ -231,7 +230,7 @@ impl BatchWriter {
     pub fn find_consumed_dao_deposits(
         &self,
         inputs: &[(&[u8], i32)],
-    ) -> Result<Vec<(i64, Vec<u8>, i16, String, i64, i16)>> {
+    ) -> Result<Vec<(Vec<u8>, i16, String, i64, i16)>> {
         if inputs.is_empty() {
             return Ok(vec![]);
         }
@@ -331,7 +330,7 @@ impl BatchWriter {
 
     pub fn process_dao_withdrawals(
         &self,
-        consumed_dao_deposits: &[(i64, Vec<u8>, i16, String, i64, i16)],
+        consumed_dao_deposits: &[(Vec<u8>, i16, String, i64, i16)],
         new_dao_outputs: &[(Vec<u8>, i16, Vec<u8>, i64, u64)],
         candidate_withdraw_to_outputs: &[(i16, Vec<u8>)],
         tx_inputs: &[(Vec<u8>, i16)],
@@ -341,14 +340,8 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let mut consumed_output_indices: HashSet<usize> = HashSet::new();
-        for (
-            _deposit_id,
-            original_tx_hash,
-            original_output_index,
-            capacity_str,
-            deposit_block,
-            status,
-        ) in consumed_dao_deposits
+        for (original_tx_hash, original_output_index, capacity_str, deposit_block, status) in
+            consumed_dao_deposits
         {
             let capacity: i64 = capacity_str.parse().map_err(|e| {
                 anyhow!(
@@ -545,12 +538,12 @@ impl BatchWriter {
     pub fn find_consumed_dao_deposits_batch(
         &self,
         inputs: &[(&[u8], i16)],
-    ) -> Result<HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>> {
+    ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, i16, String, i64, i16)>> {
         if inputs.is_empty() {
             return Ok(HashMap::new());
         }
 
-        let mut result_map: HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)> =
+        let mut result_map: HashMap<(Vec<u8>, i16), (Vec<u8>, i16, String, i64, i16)> =
             HashMap::new();
 
         // Direct deposit lookups
@@ -628,7 +621,7 @@ impl BatchWriter {
         // Pre-fetch DAO fields for all relevant blocks
         let mut all_blocks: HashSet<i64> = HashSet::new();
         for ctx in contexts {
-            for (_, _, _, _, deposit_block, status) in ctx.consumed_deposits() {
+            for (_, _, _, deposit_block, status) in ctx.consumed_deposits() {
                 if *status == 1 {
                     all_blocks.insert(*deposit_block);
                 }
@@ -637,7 +630,7 @@ impl BatchWriter {
 
         // Also collect request blocks from the store (or pending deposits)
         for ctx in contexts {
-            for (_, tx_hash, output_index, _, _, status) in ctx.consumed_deposits() {
+            for (tx_hash, output_index, _, _, status) in ctx.consumed_deposits() {
                 if *status == 1 {
                     let outpoint_key = keys::encode_outpoint(tx_hash, *output_index);
                     let maybe_entry: Option<DaoDepositCacheEntry> = if let Some(value) = self
@@ -678,14 +671,8 @@ impl BatchWriter {
 
         for ctx in contexts {
             let mut consumed_output_indices: HashSet<usize> = HashSet::new();
-            for (
-                _deposit_id,
-                original_tx_hash,
-                original_output_index,
-                capacity_str,
-                deposit_block,
-                status,
-            ) in ctx.consumed_deposits()
+            for (original_tx_hash, original_output_index, capacity_str, deposit_block, status) in
+                ctx.consumed_deposits()
             {
                 let capacity: i64 = capacity_str.parse().map_err(|e| {
                     anyhow!(
@@ -884,14 +871,14 @@ mod tests {
 
     #[derive(Clone)]
     struct BatchCtx {
-        consumed: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+        consumed: Vec<(Vec<u8>, i16, String, i64, i16)>,
         new_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
         block_num: i64,
         consuming_tx: Vec<u8>,
     }
 
     impl DaoWithdrawalContextTrait for BatchCtx {
-        fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+        fn consumed_deposits(&self) -> &[(Vec<u8>, i16, String, i64, i16)] {
             &self.consumed
         }
         fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
@@ -964,10 +951,9 @@ mod tests {
             withdraw_to_output_index: None,
             compensation: None,
         };
-        let (id, tx_hash, output_index, capacity_str, deposit_block, status) =
+        let (tx_hash, output_index, capacity_str, deposit_block, status) =
             dao_cache_entry_to_row(vec![0xaa; 32], 3, entry);
 
-        assert_eq!(id, 0);
         assert_eq!(tx_hash, vec![0xaa; 32]);
         assert_eq!(output_index, 3);
         assert_eq!(capacity_str, "999");
@@ -1138,7 +1124,6 @@ mod tests {
 
         let ctx = BatchCtx {
             consumed: vec![(
-                0,
                 deposit_tx_hash,
                 deposit_output_index,
                 "not-a-number".to_string(),
@@ -1198,7 +1183,6 @@ mod tests {
 
         let ctx = BatchCtx {
             consumed: vec![(
-                0,
                 deposit_tx_hash,
                 deposit_output_index,
                 "10000000000".to_string(),
@@ -1253,7 +1237,6 @@ mod tests {
         batch.commit().unwrap();
 
         let consumed = vec![(
-            0,
             original_tx_hash.clone(),
             original_output_index,
             "50000000000".to_string(),
@@ -1311,7 +1294,6 @@ mod tests {
         batch.commit().unwrap();
 
         let consumed = vec![(
-            0,
             original_tx_hash.clone(),
             original_output_index,
             "50000000000".to_string(),
@@ -1379,7 +1361,6 @@ mod tests {
         batch.commit().unwrap();
 
         let consumed = vec![(
-            0,
             original_tx_hash.clone(),
             original_output_index,
             "50000000000".to_string(),
@@ -1467,13 +1448,13 @@ mod tests {
 
         #[derive(Clone)]
         struct TestCtx {
-            consumed: Vec<(i64, Vec<u8>, i16, String, i64, i16)>,
+            consumed: Vec<(Vec<u8>, i16, String, i64, i16)>,
             new_outputs: Vec<(Vec<u8>, i16, Vec<u8>, i64, u64)>,
             block_num: i64,
             consuming_tx: Vec<u8>,
         }
         impl DaoWithdrawalContextTrait for TestCtx {
-            fn consumed_deposits(&self) -> &[(i64, Vec<u8>, i16, String, i64, i16)] {
+            fn consumed_deposits(&self) -> &[(Vec<u8>, i16, String, i64, i16)] {
                 &self.consumed
             }
             fn new_dao_outputs(&self) -> &[(Vec<u8>, i16, Vec<u8>, i64, u64)] {
@@ -1492,7 +1473,6 @@ mod tests {
 
         let ctx = TestCtx {
             consumed: vec![(
-                0,
                 deposit_tx_hash.clone(),
                 deposit_output_index,
                 deposit_capacity.to_string(),
@@ -1585,7 +1565,6 @@ mod tests {
         ];
 
         let consumed = vec![(
-            0,
             deposit_a_tx.clone(),
             0i16,
             capacity.to_string(),
@@ -1664,7 +1643,6 @@ mod tests {
 
         let ctx = BatchCtx {
             consumed: vec![(
-                0,
                 deposit_tx_hash,
                 deposit_output_index,
                 "50000000000".to_string(),
@@ -1724,7 +1702,6 @@ mod tests {
 
         let ctx = BatchCtx {
             consumed: vec![(
-                0,
                 deposit_tx_hash,
                 deposit_output_index,
                 capacity.to_string(),
@@ -1840,7 +1817,6 @@ mod tests {
         ];
         let consumed = vec![
             (
-                0,
                 deposit_a_tx.clone(),
                 0i16,
                 capacity_a.to_string(),
@@ -1848,7 +1824,6 @@ mod tests {
                 0i16,
             ),
             (
-                0,
                 deposit_b_tx.clone(),
                 0i16,
                 capacity_b.to_string(),
@@ -2007,14 +1982,7 @@ mod tests {
             // Correct match.
             (withdraw_tx.clone(), 1i16, vec![0xBB; 32], capacity, 100u64),
         ];
-        let consumed = vec![(
-            0,
-            deposit_tx.clone(),
-            0i16,
-            capacity.to_string(),
-            100i64,
-            0i16,
-        )];
+        let consumed = vec![(deposit_tx.clone(), 0i16, capacity.to_string(), 100i64, 0i16)];
 
         let mut batch = StoreBatch::new(&store);
         writer
@@ -2090,7 +2058,6 @@ mod tests {
         let withdraw_tx = vec![0xC5; 32];
         let ctx = BatchCtx {
             consumed: vec![(
-                0,
                 deposit_tx,
                 deposit_output_index,
                 capacity.to_string(),
@@ -2168,7 +2135,7 @@ mod tests {
         seed.commit().unwrap();
 
         let withdraw_tx = vec![0xC7; 32];
-        let consumed = vec![(0, deposit_tx, 0i16, capacity.to_string(), 5668752i64, 0i16)];
+        let consumed = vec![(deposit_tx, 0i16, capacity.to_string(), 5668752i64, 0i16)];
         let new_dao_outputs = vec![(
             withdraw_tx.clone(),
             0i16,
@@ -2248,7 +2215,6 @@ mod tests {
         let withdraw_tx = vec![0xC8; 32];
         let ctx = BatchCtx {
             consumed: vec![(
-                0,
                 deposit_tx,
                 deposit_output_index,
                 capacity.to_string(),

@@ -332,7 +332,6 @@ impl BatchWriter {
     pub fn get_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],
-        _bulk_sync_mode: bool,
     ) -> Result<HashMap<(Vec<u8>, i16), (i64, i64, Vec<u8>, i32)>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
@@ -388,7 +387,6 @@ impl BatchWriter {
     pub fn get_full_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],
-        _bulk_sync_mode: bool,
     ) -> Result<HashMap<(Vec<u8>, i16), PositionedCellInfo>> {
         if outpoints.is_empty() {
             return Ok(HashMap::new());
@@ -835,9 +833,7 @@ mod tests {
             .unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), 0i16)];
-        let err = writer
-            .get_full_cells_info_batch(&outpoints, false)
-            .unwrap_err();
+        let err = writer.get_full_cells_info_batch(&outpoints).unwrap_err();
         assert!(
             err.to_string()
                 .contains("failed to decode consumed cell meta in get_consumed_cells_batch"),

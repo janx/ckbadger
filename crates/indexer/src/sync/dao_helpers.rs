@@ -66,7 +66,7 @@ pub(crate) struct EpochAccum {
 // Type aliases for DAO consumed-cell maps
 // ---------------------------------------------------------------------------
 
-pub(crate) type DaoConsumedRow = (i64, Vec<u8>, i16, String, i64, i16);
+pub(crate) type DaoConsumedRow = (Vec<u8>, i16, String, i64, i16);
 pub(crate) type DaoConsumedMap = HashMap<(Vec<u8>, i16), DaoConsumedRow>;
 pub(crate) type DaoSameBatchMap = HashMap<(Vec<u8>, i16), i64>;
 
@@ -439,7 +439,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
                 input.previous_tx_hash.to_vec(),
                 parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer"),
             );
-            if let Some((_, _, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
+            if let Some((_, _, _, _, status)) = consumed_dao_map.get(&outpoint) {
                 if *status == 1 {
                     *daily_withdrawals_delta.entry(block_date).or_default() += 1;
                 }
@@ -459,7 +459,7 @@ pub(crate) fn accumulate_dao_snapshot_deltas_for_txs(
             );
             let mut maybe_cap: Option<i64> = same_batch_dao_map.get(&outpoint).copied();
             if maybe_cap.is_none() {
-                if let Some((_, _, _, capacity_str, _, status)) = consumed_dao_map.get(&outpoint) {
+                if let Some((_, _, capacity_str, _, status)) = consumed_dao_map.get(&outpoint) {
                     if *status == 0 {
                         maybe_cap = Some(capacity_str.parse::<i64>().map_err(|e| {
                             anyhow!(
@@ -993,7 +993,7 @@ mod tests {
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
         consumed_dao_map.insert(
             (input_hash_vec, 0),
-            (0, vec![], 0, "10000000000".to_string(), 0, 0),
+            (vec![], 0, "10000000000".to_string(), 0, 0),
         );
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
@@ -1042,7 +1042,7 @@ mod tests {
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
-        consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+        consumed_dao_map.insert((input_hash_vec, 0), (vec![], 0, "123".to_string(), 0, 1));
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1090,7 +1090,7 @@ mod tests {
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
-        consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+        consumed_dao_map.insert((input_hash_vec, 0), (vec![], 0, "123".to_string(), 0, 1));
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1139,7 +1139,7 @@ mod tests {
         );
 
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
-        consumed_dao_map.insert((input_hash_vec, 0), (0, vec![], 0, "123".to_string(), 0, 1));
+        consumed_dao_map.insert((input_hash_vec, 0), (vec![], 0, "123".to_string(), 0, 1));
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
         let mut daily_active_delta: HashMap<chrono::NaiveDate, i128> = HashMap::new();
@@ -1186,7 +1186,7 @@ mod tests {
         let mut consumed_dao_map: DaoConsumedMap = HashMap::new();
         consumed_dao_map.insert(
             (input_hash_vec, 0),
-            (0, vec![], 0, "bad-capacity".to_string(), 0, 0),
+            (vec![], 0, "bad-capacity".to_string(), 0, 0),
         );
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();

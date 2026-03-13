@@ -27,7 +27,6 @@ impl BatchWriter {
     pub fn with_fast_sync_mode(
         store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
-        _fast_sync_mode: bool,
     ) -> Self {
         Self {
             store,
@@ -39,7 +38,6 @@ impl BatchWriter {
     pub fn with_cache(
         store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,
-        _fast_sync_mode: bool,
         cache_invalidator: CacheInvalidator,
     ) -> Self {
         Self {

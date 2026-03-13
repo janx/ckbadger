@@ -125,7 +125,6 @@ impl BatchWriter {
         Ok(ReorgResult {
             depth,
             orphaned_blocks: depth,
-            orphaned_txs: 0, // Not tracked in RocksDB model
         })
     }
 }
@@ -133,7 +132,6 @@ impl BatchWriter {
 pub struct ReorgResult {
     pub depth: i32,
     pub orphaned_blocks: i32,
-    pub orphaned_txs: i32,
 }
 
 #[cfg(test)]

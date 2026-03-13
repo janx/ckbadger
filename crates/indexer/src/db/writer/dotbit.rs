@@ -567,18 +567,12 @@ impl BatchWriter {
     pub fn consume_dotbit_account(
         &self,
         account_id: &[u8],
-        _block_number: i64,
-        _tx_hash: &[u8],
+        block_number: i64,
+        tx_hash: &[u8],
         batch: &mut StoreBatch,
     ) -> Result<Option<Vec<u8>>> {
         let mut state = self.new_dotbit_batch_state();
-        self.consume_dotbit_account_with_state(
-            account_id,
-            _block_number,
-            _tx_hash,
-            batch,
-            &mut state,
-        )
+        self.consume_dotbit_account_with_state(account_id, block_number, tx_hash, batch, &mut state)
     }
 
     /// Consume a .bit account. Returns `Some(DOTBIT_SENTINEL_COLLECTION)` if consumed.

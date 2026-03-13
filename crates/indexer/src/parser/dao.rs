@@ -60,6 +60,9 @@ impl DaoParser {
 
     pub fn is_dao_cell(output: &CellOutput) -> bool {
         if let Some(ref type_script) = output.type_ {
+            if type_script.hash_type != "type" {
+                return false;
+            }
             let code_hash = parse_hex_to_bytes(&type_script.code_hash);
             return Self::is_dao_code_hash(&code_hash);
         }
@@ -110,7 +113,7 @@ impl DaoParser {
 
         Some(ParsedDaoCell {
             lock_script_hash,
-            capacity: Self::parse_capacity_i64(&output.capacity),
+            capacity: super::parse_capacity_i64(&output.capacity),
             state,
             deposit_block_number,
         })
@@ -150,14 +153,7 @@ impl DaoParser {
         tx_hash: &[u8],
         input_cells: &[(Vec<u8>, i32, CellOutput, String)],
     ) -> Vec<ParsedDaoWithdrawRequest> {
-        if tx.outputs.len() != tx.outputs_data.len() {
-            panic!(
-                "transaction outputs mismatch while parsing DAO withdraw requests: tx_hash={}, outputs={}, outputs_data={}",
-                tx.hash,
-                tx.outputs.len(),
-                tx.outputs_data.len()
-            );
-        }
+        super::validate_outputs_data_len(&tx.outputs, &tx.outputs_data, &tx.hash);
         tx.outputs
             .iter()
             .zip(tx.outputs_data.iter())
@@ -213,14 +209,6 @@ impl DaoParser {
 
         let gross = free_capacity.checked_mul(ar_withdraw_request)? / ar_deposit;
         gross.checked_sub(free_capacity)
-    }
-
-    fn parse_capacity_i64(capacity_hex: &str) -> i64 {
-        let raw = capacity_hex;
-        let hex = capacity_hex.strip_prefix("0x").unwrap_or(capacity_hex);
-        let cap = u64::from_str_radix(hex, 16)
-            .unwrap_or_else(|e| panic!("invalid DAO capacity hex '{}': {}", raw, e));
-        i64::try_from(cap).unwrap_or_else(|_| panic!("DAO capacity exceeds i64 '{}': {}", raw, cap))
     }
 }
 
@@ -367,25 +355,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_capacity_i64() {
-        assert_eq!(DaoParser::parse_capacity_i64("0x2540be400"), 10_000_000_000);
-        assert_eq!(DaoParser::parse_capacity_i64("2540be400"), 10_000_000_000);
-        assert_eq!(DaoParser::parse_capacity_i64("0x0"), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid DAO capacity hex")]
-    fn test_parse_capacity_i64_invalid_panics() {
-        let _ = DaoParser::parse_capacity_i64("0xzz");
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid DAO capacity hex")]
-    fn test_parse_capacity_i64_non_hex_panics() {
-        let _ = DaoParser::parse_capacity_i64("not_hex");
-    }
-
-    #[test]
     fn test_parse_deposits_from_cells_deposit() {
         use super::super::cell::ParsedCell;
 
@@ -485,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "transaction outputs mismatch while parsing DAO withdraw requests")]
+    #[should_panic(expected = "outputs/outputs_data length mismatch")]
     fn test_parse_withdraw_requests_panics_on_outputs_data_length_mismatch() {
         let tx = crate::rpc::TransactionView {
             hash: "0x".to_string() + &"bb".repeat(32),

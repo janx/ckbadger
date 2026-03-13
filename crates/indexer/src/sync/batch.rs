@@ -166,11 +166,11 @@ fn build_activity_input_views(
 /// Extract outpoints whose DAO status == 1 (withdraw request) from consumed_dao_map.
 /// The returned set lets T_ACT classify inputs without per-input RocksDB reads.
 fn dao_withdraw_outpoints_from_map(
-    consumed_dao_map: &HashMap<(Vec<u8>, i16), (i64, Vec<u8>, i16, String, i64, i16)>,
+    consumed_dao_map: &HashMap<(Vec<u8>, i16), (Vec<u8>, i16, String, i64, i16)>,
 ) -> HashSet<(Vec<u8>, i16)> {
     consumed_dao_map
         .iter()
-        .filter(|(_, row)| row.5 == 1) // status == 1 means withdraw request
+        .filter(|(_, row)| row.4 == 1) // status == 1 means withdraw request
         .map(|(k, _)| k.clone())
         .collect()
 }
@@ -1886,7 +1886,7 @@ impl Indexer {
                     // so it misses deposits written above in this batch.
                     let mut same_batch_dao_deposits: HashMap<
                         (Vec<u8>, i16),
-                        (i64, Vec<u8>, i16, String, i64, i16),
+                        (Vec<u8>, i16, String, i64, i16),
                     > = HashMap::new();
                     // Also build a pending entries map keyed by outpoint for
                     // process_dao_withdrawals_batch to update same-batch deposits.
@@ -1910,7 +1910,6 @@ impl Indexer {
                         same_batch_dao_deposits.insert(
                             (deposit.tx_hash.clone(), deposit_output_index),
                             (
-                                0,
                                 deposit.tx_hash.clone(),
                                 deposit_output_index,
                                 deposit.capacity.to_string(),
@@ -1955,7 +1954,6 @@ impl Indexer {
                                     continue;
                                 }
                                 let mut consumed_deposits: Vec<(
-                                    i64,
                                     Vec<u8>,
                                     i16,
                                     String,
@@ -3150,7 +3148,7 @@ impl Indexer {
                 // batch that may also be consumed within the same batch.
                 let mut same_batch_dao_deposits: HashMap<
                     (Vec<u8>, i16),
-                    (i64, Vec<u8>, i16, String, i64, i16),
+                    (Vec<u8>, i16, String, i64, i16),
                 > = HashMap::new();
                 // Also build pending entries map for process_dao_withdrawals_batch
                 let mut pending_dao_entries: HashMap<
@@ -3173,7 +3171,6 @@ impl Indexer {
                     same_batch_dao_deposits.insert(
                         (deposit.tx_hash.clone(), deposit_output_index),
                         (
-                            0,
                             deposit.tx_hash.clone(),
                             deposit_output_index,
                             deposit.capacity.to_string(),
@@ -3217,7 +3214,7 @@ impl Indexer {
                             if tx_data.is_cellbase || tx_data.inputs.is_empty() {
                                 continue;
                             }
-                            let mut consumed_deposits: Vec<(i64, Vec<u8>, i16, String, i64, i16)> =
+                            let mut consumed_deposits: Vec<(Vec<u8>, i16, String, i64, i16)> =
                                 Vec::new();
                             for input in &tx_data.inputs {
                                 let key = (
