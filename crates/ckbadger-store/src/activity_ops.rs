@@ -41,6 +41,58 @@ fn validate_tx_activity_bundle_identity(
     Ok(())
 }
 
+fn bundle_owner_to_activity_entry(
+    bundle: &TxActivityBundle,
+    owner: &OwnerActivityDelta,
+) -> ActivityEntry {
+    ActivityEntry {
+        tx_hash: bundle.tx_hash.clone(),
+        block_hash: bundle.block_hash.clone(),
+        block_number: bundle.block_number,
+        tx_index: bundle.tx_index,
+        timestamp: bundle.timestamp,
+        ckb_delta: owner.ckb_delta,
+        used_delta: owner.used_delta,
+        is_cellbase: bundle.is_cellbase,
+        has_type_script: owner.has_type_script,
+        asset_changes: owner.asset_changes.clone(),
+        script_calls: owner.script_calls.clone(),
+        peers: owner.peers.clone(),
+    }
+}
+
+fn resolve_owner_activity_entry(
+    bundle: &TxActivityBundle,
+    lock_hash: &[u8],
+) -> anyhow::Result<ActivityEntry> {
+    let mut matched_owner: Option<&OwnerActivityDelta> = None;
+    for owner in &bundle.owners {
+        if owner.lock_hash != lock_hash {
+            continue;
+        }
+        if matched_owner.replace(owner).is_some() {
+            anyhow::bail!(
+                "duplicate owner lock_hash in tx activity bundle: block_num={}, tx_idx={}, tx_hash=0x{}, lock_hash=0x{}",
+                bundle.block_number,
+                bundle.tx_index,
+                bytes_to_hex(&bundle.tx_hash),
+                bytes_to_hex(lock_hash)
+            );
+        }
+    }
+
+    let owner = matched_owner.ok_or_else(|| {
+        anyhow::anyhow!(
+            "addr_txs points to tx activity bundle without matching owner: block_num={}, tx_idx={}, tx_hash=0x{}, lock_hash=0x{}",
+            bundle.block_number,
+            bundle.tx_index,
+            bytes_to_hex(&bundle.tx_hash),
+            bytes_to_hex(lock_hash)
+        )
+    })?;
+    Ok(bundle_owner_to_activity_entry(bundle, owner))
+}
+
 impl CkbadgerStore {
     pub fn get_tx_activity_bundle(
         &self,
@@ -127,72 +179,83 @@ impl CkbadgerStore {
             return Ok(Vec::new());
         }
 
-        let prefix = &lock_hash[..32];
+        let scan_limit = limit.max(128);
+        let mut results = Vec::with_capacity(limit);
+        let mut scan_cursor = cursor;
+        let activity_cf = self.cf_activities();
 
-        // For cursor: seek to the cursor key and skip that exact row.
-        // For no cursor: start from the lock_hash prefix (newest first due to desc key).
-        let start_key = match cursor {
-            Some((block_num, tx_idx)) => {
-                keys::encode_activity_seek_after_key(lock_hash, block_num, tx_idx)
-            }
-            None => prefix.to_vec(),
-        };
-
-        let iter = self.iterator_cf(
-            self.cf_activities(),
-            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
-
-        let mut results = Vec::new();
-        for item in iter {
-            let (key, value) = item.map_err(|e| {
-                anyhow::anyhow!("failed to iterate activities in list_activities: {}", e)
-            })?;
-            if !key.starts_with(prefix) {
+        loop {
+            let rows = self.list_addr_txs_recent(lock_hash, scan_limit, scan_cursor)?;
+            if rows.is_empty() {
                 break;
             }
-            if key.len() == keys::ACTIVITY_KEY_SIZE {
-                let (_, block_num, tx_idx, block_hash_from_key, tx_hash_from_key) =
-                    keys::decode_activity_key(&key);
-                let entry: ActivityEntry = bincode::deserialize(&value)?;
-                if entry.tx_hash != tx_hash_from_key {
-                    anyhow::bail!(
-                        "activity key/value tx_hash mismatch in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
-                        bytes_to_hex(prefix),
+
+            let bundle_keys: Vec<Vec<u8>> = rows
+                .iter()
+                .map(|(block_num, tx_idx, tx_hash)| {
+                    keys::encode_tx_activity_bundle_key(*block_num, *tx_idx, tx_hash)
+                })
+                .collect();
+            let bundle_refs: Vec<(&rocksdb::ColumnFamily, &[u8])> = bundle_keys
+                .iter()
+                .map(|key| (activity_cf, key.as_slice()))
+                .collect();
+            let bundle_values = self.multi_get_cf(bundle_refs);
+
+            let mut last_seen = None;
+            for ((block_num, tx_idx, tx_hash), value_result) in rows.iter().zip(bundle_values) {
+                last_seen = Some((*block_num, *tx_idx));
+                let value = match value_result {
+                    Ok(Some(value)) => value,
+                    Ok(None) => {
+                        anyhow::bail!(
+                            "missing tx activity bundle for addr_txs entry: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}",
+                            bytes_to_hex(lock_hash),
+                            block_num,
+                            tx_idx,
+                            bytes_to_hex(tx_hash)
+                        );
+                    }
+                    Err(e) => {
+                        anyhow::bail!(
+                            "rocksdb multi_get failed in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
+                            bytes_to_hex(lock_hash),
+                            block_num,
+                            tx_idx,
+                            bytes_to_hex(tx_hash),
+                            e
+                        );
+                    }
+                };
+                let bundle: TxActivityBundle = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize tx activity bundle in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, tx_hash=0x{}, error={}",
+                        bytes_to_hex(lock_hash),
                         block_num,
                         tx_idx,
-                        bytes_to_hex(&tx_hash_from_key),
-                        bytes_to_hex(&entry.tx_hash)
-                    );
-                }
-                if entry.block_hash != block_hash_from_key {
-                    anyhow::bail!(
-                        "activity key/value block_hash mismatch in list_activities: lock_hash=0x{}, block_num={}, tx_idx={}, key_block_hash=0x{}, value_block_hash=0x{}",
-                        bytes_to_hex(prefix),
-                        block_num,
-                        tx_idx,
-                        bytes_to_hex(&block_hash_from_key),
-                        bytes_to_hex(&entry.block_hash)
-                    );
-                }
-                if entry.block_number != block_num || entry.tx_index != tx_idx {
-                    anyhow::bail!(
-                        "activity key/value location mismatch in list_activities: lock_hash=0x{}, key_block_num={}, value_block_num={}, key_tx_idx={}, value_tx_idx={}",
-                        bytes_to_hex(prefix),
-                        block_num,
-                        entry.block_number,
-                        tx_idx,
-                        entry.tx_index
-                    );
-                }
+                        bytes_to_hex(tx_hash),
+                        e
+                    )
+                })?;
+                validate_tx_activity_bundle_identity(&bundle, *block_num, *tx_idx, tx_hash)?;
+                let entry = resolve_owner_activity_entry(&bundle, lock_hash)?;
                 if Self::matches_activity_filter(&entry, filter) {
-                    results.push((block_num, tx_idx, entry));
+                    results.push((*block_num, *tx_idx, entry));
                     if results.len() >= limit {
-                        break;
+                        return Ok(results);
                     }
                 }
             }
+
+            if rows.len() < scan_limit {
+                break;
+            }
+            let Some(next_cursor) = last_seen else {
+                break;
+            };
+            scan_cursor = Some(next_cursor);
         }
+
         Ok(results)
     }
 
@@ -231,27 +294,6 @@ mod tests {
     use crate::batch::StoreBatch;
     use tempfile::TempDir;
 
-    fn make_activity_with_hash(tx_hash: &[u8], block_num: i64, tx_idx: i32) -> ActivityEntry {
-        ActivityEntry {
-            tx_hash: tx_hash.to_vec(),
-            block_hash: vec![0x40 | (block_num as u8); 32],
-            block_number: block_num,
-            tx_index: tx_idx,
-            timestamp: 1_700_000_000 + block_num,
-            ckb_delta: 0,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
-        }
-    }
-
-    fn make_activity(block_num: i64, tx_idx: i32) -> ActivityEntry {
-        make_activity_with_hash(&[block_num as u8; 32], block_num, tx_idx)
-    }
-
     fn make_bundle(block_num: i64, tx_idx: i32, owner_count: usize) -> TxActivityBundle {
         TxActivityBundle {
             tx_hash: vec![block_num as u8; 32],
@@ -278,6 +320,35 @@ mod tests {
         }
     }
 
+    fn make_bundle_for_owner(
+        tx_hash: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        lock_hash: &[u8],
+    ) -> TxActivityBundle {
+        TxActivityBundle {
+            tx_hash: tx_hash.to_vec(),
+            block_hash: vec![0x40 | (block_num as u8); 32],
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            is_cellbase: false,
+            owners: vec![OwnerActivityDelta {
+                lock_hash: lock_hash.to_vec(),
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x22; 20],
+                ckb_delta: 0,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0x33; 32]],
+                asset_changes: vec![],
+                script_calls: None,
+                peers: vec![],
+            }],
+        }
+    }
+
     #[test]
     fn test_list_activities_limit_zero_returns_empty() {
         let dir = TempDir::new().unwrap();
@@ -285,7 +356,9 @@ mod tests {
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0));
+        let bundle = make_bundle_for_owner(&[0x10; 32], 100, 0, &lock);
+        batch.put_tx_activity_bundle(&bundle);
+        batch.put_addr_tx(&lock, 100, 0, &bundle.tx_hash);
         batch.commit().unwrap();
 
         let rows = store.list_activities(&lock, 0, None, None).unwrap();
@@ -299,7 +372,9 @@ mod tests {
         let lock = [0xAA; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0));
+        let bundle = make_bundle_for_owner(&[0x10; 32], 100, 0, &lock);
+        batch.put_tx_activity_bundle(&bundle);
+        batch.put_addr_tx(&lock, 100, 0, &bundle.tx_hash);
         batch.commit().unwrap();
 
         let rows = store.list_activities(&lock, 10, None, Some("tok")).unwrap();
@@ -313,9 +388,15 @@ mod tests {
         let lock = [0xAB; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 1, &make_activity_with_hash(&[0x10; 32], 100, 1));
-        batch.put_activity(&lock, 100, 1, &make_activity_with_hash(&[0x20; 32], 100, 1));
-        batch.put_activity(&lock, 99, 3, &make_activity_with_hash(&[0x30; 32], 99, 3));
+        let first = make_bundle_for_owner(&[0x10; 32], 100, 1, &lock);
+        let second = make_bundle_for_owner(&[0x20; 32], 100, 1, &lock);
+        let third = make_bundle_for_owner(&[0x30; 32], 99, 3, &lock);
+        batch.put_tx_activity_bundle(&first);
+        batch.put_tx_activity_bundle(&second);
+        batch.put_tx_activity_bundle(&third);
+        batch.put_addr_tx(&lock, 100, 1, &first.tx_hash);
+        batch.put_addr_tx(&lock, 100, 1, &second.tx_hash);
+        batch.put_addr_tx(&lock, 99, 3, &third.tx_hash);
         batch.commit().unwrap();
 
         let rows = store.list_activities(&lock, 10, None, None).unwrap();

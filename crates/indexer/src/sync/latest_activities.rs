@@ -4,18 +4,20 @@
 //! Serialized to CF_SYNC_META after each batch commit for cross-process
 //! access by the API.
 
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-#[cfg(test)]
-use ckbadger_store::types::ActivityEntry;
-use ckbadger_store::types::LatestActivityItem;
+use ckbadger_store::types::{ActivityEntry, LatestActivityItem, TxActivityBundle};
 
+#[cfg(test)]
 use crate::db::writer::activities::OwnerActivity;
+#[cfg(test)]
 use crate::parser::cell::ParsedCell;
+#[cfg(test)]
+use std::collections::HashMap;
 
 /// (code_hash, hash_type, args) tuple for lock script identification.
+#[cfg(test)]
 type LockScriptInfo = (Vec<u8>, i16, Vec<u8>);
 
 /// Maximum items in the ring buffer.
@@ -59,6 +61,7 @@ impl LatestActivitiesBuffer {
 /// Build lock_hash -> (code_hash, hash_type, args) mapping from parsed output cells.
 /// Input cells (InputCellView) don't carry lock script components, so input-only
 /// addresses won't have CKB address info — API falls back to hex display for those.
+#[cfg(test)]
 pub fn collect_lock_scripts_from_outputs(
     outputs: &[ParsedCell],
 ) -> HashMap<Vec<u8>, LockScriptInfo> {
@@ -78,6 +81,7 @@ pub fn collect_lock_scripts_from_outputs(
 }
 
 /// Convert activity triples + lock script map into LatestActivityItems.
+#[cfg(test)]
 pub fn to_latest_items(
     activities: &[OwnerActivity],
     lock_scripts: &HashMap<Vec<u8>, LockScriptInfo>,
@@ -97,6 +101,39 @@ pub fn to_latest_items(
                 lock_args: args,
                 entry: entry.clone(),
             }
+        })
+        .collect()
+}
+
+pub fn to_latest_items_from_bundles(bundles: &[TxActivityBundle]) -> Vec<LatestActivityItem> {
+    bundles
+        .iter()
+        .flat_map(|bundle| {
+            bundle.owners.iter().filter_map(|owner| {
+                if bundle.is_cellbase {
+                    return None;
+                }
+                Some(LatestActivityItem {
+                    lock_hash: owner.lock_hash.clone(),
+                    lock_code_hash: owner.lock_code_hash.clone(),
+                    lock_hash_type: owner.lock_hash_type,
+                    lock_args: owner.lock_args.clone(),
+                    entry: ActivityEntry {
+                        tx_hash: bundle.tx_hash.clone(),
+                        block_hash: bundle.block_hash.clone(),
+                        block_number: bundle.block_number,
+                        tx_index: bundle.tx_index,
+                        timestamp: bundle.timestamp,
+                        ckb_delta: owner.ckb_delta,
+                        used_delta: owner.used_delta,
+                        is_cellbase: bundle.is_cellbase,
+                        has_type_script: owner.has_type_script,
+                        asset_changes: owner.asset_changes.clone(),
+                        script_calls: owner.script_calls.clone(),
+                        peers: owner.peers.clone(),
+                    },
+                })
+            })
         })
         .collect()
 }
@@ -264,5 +301,65 @@ mod tests {
         let items = to_latest_items(&activities, &lock_scripts);
         assert_eq!(items.len(), 1, "cellbase activity should be filtered out");
         assert_eq!(items[0].lock_hash, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn test_to_latest_items_from_bundles_uses_owner_lock_script() {
+        let bundles = vec![
+            ckbadger_store::types::TxActivityBundle {
+                tx_hash: vec![0x01; 32],
+                block_hash: vec![0x02; 32],
+                block_number: 100,
+                tx_index: 0,
+                timestamp: 1_700_000_000,
+                is_cellbase: true,
+                owners: vec![ckbadger_store::types::OwnerActivityDelta {
+                    lock_hash: vec![0xAA; 32],
+                    lock_code_hash: vec![0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0x22; 20],
+                    ckb_delta: 1000,
+                    used_delta: 0,
+                    has_type_script: false,
+                    involved_script_code_hashes: vec![vec![0x11; 32]],
+                    asset_changes: vec![],
+                    script_calls: None,
+                    peers: vec![],
+                }],
+            },
+            ckbadger_store::types::TxActivityBundle {
+                tx_hash: vec![0x03; 32],
+                block_hash: vec![0x04; 32],
+                block_number: 101,
+                tx_index: 1,
+                timestamp: 1_700_000_100,
+                is_cellbase: false,
+                owners: vec![ckbadger_store::types::OwnerActivityDelta {
+                    lock_hash: vec![0xBB; 32],
+                    lock_code_hash: vec![0x33; 32],
+                    lock_hash_type: 0,
+                    lock_args: vec![0x44; 20],
+                    ckb_delta: 500,
+                    used_delta: 0,
+                    has_type_script: false,
+                    involved_script_code_hashes: vec![vec![0x33; 32]],
+                    asset_changes: vec![],
+                    script_calls: None,
+                    peers: vec![],
+                }],
+            },
+        ];
+
+        let items = to_latest_items_from_bundles(&bundles);
+        assert_eq!(
+            items.len(),
+            1,
+            "cellbase bundle owners should be filtered out"
+        );
+        assert_eq!(items[0].lock_hash, vec![0xBB; 32]);
+        assert_eq!(items[0].lock_code_hash, vec![0x33; 32]);
+        assert_eq!(items[0].lock_hash_type, 0);
+        assert_eq!(items[0].lock_args, vec![0x44; 20]);
+        assert_eq!(items[0].entry.block_number, 101);
     }
 }

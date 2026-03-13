@@ -35,7 +35,7 @@ use super::dao_helpers::*;
 use super::diagnostics::*;
 use super::helpers::*;
 use super::indexer::{Indexer, CACHE_INVALIDATION_INTERVAL};
-use super::latest_activities::{collect_lock_scripts_from_outputs, to_latest_items};
+use super::latest_activities::to_latest_items_from_bundles;
 use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
@@ -2763,62 +2763,58 @@ impl Indexer {
                                         )
                                         .collect::<Result<Vec<_>>>()?;
 
-                                let activities =
-                                    crate::db::writer::activities::build_activities_for_block(
+                                let bundles =
+                                    crate::db::writer::activities::build_activity_bundles_for_block(
                                         &tx_views,
                                         token_info_cache,
                                     );
 
-                                // Collect lock scripts from output cells for address display
-                                let mut lock_scripts = std::collections::HashMap::new();
-                                for td in tx_slice {
-                                    let block_scripts =
-                                        collect_lock_scripts_from_outputs(&td.cells);
-                                    lock_scripts.extend(block_scripts);
-                                }
-                                let latest_items = to_latest_items(&activities, &lock_scripts);
+                                let latest_items = to_latest_items_from_bundles(&bundles);
                                 if !latest_items.is_empty() {
                                     latest_activities_buf.push_batch(latest_items);
                                 }
 
-                                for (lock_hash, scripts, entry) in activities {
-                                    // Accumulate daily activity stats
-                                    let date = ckbadger_common::block_date_from_ms(entry.timestamp)
-                                        .format("%Y%m%d")
+                                for bundle in bundles {
+                                    for owner in &bundle.owners {
+                                        // Accumulate daily activity stats
+                                        let date =
+                                            ckbadger_common::block_date_from_ms(bundle.timestamp)
+                                                .format("%Y%m%d")
+                                                .to_string();
+                                        let day_stats =
+                                            act_stats_accum.entry(date.clone()).or_default();
+                                        BatchWriter::accumulate_owner_activity_stats(
+                                            bundle.is_cellbase,
+                                            owner,
+                                            day_stats,
+                                        );
+                                        // Exclude coinbase from unique address count
+                                        if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
+                                            let mut hash = [0u8; 32];
+                                            hash.copy_from_slice(&owner.lock_hash);
+                                            act_stats_addrs.entry(date).or_default().insert(hash);
+                                        }
+
+                                        // Accumulate hourly activity stats
+                                        let hour = ckbadger_common::block_datetime_from_ms(
+                                            bundle.timestamp,
+                                        )
+                                        .format("%Y%m%d%H")
                                         .to_string();
-                                    let day_stats =
-                                        act_stats_accum.entry(date.clone()).or_default();
-                                    BatchWriter::accumulate_activity_stats(
-                                        &entry, &scripts, day_stats,
-                                    );
-                                    // Exclude coinbase from unique address count
-                                    if !entry.is_cellbase && lock_hash.len() == 32 {
-                                        let mut hash = [0u8; 32];
-                                        hash.copy_from_slice(&lock_hash);
-                                        act_stats_addrs.entry(date).or_default().insert(hash);
+                                        let hour_stats =
+                                            hourly_accum.entry(hour.clone()).or_default();
+                                        BatchWriter::accumulate_owner_activity_stats(
+                                            bundle.is_cellbase,
+                                            owner,
+                                            hour_stats,
+                                        );
+                                        if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
+                                            let mut hash = [0u8; 32];
+                                            hash.copy_from_slice(&owner.lock_hash);
+                                            hourly_addrs.entry(hour).or_default().insert(hash);
+                                        }
                                     }
-
-                                    // Accumulate hourly activity stats
-                                    let hour =
-                                        ckbadger_common::block_datetime_from_ms(entry.timestamp)
-                                            .format("%Y%m%d%H")
-                                            .to_string();
-                                    let hour_stats = hourly_accum.entry(hour.clone()).or_default();
-                                    BatchWriter::accumulate_activity_stats(
-                                        &entry, &scripts, hour_stats,
-                                    );
-                                    if !entry.is_cellbase && lock_hash.len() == 32 {
-                                        let mut hash = [0u8; 32];
-                                        hash.copy_from_slice(&lock_hash);
-                                        hourly_addrs.entry(hour).or_default().insert(hash);
-                                    }
-
-                                    activity_batch.put_activity(
-                                        &lock_hash,
-                                        entry.block_number,
-                                        entry.tx_index,
-                                        &entry,
-                                    );
+                                    activity_batch.put_tx_activity_bundle(&bundle);
                                 }
                             }
                             let mut commit_ms = 0.0;
@@ -4032,55 +4028,56 @@ impl Indexer {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let activities = crate::db::writer::activities::build_activities_for_block(
+                    let bundles = crate::db::writer::activities::build_activity_bundles_for_block(
                         &tx_views,
                         &token_info_cache,
                     );
 
-                    // Collect lock scripts from output cells for address display
-                    let mut lock_scripts = std::collections::HashMap::new();
-                    for td in tx_slice {
-                        let block_scripts = collect_lock_scripts_from_outputs(&td.cells);
-                        lock_scripts.extend(block_scripts);
-                    }
-                    let latest_items = to_latest_items(&activities, &lock_scripts);
+                    let latest_items = to_latest_items_from_bundles(&bundles);
                     if !latest_items.is_empty() {
                         self.latest_activities.push_batch(latest_items);
                     }
 
-                    for (lock_hash, scripts, entry) in activities {
-                        // Accumulate daily activity stats
-                        let date = ckbadger_common::block_date_from_ms(entry.timestamp)
-                            .format("%Y%m%d")
-                            .to_string();
-                        let day_stats = daily_activity_accum.entry(date.clone()).or_default();
-                        BatchWriter::accumulate_activity_stats(&entry, &scripts, day_stats);
-                        // Exclude coinbase from unique address count
-                        if !entry.is_cellbase && lock_hash.len() == 32 {
-                            let mut hash = [0u8; 32];
-                            hash.copy_from_slice(&lock_hash);
-                            daily_activity_addrs.entry(date).or_default().insert(hash);
-                        }
+                    for bundle in bundles {
+                        for owner in &bundle.owners {
+                            // Accumulate daily activity stats
+                            let date = ckbadger_common::block_date_from_ms(bundle.timestamp)
+                                .format("%Y%m%d")
+                                .to_string();
+                            let day_stats = daily_activity_accum.entry(date.clone()).or_default();
+                            BatchWriter::accumulate_owner_activity_stats(
+                                bundle.is_cellbase,
+                                owner,
+                                day_stats,
+                            );
+                            // Exclude coinbase from unique address count
+                            if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
+                                let mut hash = [0u8; 32];
+                                hash.copy_from_slice(&owner.lock_hash);
+                                daily_activity_addrs.entry(date).or_default().insert(hash);
+                            }
 
-                        // Accumulate hourly activity stats
-                        let hour = ckbadger_common::block_datetime_from_ms(entry.timestamp)
-                            .format("%Y%m%d%H")
-                            .to_string();
-                        let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
-                        BatchWriter::accumulate_activity_stats(&entry, &scripts, hour_stats);
-                        if !entry.is_cellbase && lock_hash.len() == 32 {
-                            let mut hash = [0u8; 32];
-                            hash.copy_from_slice(&lock_hash);
-                            hourly_activity_addrs.entry(hour).or_default().insert(hash);
+                            // Accumulate hourly activity stats
+                            let hour = ckbadger_common::block_datetime_from_ms(bundle.timestamp)
+                                .format("%Y%m%d%H")
+                                .to_string();
+                            let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
+                            BatchWriter::accumulate_owner_activity_stats(
+                                bundle.is_cellbase,
+                                owner,
+                                hour_stats,
+                            );
+                            if !bundle.is_cellbase && owner.lock_hash.len() == 32 {
+                                let mut hash = [0u8; 32];
+                                hash.copy_from_slice(&owner.lock_hash);
+                                hourly_activity_addrs.entry(hour).or_default().insert(hash);
+                            }
                         }
-
-                        put_activity_with_undo_log(
+                        put_tx_activity_bundle_with_undo_log(
                             &mut activity_batch,
                             &mut append_undo_seq_by_block,
-                            &lock_hash,
-                            entry.block_number,
-                            entry.tx_index,
-                            &entry,
+                            bundle.block_number,
+                            &bundle,
                         );
                     }
                 }

@@ -32,6 +32,89 @@ fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -
     })
 }
 
+fn accumulate_activity_stats_inner(
+    is_cellbase: bool,
+    ckb_delta: i128,
+    has_type_script: bool,
+    asset_changes: &[AssetChange],
+    script_calls: Option<&[ScriptCallEntry]>,
+    scripts: &[Vec<u8>],
+    stats: &mut DailyActivityStats,
+) {
+    // Coinbase transactions are counted but excluded from all other metrics
+    if is_cellbase {
+        stats.coinbase_count += 1;
+        return;
+    }
+
+    // Total CKB moved (absolute value) — excludes coinbase
+    stats.total_ckb_moved = stats
+        .total_ckb_moved
+        .checked_add(ckb_delta.unsigned_abs())
+        .expect("total_ckb_moved overflow in accumulate_activity_stats_inner");
+
+    // Count each involved script — excludes coinbase
+    for code_hash in scripts {
+        let hex = hex::encode(code_hash);
+        *stats.script_counts.entry(hex).or_insert(0) += 1;
+    }
+
+    let mut has_dao = false;
+    let mut has_token = false;
+    let mut has_object = false;
+    let mut has_identity = false;
+    let has_script_call = script_calls.is_some_and(|calls| !calls.is_empty());
+
+    for change in asset_changes {
+        match change {
+            AssetChange::DaoDeposit { .. } => {
+                stats.dao_deposit_count += 1;
+                has_dao = true;
+            }
+            AssetChange::DaoWithdrawRequest { .. } => {
+                stats.dao_withdraw_request_count += 1;
+                has_dao = true;
+            }
+            AssetChange::DaoWithdrawComplete { .. } => {
+                stats.dao_withdraw_complete_count += 1;
+                has_dao = true;
+            }
+            AssetChange::Token { .. } => {
+                has_token = true;
+            }
+            AssetChange::Object { .. } => {
+                has_object = true;
+            }
+            AssetChange::Identity { .. } => {
+                has_identity = true;
+            }
+        }
+    }
+
+    if has_token {
+        stats.token_count += 1;
+    }
+    if has_object {
+        stats.object_count += 1;
+    }
+    if has_identity {
+        stats.identity_count += 1;
+    }
+    if has_script_call {
+        stats.script_call_count += 1;
+    }
+
+    let matched = has_dao || has_token || has_object || has_identity || has_script_call;
+    if matched {
+        return;
+    }
+    if !has_type_script {
+        stats.transfer_count += 1;
+    } else {
+        stats.unknown_count += 1;
+    }
+}
+
 /// Pre-computed DAO deposit statistics for daily snapshots.
 /// Computed from tracked deposit/withdrawal events rather than block header fields.
 pub struct DaoSnapshotInput {
@@ -528,82 +611,32 @@ impl BatchWriter {
         scripts: &[Vec<u8>],
         stats: &mut DailyActivityStats,
     ) {
-        // Coinbase transactions are counted but excluded from all other metrics
-        if entry.is_cellbase {
-            stats.coinbase_count += 1;
-            return;
-        }
+        accumulate_activity_stats_inner(
+            entry.is_cellbase,
+            entry.ckb_delta,
+            entry.has_type_script,
+            &entry.asset_changes,
+            entry.script_calls.as_deref(),
+            scripts,
+            stats,
+        );
+    }
 
-        // Total CKB moved (absolute value) — excludes coinbase
-        stats.total_ckb_moved = stats
-            .total_ckb_moved
-            .checked_add(entry.ckb_delta.unsigned_abs())
-            .expect("total_ckb_moved overflow in accumulate_activity_stats");
-
-        // Count each involved script — excludes coinbase
-        for code_hash in scripts {
-            let hex = hex::encode(code_hash);
-            *stats.script_counts.entry(hex).or_insert(0) += 1;
-        }
-
-        // Check asset changes for specific types
-        let mut has_dao = false;
-        let mut has_token = false;
-        let mut has_object = false;
-        let mut has_identity = false;
-        let has_script_call = entry
-            .script_calls
-            .as_ref()
-            .is_some_and(|calls| !calls.is_empty());
-
-        for change in &entry.asset_changes {
-            match change {
-                AssetChange::DaoDeposit { .. } => {
-                    stats.dao_deposit_count += 1;
-                    has_dao = true;
-                }
-                AssetChange::DaoWithdrawRequest { .. } => {
-                    stats.dao_withdraw_request_count += 1;
-                    has_dao = true;
-                }
-                AssetChange::DaoWithdrawComplete { .. } => {
-                    stats.dao_withdraw_complete_count += 1;
-                    has_dao = true;
-                }
-                AssetChange::Token { .. } => {
-                    has_token = true;
-                }
-                AssetChange::Object { .. } => {
-                    has_object = true;
-                }
-                AssetChange::Identity { .. } => {
-                    has_identity = true;
-                }
-            }
-        }
-
-        if has_token {
-            stats.token_count += 1;
-        }
-        if has_object {
-            stats.object_count += 1;
-        }
-        if has_identity {
-            stats.identity_count += 1;
-        }
-        if has_script_call {
-            stats.script_call_count += 1;
-        }
-
-        // Exclusive activity-level classification
-        let matched = has_dao || has_token || has_object || has_identity || has_script_call;
-        if matched {
-            // Already counted in specific categories above
-        } else if !entry.has_type_script {
-            stats.transfer_count += 1; // Pure CKB transfer: positive match
-        } else {
-            stats.unknown_count += 1; // Fallback: no conditions, just else
-        }
+    /// Classify one bundle owner and accumulate counts into DailyActivityStats.
+    pub fn accumulate_owner_activity_stats(
+        is_cellbase: bool,
+        owner: &OwnerActivityDelta,
+        stats: &mut DailyActivityStats,
+    ) {
+        accumulate_activity_stats_inner(
+            is_cellbase,
+            owner.ckb_delta,
+            owner.has_type_script,
+            &owner.asset_changes,
+            owner.script_calls.as_deref(),
+            &owner.involved_script_code_hashes,
+            stats,
+        );
     }
 
     /// Write accumulated daily activity stats for a date.
@@ -1606,7 +1639,8 @@ mod activity_stats_tests {
     use std::sync::Arc;
 
     use ckbadger_store::types::{
-        ActivityEntry, AssetAction, AssetChange, DailyActivityStats, ScriptCallEntry,
+        ActivityEntry, AssetAction, AssetChange, DailyActivityStats, OwnerActivityDelta,
+        ScriptCallEntry,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -1632,6 +1666,26 @@ mod activity_stats_tests {
         }
     }
 
+    fn make_owner_delta(
+        ckb_delta: i128,
+        has_type_script: bool,
+        changes: Vec<AssetChange>,
+    ) -> OwnerActivityDelta {
+        OwnerActivityDelta {
+            lock_hash: vec![0xAA; 32],
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            ckb_delta,
+            used_delta: 0,
+            has_type_script,
+            involved_script_code_hashes: vec![vec![0x11; 32]],
+            asset_changes: changes,
+            script_calls: None,
+            peers: vec![],
+        }
+    }
+
     #[test]
     fn test_coinbase_classified_correctly() {
         let mut stats = DailyActivityStats::default();
@@ -1643,6 +1697,19 @@ mod activity_stats_tests {
         // Coinbase excluded from total_ckb_moved and script_counts
         assert_eq!(stats.total_ckb_moved, 0);
         assert!(stats.script_counts.is_empty());
+    }
+
+    #[test]
+    fn test_owner_activity_stats_classify_transfers_from_bundle_owner() {
+        let mut stats = DailyActivityStats::default();
+        let owner = make_owner_delta(-100_00000000, false, vec![]);
+        BatchWriter::accumulate_owner_activity_stats(false, &owner, &mut stats);
+        assert_eq!(stats.transfer_count, 1);
+        assert_eq!(stats.total_ckb_moved, 100_00000000);
+        assert_eq!(
+            *stats.script_counts.get(&hex::encode([0x11; 32])).unwrap(),
+            1
+        );
     }
 
     #[test]

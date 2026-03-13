@@ -4,8 +4,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 
 use ckbadger_store::types::{
-    ActivityEntry, AssetAction, AssetChange, OwnerActivityDelta, ScriptCallEntry, TxActivityBundle,
+    AssetAction, AssetChange, OwnerActivityDelta, ScriptCallEntry, TxActivityBundle,
 };
+#[cfg(test)]
+use ckbadger_store::types::ActivityEntry;
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
@@ -106,6 +108,7 @@ pub struct TxView<'a> {
 }
 
 /// `(lock_hash, involved_script_code_hashes, ActivityEntry)` — one per owner per transaction.
+#[cfg(test)]
 pub type OwnerActivity = (Vec<u8>, Vec<Vec<u8>>, ActivityEntry);
 
 /// Build tx-scoped activity bundles for all transactions in a block.
@@ -122,6 +125,7 @@ pub fn build_activity_bundles_for_block(
 /// Build activities for all transactions in a block.
 ///
 /// Returns `OwnerActivity` triples — one per owner per transaction.
+#[cfg(test)]
 pub fn build_activities_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
@@ -431,6 +435,7 @@ fn build_tx_activity_bundle(
     }
 }
 
+#[cfg(test)]
 fn flatten_tx_activity_bundle(bundle: TxActivityBundle) -> Vec<OwnerActivity> {
     bundle
         .owners

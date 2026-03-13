@@ -136,6 +136,7 @@ pub(crate) fn put_addr_tx_with_undo_log(
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
 }
 
+#[cfg(test)]
 pub(crate) fn put_activity_with_undo_log(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -146,6 +147,20 @@ pub(crate) fn put_activity_with_undo_log(
 ) {
     // activities is now in domain store; rollback deletes entries directly (no undo log needed)
     batch.put_activity(lock_hash, block_num, tx_idx, entry);
+}
+
+pub(crate) fn put_tx_activity_bundle_with_undo_log(
+    batch: &mut StoreBatch<'_>,
+    _undo_seq_by_block: &mut HashMap<i64, u64>,
+    block_num: i64,
+    bundle: &ckbadger_store::types::TxActivityBundle,
+) {
+    assert_eq!(
+        bundle.block_number, block_num,
+        "tx activity bundle block number mismatch in undo helper"
+    );
+    // activities is now in domain store; rollback deletes entries directly (no undo log needed)
+    batch.put_tx_activity_bundle(bundle);
 }
 
 pub(crate) fn rollback_undo_log_after_batch_cleanup(
@@ -350,6 +365,53 @@ mod tests {
                 domain_store.cf_activities(),
                 &keys::encode_activity_key(&lock_hash, 42, 3, &entry.block_hash, &entry.tx_hash)
             )
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn test_put_tx_activity_bundle_with_undo_log_writes_to_domain_without_undo() {
+        let domain_dir = tempfile::tempdir().unwrap();
+        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let bundle = ckbadger_store::types::TxActivityBundle {
+            tx_hash: vec![0xAB; 32],
+            block_hash: vec![0xBC; 32],
+            block_number: 42,
+            tx_index: 3,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            owners: vec![ckbadger_store::types::OwnerActivityDelta {
+                lock_hash: vec![0x44; 32],
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x22; 20],
+                ckb_delta: 0,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0x11; 32]],
+                asset_changes: vec![],
+                script_calls: None,
+                peers: vec![],
+            }],
+        };
+
+        let mut domain_batch = StoreBatch::new(&domain_store);
+        let mut undo_seq_by_block = HashMap::new();
+        put_tx_activity_bundle_with_undo_log(
+            &mut domain_batch,
+            &mut undo_seq_by_block,
+            42,
+            &bundle,
+        );
+        domain_batch.commit().unwrap();
+
+        let iter = domain_store.iterator_cf(
+            domain_store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::Start,
+        );
+        assert_eq!(iter.count(), 0);
+        assert!(domain_store
+            .get_tx_activity_bundle(42, 3, &bundle.tx_hash)
             .unwrap()
             .is_some());
     }
