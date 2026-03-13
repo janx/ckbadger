@@ -31,13 +31,13 @@ const STREAM_KEYFRAMES = `
 }
 `;
 
-let keyframesInjected = false;
 function ensureKeyframes() {
-  if (keyframesInjected || typeof document === 'undefined') return;
+  if (typeof document === 'undefined') return;
+  if (document.getElementById('stream-keyframes')) return;
   const style = document.createElement('style');
+  style.id = 'stream-keyframes';
   style.textContent = STREAM_KEYFRAMES;
   document.head.appendChild(style);
-  keyframesInjected = true;
 }
 
 function truncateAddress(addr: string): string {
@@ -278,14 +278,13 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
   const badge = getTypeBadge(classified);
 
   let tokenDelta = '';
-  let tokenSymbol = '';
   let typeScriptHash = '';
   if (primaryAssetChange && primaryAssetChange.type === 'token') {
     const delta = BigInt(primaryAssetChange.delta);
     const sign = delta > BigInt(0) ? '+' : '';
-    tokenSymbol = primaryAssetChange.symbol ?? '';
+    const symbol = primaryAssetChange.symbol;
     typeScriptHash = primaryAssetChange.typeScriptHash;
-    tokenDelta = `${sign}${primaryAssetChange.delta}${tokenSymbol ? ` ${tokenSymbol}` : ''}`;
+    tokenDelta = `${sign}${primaryAssetChange.delta}${symbol ? ` ${symbol}` : ''}`;
   }
 
   const ckbValue = BigInt(activity.ckbDelta);
@@ -348,7 +347,7 @@ function StreamItemObject({ classified }: { classified: ClassifiedActivity }) {
         {objectId ? (
           <Link
             href={getObjectDetailHref(objectId)}
-            className="text-lavender hover:text-lavender-bright font-mono text-xs transition-colors"
+            className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {truncateHash(objectId, 8, 6)}
@@ -387,7 +386,7 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
         {identityId ? (
           <Link
             href={getIdentityItemDetailHref(standard, identityId)}
-            className="text-aqua hover:text-aqua-bright font-mono text-xs transition-colors"
+            className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {truncateHash(identityId, 8, 6)}
@@ -417,7 +416,7 @@ function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }
                 hashType: primaryScriptCall.typeHashType,
                 scriptKind: 'type',
               })}
-              className="text-amber hover:text-amber-bright transition-colors"
+              className="text-amber/80 hover:text-amber transition-colors"
               onClick={(e) => e.stopPropagation()}
             >
               {badge.label}
@@ -499,6 +498,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
     if (classifiedItems.length > 0) {
       const currentKeys = new Set(classifiedItems.map((c) => itemKey(c.activity)));
       const prevKeys = prevKeysRef.current;
+      prevKeysRef.current = currentKeys;
 
       if (prevKeys.size > 0) {
         const freshKeys = new Set<string>();
@@ -513,8 +513,6 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
           return () => clearTimeout(timer);
         }
       }
-
-      prevKeysRef.current = currentKeys;
     }
   }, [classifiedItems]);
 
