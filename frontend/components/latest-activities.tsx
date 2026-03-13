@@ -526,7 +526,7 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   );
 
   return (
-    <TerminalPanel variant="default" glow={isRealtime} className="flex h-[44rem] flex-col">
+    <TerminalPanel variant="default" glow={isRealtime} className="flex h-[38rem] flex-col">
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'} actions={headerActions}>
         Latest Activities
       </TerminalPanelHeader>

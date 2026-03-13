@@ -258,13 +258,16 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
   );
 
   return (
-    <TerminalPanel variant="default" glow={isRealtime} className="flex flex-col lg:h-[44rem]">
+    <TerminalPanel variant="default" glow={isRealtime} className="flex flex-col lg:h-[38rem]">
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'} actions={headerActions}>
         <Link href="/charts" className="hover:text-jade transition-colors">
           Activity Stats (24h)
         </Link>
       </TerminalPanelHeader>
-      <TerminalPanelContent padding="md" className="flex min-h-0 flex-1 flex-col">
+      <TerminalPanelContent
+        padding="md"
+        className="flex min-h-0 flex-1 flex-col items-center justify-center"
+      >
         {isLoading ? (
           <div className="space-y-4">
             <div className="bg-base-elevated h-6 w-full animate-pulse rounded" />
@@ -272,7 +275,7 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
             <div className="bg-base-elevated h-36 w-full animate-pulse rounded" />
           </div>
         ) : (
-          <div className="flex h-full flex-col gap-4">
+          <div className="flex flex-col gap-4">
             {/* 24h stats — top */}
             <div className="border-base-border/40 divide-base-border/40 flex items-stretch divide-x border-b pb-3">
               <StatItem
@@ -302,7 +305,7 @@ export function ActivityCard({ isRealtime = false }: ActivityCardProps) {
               />
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-4">
+            <div className="flex flex-col gap-4">
               {/* Activity types pie */}
               {activityPieData.length > 0 && (
                 <PieSection
