@@ -220,6 +220,39 @@ impl CkbadgerStore {
         })
     }
 
+    pub fn rollback_sync_status_tip_and_totals(
+        &self,
+        tip_block_number: i64,
+        tip_block_hash: &[u8],
+        txs_removed: i64,
+        cells_created_removed: i64,
+        cells_consumed_removed: i64,
+    ) -> anyhow::Result<()> {
+        let mut status = self.get_sync_status()?;
+        status.tip_block_number = tip_block_number;
+        status.tip_block_hash = tip_block_hash.to_vec();
+        status.total_transactions = checked_rollback_total(
+            "total_transactions",
+            status.total_transactions,
+            txs_removed,
+            tip_block_number,
+        )?;
+        status.total_cells_created = checked_rollback_total(
+            "total_cells_created",
+            status.total_cells_created,
+            cells_created_removed,
+            tip_block_number,
+        )?;
+        status.total_cells_consumed = checked_rollback_total(
+            "total_cells_consumed",
+            status.total_cells_consumed,
+            cells_consumed_removed,
+            tip_block_number,
+        )?;
+        status.last_synced_at = chrono::Utc::now().timestamp();
+        self.set_sync_status(&status)
+    }
+
     /// Check if there's an unresolved deep fork.
     pub fn has_unresolved_deep_fork(&self) -> anyhow::Result<bool> {
         let status = self.get_sync_status()?;
@@ -286,6 +319,40 @@ impl CkbadgerStore {
 
         Ok(None)
     }
+}
+
+fn checked_rollback_total(
+    field_name: &str,
+    current_total: i64,
+    removed_total: i64,
+    tip_block_number: i64,
+) -> anyhow::Result<i64> {
+    if current_total < 0 {
+        return Err(anyhow!(
+            "invalid negative sync_status total before rollback: field={} current_total={} tip_block_number={}",
+            field_name,
+            current_total,
+            tip_block_number
+        ));
+    }
+    if removed_total < 0 {
+        return Err(anyhow!(
+            "invalid negative rollback delta for sync_status: field={} removed_total={} tip_block_number={}",
+            field_name,
+            removed_total,
+            tip_block_number
+        ));
+    }
+    if removed_total > current_total {
+        return Err(anyhow!(
+            "rollback would underflow sync_status total: field={} current_total={} removed_total={} tip_block_number={}",
+            field_name,
+            current_total,
+            removed_total,
+            tip_block_number
+        ));
+    }
+    Ok(current_total - removed_total)
 }
 
 #[cfg(test)]

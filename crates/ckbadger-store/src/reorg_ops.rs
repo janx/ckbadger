@@ -550,11 +550,24 @@ impl CkbadgerStore {
         let cells_store = append_only_store.unwrap_or(self);
         // Persist a rollback marker so startup can force cleanup if interrupted.
         self.set_rollback_cleanup_in_progress(true)?;
+        let sync_status_before = self.get_sync_status()?;
+        // Only blocks up to the last persisted sync tip were counted into sync_status totals.
+        // Startup cleanup may delete partial tail data beyond that point without subtracting it.
+        let rollback_accounted_tip = if sync_status_before.tip_block_number == 0
+            && sync_status_before.tip_block_hash.is_empty()
+        {
+            -1
+        } else {
+            sync_status_before.tip_block_number
+        };
         let mut batch = WriteBatch::default();
         let mut blocks_removed = 0u64;
         let mut txs_removed = 0u64;
         let mut cells_removed = 0u64;
         let mut cells_restored = 0u64;
+        let mut rollback_total_transactions = 0i64;
+        let mut rollback_total_cells_created = 0i64;
+        let mut rollback_total_cells_consumed = 0i64;
         let rollback_started_at = Instant::now();
         let replay_start = rollback_to + 1;
         let replay_cutoff_date = self.get_block_header(replay_start)?.map(|h| {
@@ -610,7 +623,7 @@ impl CkbadgerStore {
             IteratorMode::From(&start_key, rocksdb::Direction::Forward),
         );
         for item in iter {
-            let (key, _) = item.map_err(|e| {
+            let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
                     "failed to iterate tx_index in rollback_to_block cleanup: {}",
                     e
@@ -622,8 +635,65 @@ impl CkbadgerStore {
                     stage.tick(txs_removed);
                     continue;
                 }
+                let tx_idx = keys::decode_tx_idx(&key[8..12]);
+                let tx_index: TxIndexEntry = bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize tx_index during rollback cleanup: block_num={}, tx_idx={}, key=0x{}, error={}",
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+                let cells_created_removed = i64::from(tx_index.outputs_count);
+                let inputs_count = i64::from(tx_index.inputs_count);
+                if cells_created_removed < 0 || inputs_count < 0 {
+                    anyhow::bail!(
+                        "invalid negative tx_index counts during rollback cleanup: block_num={}, tx_idx={}, inputs_count={}, outputs_count={}",
+                        block_num,
+                        tx_idx,
+                        tx_index.inputs_count,
+                        tx_index.outputs_count
+                    );
+                }
+                let cells_consumed_removed = if tx_index.is_cellbase {
+                    0
+                } else {
+                    inputs_count
+                };
                 batch.delete_cf(self.cf_tx_index(), &key);
                 txs_removed += 1;
+                if block_num <= rollback_accounted_tip {
+                    rollback_total_transactions = rollback_total_transactions
+                        .checked_add(1)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "rollback total_transactions delta overflow: block_num={}, tx_idx={}",
+                                block_num,
+                                tx_idx
+                            )
+                        })?;
+                    rollback_total_cells_created = rollback_total_cells_created
+                        .checked_add(cells_created_removed)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "rollback total_cells_created delta overflow: block_num={}, tx_idx={}, outputs_count={}",
+                                block_num,
+                                tx_idx,
+                                tx_index.outputs_count
+                            )
+                        })?;
+                    rollback_total_cells_consumed = rollback_total_cells_consumed
+                        .checked_add(cells_consumed_removed)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "rollback total_cells_consumed delta overflow: block_num={}, tx_idx={}, inputs_count={}",
+                                block_num,
+                                tx_idx,
+                                tx_index.inputs_count
+                            )
+                        })?;
+                }
             }
             stage.tick(txs_removed);
         }
@@ -2166,11 +2236,13 @@ impl CkbadgerStore {
             Vec::new()
         };
         let tip_number = if rollback_to < 0 { 0 } else { rollback_to };
-        self.update_sync_status(|status| {
-            status.tip_block_number = tip_number;
-            status.tip_block_hash = tip_hash.clone();
-            status.last_synced_at = chrono::Utc::now().timestamp();
-        })?;
+        self.rollback_sync_status_tip_and_totals(
+            tip_number,
+            &tip_hash,
+            rollback_total_transactions,
+            rollback_total_cells_created,
+            rollback_total_cells_consumed,
+        )?;
 
         self.set_rollback_cleanup_in_progress(false)?;
 
@@ -2207,8 +2279,8 @@ mod tests {
         AddressBalance, AssetAction, CachedBlockHeader, DaoDepositCacheEntry, HodlTrackerState,
         LiveCellInfo, ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectEntry,
         ObjectExtra, ObjectStandard, OwnerActivityDelta, ScriptInfo, SporeMediaProfile,
-        StorageDependencyTier, TokenInfo, TxActivityBundle, TxIndexEntry, UndoInputOutPoint,
-        UndoLogEntry, UndoTxContext,
+        StorageDependencyTier, SyncStatus, TokenInfo, TxActivityBundle, TxIndexEntry,
+        UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     fn put_canonical_tx(batch: &mut StoreBatch<'_>, block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
@@ -2250,6 +2322,26 @@ mod tests {
                 peers: vec![],
             }],
         }
+    }
+
+    fn seed_sync_status(
+        store: &CkbadgerStore,
+        tip_block_number: i64,
+        tip_block_hash: &[u8],
+        total_transactions: i64,
+        total_cells_created: i64,
+        total_cells_consumed: i64,
+    ) {
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number,
+                tip_block_hash: tip_block_hash.to_vec(),
+                total_transactions,
+                total_cells_created,
+                total_cells_consumed,
+                ..Default::default()
+            })
+            .unwrap();
     }
 
     #[test]
@@ -2429,6 +2521,7 @@ mod tests {
         batch.put_addr_tx(&lock_hash, 1, 0, &tx_hash_keep);
         batch.put_addr_tx(&lock_hash, 2, 0, &tx_hash_drop);
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 2, 2, 2);
 
         store.rollback_to_block(1).unwrap();
 
@@ -2442,6 +2535,87 @@ mod tests {
             .is_none());
         let addr_rows = store.list_addr_txs_recent(&lock_hash, 10, None).unwrap();
         assert_eq!(addr_rows, vec![(1, 0, tx_hash_keep)]);
+    }
+
+    #[test]
+    fn test_rollback_to_block_decrements_sync_status_totals_for_deleted_tx_index_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let header1 = CachedBlockHeader {
+            hash: vec![0x11; 32],
+            timestamp: 1_700_000_001_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header2 = CachedBlockHeader {
+            hash: vec![0x22; 32],
+            timestamp: 1_700_000_002_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 2,
+        };
+
+        let block1_tx = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header1.timestamp,
+            inputs_count: 1,
+            outputs_count: 2,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        };
+        let block2_tx_a = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header2.timestamp,
+            inputs_count: 3,
+            outputs_count: 5,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        };
+        let block2_tx_b = TxIndexEntry {
+            is_cellbase: false,
+            timestamp: header2.timestamp,
+            inputs_count: 2,
+            outputs_count: 4,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+        };
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_index(1, 0, &block1_tx);
+        batch.put_tx_index(2, 0, &block2_tx_a);
+        batch.put_tx_index(2, 1, &block2_tx_b);
+        batch.commit().unwrap();
+
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 2,
+                tip_block_hash: header2.hash.clone(),
+                total_transactions: 3,
+                total_cells_created: 11,
+                total_cells_consumed: 6,
+                ..Default::default()
+            })
+            .unwrap();
+
+        store.rollback_to_block(1).unwrap();
+
+        let status = store.get_sync_status().unwrap();
+        assert_eq!(status.tip_block_number, 1);
+        assert_eq!(status.tip_block_hash, header1.hash);
+        assert_eq!(status.total_transactions, 1);
+        assert_eq!(status.total_cells_created, 2);
+        assert_eq!(status.total_cells_consumed, 1);
     }
 
     #[test]
@@ -2742,6 +2916,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
         assert!(store.get_cell(&consuming_tx, 0, &store).unwrap().is_some());
@@ -2894,6 +3069,7 @@ mod tests {
         batch.put_token_holder_by_balance(&type_hash, &lock_b, 100);
         batch.put_addr_token_by_balance(&lock_b, &type_hash, 100);
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert_eq!(
             store
@@ -3072,6 +3248,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 2, 2, 2);
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
         assert!(store
@@ -3147,6 +3324,7 @@ mod tests {
         batch.put_tx_hash_map(&drop_tx, 2, 0);
         batch.put_tx_index(2, 0, &tx_index);
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         store.rollback_to_block(1).unwrap();
 
@@ -3207,6 +3385,7 @@ mod tests {
             }),
         );
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         // Corrupt unrelated tx_hash_map row to prove rollback does not full-scan tx_hash_map
         // when tx-context coverage is complete.
@@ -3308,6 +3487,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
+        seed_sync_status(&store, 2, &header2.hash, 1, 1, 0);
 
         store.rollback_to_block(1).unwrap();
 
