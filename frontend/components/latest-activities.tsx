@@ -2,7 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type GlobalActivity } from '@/lib/api';
 import { classifyActivity, type ClassifiedActivity } from '@/lib/activity-classify';
 import {
@@ -19,6 +19,26 @@ import {
 } from '@/components/ui/terminal-panel';
 
 const MAX_STREAM_ITEMS = 20;
+
+const STREAM_KEYFRAMES = `
+@keyframes stream-slide-in {
+  from { transform: translateY(-100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes stream-glow-fade {
+  from { background-color: rgba(46, 219, 163, 0.1); }
+  to { background-color: transparent; }
+}
+`;
+
+let keyframesInjected = false;
+function ensureKeyframes() {
+  if (keyframesInjected || typeof document === 'undefined') return;
+  const style = document.createElement('style');
+  style.textContent = STREAM_KEYFRAMES;
+  document.head.appendChild(style);
+  keyframesInjected = true;
+}
 
 function truncateAddress(addr: string): string {
   return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
@@ -453,6 +473,7 @@ interface LatestActivitiesProps {
 }
 
 export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) {
+  useEffect(() => ensureKeyframes(), []);
   const [newItemKeys, setNewItemKeys] = useState<Set<string>>(new Set());
   const prevKeysRef = useRef<Set<string>>(new Set());
 
@@ -469,9 +490,10 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   const itemCount = activities?.length ?? 0;
   const showSkeleton = isLoading || (itemCount === 0 && isFetching);
 
-  const classifiedItems: ClassifiedActivity[] = activities
-    ? activities.slice(0, MAX_STREAM_ITEMS).map((a) => classifyActivity(a))
-    : [];
+  const classifiedItems = useMemo<ClassifiedActivity[]>(
+    () => (activities ? activities.slice(0, MAX_STREAM_ITEMS).map((a) => classifyActivity(a)) : []),
+    [activities]
+  );
 
   useEffect(() => {
     if (classifiedItems.length > 0) {
@@ -538,9 +560,16 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
                     href={`/tx/${classified.activity.txHash}`}
                     className={cn(
                       'border-base-border/50 block border-b px-3 py-2 no-underline last:border-b-0',
-                      'hover:bg-base-elevated/50 transition-all duration-300',
-                      isNew && 'bg-jade/10'
+                      'hover:bg-base-elevated/50 transition-all duration-300'
                     )}
+                    style={
+                      isNew
+                        ? {
+                            animation:
+                              'stream-slide-in 300ms ease-out, stream-glow-fade 2s ease-out forwards',
+                          }
+                        : undefined
+                    }
                   >
                     <div className="space-y-1">
                       <StreamItem classified={classified} />
