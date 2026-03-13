@@ -44,6 +44,32 @@ pub(crate) fn should_consume_dotbit_account(
     }
 }
 
+/// Returns true if the spore should be consumed in this batch.
+/// If the spore was re-created later in the same batch (transfer), skip consumption.
+#[allow(dead_code)] // will be called from T6a batch processing
+pub(crate) fn should_consume_spore(
+    latest_create_tx_index: Option<usize>,
+    consume_tx_index: usize,
+) -> bool {
+    match latest_create_tx_index {
+        Some(last_create) => last_create < consume_tx_index,
+        None => true,
+    }
+}
+
+/// Returns true if the mNFT token should be consumed in this batch.
+/// If the token was re-created later in the same batch (transfer), skip consumption.
+#[allow(dead_code)] // will be called from T6b batch processing
+pub(crate) fn should_consume_mnft_token(
+    latest_create_tx_index: Option<usize>,
+    consume_tx_index: usize,
+) -> bool {
+    match latest_create_tx_index {
+        Some(last_create) => last_create < consume_tx_index,
+        None => true,
+    }
+}
+
 /// Look up the DotBit account-id for a given outpoint.  Prefers an already-
 /// persisted store mapping (`db_account_id`) and falls back to the in-flight
 /// batch mapping when the outpoint was created within the same batch.
@@ -101,6 +127,36 @@ mod tests {
             should_consume_dotbit_account(Some(create_t2), consume_t3),
             "consume after latest output should mark account consumed"
         );
+    }
+
+    #[test]
+    fn test_should_consume_spore_no_recreate() {
+        assert!(should_consume_spore(None, 10));
+    }
+
+    #[test]
+    fn test_should_consume_spore_recreated_after() {
+        assert!(!should_consume_spore(Some(12), 10));
+    }
+
+    #[test]
+    fn test_should_consume_spore_recreated_before() {
+        assert!(should_consume_spore(Some(8), 10));
+    }
+
+    #[test]
+    fn test_should_consume_mnft_no_recreate() {
+        assert!(should_consume_mnft_token(None, 10));
+    }
+
+    #[test]
+    fn test_should_consume_mnft_recreated_after() {
+        assert!(!should_consume_mnft_token(Some(12), 10));
+    }
+
+    #[test]
+    fn test_should_consume_mnft_recreated_before() {
+        assert!(should_consume_mnft_token(Some(8), 10));
     }
 
     #[test]
