@@ -396,6 +396,8 @@ pub mod stats_prefix {
     pub const ACTIVITY_HOURLY: u8 = 0x1E;
     pub const DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 = 0x1F;
     pub const DAO_TOP_DEPOSITORS: u8 = 0x20;
+    pub const CELL_DISTRIBUTION: u8 = 0x21;
+    pub const ADDR_COHORT: u8 = 0x22;
 }
 
 // Flat re-exports for convenience
@@ -432,6 +434,8 @@ pub const STATS_PREFIX_ACTIVITY_HOURLY: u8 = stats_prefix::ACTIVITY_HOURLY;
 pub const STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID: u8 =
     stats_prefix::DOTBIT_OUTPOINT_BY_ACCOUNT_ID;
 pub const STATS_PREFIX_DAO_TOP_DEPOSITORS: u8 = stats_prefix::DAO_TOP_DEPOSITORS;
+pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
+pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -1139,6 +1143,7 @@ pub mod sync_meta_keys {
     pub const DEEP_FORK: &[u8] = b"deep_fork";
     pub const REORG_EVENTS: &[u8] = b"reorg_events";
     pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
+    pub const CELL_DIST_TRACKER: &[u8] = b"cell_dist_tracker";
     pub const SYNC_PROGRESS: &[u8] = b"sync_progress";
     pub const MEMORY_STATS: &[u8] = b"memory_stats";
 }

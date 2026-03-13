@@ -746,6 +746,48 @@ pub struct HodlTrackerState {
 }
 
 // ============================================
+// Group G3: Cell Distribution & Address Cohort
+// ============================================
+
+/// Daily snapshot of live cell distribution by age and size.
+/// Materialized by the indexer at each day boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DailyCellDistribution {
+    /// Capacity by age band (shannons): <1d, 1-7d, 7-30d, 30-180d, >180d
+    pub age_band_lt1d: i128,
+    pub age_band_1d_7d: i128,
+    pub age_band_7d_30d: i128,
+    pub age_band_30d_180d: i128,
+    pub age_band_gt180d: i128,
+    /// Cell count and capacity by size bucket: <100, 100-1k, 1k-10k, 10k-100k, 100k-1m, >=1m CKB
+    pub size_bucket_counts: [i64; 6],
+    pub size_bucket_capacities: [i128; 6],
+}
+
+/// Daily snapshot of address cohort retention data.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DailyAddressCohort {
+    pub cohorts: Vec<AddressCohortEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressCohortEntry {
+    pub cohort_month: String, // "YYYY-MM"
+    pub used_capacity: i128,
+    pub total_balance: i128,
+}
+
+/// Serializable state for the cell distribution tracker.
+/// Persisted to sync_meta for crash recovery.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CellDistributionTrackerState {
+    pub capacity_by_date_and_bucket: Vec<(String, [i128; 6])>,
+    pub count_by_bucket: [i64; 6],
+    pub total_capacity_by_bucket: [i128; 6],
+    pub last_snapshot_date: Option<String>,
+}
+
+// ============================================
 // Group H: System
 // ============================================
 
