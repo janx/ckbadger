@@ -52,7 +52,7 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Known script metadata                                        |
 | `stats_chain`                    | prefixed keys                                         | chain chart snapshots   | Daily/hourly/epoch/miner/block stats                         |
 | `stats_dao`                      | prefixed keys                                         | DAO snapshots           | DAO daily snapshots                                          |
-| `stats_hodl`                     | prefixed keys                                         | HODL snapshots          | HODL wave timelines                                          |
+| `stats_hodl`                     | prefixed keys                                         | HODL/chart snapshots    | HODL waves, cell distribution, address cohorts               |
 | `stats_script`                   | prefixed keys                                         | ScriptDailyDelta        | Script daily deltas                                          |
 | `stats_token`                    | prefixed keys                                         | token rollups + deltas  | Token transfer/hourly/daily stats                            |
 | `stats_spore`                    | prefixed keys                                         | spore rollups/indexes   | Spore/cluster daily + owner/index stats                      |
@@ -64,6 +64,18 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 - `dao_by_block`: key = `i64::MAX - deposit_block` (big-endian) + deposit outpoint, supports global DAO deposit pagination in newest-first order.
 - `dao_by_lock_block`: key = `lock_script_hash(32B)` + block_desc + outpoint, supports per-address DAO deposit pagination.
 - `dao_by_status_block`: key = `status(i16 BE)` + block_desc + outpoint, supports status-filtered DAO queries (`deposited/withdrawing/withdrawn`).
+
+### stats_hodl Key Prefixes
+
+The `stats_hodl` CF uses single-byte prefixes to multiplex different snapshot types. Key format: `prefix(1B) + date_string`.
+
+| Prefix | Constant                         | Value Type            | Description                                         |
+| ------ | -------------------------------- | --------------------- | --------------------------------------------------- |
+| `0x0B` | `STATS_PREFIX_HODL_WAVE`         | HODL wave snapshot    | Daily HODL wave age-band distribution               |
+| `0x21` | `STATS_PREFIX_CELL_DISTRIBUTION` | DailyCellDistribution | Daily cell distribution (age bands + size buckets)  |
+| `0x22` | `STATS_PREFIX_ADDR_COHORT`       | DailyAddressCohort    | Daily address cohort retention (new/returning/lost) |
+
+Cell distribution and address cohort snapshots are materialized by the indexer during sync (one snapshot per day boundary). The API reads these directly instead of scanning live cells.
 
 ## Key Design
 
