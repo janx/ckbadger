@@ -1043,8 +1043,7 @@ impl CkbadgerStore {
         }
 
         // 5. Clear DAO secondary indexes before rebuilding from repaired deposits.
-        let mut dao_indexes_deleted = 0u64;
-        let mut stage = RollbackStageProgress::new("rebuild_dao_indexes_clear");
+        // Use delete_range_cf to wipe each CF in O(1) instead of per-key iteration.
         let dao_index_cfs = [
             self.cf_dao_by_withdraw_tx(),
             self.cf_dao_by_block(),
@@ -1052,20 +1051,9 @@ impl CkbadgerStore {
             self.cf_dao_by_status_block(),
         ];
         for cf in dao_index_cfs {
-            let iter = self.iterator_cf(cf, IteratorMode::Start);
-            for item in iter {
-                let (key, _) = item.map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to iterate DAO index in rollback_to_block clear stage: {}",
-                        e
-                    )
-                })?;
-                batch.delete_cf(cf, &key);
-                dao_indexes_deleted += 1;
-                stage.tick(dao_indexes_deleted);
-            }
+            batch.delete_range_cf::<&[u8]>(cf, &[], &[0xFF; 128]);
         }
-        stage.finish(dao_indexes_deleted);
+        info!("rollback: cleared 4 DAO secondary index CFs via delete_range");
 
         // 6. Repair DAO deposits and stream rebuilt secondary indexes into the same batch.
         let mut dao_deposits_deleted = 0u64;
@@ -1240,8 +1228,9 @@ impl CkbadgerStore {
                 }
                 let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_activity_bundle_key(&key);
                 if block_num <= rollback_to {
-                    stage.tick(activities_removed);
-                    continue;
+                    // Keys are in descending block_num order; all remaining entries
+                    // are also <= rollback_to, so stop scanning.
+                    break;
                 }
                 batch.delete_cf(self.cf_activities(), &key);
                 activities_removed += 1;
@@ -1284,6 +1273,8 @@ impl CkbadgerStore {
         }
 
         // 8d. Delete object_collection_activities entries for rolled-back blocks.
+        // Also count surviving entries per collection to avoid a duplicate scan in stage 10.
+        let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
         {
             let mut removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_object_collection_activities");
@@ -1299,9 +1290,18 @@ impl CkbadgerStore {
                 if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
                     continue;
                 }
-                let (_collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
+                let (collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
                     keys::decode_nft_collection_activity_key(&key);
                 if block_num <= rollback_to {
+                    // Surviving entry — count it for the aggregate rebuild.
+                    let total = nft_activity_totals
+                        .entry(collection_id.to_vec())
+                        .or_insert(0);
+                    *total = total.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "nft collection activities_count overflow while counting survivors in rollback"
+                        )
+                    })?;
                     stage.tick(removed);
                     continue;
                 }
@@ -1319,6 +1319,8 @@ impl CkbadgerStore {
         }
 
         // 8e. Delete identity_collection_activities entries for rolled-back blocks.
+        // Also count surviving entries per collection to avoid a duplicate scan in stage 10.
+        let mut identity_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
         {
             let mut removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_identity_collection_activities");
@@ -1336,9 +1338,18 @@ impl CkbadgerStore {
                 if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
                     continue;
                 }
-                let (_collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
+                let (collection_id, block_num, _tx_idx, _block_hash, _tx_hash) =
                     keys::decode_nft_collection_activity_key(&key);
                 if block_num <= rollback_to {
+                    // Surviving entry — count it for the aggregate rebuild.
+                    let total = identity_activity_totals
+                        .entry(collection_id.to_vec())
+                        .or_insert(0);
+                    *total = total.checked_add(1).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "identity collection activities_count overflow while counting survivors in rollback"
+                        )
+                    })?;
                     stage.tick(removed);
                     continue;
                 }
@@ -1572,6 +1583,7 @@ impl CkbadgerStore {
         let mut aggregate_rows_written = 0u64;
         let mut cluster_owner_rows_written = 0u64;
 
+        // Clear 5 secondary index/aggregate CFs via delete_range (O(1) per CF).
         let secondary_cfs = [
             self.cf_spore_by_cluster(),
             self.cf_cluster_agg(),
@@ -1580,114 +1592,28 @@ impl CkbadgerStore {
             self.cf_identity_agg(),
         ];
         for cf in secondary_cfs {
-            let iter = self.iterator_cf(cf, IteratorMode::Start);
-            for item in iter {
-                let (key, _) = item.map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to iterate spore/nft secondary CF during rollback cleanup: {}",
-                        e
-                    )
-                })?;
-                batch.delete_cf(cf, &key);
-                secondary_keys_deleted += 1;
-                stage.tick(
-                    spore_deleted
-                        + nft_deleted
-                        + secondary_keys_deleted
-                        + secondary_keys_written
-                        + aggregate_rows_written
-                        + cluster_owner_rows_written,
-                );
-            }
+            batch.delete_range_cf::<&[u8]>(cf, &[], &[0xFF; 128]);
         }
 
-        // Cluster-owner counters are stored in stats_spore CF under a dedicated prefix.
-        let iter = self.iterator_cf(self.cf_stats_spore(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate stats_spore while clearing cluster owner counters in rollback cleanup: {}",
-                    e
-                )
-            })?;
-            if key.first() == Some(&keys::STATS_PREFIX_CLUSTER_OWNER) {
-                batch.delete_cf(self.cf_stats_spore(), &key);
-                secondary_keys_deleted += 1;
-            }
-            stage.tick(
-                spore_deleted
-                    + nft_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
+        // Clear cluster-owner counters (single-byte prefix in stats_spore CF).
+        {
+            let start = [keys::STATS_PREFIX_CLUSTER_OWNER];
+            let end = [keys::STATS_PREFIX_CLUSTER_OWNER + 1];
+            batch.delete_range_cf(self.cf_stats_spore(), start, end);
         }
 
-        // Identity-owner counters (CF_STATS_IDENTITY) — clear all.
-        let iter = self.iterator_cf(self.cf_stats_identity(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate stats_identity while clearing identity owner counters in rollback cleanup: {}",
-                    e
-                )
-            })?;
-            batch.delete_cf(self.cf_stats_identity(), &key);
-            secondary_keys_deleted += 1;
-            stage.tick(
-                spore_deleted
-                    + nft_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
+        // Clear identity-owner counters and identity-by-collection index.
+        batch.delete_range_cf::<&[u8]>(self.cf_stats_identity(), &[], &[0xFF; 128]);
+        batch.delete_range_cf::<&[u8]>(self.cf_identity_by_collection(), &[], &[0xFF; 128]);
+
+        // Clear NFT collection-owner counters (single-byte prefix in stats_object CF).
+        {
+            let start = [keys::STATS_PREFIX_NFT_COLLECTION_OWNER];
+            let end = [keys::STATS_PREFIX_NFT_COLLECTION_OWNER + 1];
+            batch.delete_range_cf(self.cf_stats_object(), start, end);
         }
 
-        // Identity-by-collection index (CF_IDENTITY_BY_COLLECTION) — clear all.
-        let iter = self.iterator_cf(self.cf_identity_by_collection(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate identity_by_collection while clearing index in rollback cleanup: {}",
-                    e
-                )
-            })?;
-            batch.delete_cf(self.cf_identity_by_collection(), &key);
-            secondary_keys_deleted += 1;
-            stage.tick(
-                spore_deleted
-                    + nft_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
-        }
-
-        // NFT collection-owner counters are stored in stats_nft CF under a dedicated prefix.
-        let iter = self.iterator_cf(self.cf_stats_object(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate stats_nft while clearing nft collection owner counters in rollback cleanup: {}",
-                    e
-                )
-            })?;
-            if key.first() == Some(&keys::STATS_PREFIX_NFT_COLLECTION_OWNER) {
-                batch.delete_cf(self.cf_stats_object(), &key);
-                secondary_keys_deleted += 1;
-            }
-            stage.tick(
-                spore_deleted
-                    + nft_deleted
-                    + secondary_keys_deleted
-                    + secondary_keys_written
-                    + aggregate_rows_written
-                    + cluster_owner_rows_written,
-            );
-        }
+        info!("rollback: cleared secondary index/aggregate CFs via delete_range");
 
         let mut cluster_aggs: HashMap<Vec<u8>, ClusterAggregate> = HashMap::new();
         let mut cluster_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64> = HashMap::new();
@@ -2043,58 +1969,9 @@ impl CkbadgerStore {
             })?;
         }
 
-        // Count collection activities — all remaining entries are canonical after
-        // rollback deletion in stages 8d/8e above.
-        let mut nft_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        let iter = self.iterator_cf(self.cf_object_collection_activities(), IteratorMode::Start);
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate object_collection_activities while repairing rollback state: {}",
-                    e
-                )
-            })?;
-            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
-                continue;
-            }
-            let (collection_id, _block_num, _tx_idx, _block_hash, _tx_hash) =
-                keys::decode_nft_collection_activity_key(&key);
-            let total = nft_activity_totals
-                .entry(collection_id.to_vec())
-                .or_insert(0);
-            *total = total.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "nft collection activities_count overflow while repairing rollback state"
-                )
-            })?;
-        }
-
-        let mut identity_activity_totals: HashMap<Vec<u8>, i64> = HashMap::new();
-        let iter = self.iterator_cf(
-            self.cf_identity_collection_activities(),
-            IteratorMode::Start,
-        );
-        for item in iter {
-            let (key, _) = item.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to iterate identity_collection_activities while repairing rollback state: {}",
-                    e
-                )
-            })?;
-            if key.len() != keys::NFT_COLLECTION_ACTIVITY_KEY_SIZE {
-                continue;
-            }
-            let (collection_id, _block_num, _tx_idx, _block_hash, _tx_hash) =
-                keys::decode_nft_collection_activity_key(&key);
-            let total = identity_activity_totals
-                .entry(collection_id.to_vec())
-                .or_insert(0);
-            *total = total.checked_add(1).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "identity collection activities_count overflow while repairing rollback state"
-                )
-            })?;
-        }
+        // Collection activity counts (nft_activity_totals, identity_activity_totals)
+        // were already computed during stages 8d/8e to avoid a duplicate full-CF scan
+        // and the data inconsistency from reading uncommitted batch deletes.
 
         for (collection_id, agg) in &mut nft_collection_aggs {
             agg.holders_count = nft_owner_totals.get(collection_id).copied().unwrap_or(0);
@@ -2729,6 +2606,99 @@ mod tests {
         assert_eq!(rebuilt.total_count, 1);
         assert_eq!(rebuilt.live_count, 1);
         assert_eq!(rebuilt.activities_count, 2);
+    }
+
+    #[test]
+    fn test_rollback_excludes_rolled_back_activities_from_collection_aggregate_count() {
+        // Regression test: verifies that collection activity counts only include
+        // entries at or below the rollback target, not entries from rolled-back
+        // blocks that are being deleted in the same write batch.
+        let dir = tempfile::tempdir().unwrap();
+        let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let class_id = vec![0x44; 32];
+        let nft_id = vec![0x55; 32];
+
+        let header0 = CachedBlockHeader {
+            hash: vec![0x01; 32],
+            timestamp: 1_700_000_000_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+        let header1 = CachedBlockHeader {
+            hash: vec![0x02; 32],
+            timestamp: 1_700_000_010_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+        };
+
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_block_header(0, &header0);
+        batch.put_block_header(1, &header1);
+        batch.put_object(
+            &nft_id,
+            &ObjectEntry {
+                standard: ObjectStandard::MnftToken,
+                collection_id: Some(class_id.clone()),
+                token_id: Some(nft_id.clone()),
+                owner_lock_hash: Some(vec![0x66; 32]),
+                name: None,
+                description: None,
+                is_live: true,
+                created_at_block: 0,
+                created_at_tx: vec![],
+                extra: ObjectExtra::MnftToken {
+                    token_index: 1,
+                    characteristic: vec![],
+                    configure: 0,
+                    state: 0,
+                },
+            },
+        );
+        put_canonical_tx(&mut batch, 0, 0, &[0xA1; 32]);
+        put_canonical_tx(&mut batch, 1, 0, &[0xA2; 32]);
+        // Activity at block 0 (should survive rollback)
+        batch.put_object_collection_activity(
+            &class_id,
+            0,
+            0,
+            &ObjectCollectionActivityEntry {
+                tx_hash: vec![0xA1; 32],
+                block_hash: header0.hash.clone(),
+                timestamp_ms: 1_700_000_000_000,
+                actions: vec![AssetAction::Mint],
+            },
+        );
+        // Activity at block 1 (should be deleted by rollback)
+        batch.put_object_collection_activity(
+            &class_id,
+            1,
+            0,
+            &ObjectCollectionActivityEntry {
+                tx_hash: vec![0xA2; 32],
+                block_hash: header1.hash.clone(),
+                timestamp_ms: 1_700_000_010_000,
+                actions: vec![AssetAction::Transfer],
+            },
+        );
+        batch.commit().unwrap();
+
+        domain.rollback_to_block(0).unwrap();
+
+        let rebuilt = domain
+            .get_object_collection_aggregate(&class_id)
+            .unwrap()
+            .unwrap();
+        // Only the block-0 activity should remain.
+        assert_eq!(
+            rebuilt.activities_count, 1,
+            "activities_count should exclude rolled-back block-1 entries"
+        );
     }
 
     #[test]
