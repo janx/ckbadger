@@ -620,18 +620,18 @@ describe('AssetsPage', () => {
     });
   });
 
-  it('uses canonical slugs for identity detail links', async () => {
+  it('uses canonical slugs for identity collection links', async () => {
     const cases = [
       {
         assets: mockDotbitIdentityAssets,
         linkName: /\.bit/i,
-        href: '/identities/dotbit/0x646f746269745f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
+        href: '/identities/dotbit',
         standard: 'DOTBIT',
       },
       {
         assets: mockDidCkbIdentityAssets,
         linkName: /did:ckb/i,
-        href: '/identities/did/0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5f5f5f5f5f5f5f5f5f',
+        href: '/identities/did:ckb',
         standard: 'did:ckb',
       },
     ];

@@ -20,7 +20,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { api, Asset } from '@/lib/api';
 import {
   getClusterDetailHref,
-  getIdentityItemDetailHref,
+  getIdentityCollectionHref,
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
@@ -203,7 +203,7 @@ function AssetTable({
     if (asset.standard === 'spore') {
       return getClusterDetailHref(asset.clusterId || asset.id);
     }
-    if (asset.assetType === 'identity') return getIdentityItemDetailHref(asset.standard, asset.id);
+    if (asset.assetType === 'identity') return getIdentityCollectionHref(asset.standard, asset.id);
     return getObjectDetailHref(asset.id);
   };
   const getAssetName = (asset: Asset) => {

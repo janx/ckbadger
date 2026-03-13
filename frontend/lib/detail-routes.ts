@@ -29,6 +29,12 @@ export function getObjectDetailHref(assetId: string): string {
   return `/objects/${encodeURIComponent(assetId)}`;
 }
 
+export function getIdentityCollectionHref(standard: string, collectionId: string): string {
+  if (standard === 'dotbit') return '/identities/dotbit';
+  if (standard === 'did_ckb' || standard === 'did:ckb') return '/identities/did:ckb';
+  return `/identities/${encodeURIComponent(collectionId)}`;
+}
+
 export function getIdentityItemDetailHref(standard: string, identityId: string): string {
   if (standard === 'dotbit') return `/identities/dotbit/${encodeURIComponent(identityId)}`;
   if (standard === 'did_ckb' || standard === 'did:ckb')
