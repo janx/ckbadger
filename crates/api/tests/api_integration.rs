@@ -7297,7 +7297,7 @@ async fn test_address_activities_return_type_calls_separately_and_support_script
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["assetChanges"].as_array().unwrap().len(), 0);
-    let type_calls = data[0]["scriptCalls"].as_array().unwrap();
+    let type_calls = data[0]["typeCalls"].as_array().unwrap();
     assert_eq!(type_calls.len(), 1);
     assert_eq!(
         type_calls[0]["typeCodeHash"],
@@ -7310,6 +7310,8 @@ async fn test_address_activities_return_type_calls_separately_and_support_script
     );
     assert_eq!(type_calls[0]["scriptHash"], expected_script_hash);
     assert_eq!(type_calls[0]["scriptName"], "RGB++ Lock");
+    let lock_calls = data[0]["lockCalls"].as_array().unwrap();
+    assert_eq!(lock_calls.len(), 0);
 }
 
 #[tokio::test]
@@ -7396,11 +7398,13 @@ async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_
     let items = json.as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["assetChanges"].as_array().unwrap().len(), 1);
-    let type_calls = items[0]["scriptCalls"].as_array().unwrap();
+    let type_calls = items[0]["typeCalls"].as_array().unwrap();
     assert_eq!(type_calls.len(), 1);
     assert_eq!(type_calls[0]["typeHashType"], "type");
     assert_eq!(type_calls[0]["scriptHash"], expected_script_hash);
     assert_eq!(type_calls[0]["scriptName"], "RGB++ Lock");
+    let lock_calls = items[0]["lockCalls"].as_array().unwrap();
+    assert_eq!(lock_calls.len(), 0);
 }
 
 #[tokio::test]

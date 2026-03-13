@@ -5,12 +5,13 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, ScriptInfo, TypeCallEntry,
+        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, LockCallEntry, ScriptInfo,
+        TypeCallEntry,
     },
     CkbadgerStore,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 use crate::response::{
@@ -45,7 +46,8 @@ pub struct ActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
-    pub type_calls: Vec<ScriptCallResponse>,
+    pub type_calls: Vec<TypeCallResponse>,
+    pub lock_calls: Vec<LockCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -87,13 +89,25 @@ pub enum AssetChangeResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptCallResponse {
+pub struct TypeCallResponse {
     pub type_code_hash: String,
     pub type_hash_type: String,
     pub type_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
     pub protocol_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockCallResponse {
+    pub lock_code_hash: String,
+    pub lock_hash_type: String,
+    pub lock_args: String,
+    pub script_hash: String,
+    pub script_name: Option<String>,
+    pub role: String,
+    pub decoded: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,7 +122,8 @@ pub struct GlobalActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
-    pub type_calls: Vec<ScriptCallResponse>,
+    pub type_calls: Vec<TypeCallResponse>,
+    pub lock_calls: Vec<LockCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -238,15 +253,15 @@ fn resolve_script_info_cached<'a>(
     Ok(cache.get(type_code_hash).and_then(Option::as_ref))
 }
 
-fn convert_script_call(
+fn convert_type_call(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     call: &TypeCallEntry,
-) -> anyhow::Result<ScriptCallResponse> {
+) -> anyhow::Result<TypeCallResponse> {
     let hash_type = hash_type_to_str(call.type_hash_type);
     if hash_type == "unknown" {
         return Err(anyhow::anyhow!(
-            "unsupported script hash_type {} in activity script_call",
+            "unsupported script hash_type {} in activity type_call",
             call.type_hash_type
         ));
     }
@@ -257,7 +272,7 @@ fn convert_script_call(
     );
     let script_info = resolve_script_info_cached(store, cache, &call.type_code_hash)?;
 
-    Ok(ScriptCallResponse {
+    Ok(TypeCallResponse {
         type_code_hash: format!("0x{}", hex::encode(&call.type_code_hash)),
         type_hash_type: hash_type.to_string(),
         type_args: format!("0x{}", hex::encode(&call.type_args)),
@@ -271,11 +286,69 @@ fn convert_type_calls(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     calls: Option<&Vec<TypeCallEntry>>,
-) -> anyhow::Result<Vec<ScriptCallResponse>> {
+) -> anyhow::Result<Vec<TypeCallResponse>> {
     calls
         .into_iter()
         .flatten()
-        .map(|call| convert_script_call(store, cache, call))
+        .map(|call| convert_type_call(store, cache, call))
+        .collect()
+}
+
+/// Protocol action lock code_hashes — locks where creating a cell IS the protocol action.
+/// Initially empty; populated when UTXOSwap/Fiber code_hashes become available.
+static PROTOCOL_ACTION_LOCKS: LazyLock<HashSet<Vec<u8>>> = LazyLock::new(|| {
+    HashSet::new()
+    // Future: add UTXOSwap intentLock, Fiber funding_lock, etc.
+});
+
+fn lock_call_role(code_hash: &[u8]) -> &'static str {
+    if PROTOCOL_ACTION_LOCKS.contains(code_hash) {
+        "protocol_action"
+    } else {
+        "access_control"
+    }
+}
+
+fn convert_lock_call(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    call: &LockCallEntry,
+) -> anyhow::Result<LockCallResponse> {
+    let hash_type = hash_type_to_str(call.lock_hash_type);
+    if hash_type == "unknown" {
+        return Err(anyhow::anyhow!(
+            "unsupported lock hash_type {} in activity lock_call",
+            call.lock_hash_type
+        ));
+    }
+    let script_hash = compute_script_hash(
+        &call.lock_code_hash,
+        call.lock_hash_type as u8,
+        &call.lock_args,
+    );
+    let script_info = resolve_script_info_cached(store, cache, &call.lock_code_hash)?;
+    let role = lock_call_role(&call.lock_code_hash);
+
+    Ok(LockCallResponse {
+        lock_code_hash: format!("0x{}", hex::encode(&call.lock_code_hash)),
+        lock_hash_type: hash_type.to_string(),
+        lock_args: format!("0x{}", hex::encode(&call.lock_args)),
+        script_hash: format!("0x{}", hex::encode(script_hash)),
+        script_name: normalized_script_name(script_info),
+        role: role.to_string(),
+        decoded: None, // Decoders added in Task 5
+    })
+}
+
+fn convert_lock_calls(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
+    calls: Option<&Vec<LockCallEntry>>,
+) -> anyhow::Result<Vec<LockCallResponse>> {
+    calls
+        .into_iter()
+        .flatten()
+        .map(|call| convert_lock_call(store, cache, call))
         .collect()
 }
 
@@ -298,6 +371,7 @@ pub(crate) fn build_activity_response(
             .map(convert_asset_change)
             .collect(),
         type_calls: convert_type_calls(store, script_info_cache, entry.type_calls.as_ref())?,
+        lock_calls: convert_lock_calls(store, script_info_cache, entry.lock_calls.as_ref())?,
         peers: entry
             .peers
             .iter()
@@ -340,6 +414,7 @@ pub(crate) fn build_global_activity_response(
             .map(convert_asset_change)
             .collect(),
         type_calls: convert_type_calls(store, script_info_cache, item.entry.type_calls.as_ref())?,
+        lock_calls: convert_lock_calls(store, script_info_cache, item.entry.lock_calls.as_ref())?,
         peers: item
             .entry
             .peers
