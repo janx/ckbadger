@@ -54,7 +54,7 @@ export function DaoOverview() {
         {/* Header row */}
         <div className="mb-1.5 flex items-baseline justify-between">
           <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-            Nervos DAO
+            Nervos DAO - Daily Change
           </div>
           {hovered ? (
             <div className="font-mono text-[10px] tabular-nums">

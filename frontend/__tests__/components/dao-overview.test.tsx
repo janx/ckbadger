@@ -65,7 +65,7 @@ describe('DaoOverview', () => {
     expect(screen.getByText('4,521')).toBeInTheDocument();
 
     // Card title
-    expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
+    expect(screen.getByText('Nervos DAO - Daily Change')).toBeInTheDocument();
   });
 
   it('renders delta bar chart when chart data is available', async () => {
