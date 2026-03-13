@@ -126,7 +126,7 @@ impl BatchWriter {
             return Ok(());
         }
 
-        for (tx_hash, output_index, _cell, _created_at_block) in cells {
+        for (tx_hash, output_index, cell, _created_at_block) in cells {
             let lookup_key = (tx_hash.to_vec(), *output_index);
             let info = precomputed_infos.get(&lookup_key).cloned().ok_or_else(|| {
                 anyhow!(
@@ -165,6 +165,14 @@ impl BatchWriter {
                 if let Some(ref type_code_hash) = info.type_code_hash {
                     domain_batch.put_cell_by_type_code(
                         type_code_hash,
+                        info.created_at_block,
+                        tx_hash,
+                        *output_index,
+                    );
+                }
+                if !cell.data_hash.is_empty() {
+                    domain_batch.put_cell_by_data_hash(
+                        &cell.data_hash,
                         info.created_at_block,
                         tx_hash,
                         *output_index,
@@ -847,6 +855,80 @@ mod tests {
                 .contains("failed to decode consumed cell meta in get_consumed_cells_batch"),
             "expected consumed batch lookup error context, got: {}",
             err
+        );
+    }
+
+    #[test]
+    fn test_insert_cells_batch_populates_data_hash_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let type_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
+        let cell = build_udt_cell(type_code_hash, vec![0x01, 0x02, 0x03]);
+        let tx_hash = vec![0xDA; 32];
+        let output_index = 0i16;
+        let block_num = 42i64;
+        let all_cells = vec![(tx_hash.as_slice(), output_index, &cell, block_num)];
+        let precomputed = precomputed_info_map(&tx_hash, output_index, &cell, block_num, None);
+
+        let mut domain_batch = StoreBatch::new(&store);
+        let mut cells_batch = StoreBatch::new(&store);
+        writer
+            .insert_cells_batch(
+                &all_cells,
+                &precomputed,
+                &mut domain_batch,
+                &mut cells_batch,
+                false,
+            )
+            .unwrap();
+        cells_batch.commit().unwrap();
+        domain_batch.commit().unwrap();
+
+        // The data_hash from build_udt_cell is vec![0x66; 32]
+        let results = store
+            .list_cells_by_data_hash(&cell.data_hash, 10, None, &store)
+            .unwrap();
+        assert_eq!(results.len(), 1, "expected one cell indexed by data hash");
+        assert_eq!(results[0].0, tx_hash);
+        assert_eq!(results[0].1, output_index);
+    }
+
+    #[test]
+    fn test_insert_cells_batch_skips_data_hash_index_when_skip_indices() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let type_code_hash =
+            crate::rpc::parse_hex_to_bytes(crate::parser::udt::XUDT_CODE_HASH_TYPE);
+        let cell = build_udt_cell(type_code_hash, vec![0x04, 0x05]);
+        let tx_hash = vec![0xDB; 32];
+        let all_cells = vec![(tx_hash.as_slice(), 0i16, &cell, 10i64)];
+        let precomputed = precomputed_info_map(&tx_hash, 0, &cell, 10, None);
+
+        let mut domain_batch = StoreBatch::new(&store);
+        let mut cells_batch = StoreBatch::new(&store);
+        writer
+            .insert_cells_batch(
+                &all_cells,
+                &precomputed,
+                &mut domain_batch,
+                &mut cells_batch,
+                true, // skip_cell_indices
+            )
+            .unwrap();
+        cells_batch.commit().unwrap();
+        domain_batch.commit().unwrap();
+
+        let results = store
+            .list_cells_by_data_hash(&cell.data_hash, 10, None, &store)
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "data hash index should be empty when skip_cell_indices=true"
         );
     }
 }

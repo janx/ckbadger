@@ -498,6 +498,17 @@ impl<'a> StoreBatch<'a> {
         self.delete_cf(self.store.cf_cell_by_type_code(), &key);
     }
 
+    pub fn put_cell_by_data_hash(
+        &mut self,
+        data_hash: &[u8],
+        block_num: i64,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) {
+        let key = keys::encode_cell_index_key(data_hash, block_num, tx_hash, output_index);
+        self.put_cf(self.store.cf_cell_by_data_hash(), key, []);
+    }
+
     // ---- Cell index (raw pre-computed key) ----
 
     pub fn put_cell_by_lock_raw(&mut self, key: &[u8]) {

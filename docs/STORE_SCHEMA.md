@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (47 total: 46 domain + 1 append-only)
+# ckbadger-store Column Families (48 total: 47 domain + 1 append-only)
 
 ckbadger runs two logical RocksDB stores (both backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 46 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 47 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 
 The indexer opens both stores read-write; the API opens both in secondary (read-only) mode. Cell reads are cross-store: live/consumed markers in domain, cell payloads in append-only.
@@ -21,6 +21,7 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `cell_by_type`                   | type_script_hash + outpoint                           | empty                   | Cell index by type script                                    |
 | `cell_by_lock_code`              | lock_code_hash + outpoint                             | empty                   | Cell index by lock code_hash                                 |
 | `cell_by_type_code`              | type_code_hash + outpoint                             | empty                   | Cell index by type code_hash                                 |
+| `cell_by_data_hash`              | blake2b(cell_data) + outpoint                         | empty                   | Cell index by data hash (code cell resolution)               |
 | `tx_index`                       | block_number + tx_index                               | tx_hash                 | Transaction ordering index                                   |
 | `tx_hash_map`                    | tx_hash (32B)                                         | block_number + tx_index | Reverse lookup: tx_hash -> position                          |
 | `addr_balance`                   | lock_script_hash (32B)                                | AddressBalance          | Address balance and cell counts                              |

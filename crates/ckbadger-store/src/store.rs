@@ -273,6 +273,7 @@ pub const CF_BLOCK_HEADERS: &str = "block_headers";
 pub const CF_BLOCK_HASH_INDEX: &str = "block_hash_index";
 pub const CF_CELL_BY_LOCK: &str = "cell_by_lock";
 pub const CF_CELL_BY_TYPE: &str = "cell_by_type";
+pub const CF_CELL_BY_DATA_HASH: &str = "cell_by_data_hash";
 pub const CF_TX_INDEX: &str = "tx_index";
 pub const CF_TX_HASH_MAP: &str = "tx_hash_map";
 pub const CF_ADDR_BALANCE: &str = "addr_balance";
@@ -342,6 +343,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_CELL_BY_TYPE,
     CF_CELL_BY_LOCK_CODE,
     CF_CELL_BY_TYPE_CODE,
+    CF_CELL_BY_DATA_HASH,
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
@@ -393,6 +395,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_CELL_BY_TYPE,
     CF_CELL_BY_LOCK_CODE,
     CF_CELL_BY_TYPE_CODE,
+    CF_CELL_BY_DATA_HASH,
     CF_TX_INDEX,
     CF_TX_HASH_MAP,
     CF_ADDR_BALANCE,
@@ -1179,6 +1182,9 @@ impl CkbadgerStore {
     }
     pub fn cf_cell_by_type_code(&self) -> &ColumnFamily {
         self.cf(CF_CELL_BY_TYPE_CODE)
+    }
+    pub fn cf_cell_by_data_hash(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_BY_DATA_HASH)
     }
     pub fn cf_token_transfers(&self) -> &ColumnFamily {
         self.cf(CF_TOKEN_TRANSFERS)

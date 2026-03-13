@@ -173,14 +173,17 @@ pub struct ScriptLookupInfo {
 }
 
 /// Resolve the deployment code cell outpoint for a script.
+///
+/// Tries type-ref lookup first, then data-hash lookup as fallback (not mutually exclusive).
+/// Both paths use ckbadger's own domain store indexes — no dependency on CKB node RocksDB.
 fn resolve_code_cell(
     info: &ckbadger_store::ScriptInfo,
     store: &ckbadger_store::CkbadgerStore,
     cells_store: &ckbadger_store::CkbadgerStore,
-    ckb_store: Option<&ckb_store_reader::CkbChainReader>,
 ) -> Result<(Option<String>, Option<i32>), ApiRouteError> {
     let (type_ref, data_ref) = deployment_reference_hashes(info);
 
+    // Step 1: try type-ref lookup (CF_CELL_BY_TYPE)
     if let Some(type_hash) = type_ref.as_deref() {
         let cells = store
             .list_cells_by_type(type_hash, 1, None, cells_store)
@@ -198,25 +201,21 @@ fn resolve_code_cell(
                 Some(output_index),
             ));
         }
-    } else if let Some(data_hash) = data_ref.as_deref() {
-        let data_hash_arr: [u8; 32] = data_hash.try_into().map_err(|_| {
-            ApiError::internal(format!(
-                "deployment data hash must be 32 bytes for code-cell resolution: data_hash=0x{}",
-                hex::encode(data_hash)
-            ))
-        })?;
+    }
 
-        if let Some((tx_hash, output_index)) =
-            ckb_store.and_then(|reader| reader.find_cell_by_data_hash(&data_hash_arr))
-        {
-            let output_index = i32::try_from(output_index).map_err(|e| {
+    // Step 2: try data-hash lookup (CF_CELL_BY_DATA_HASH) — runs even if type-ref was attempted
+    if let Some(data_hash) = data_ref.as_deref() {
+        let cells = store
+            .list_cells_by_data_hash(data_hash, 1, None, cells_store)
+            .map_err(|e| {
                 ApiError::internal(format!(
-                    "deployment data lookup returned out-of-range output index: data_hash=0x{}, output_index={}, error={}",
+                    "failed to resolve code cell by deployment data hash 0x{}: {}",
                     hex::encode(data_hash),
-                    output_index,
                     e
                 ))
             })?;
+        if let Some((tx_hash, idx, _)) = cells.first() {
+            let output_index = i32::from(*idx);
             return Ok((
                 Some(format!("0x{}", hex::encode(tx_hash))),
                 Some(output_index),
@@ -224,7 +223,7 @@ fn resolve_code_cell(
         }
     }
 
-    // Use the imported outpoint when no live deployment cell lookup is available.
+    // Step 3: use the imported outpoint when no live deployment cell found.
     if let (Some(tx_hash), Some(idx)) = (&info.code_cell_tx_hash, info.code_cell_output_index) {
         if !tx_hash.is_empty() {
             return Ok((
@@ -441,14 +440,8 @@ fn script_info_to_response(
     };
 
     // Resolve deployment code cell outpoint from the deployment-family references.
-    // Type-referenced deployments use the type index; data-referenced deployments
-    // use the direct CKB cell-data reader by data hash.
-    let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(
-        info,
-        &state.store,
-        &state.append_only_store,
-        state.ckb_store.as_deref(),
-    )?;
+    let (code_cell_tx_hash, code_cell_output_index) =
+        resolve_code_cell(info, &state.store, &state.append_only_store)?;
     let deployed_at = resolve_deployed_at(
         &state.store,
         &state.append_only_store,
@@ -548,12 +541,8 @@ async fn lookup_scripts(
             let live_used_capacity_sum =
                 (info.lock_live_used_capacity_sum + info.type_live_used_capacity_sum).to_string();
 
-            let (code_cell_tx_hash, code_cell_output_index) = resolve_code_cell(
-                &info,
-                &state.store,
-                &state.append_only_store,
-                state.ckb_store.as_deref(),
-            )?;
+            let (code_cell_tx_hash, code_cell_output_index) =
+                resolve_code_cell(&info, &state.store, &state.append_only_store)?;
             let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&info);
 
             result.insert(
@@ -644,12 +633,8 @@ async fn get_code_cell(
             ..Default::default()
         });
 
-    let (tx_hash, output_index) = resolve_code_cell(
-        &script_info,
-        &state.store,
-        &state.append_only_store,
-        state.ckb_store.as_deref(),
-    )?;
+    let (tx_hash, output_index) =
+        resolve_code_cell(&script_info, &state.store, &state.append_only_store)?;
 
     ok(CodeCellResponse {
         tx_hash,
@@ -1210,7 +1195,8 @@ async fn get_script_capacity_history_chart_by_code_hash(
 mod tests {
     use super::{
         apply_script_chart_delta, checked_capacity_totals,
-        latest_complete_script_chart_date_from_tip, resolve_script_capacity_chart_bounds,
+        latest_complete_script_chart_date_from_tip, resolve_code_cell,
+        resolve_script_capacity_chart_bounds,
     };
     use axum::http::StatusCode;
     use ckbadger_store::ScriptInfo;
@@ -1296,5 +1282,69 @@ mod tests {
             ),
             Some((20240116, 20240117))
         );
+    }
+
+    /// When type-ref lookup fails (dep_type_hash set but no matching live cell),
+    /// resolve_code_cell must fall through to the data-hash lookup instead of
+    /// returning (None, None).
+    #[test]
+    fn resolve_code_cell_falls_through_type_to_data_hash() {
+        use ckbadger_store::{CkbadgerStore, LiveCellInfo, StoreBatch};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+
+        let tx_hash = vec![0xCA; 32];
+        let output_index: i16 = 0;
+        let block_num: i64 = 5;
+        let data_hash = vec![0xDD; 32];
+
+        // Write a live cell that is findable by data_hash.
+        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
+        let cell_info = LiveCellInfo {
+            capacity: 200_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 100,
+            occupied_capacity: 100_00000000,
+            udt_amount: None,
+        };
+        let marker = ckbadger_store::types::encode_live_cell_marker(block_num);
+        let payload = bincode::serialize(&cell_info).unwrap();
+        store
+            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
+            .unwrap();
+        store
+            .put_cf(store.cf_cells(), &outpoint_key, &payload)
+            .unwrap();
+
+        // Write CF_CELL_BY_DATA_HASH index entry.
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell_by_data_hash(&data_hash, block_num, &tx_hash, output_index);
+        batch.commit().unwrap();
+
+        // ScriptInfo with dep_type_hash set (triggers type-ref path) but no matching cell,
+        // AND data_ref available via hash_type=0.
+        let info = ScriptInfo {
+            code_hash: data_hash.clone(),
+            hash_type: 0,
+            dep_type_hash: Some(vec![0xFF; 32]), // no live cell with this type hash
+            ..Default::default()
+        };
+
+        let (resolved_tx, resolved_idx) = resolve_code_cell(&info, &store, &store).unwrap();
+        assert_eq!(
+            resolved_tx.as_deref(),
+            Some(format!("0x{}", hex::encode(&tx_hash)).as_str()),
+            "should resolve code cell via data_hash fallback"
+        );
+        assert_eq!(resolved_idx, Some(0));
     }
 }

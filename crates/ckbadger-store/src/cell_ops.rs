@@ -464,6 +464,24 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// List live cells by cell data hash (prefix scan on cell_by_data_hash).
+    /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
+    pub fn list_cells_by_data_hash(
+        &self,
+        data_hash: &[u8],
+        limit: usize,
+        after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
+        self.list_cells_by_hash_cf(
+            self.cf_cell_by_data_hash(),
+            data_hash,
+            limit,
+            after_key,
+            cells_store,
+        )
+    }
+
     /// List live cells by lock code hash (prefix scan on cell_by_lock_code).
     /// `after_key` is the full 74-byte cell index key of the last returned entry (for pagination).
     pub fn list_cells_by_lock_code_hash(
