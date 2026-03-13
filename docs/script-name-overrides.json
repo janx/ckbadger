@@ -1,5 +1,5 @@
 {
-  "_comment": "Override script names (by name), mark deprecated scripts (by code_hash), and define NFT storage-tier overrides by standard. Applied during label import and API asset rendering.",
+  "_comment": "Override script names (by name), mark deprecated scripts (by code_hash), define NFT storage-tier overrides by standard, and group scripts by protocol. Applied during label import and API asset rendering.",
   "overrides": {
     "DAS Lock": ".bit Lock",
     "DID Account": ".bit Account",
@@ -20,5 +20,22 @@
     "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
     "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df",
     "0x90ca618be6c15f5857d3cbd09f9f24ca6770af047ba9ee70989ec3b229419ac7"
-  ]
+  ],
+  "protocols": {
+    "Stable++": [
+      "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
+      "0x56fb632a13abdad7308d2e034baae1cb049e8e8ff23cc7c0b69449f617549733",
+      "0x26622198b66240e437e323e0fecf1c26ba3c8c28a45f03ed3ebb9f7f2bdc0055",
+      "0xff352022029a6ecf03e8a838b979a46e1231f05f9a3df9b4198f7eeb4afc2e67"
+    ],
+    "Godwoken": [
+      "0x628b5f956b46ae27b50819a9ebab79ce5f957e6899ba0c75b8e142de2ed0dcd2",
+      "0x000f87062a2fe9bb4a6cc475212ea11014b84deb32e0375ee51e6ec4a553e009",
+      "0xff602581f07667eef54232cce850cbca2c418b3418611c132fca849d1edcd775",
+      "0x096df264f38fff07f3acd318995abc2c71ae0e504036fe32bc38d5b6037364d4",
+      "0xb619184ab9142c51b0ee75f4e24bcec3d077eefe513115bad68836d06738fd2c",
+      "0xfef1d086d9f74d143c60bf03bd04bab29200dbf484c801c72774f2056d4c6718",
+      "0x3714af858b8b82b2bb8f13d51f3cffede2dd8d352a6938334bb79e6b845e3658"
+    ]
+  }
 }
