@@ -12,6 +12,13 @@ use ckbadger_store::types::{
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
 
+mod bundled_udt {
+    pub const EXTRA_UDT_CODE_HASHES: &[u8] = include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/bundled_udt_script_code_hashes.json"
+    ));
+}
+
 static CODE_HASHES: OnceLock<CodeHashes> = OnceLock::new();
 
 fn code_hashes() -> &'static CodeHashes {
@@ -64,10 +71,18 @@ impl CodeHashes {
             (DOTBIT_ACCOUNT_CELL_TYPE_ID, AssetKind::Dotbit),
         ];
 
-        let lookup = entries
+        let mut lookup: HashMap<Vec<u8>, AssetKind> = entries
             .iter()
             .map(|(hex, kind)| (parse_hex_to_bytes(hex), *kind))
             .collect();
+
+        // Extend with xudt_compatible scripts from bundled script labels (decoderType "udt").
+        let extra: Vec<String> = serde_json::from_slice(bundled_udt::EXTRA_UDT_CODE_HASHES)
+            .expect("bundled UDT script code hashes JSON is invalid — build.rs bug");
+        for hex_str in &extra {
+            let bytes = parse_hex_to_bytes(hex_str);
+            lookup.entry(bytes).or_insert(AssetKind::Udt);
+        }
 
         Self { lookup }
     }
@@ -1481,5 +1496,102 @@ mod tests {
         assert_eq!(script_calls[0].type_code_hash, unknown_code_hash);
         assert_eq!(script_calls[0].type_hash_type, 1);
         assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
+    }
+
+    #[test]
+    fn test_xudt_compatible_code_hash_classified_as_udt() {
+        use crate::rpc::parse_hex_to_bytes;
+        let hashes = CodeHashes::new();
+
+        // Stable++ Asset (mainnet) — xudt_compatible, decoderType "udt" in script labels
+        let stablepp = parse_hex_to_bytes(
+            "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
+        );
+        assert_eq!(
+            hashes.classify(&stablepp),
+            Some(AssetKind::Udt),
+            "Stable++ Asset should be classified as Udt"
+        );
+
+        // ccBTC Asset (mainnet)
+        let ccbtc = parse_hex_to_bytes(
+            "0x092c2c4a26ea475a8e860c29cf00502103add677705e2ccd8d6fe5af3caa5ae3",
+        );
+        assert_eq!(
+            hashes.classify(&ccbtc),
+            Some(AssetKind::Udt),
+            "ccBTC Asset should be classified as Udt"
+        );
+
+        // Random unknown code_hash should still be None
+        assert_eq!(hashes.classify(&[0x99; 32]), None);
+    }
+
+    #[test]
+    fn test_xudt_compatible_produces_token_change_not_script_call() {
+        use crate::rpc::parse_hex_to_bytes;
+
+        let alice = 0xAA;
+        let bob = 0xBB;
+
+        // Stable++ Asset (mainnet) code_hash
+        let stablepp_code_hash = parse_hex_to_bytes(
+            "0x26a33e0815888a4a0614a0b7d09fa951e0993ff21e55905510104a0b1312032b",
+        );
+        let type_script_hash = vec![0x71; 32];
+        let type_args = vec![0x36; 32];
+
+        // Alice has 100 tokens, sends to Bob
+        let amount: u128 = 100_00000000;
+
+        let mut alice_input = make_input(alice, 200_00000000, 102_00000000);
+        alice_input.type_code_hash = Some(stablepp_code_hash.clone());
+        alice_input.type_script_hash = Some(type_script_hash.clone());
+        alice_input.type_hash_type = Some(1);
+        alice_input.type_args = Some(type_args.clone());
+        alice_input.udt_amount = Some(amount);
+
+        let mut bob_output = make_output(
+            bob,
+            200_00000000,
+            Some(stablepp_code_hash),
+            Some(type_script_hash),
+            Some(type_args),
+            amount.to_le_bytes().to_vec(),
+        );
+        bob_output.type_hash_type = Some(1);
+
+        let outputs = vec![bob_output];
+        let tx = TxView {
+            tx_hash: &[0x0B; 32],
+            block_hash: &[0xBB; 32],
+            tx_index: 1,
+            block_number: 2000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![alice_input],
+            outputs: &outputs,
+        };
+
+        let activities = build_activities_for_block(&[tx], &HashMap::new());
+
+        // Alice should have a Token asset change (negative delta), NOT a script_call
+        let alice_act = activities
+            .iter()
+            .find(|(lh, _, _)| lh == &vec![alice; 32])
+            .map(|(_, _, e)| e)
+            .unwrap();
+        assert!(
+            alice_act.script_calls.is_none() || alice_act.script_calls.as_ref().unwrap().is_empty(),
+            "xudt_compatible should not produce script_calls"
+        );
+        let has_token_change = alice_act
+            .asset_changes
+            .iter()
+            .any(|c| matches!(c, AssetChange::Token { .. }));
+        assert!(
+            has_token_change,
+            "xudt_compatible should produce Token asset change"
+        );
     }
 }

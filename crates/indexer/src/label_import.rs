@@ -103,6 +103,9 @@ struct ScriptNameOverrides {
     pub nft_storage_tier_overrides: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub deprecated: Vec<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub protocols: std::collections::HashMap<String, Vec<String>>,
 }
 
 pub fn run_label_import(

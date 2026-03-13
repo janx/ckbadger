@@ -11,7 +11,7 @@ use ckbadger_store::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
@@ -93,6 +93,7 @@ pub struct ScriptCallResponse {
     pub type_args: String,
     pub script_hash: String,
     pub script_name: Option<String>,
+    pub protocol_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -120,6 +121,38 @@ pub struct LatestActivityParams {
 fn default_latest_limit() -> usize {
     8
 }
+
+/// Reverse index: code_hash bytes → protocol name.
+/// Built once from `docs/script-name-overrides.json` (same source as `assets.rs`).
+static PROTOCOL_INDEX: LazyLock<HashMap<Vec<u8>, String>> = LazyLock::new(|| {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/script-name-overrides.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return HashMap::new(),
+    };
+    let doc: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+
+    let mut index = HashMap::new();
+    if let Some(protocols) = doc.get("protocols").and_then(|v| v.as_object()) {
+        for (protocol_name, code_hashes) in protocols {
+            if let Some(hashes) = code_hashes.as_array() {
+                for hash_val in hashes {
+                    if let Some(hex_str) = hash_val.as_str() {
+                        let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+                        if let Ok(bytes) = hex::decode(hex) {
+                            index.insert(bytes, protocol_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    index
+});
 
 fn action_to_string(action: &AssetAction) -> String {
     match action {
@@ -230,6 +263,7 @@ fn convert_script_call(
         type_args: format!("0x{}", hex::encode(&call.type_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
         script_name: normalized_script_name(script_info),
+        protocol_name: PROTOCOL_INDEX.get(&call.type_code_hash).cloned(),
     })
 }
 
