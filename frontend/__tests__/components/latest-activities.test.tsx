@@ -112,7 +112,8 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Script: Omnilock/)).toBeInTheDocument();
+      expect(screen.getByText(/Omnilock/)).toBeInTheDocument();
+      expect(screen.getByText(/Script call/)).toBeInTheDocument();
     });
   });
 

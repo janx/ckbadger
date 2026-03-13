@@ -110,14 +110,8 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       }
       return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
     }
-    case 'scriptCall': {
-      const sc = primaryScriptCall;
-      if (sc) {
-        const name = sc.scriptName?.trim() || truncateHash(sc.typeCodeHash, 8, 6);
-        return { icon: '\u2699', label: `Script: ${name}`, colorClass: 'text-amber' };
-      }
+    case 'scriptCall':
       return { icon: '\u2699', label: 'Script Call', colorClass: 'text-amber' };
-    }
     case 'ckbTransfer':
       return { icon: '\u2197', label: 'CKB Transfer', colorClass: 'text-jade' };
     default:
@@ -399,6 +393,52 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
   );
 }
 
+function formatScriptRef(sc: {
+  scriptHash: string;
+  typeHashType: string;
+  scriptName?: string;
+}): string {
+  if (sc.scriptName?.trim()) return sc.scriptName!.trim();
+  // script_kind:<first 4 bytes of script_hash>
+  const hashPrefix = sc.scriptHash.slice(0, 10); // "0x" + 8 hex chars = 4 bytes
+  return `${sc.typeHashType}:${hashPrefix}`;
+}
+
+function ScriptCallExpr({
+  sc,
+}: {
+  sc: {
+    typeCodeHash: string;
+    typeHashType: string;
+    typeArgs: string;
+    scriptHash: string;
+    scriptName?: string;
+  };
+}) {
+  const fnName = formatScriptRef(sc);
+  const args = truncateHash(sc.typeArgs, 6, 4);
+
+  return (
+    <>
+      <Link
+        href={getScriptDetailHref({
+          name: sc.scriptName,
+          codeHash: sc.typeCodeHash,
+          hashType: sc.typeHashType,
+          scriptKind: 'type',
+        })}
+        className="text-gold hover:text-gold/80 transition-colors"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {fnName}
+      </Link>
+      <span className="text-text-dim">(</span>
+      <span className="text-aqua/70">{args}</span>
+      <span className="text-text-dim">)</span>
+    </>
+  );
+}
+
 function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryScriptCall } = classified;
   const badge = getTypeBadge(classified);
@@ -406,26 +446,11 @@ function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('font-mono text-xs', badge.colorClass)}>
-          {badge.icon}{' '}
-          {primaryScriptCall ? (
-            <Link
-              href={getScriptDetailHref({
-                name: primaryScriptCall.scriptName,
-                codeHash: primaryScriptCall.typeCodeHash,
-                hashType: primaryScriptCall.typeHashType,
-                scriptKind: 'type',
-              })}
-              className="text-amber/80 hover:text-amber transition-colors"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {badge.label}
-            </Link>
-          ) : (
-            badge.label
-          )}
+        <span className={cn('min-w-0 truncate font-mono text-xs', badge.colorClass)}>
+          {badge.icon} Script call{' '}
+          {primaryScriptCall ? <ScriptCallExpr sc={primaryScriptCall} /> : null}
         </span>
-        <span className="text-text-dim font-mono text-[10px]">
+        <span className="text-text-dim shrink-0 font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
         </span>
       </div>
@@ -433,13 +458,6 @@ function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }
         <AddressLink address={activity.address} />
         <CkbDelta delta={activity.ckbDelta} />
       </div>
-      {primaryScriptCall && (
-        <div className="flex justify-end">
-          <span className="text-text-dim font-mono text-[10px]">
-            args {truncateHash(primaryScriptCall.typeArgs, 8, 6)}
-          </span>
-        </div>
-      )}
     </>
   );
 }
