@@ -68,7 +68,7 @@ export function CkbDelta({ delta }: { delta: string }) {
 // ScriptCallExpr — script name link with args
 // ---------------------------------------------------------------------------
 
-function ScriptCallExpr({ sc }: { sc: ActivityScriptCall }) {
+export function ScriptCallExpr({ sc }: { sc: ActivityScriptCall }) {
   const fnName = formatScriptRef(sc);
   const args = truncateHash(sc.typeArgs, 6, 4);
 
@@ -143,7 +143,7 @@ function AssetEventRow({ change, className }: { change: ActivityAssetChange } & 
       const delta = BigInt(change.delta);
       const isPositive = delta > BigInt(0);
       const isZero = delta === BigInt(0);
-      const sign = isZero ? '' : isPositive ? '+' : '';
+      const prefix = isZero ? '' : isPositive ? '+' : '-';
       const absDelta = change.delta.startsWith('-') ? change.delta.slice(1) : change.delta;
       const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
       const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
@@ -162,8 +162,7 @@ function AssetEventRow({ change, className }: { change: ActivityAssetChange } & 
             )}
             onClick={(e) => e.stopPropagation()}
           >
-            {sign}
-            {change.delta.startsWith('-') ? '-' : ''}
+            {prefix}
             {formatted} {label}
           </Link>
         </div>

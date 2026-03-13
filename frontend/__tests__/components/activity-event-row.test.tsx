@@ -136,6 +136,35 @@ describe('ActivityEventGroup', () => {
     expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
   });
 
+  it('renders DAO Withdraw Complete with compensation', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          assetChanges: [
+            { type: 'daoWithdrawComplete', capacity: '20000000000', compensation: '500000000' },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/DAO Withdraw Complete/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/compensation/).length).toBeGreaterThan(0);
+  });
+
+  it('renders identity sub-row', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          assetChanges: [
+            { type: 'identity', identityId: '0xid123', standard: 'dotbit', action: 'register' },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/\.bit Register/).length).toBeGreaterThan(0);
+  });
+
   it('renders time ago text', () => {
     render(<ActivityEventGroup activity={makeActivity()} formatTimeAgo={() => '5 mins ago'} />);
     expect(screen.getAllByText('5 mins ago').length).toBeGreaterThan(0);
