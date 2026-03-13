@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::cache::InMemoryCache;
-use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range,
     resolve_collection_standard, resolve_nft_collection_name,
@@ -153,10 +155,6 @@ pub struct CollectionActivitiesParams {
     pub(crate) limit: i64,
     pub(crate) cursor: Option<String>,
     pub(crate) action: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

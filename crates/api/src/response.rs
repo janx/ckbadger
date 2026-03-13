@@ -114,6 +114,26 @@ pub type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 /// Common error type used by route handlers.
 pub type ApiRouteError = (StatusCode, Json<ApiError>);
 
+/// Sync status for WebSocket broadcasts and the statistics endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatusResponse {
+    pub is_syncing: bool,
+    pub synced_block: i64,
+    pub tip_block: i64,
+    pub progress: f64,
+    pub estimated_time: Option<String>,
+    pub chart_data_may_be_incomplete: bool,
+    pub blocks_per_second: Option<f64>,
+    pub ema_blocks_per_second: Option<f64>,
+    pub txs_per_second: Option<f64>,
+    pub ema_txs_per_second: Option<f64>,
+    pub sync_mode: String,
+    pub started_at: Option<i64>,
+    pub elapsed_time: Option<String>,
+    pub total_time: Option<String>,
+}
+
 pub fn ok<T: Serialize>(data: T) -> ApiResult<T> {
     Ok(Json(data))
 }

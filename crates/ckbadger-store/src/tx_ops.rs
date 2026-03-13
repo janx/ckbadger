@@ -262,6 +262,40 @@ impl CkbadgerStore {
         }
         Ok(results)
     }
+
+    /// List transactions for a block with tx_idx < `before_tx_idx`, ordered ascending by tx_index.
+    /// Returns at most `limit` entries. Uses a seek to `(block_num, 0)` and stops at `before_tx_idx`.
+    pub fn list_block_txs_before(
+        &self,
+        block_num: i64,
+        before_tx_idx: i32,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(i32, TxIndexEntry)>> {
+        let prefix = keys::encode_block_num(block_num);
+        let iter = self.prefix_iterator_cf(self.cf_tx_index(), &prefix);
+
+        let mut results = Vec::new();
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate tx_index in list_block_txs_before: {}", e)
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if key.len() == 12 {
+                let tx_idx = keys::decode_tx_idx(&key[8..12]);
+                if tx_idx >= before_tx_idx {
+                    break;
+                }
+                let entry: TxIndexEntry = bincode::deserialize(&value)?;
+                results.push((tx_idx, entry));
+                if results.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
@@ -394,6 +428,54 @@ mod tests {
         assert!(err
             .to_string()
             .contains("invalid tx_hash_map value length in get_txs_by_hash_batch"));
+    }
+
+    #[test]
+    fn test_list_block_txs_before_returns_subset() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let block_num = 500i64;
+        let mut batch = StoreBatch::new(&store);
+        for i in 0..5 {
+            batch.put_tx_index(
+                block_num,
+                i,
+                &TxIndexEntry {
+                    is_cellbase: i == 0,
+                    timestamp: 1_700_000_000_000,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: (i as i64) * 100,
+                    tx_size: 200,
+                    cycles: None,
+                },
+            );
+        }
+        batch.commit().unwrap();
+
+        // before_tx_idx=3 should return txs 0,1,2
+        let results = store.list_block_txs_before(block_num, 3, 100).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].0, 0);
+        assert_eq!(results[1].0, 1);
+        assert_eq!(results[2].0, 2);
+
+        // before_tx_idx=i32::MAX should return all 5
+        let all = store
+            .list_block_txs_before(block_num, i32::MAX, 100)
+            .unwrap();
+        assert_eq!(all.len(), 5);
+
+        // limit should cap results
+        let limited = store.list_block_txs_before(block_num, i32::MAX, 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].0, 0);
+        assert_eq!(limited[1].0, 1);
+
+        // before_tx_idx=0 should return empty
+        let empty = store.list_block_txs_before(block_num, 0, 100).unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]

@@ -12,13 +12,13 @@ use super::assets::{
     count_nft_collection_activities_cached, list_canonical_nft_collection_activities_page,
 };
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
 use crate::utils::{apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range};
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_SPORES_ALL};
 use crate::AppState;
 use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
-
-type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 type CachedSporeRows = Vec<(Vec<u8>, ckbadger_store::ObjectEntry)>;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -77,10 +77,6 @@ pub struct ClusterActivitiesParams {
     limit: i64,
     cursor: Option<String>,
     action: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 fn decode_cluster_holders_cursor(

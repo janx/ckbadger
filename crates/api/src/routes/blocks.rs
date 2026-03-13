@@ -9,16 +9,10 @@ use ckb_store_reader::CkbChainReader;
 use ckbadger_common::hardforks_for_network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
-
-static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-fn get_http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(reqwest::Client::new)
-}
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::utils::script_to_address;
 use crate::AppState;
@@ -493,9 +487,14 @@ struct MiningRewardInfo {
     cellbase_tx_hash: Option<String>,
 }
 
-fn parse_hex_u128(hex: &str) -> u128 {
-    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    u128::from_str_radix(hex, 16).unwrap_or(0)
+fn parse_hex_u128(hex: &str, field_name: &str) -> Result<u128, String> {
+    let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+    u128::from_str_radix(stripped, 16).map_err(|e| {
+        format!(
+            "failed to parse hex field '{}': value='{}', error={}",
+            field_name, hex, e
+        )
+    })
 }
 
 async fn get_mining_reward(
@@ -509,7 +508,7 @@ async fn get_mining_reward(
         return Some(cached);
     }
 
-    let client = get_http_client();
+    let client = crate::utils::shared_http_client();
     let response = client
         .post(rpc_url)
         .json(&serde_json::json!({
@@ -525,10 +524,44 @@ async fn get_mining_reward(
     let rpc_result: RpcResponse<BlockEconomicState> = response.json().await.ok()?;
     let economic_state = rpc_result.result?;
 
-    let primary = parse_hex_u128(&economic_state.miner_reward.primary);
-    let secondary = parse_hex_u128(&economic_state.miner_reward.secondary);
-    let committed = parse_hex_u128(&economic_state.miner_reward.committed);
-    let proposal = parse_hex_u128(&economic_state.miner_reward.proposal);
+    let primary = match parse_hex_u128(&economic_state.miner_reward.primary, "miner_reward.primary")
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("{}", e);
+            return None;
+        }
+    };
+    let secondary = match parse_hex_u128(
+        &economic_state.miner_reward.secondary,
+        "miner_reward.secondary",
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("{}", e);
+            return None;
+        }
+    };
+    let committed = match parse_hex_u128(
+        &economic_state.miner_reward.committed,
+        "miner_reward.committed",
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("{}", e);
+            return None;
+        }
+    };
+    let proposal = match parse_hex_u128(
+        &economic_state.miner_reward.proposal,
+        "miner_reward.proposal",
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("{}", e);
+            return None;
+        }
+    };
 
     let total = primary + secondary + committed + proposal;
 
@@ -855,9 +888,26 @@ mod tests {
 
     #[test]
     fn test_parse_hex_u128() {
-        assert_eq!(parse_hex_u128("0x0"), 0);
-        assert_eq!(parse_hex_u128("0xa"), 10);
-        assert_eq!(parse_hex_u128("0xff"), 255);
-        assert_eq!(parse_hex_u128("ff"), 255);
+        assert_eq!(parse_hex_u128("0x0", "test").unwrap(), 0);
+        assert_eq!(parse_hex_u128("0xa", "test").unwrap(), 10);
+        assert_eq!(parse_hex_u128("0xff", "test").unwrap(), 255);
+        assert_eq!(parse_hex_u128("ff", "test").unwrap(), 255);
+    }
+
+    #[test]
+    fn test_parse_hex_u128_invalid() {
+        let result = parse_hex_u128("0xZZZZ", "bad_field");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("bad_field"),
+            "error should name the field: {}",
+            err
+        );
+        assert!(
+            err.contains("0xZZZZ"),
+            "error should include the value: {}",
+            err
+        );
     }
 }

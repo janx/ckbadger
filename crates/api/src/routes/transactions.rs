@@ -184,15 +184,19 @@ async fn list_transactions(
         // List transactions for a specific block
         let cursor = params.cursor.as_ref().and_then(|c| decode_cursor(c));
         let (_cursor_block, cursor_index) = cursor.unwrap_or((i64::MAX, i32::MAX));
+        let fetch_limit = (limit + 1) as usize;
 
         let store_c = store.clone();
         let ckb_store_c = ckb_store.clone();
         let mem_cache_c = mem_cache.clone();
-        let (all_txs, block_tx_hashes) = tokio::task::spawn_blocking(move || {
-            let all_txs = store_c.list_block_txs(block_number)?;
+        let (page_txs, block_tx_hashes) = tokio::task::spawn_blocking(move || {
+            // Use range-limited query: only fetch txs with tx_idx < cursor_index,
+            // limited to the page size we need. Avoids loading all block transactions.
+            let page_txs =
+                store_c.list_block_txs_before(block_number, cursor_index, fetch_limit)?;
             let block_tx_hashes =
                 get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, block_number);
-            Ok::<_, anyhow::Error>((all_txs, block_tx_hashes))
+            Ok::<_, anyhow::Error>((page_txs, block_tx_hashes))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -211,15 +215,8 @@ async fn list_transactions(
         .await
         .unwrap_or_default();
 
-        // Filter by cursor (tx_index < cursor_index), take limit + 1 for has_more check
-        let filtered: Vec<_> = all_txs
-            .into_iter()
-            .filter(|(tx_idx, _)| *tx_idx < cursor_index)
-            .take((limit + 1) as usize)
-            .collect();
-
-        let has_more = filtered.len() as i64 > limit;
-        let page: Vec<_> = filtered.into_iter().take(limit as usize).collect();
+        let has_more = page_txs.len() as i64 > limit;
+        let page: Vec<_> = page_txs.into_iter().take(limit as usize).collect();
 
         let next_cursor = if has_more {
             page.last()
@@ -269,24 +266,39 @@ async fn list_transactions(
         let txs_result =
             tokio::task::spawn_blocking(move || -> Result<Vec<TxListEntry>, anyhow::Error> {
                 let mut results = Vec::with_capacity(fetch_limit);
-                let mut scan_from = Some(cursor_block);
+                // Fetch blocks in small batches to avoid loading many more blocks than needed.
+                // Most blocks have 1-3 transactions, so fetch_limit blocks is usually enough.
+                let block_batch_size = fetch_limit.max(4);
+                let mut next_block_cursor = Some(cursor_block);
 
-                // Fetch blocks in batches until we have enough transactions.
-                // A single batch may not suffice when blocks contain few txs.
                 while results.len() < fetch_limit {
-                    let blocks = store_c.list_blocks_desc(scan_from, fetch_limit)?;
+                    let from_block = match next_block_cursor {
+                        Some(b) => b,
+                        None => break, // no more blocks
+                    };
+                    let blocks =
+                        store_c.list_blocks_desc(Some(from_block), block_batch_size + 1)?;
                     if blocks.is_empty() {
                         break;
                     }
 
+                    // Determine next cursor for the next batch (if we need more blocks)
+                    next_block_cursor = if blocks.len() > block_batch_size {
+                        blocks.last().map(|(bn, _)| *bn)
+                    } else {
+                        None
+                    };
+
                     for (block_num, header) in &blocks {
-                        let block_txs = store_c.list_block_txs(*block_num)?;
+                        // For the cursor block, only fetch txs before the cursor index
+                        let block_txs = if *block_num == cursor_block {
+                            store_c.list_block_txs_before(*block_num, cursor_index, fetch_limit)?
+                        } else {
+                            store_c.list_block_txs(*block_num)?
+                        };
                         let block_tx_hashes =
                             get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, *block_num);
                         for (tx_idx, entry) in block_txs.into_iter().rev() {
-                            if *block_num == cursor_block && tx_idx >= cursor_index {
-                                continue;
-                            }
                             let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
                                 .unwrap_or_default();
                             results.push((*block_num, header.hash.clone(), tx_idx, entry, tx_hash));
@@ -297,12 +309,6 @@ async fn list_transactions(
                         if results.len() >= fetch_limit {
                             break;
                         }
-                    }
-
-                    // Continue scanning from block before the last one fetched
-                    match blocks.last() {
-                        Some((num, _)) if *num > 0 => scan_from = Some(*num - 1),
-                        _ => break,
                     }
                 }
                 Ok(results)

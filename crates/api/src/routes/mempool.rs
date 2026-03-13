@@ -3,17 +3,11 @@
 use axum::{extract::State, routing::get, Router};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::cache::CacheTtl;
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::AppState;
-
-static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-
-fn get_http_client() -> &'static reqwest::Client {
-    HTTP_CLIENT.get_or_init(reqwest::Client::new)
-}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -140,7 +134,7 @@ fn parse_hex(hex_str: &str) -> Result<u64, ApiRouteError> {
 }
 
 async fn fetch_tx_pool_info(url: &str) -> Result<RpcTxPoolInfo, String> {
-    let client = get_http_client();
+    let client = crate::utils::shared_http_client();
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "tx_pool_info",
@@ -166,7 +160,7 @@ async fn fetch_tx_pool_info(url: &str) -> Result<RpcTxPoolInfo, String> {
 }
 
 async fn fetch_raw_tx_pool_verbose(url: &str) -> Result<RpcTxPoolVerbose, String> {
-    let client = get_http_client();
+    let client = crate::utils::shared_http_client();
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "get_raw_tx_pool",

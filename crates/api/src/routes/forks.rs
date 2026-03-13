@@ -2,14 +2,13 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     routing::get,
-    Json, Router,
+    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
 use crate::AppState;
 use ckbadger_store::types::{DeepForkInfo, SyncStatus};
 
@@ -99,8 +98,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/forks/recent", get(get_recent_reorg))
         .route("/forks/{id}", get(get_fork_detail))
 }
-
-type ApiRouteError = (StatusCode, Json<ApiError>);
 
 fn deep_fork_info_if_consistent(
     status: &SyncStatus,

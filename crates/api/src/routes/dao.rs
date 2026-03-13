@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
-use crate::utils::shannon_to_ckb;
+use crate::utils::{script_to_address, shannon_to_ckb};
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -367,12 +367,40 @@ fn deposit_to_response(
         .as_ref()
         .map(|tx| format!("0x{}", hex::encode(tx)));
 
+    // Resolve address and lock_code_hash from the cell payload in the append-only store.
+    // The deposit cell's outpoint key maps to a LiveCellInfo that has the full lock script.
+    let (address, lock_code_hash) = match state
+        .append_only_store
+        .get_cell_by_outpoint_key(outpoint_key)
+    {
+        Ok(Some(cell_info)) => {
+            let addr = script_to_address(
+                &cell_info.lock_code_hash,
+                cell_info.lock_hash_type,
+                &cell_info.lock_args,
+                &state.ckb_network,
+            )
+            .ok();
+            let code_hash = format!("0x{}", hex::encode(&cell_info.lock_code_hash));
+            (addr, Some(code_hash))
+        }
+        Ok(None) => (None, None),
+        Err(e) => {
+            tracing::warn!(
+                "failed to resolve address for DAO deposit outpoint=0x{}: {}",
+                hex::encode(outpoint_key),
+                e
+            );
+            (None, None)
+        }
+    };
+
     DaoDepositResponse {
         tx_hash: format!("0x{}", hex::encode(&tx_hash_bytes)),
         output_index: output_index as i32,
         lock_script_hash: format!("0x{}", hex::encode(&entry.lock_script_hash)),
-        address: None,
-        lock_code_hash: None,
+        address,
+        lock_code_hash,
         capacity: entry.capacity.to_string(),
         deposit_block_number: entry.deposit_block_number,
         deposit_timestamp,

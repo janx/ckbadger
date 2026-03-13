@@ -19,10 +19,10 @@ use super::assets::{
     MnftItemActivityResponse, NftLifecycleStandard, ObjectItemsParams,
 };
 use crate::cache::InMemoryCache;
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
 use crate::AppState;
-
-type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 
 /// Decode an identity collection ID from a URL path segment.
 ///
@@ -105,10 +105,6 @@ pub struct IdentityCollectionHoldersParams {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 fn collect_identity_holder_counts(

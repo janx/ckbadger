@@ -31,6 +31,7 @@ use crate::parser::{
 use crate::rpc::{BlockResponseWithCycles, CkbRpcClient};
 
 use super::adaptive::*;
+use super::checked_tx_count;
 use super::dao_helpers::*;
 use super::diagnostics::*;
 use super::helpers::*;
@@ -1322,7 +1323,9 @@ impl Indexer {
                                 let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
                                 let mut block_tx_idx = 0usize;
                                 for parsed in all_parsed_blocks.iter() {
-                                    let tx_count_for_block = parsed.transactions_count as usize;
+                                    let tx_count_for_block =
+                                        checked_tx_count(parsed.transactions_count, parsed.number)
+                                            .expect("transactions_count must be non-negative");
                                     let tx_slice = &all_tx_data
                                         [block_tx_idx..block_tx_idx + tx_count_for_block];
                                     block_tx_idx += tx_count_for_block;
@@ -1460,7 +1463,9 @@ impl Indexer {
                                 let mut block_tx_idx = 0usize;
                                 for (block_idx, block_response) in blocks.iter().enumerate() {
                                     let parsed = &all_parsed_blocks[block_idx];
-                                    let tx_count_for_block = parsed.transactions_count as usize;
+                                    let tx_count_for_block =
+                                        checked_tx_count(parsed.transactions_count, parsed.number)
+                                            .expect("transactions_count must be non-negative");
                                     let tx_slice = &all_tx_data
                                         [block_tx_idx..block_tx_idx + tx_count_for_block];
                                     block_tx_idx += tx_count_for_block;
@@ -1858,7 +1863,7 @@ impl Indexer {
                     )> = Vec::new();
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
-                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                         block_tx_idx += tx_count_for_block;
@@ -1945,7 +1950,7 @@ impl Indexer {
                         let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
                         let mut block_tx_idx = 0usize;
                         for parsed in all_parsed_blocks {
-                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
                             let tx_slice =
                                 &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                             block_tx_idx += tx_count_for_block;
@@ -2157,7 +2162,8 @@ impl Indexer {
                         let mut block_tx_idx = 0usize;
                         for (block_idx, _block_response) in blocks.iter().enumerate() {
                             let parsed = &all_parsed_blocks[block_idx];
-                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let tx_count_for_block =
+                                checked_tx_count(parsed.transactions_count, parsed.number)?;
                             let tx_slice =
                                 &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                             let ts_ms = parsed.timestamp.timestamp_millis();
@@ -2331,7 +2337,7 @@ impl Indexer {
                     let mut tx_lookup: Vec<(usize, i64, i64, Vec<u8>)> =
                         Vec::with_capacity(all_tx_data.len());
                     for parsed in all_parsed_blocks.iter().take(blocks.len()) {
-                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
                         let ts_ms = parsed.timestamp.timestamp_millis();
                         for tx_idx in 0..tx_count_for_block {
                             tx_lookup.push((tx_idx, parsed.number, ts_ms, parsed.hash.clone()));
@@ -2599,7 +2605,8 @@ impl Indexer {
                                 block_date,
                                 &mut prev_dao_cs,
                             )?;
-                            let tx_count_for_block = parsed.transactions_count as usize;
+                            let tx_count_for_block =
+                                checked_tx_count(parsed.transactions_count, parsed.number)?;
                             let tx_slice =
                                 &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                             block_tx_idx += tx_count_for_block;
@@ -2819,7 +2826,8 @@ impl Indexer {
                                 HashMap::new();
                             let mut block_tx_idx = 0usize;
                             for parsed in all_parsed_blocks {
-                                let tx_count = parsed.transactions_count as usize;
+                                let tx_count =
+                                    checked_tx_count(parsed.transactions_count, parsed.number)?;
                                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
                                 block_tx_idx += tx_count;
 
@@ -3177,7 +3185,8 @@ impl Indexer {
                 )> = Vec::new();
                 let mut block_tx_idx = 0usize;
                 for parsed in all_parsed_blocks {
-                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_count_for_block =
+                        checked_tx_count(parsed.transactions_count, parsed.number)?;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
                     let ar = extract_ar_i64_from_dao(&parsed.dao, parsed.number)?;
@@ -3198,7 +3207,8 @@ impl Indexer {
                 let mut all_input_outpoints_dao: Vec<(Vec<u8>, i16)> = Vec::new();
                 let mut block_tx_idx = 0usize;
                 for parsed in all_parsed_blocks {
-                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_count_for_block =
+                        checked_tx_count(parsed.transactions_count, parsed.number)?;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
                     for tx_data in tx_slice {
@@ -3298,7 +3308,8 @@ impl Indexer {
                     let mut withdrawal_contexts: Vec<DaoWithdrawalContext> = Vec::new();
                     let mut block_tx_idx = 0usize;
                     for parsed in all_parsed_blocks {
-                        let tx_count_for_block = parsed.transactions_count as usize;
+                        let tx_count_for_block =
+                            checked_tx_count(parsed.transactions_count, parsed.number)?;
                         let tx_slice =
                             &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                         block_tx_idx += tx_count_for_block;
@@ -3429,7 +3440,8 @@ impl Indexer {
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
-                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_count_for_block =
+                        checked_tx_count(parsed.transactions_count, parsed.number)?;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     block_tx_idx += tx_count_for_block;
                     for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
@@ -3595,7 +3607,8 @@ impl Indexer {
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
-                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_count_for_block =
+                        checked_tx_count(parsed.transactions_count, parsed.number)?;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     let ts_ms = parsed.timestamp.timestamp_millis();
                     for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
@@ -3787,7 +3800,8 @@ impl Indexer {
                 let mut block_tx_idx = 0usize;
                 for (block_idx, block_response) in blocks.iter().enumerate() {
                     let parsed = &all_parsed_blocks[block_idx];
-                    let tx_count_for_block = parsed.transactions_count as usize;
+                    let tx_count_for_block =
+                        checked_tx_count(parsed.transactions_count, parsed.number)?;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                     for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
                         if tx_data.is_cellbase || tx_data.inputs.is_empty() {
@@ -4083,7 +4097,7 @@ impl Indexer {
                 )?;
                 let mut block_tx_idx = 0usize;
                 for parsed in all_parsed_blocks {
-                    let tx_count = parsed.transactions_count as usize;
+                    let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
                     let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
                     block_tx_idx += tx_count;
 
@@ -4241,7 +4255,8 @@ impl Indexer {
                     block_date,
                     &mut prev_dao_cs,
                 )?;
-                let tx_count_for_block = parsed.transactions_count as usize;
+                let tx_count_for_block =
+                    checked_tx_count(parsed.transactions_count, parsed.number)?;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 block_tx_idx += tx_count_for_block;
 

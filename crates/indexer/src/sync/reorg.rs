@@ -13,6 +13,7 @@ use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
 use crate::rpc::CkbRpcClient;
 
+use super::checked_tx_count;
 use super::dao_helpers::{derive_pre_batch_live_cells, occupied_capacity_shannons_i64};
 use super::helpers::*;
 use super::indexer::{
@@ -49,7 +50,7 @@ impl Indexer {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             tracker.record_block_date(parsed.number, block_date);
 
-            let tx_count = parsed.transactions_count as usize;
+            let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
             block_tx_idx += tx_count;
 
@@ -144,7 +145,7 @@ impl Indexer {
             let block_date = ckbadger_common::block_date(parsed.timestamp);
             tracker.record_block_date(parsed.number, block_date);
 
-            let tx_count = parsed.transactions_count as usize;
+            let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
             block_tx_idx += tx_count;
 

@@ -26,6 +26,7 @@ use rayon::prelude::*;
 
 use super::adaptive::*;
 use super::batch::*;
+use super::checked_tx_count;
 use super::dao_helpers::*;
 use super::diagnostics::*;
 use super::helpers::*;
@@ -162,7 +163,7 @@ fn run_nft_precompute(
 
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
-        let tx_count_for_block = parsed.transactions_count as usize;
+        let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
         let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
         for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
             let tx_global_index = block_tx_idx + tx_idx;
@@ -257,7 +258,7 @@ fn run_nft_precompute(
     let mut consumed_mnft: Vec<MnftConsumptionEvent> = Vec::new();
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
-        let tx_count_for_block = parsed.transactions_count as usize;
+        let tx_count_for_block = checked_tx_count(parsed.transactions_count, parsed.number)?;
         let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
         for (tx_idx, tx_data) in tx_slice.iter().enumerate() {
             if tx_data.is_cellbase || tx_data.inputs.is_empty() {
@@ -2337,8 +2338,12 @@ impl Indexer {
                     if let Some(last_block) = all_parsed_blocks.last() {
                         committed_tip_for_cache_for_writer
                             .store(last_block.number, Ordering::SeqCst);
+                        let block_num = require_non_negative_block_number(
+                            last_block.number,
+                            "pipeline writer record_batch",
+                        )?;
                         self.progress.record_batch(
-                            last_block.number as u64,
+                            block_num,
                             all_parsed_blocks.len() as u64,
                             batch_tx_count_u64,
                         );

@@ -4,6 +4,7 @@
 
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -12,9 +13,15 @@ struct CacheEntry {
     expires_at: Instant,
 }
 
+/// Number of mutating operations (get-with-expired-eviction + set) between
+/// full expired-entry cleanup sweeps.
+const CLEANUP_INTERVAL: u64 = 100;
+
 #[derive(Clone)]
 pub struct InMemoryCache {
     inner: Arc<RwLock<HashMap<String, CacheEntry>>>,
+    /// Counts mutating operations to trigger periodic cleanup.
+    ops_counter: Arc<AtomicU64>,
 }
 
 impl Default for InMemoryCache {
@@ -27,17 +34,26 @@ impl InMemoryCache {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
+            ops_counter: Arc::new(AtomicU64::new(0)),
         }
     }
 
     /// Get a cached value (sync). Returns None if missing or expired.
+    /// Expired entries are removed eagerly on access.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
-        let map = self.inner.read().ok()?;
-        let entry = map.get(key)?;
-        if Instant::now() > entry.expires_at {
-            return None;
+        {
+            let map = self.inner.read().ok()?;
+            let entry = map.get(key)?;
+            if Instant::now() <= entry.expires_at {
+                return serde_json::from_slice(&entry.data).ok();
+            }
         }
-        serde_json::from_slice(&entry.data).ok()
+        // Entry is expired -- upgrade to write lock and remove it.
+        if let Ok(mut map) = self.inner.write() {
+            map.remove(key);
+        }
+        self.maybe_cleanup();
+        None
     }
 
     /// Delete a cached value (sync).
@@ -59,6 +75,23 @@ impl InMemoryCache {
                     },
                 );
             }
+        }
+        self.maybe_cleanup();
+    }
+
+    /// Remove all expired entries from the cache.
+    pub fn cleanup(&self) {
+        if let Ok(mut map) = self.inner.write() {
+            let now = Instant::now();
+            map.retain(|_, entry| now <= entry.expires_at);
+        }
+    }
+
+    /// Trigger a full cleanup sweep every `CLEANUP_INTERVAL` operations.
+    fn maybe_cleanup(&self) {
+        let count = self.ops_counter.fetch_add(1, Ordering::Relaxed);
+        if count.is_multiple_of(CLEANUP_INTERVAL) {
+            self.cleanup();
         }
     }
 }
@@ -87,6 +120,37 @@ mod tests {
         // Entry is already expired
         std::thread::sleep(Duration::from_millis(1));
         assert_eq!(cache.get::<String>("key"), None);
+    }
+
+    #[test]
+    fn test_expired_entry_is_removed_from_map() {
+        let cache = InMemoryCache::new();
+        cache.set("key", &"hello", Duration::from_millis(0));
+        std::thread::sleep(Duration::from_millis(1));
+        // First get returns None and removes the entry
+        assert_eq!(cache.get::<String>("key"), None);
+        // Verify entry is actually removed from the underlying map
+        let map = cache.inner.read().unwrap();
+        assert!(
+            !map.contains_key("key"),
+            "expired entry should be removed from the map"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_removes_all_expired() {
+        let cache = InMemoryCache::new();
+        cache.set("alive", &1i64, Duration::from_secs(60));
+        cache.set("dead1", &2i64, Duration::from_millis(0));
+        cache.set("dead2", &3i64, Duration::from_millis(0));
+        std::thread::sleep(Duration::from_millis(1));
+
+        cache.cleanup();
+
+        let map = cache.inner.read().unwrap();
+        assert!(map.contains_key("alive"));
+        assert!(!map.contains_key("dead1"));
+        assert!(!map.contains_key("dead2"));
     }
 
     #[test]

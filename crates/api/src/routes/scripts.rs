@@ -2,7 +2,6 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
@@ -13,7 +12,8 @@ use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
-    decode_cursor_single, encode_cursor_single, ok, ApiError, ApiResult, CursorPaginatedResponse,
+    decode_cursor_single, default_limit, encode_cursor_single, ok, ApiError, ApiResult,
+    ApiRouteError, CursorPaginatedResponse,
 };
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
@@ -22,8 +22,6 @@ use crate::utils::{
 };
 use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
-
-type ApiRouteError = (StatusCode, Json<ApiError>);
 
 fn load_script_infos_cached(
     state: &Arc<AppState>,
@@ -65,10 +63,6 @@ pub struct ListParams {
     sort_key: ScriptSortKey,
     #[serde(default = "default_sort_direction")]
     sort_direction: SortDirection,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

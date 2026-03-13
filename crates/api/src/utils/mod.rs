@@ -1,6 +1,7 @@
 pub mod address;
 pub mod assets;
 pub mod format;
+pub mod http;
 pub mod script_resolution;
 
 pub use address::{address_to_lock_script_hash, is_ckb_address, script_to_address};
@@ -13,6 +14,7 @@ pub use format::{
     date_keys_inclusive, format_duration, parse_chart_date_range, parse_chart_date_yyyymmdd,
     shannon_to_ckb, shannon_to_ckb_u128,
 };
+pub use http::shared_http_client;
 pub use script_resolution::{
     deployment_key_for_script, deployment_reference_hashes, is_known_script_name,
     merge_script_info_for_reference, related_code_hashes_for_reference,

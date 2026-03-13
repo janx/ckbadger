@@ -3,24 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncStatus {
-    pub is_syncing: bool,
-    pub synced_block: i64,
-    pub tip_block: i64,
-    pub progress: f64,
-    pub estimated_time: Option<String>,
-    pub chart_data_may_be_incomplete: bool,
-    pub blocks_per_second: Option<f64>,
-    pub ema_blocks_per_second: Option<f64>,
-    pub txs_per_second: Option<f64>,
-    pub ema_txs_per_second: Option<f64>,
-    pub sync_mode: String,
-    pub started_at: Option<i64>,
-    pub elapsed_time: Option<String>,
-    pub total_time: Option<String>,
-}
+pub use crate::response::SyncStatusResponse as SyncStatus;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]

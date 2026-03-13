@@ -5,16 +5,53 @@ use axum::{
     },
     response::Response,
 };
-use futures::{SinkExt, StreamExt};
+use futures::{stream::SplitSink, SinkExt, StreamExt};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::manager::{BroadcastMessage, WsMessage};
 use crate::AppState;
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
     ws.on_upgrade(|socket| handle_socket(socket, state))
+}
+
+/// Handle a broadcast channel recv result: serialize and send to the WebSocket,
+/// returning `ControlFlow::Break` if the WebSocket is closed, or
+/// `ControlFlow::Continue` otherwise.
+async fn forward_broadcast(
+    result: Result<BroadcastMessage, broadcast::error::RecvError>,
+    sender: &mut SplitSink<WebSocket, Message>,
+    channel_name: &str,
+) -> ControlFlow<()> {
+    match result {
+        Ok(msg) => {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                if sender.send(Message::Text(json.into())).await.is_err() {
+                    return ControlFlow::Break(());
+                }
+            }
+        }
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+            warn!("ws channel '{}' lagged by {} messages", channel_name, n);
+        }
+        Err(broadcast::error::RecvError::Closed) => {
+            return ControlFlow::Break(());
+        }
+    }
+    ControlFlow::Continue(())
+}
+
+/// Await an optional broadcast receiver. If `None`, pend forever.
+async fn recv_optional(
+    rx: &mut Option<broadcast::Receiver<BroadcastMessage>>,
+) -> Result<BroadcastMessage, broadcast::error::RecvError> {
+    match rx {
+        Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
@@ -91,104 +128,24 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     _ => {}
                 }
             }
-            result = async {
-                if let Some(ref mut rx) = block_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match result {
-                    Some(Ok(broadcast_msg)) => {
-                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                            if sender.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
-                        tracing::warn!("WebSocket client lagged on block channel, skipped {} messages", n);
-                        continue;
-                    }
-                    Some(Err(broadcast::error::RecvError::Closed)) => {
-                        break;
-                    }
-                    None => {}
+            result = recv_optional(&mut block_rx) => {
+                if forward_broadcast(result, &mut sender, "new_block").await.is_break() {
+                    break;
                 }
             }
-            result = async {
-                if let Some(ref mut rx) = tx_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match result {
-                    Some(Ok(broadcast_msg)) => {
-                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                            if sender.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
-                        tracing::warn!("WebSocket client lagged on transaction channel, skipped {} messages", n);
-                        continue;
-                    }
-                    Some(Err(broadcast::error::RecvError::Closed)) => {
-                        break;
-                    }
-                    None => {}
+            result = recv_optional(&mut tx_rx) => {
+                if forward_broadcast(result, &mut sender, "new_transaction").await.is_break() {
+                    break;
                 }
             }
-            result = async {
-                if let Some(ref mut rx) = reorg_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match result {
-                    Some(Ok(broadcast_msg)) => {
-                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                            if sender.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
-                        tracing::warn!("WebSocket client lagged on reorg channel, skipped {} messages", n);
-                        continue;
-                    }
-                    Some(Err(broadcast::error::RecvError::Closed)) => {
-                        break;
-                    }
-                    None => {}
+            result = recv_optional(&mut reorg_rx) => {
+                if forward_broadcast(result, &mut sender, "reorg").await.is_break() {
+                    break;
                 }
             }
-            result = async {
-                if let Some(ref mut rx) = activity_rx {
-                    Some(rx.recv().await)
-                } else {
-                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
-                }
-            } => {
-                match result {
-                    Some(Ok(broadcast_msg)) => {
-                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                            if sender.send(Message::Text(json.into())).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
-                        tracing::warn!("WebSocket client lagged on activity channel, skipped {} messages", n);
-                        continue;
-                    }
-                    Some(Err(broadcast::error::RecvError::Closed)) => {
-                        break;
-                    }
-                    None => {}
+            result = recv_optional(&mut activity_rx) => {
+                if forward_broadcast(result, &mut sender, "latest_activity").await.is_break() {
+                    break;
                 }
             }
         }

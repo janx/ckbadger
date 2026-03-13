@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
-use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError, SyncStatusResponse as SyncStatus};
 use crate::utils::{apply_live_capacity_delta, format_duration};
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
@@ -107,25 +107,6 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/stats/activity-summary-24h", get(get_activity_summary_24h))
         // Asset ecosystem
         .route("/statistics/asset-ecosystem", get(get_asset_ecosystem))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncStatus {
-    pub is_syncing: bool,
-    pub synced_block: i64,
-    pub tip_block: i64,
-    pub progress: f64,
-    pub estimated_time: Option<String>,
-    pub chart_data_may_be_incomplete: bool,
-    pub blocks_per_second: Option<f64>,
-    pub ema_blocks_per_second: Option<f64>,
-    pub txs_per_second: Option<f64>,
-    pub ema_txs_per_second: Option<f64>,
-    pub sync_mode: String,
-    pub started_at: Option<i64>,
-    pub elapsed_time: Option<String>,
-    pub total_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

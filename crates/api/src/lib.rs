@@ -181,10 +181,12 @@ pub async fn create_router(config: AppConfig) -> Router {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_app_config_default_values() {
-        // AppConfig no longer has Default since it requires a store instance.
-        // Basic smoke test: verify the struct can be constructed.
-        assert_eq!(1 + 1, 2);
+    fn test_api_routes_are_nested_under_v1() {
+        // Verify the module-level routes() function returns a valid router.
+        // This exercises the route merging logic in routes::api_routes().
+        let _router: Router<Arc<AppState>> = routes::api_routes();
     }
 }

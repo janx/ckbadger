@@ -12,7 +12,7 @@ use ckbadger_common::dao::{
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
@@ -57,6 +57,28 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
 const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
+
+/// Decode a hex string constant (with or without "0x" prefix) into a 32-byte array at init time.
+fn decode_code_hash_bytes(hex_str: &str) -> Vec<u8> {
+    hex::decode(hex_str.strip_prefix("0x").unwrap_or(hex_str))
+        .expect("invalid hex constant in code hash definition")
+}
+
+// Pre-decoded byte arrays for code hash comparisons (avoids per-call hex encoding allocations).
+static DAO_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| decode_code_hash_bytes(DAO_CODE_HASH));
+static DOTBIT_ACCOUNT_CELL_TYPE_ID_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| decode_code_hash_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID));
+static MNFT_ISSUER_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| decode_code_hash_bytes(MNFT_ISSUER_CODE_HASH));
+static MNFT_CLASS_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| decode_code_hash_bytes(MNFT_CLASS_CODE_HASH));
+static MNFT_TOKEN_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| decode_code_hash_bytes(MNFT_TOKEN_CODE_HASH));
+static SPORE_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 4]> =
+    LazyLock::new(|| SPORE_CODE_HASHES.map(decode_code_hash_bytes));
+static CLUSTER_CODE_HASH_BYTES: LazyLock<[Vec<u8>; 3]> =
+    LazyLock::new(|| CLUSTER_CODE_HASHES.map(decode_code_hash_bytes));
 
 fn format_script_code_hash_label(code_hash: &[u8]) -> String {
     let full = hex::encode(code_hash);
@@ -177,38 +199,35 @@ fn parse_dep_group(data: &[u8], data_size: i32) -> DepGroupParseResult {
 }
 
 fn is_spore_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    SPORE_CODE_HASHES.iter().any(|h| *h == code_hash_hex)
+    SPORE_CODE_HASH_BYTES
+        .iter()
+        .any(|h| h.as_slice() == code_hash)
 }
 
 fn is_cluster_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    CLUSTER_CODE_HASHES.iter().any(|h| *h == code_hash_hex)
+    CLUSTER_CODE_HASH_BYTES
+        .iter()
+        .any(|h| h.as_slice() == code_hash)
 }
 
 fn is_dotbit_account_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    code_hash_hex == DOTBIT_ACCOUNT_CELL_TYPE_ID
+    code_hash == DOTBIT_ACCOUNT_CELL_TYPE_ID_BYTES.as_slice()
 }
 
 fn is_dao_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    code_hash_hex == DAO_CODE_HASH
+    code_hash == DAO_CODE_HASH_BYTES.as_slice()
 }
 
 fn is_mnft_issuer_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    code_hash_hex == MNFT_ISSUER_CODE_HASH
+    code_hash == MNFT_ISSUER_CODE_HASH_BYTES.as_slice()
 }
 
 fn is_mnft_class_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    code_hash_hex == MNFT_CLASS_CODE_HASH
+    code_hash == MNFT_CLASS_CODE_HASH_BYTES.as_slice()
 }
 
 fn is_mnft_token_type_code_hash(code_hash: &[u8]) -> bool {
-    let code_hash_hex = format!("0x{}", hex::encode(code_hash));
-    code_hash_hex == MNFT_TOKEN_CODE_HASH
+    code_hash == MNFT_TOKEN_CODE_HASH_BYTES.as_slice()
 }
 
 fn read_molecule_bytes_field(
@@ -1734,61 +1753,110 @@ async fn list_live_cells(
         None
     };
 
-    let after_key_ref = after_key.as_deref();
-
     // Fetch cells from the store based on available filters.
     // The store supports listing by lock hash or type hash via prefix scans.
+    // When post-filtering is needed (lock+type or lock+type_code_hash), we use a
+    // continuation loop to avoid silently skipping data with a fixed multiplier.
     let raw_cells: Vec<(Vec<u8>, i16, ckbadger_store::PositionedCellInfo)> =
         match (&lock_hash_bytes, &type_hash_bytes) {
             (Some(lock_bytes), Some(type_bytes)) => {
-                // Filter by lock first (usually more selective), then post-filter by type
-                let all = state
-                    .store
-                    .list_cells_by_lock(
-                        lock_bytes,
-                        limit * 10 + 1,
-                        after_key_ref,
-                        &state.append_only_store,
-                    )
-                    .map_err(|e| ApiError::internal(e.to_string()))?;
-                all.into_iter()
-                    .filter(|(_, _, info)| {
-                        info.type_script_hash
-                            .as_ref()
-                            .map(|h| h == type_bytes)
-                            .unwrap_or(false)
-                    })
-                    .take(limit + 1)
-                    .collect()
-            }
-            (Some(lock_bytes), None) => {
-                // For type_code_hash filtering, list by lock then post-filter
-                if let Some(ref tch) = _type_code_hash_bytes {
-                    let all = state
+                // Filter by lock first, then post-filter by type hash.
+                // Loop in batches until we have enough results or the lock scan is exhausted.
+                let needed = limit + 1;
+                let batch_size = limit * 2 + 1;
+                const MAX_ITERATIONS: usize = 50;
+                let mut results = Vec::with_capacity(needed);
+                let mut current_after_key: Option<Vec<u8>> = after_key.clone();
+                for _ in 0..MAX_ITERATIONS {
+                    let batch = state
                         .store
                         .list_cells_by_lock(
                             lock_bytes,
-                            limit * 10 + 1,
-                            after_key_ref,
+                            batch_size,
+                            current_after_key.as_deref(),
                             &state.append_only_store,
                         )
                         .map_err(|e| ApiError::internal(e.to_string()))?;
-                    all.into_iter()
-                        .filter(|(_, _, info)| {
-                            info.type_code_hash
+                    let scan_exhausted = batch.len() < batch_size;
+                    for (tx_hash, output_index, info) in batch {
+                        // Build the full index key for cursor advancement
+                        let cell_key = keys::encode_cell_index_key(
+                            lock_bytes,
+                            info.created_at_block,
+                            &tx_hash,
+                            output_index,
+                        );
+                        current_after_key = Some(cell_key);
+                        if info
+                            .type_script_hash
+                            .as_ref()
+                            .map(|h| h == type_bytes)
+                            .unwrap_or(false)
+                        {
+                            results.push((tx_hash, output_index, info));
+                            if results.len() >= needed {
+                                break;
+                            }
+                        }
+                    }
+                    if results.len() >= needed || scan_exhausted {
+                        break;
+                    }
+                }
+                results
+            }
+            (Some(lock_bytes), None) => {
+                // For type_code_hash filtering, list by lock then post-filter.
+                // Uses the same continuation loop pattern for correctness.
+                if let Some(ref tch) = _type_code_hash_bytes {
+                    let needed = limit + 1;
+                    let batch_size = limit * 2 + 1;
+                    const MAX_ITERATIONS: usize = 50;
+                    let mut results = Vec::with_capacity(needed);
+                    let mut current_after_key: Option<Vec<u8>> = after_key.clone();
+                    for _ in 0..MAX_ITERATIONS {
+                        let batch = state
+                            .store
+                            .list_cells_by_lock(
+                                lock_bytes,
+                                batch_size,
+                                current_after_key.as_deref(),
+                                &state.append_only_store,
+                            )
+                            .map_err(|e| ApiError::internal(e.to_string()))?;
+                        let scan_exhausted = batch.len() < batch_size;
+                        for (tx_hash, output_index, info) in batch {
+                            let cell_key = keys::encode_cell_index_key(
+                                lock_bytes,
+                                info.created_at_block,
+                                &tx_hash,
+                                output_index,
+                            );
+                            current_after_key = Some(cell_key);
+                            if info
+                                .type_code_hash
                                 .as_ref()
                                 .map(|h| h == tch)
                                 .unwrap_or(false)
-                        })
-                        .take(limit + 1)
-                        .collect()
+                            {
+                                results.push((tx_hash, output_index, info));
+                                if results.len() >= needed {
+                                    break;
+                                }
+                            }
+                        }
+                        if results.len() >= needed || scan_exhausted {
+                            break;
+                        }
+                    }
+                    results
                 } else {
                     state
                         .store
                         .list_cells_by_lock(
                             lock_bytes,
                             limit + 1,
-                            after_key_ref,
+                            after_key.as_deref(),
                             &state.append_only_store,
                         )
                         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -1799,7 +1867,7 @@ async fn list_live_cells(
                 .list_cells_by_type(
                     type_bytes,
                     limit + 1,
-                    after_key_ref,
+                    after_key.as_deref(),
                     &state.append_only_store,
                 )
                 .map_err(|e| ApiError::internal(e.to_string()))?,

@@ -8,15 +8,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
 use crate::utils::{
     accumulate_live_capacity, apply_live_capacity_delta, date_keys_inclusive,
     parse_chart_date_range,
 };
 use crate::warmup::{CachedAssetEntry, CACHE_KEY_ASSETS_TOKEN};
 use crate::AppState;
-
-type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -38,10 +38,6 @@ pub struct ListParams {
     standard: Option<String>,
     cursor: Option<String>,
     search: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 #[derive(Debug, Deserialize)]

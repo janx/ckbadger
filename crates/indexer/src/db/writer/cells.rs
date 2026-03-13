@@ -220,7 +220,15 @@ impl BatchWriter {
                         encoded_keys[idx].as_slice(),
                     ));
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    let (tx_hash, output_index, ..) = consumptions[idx];
+                    bail!(
+                        "live cell marker not found in domain store for outpoint 0x{}:{} at input index {} during consumption",
+                        hex::encode(tx_hash),
+                        output_index,
+                        idx
+                    );
+                }
                 Err(e) => {
                     let (tx_hash, output_index, ..) = consumptions[idx];
                     bail!(
@@ -781,7 +789,7 @@ mod tests {
             .unwrap_err();
         assert!(
             err.to_string()
-                .contains("missing live cell info during consumption"),
+                .contains("live cell marker not found in domain store"),
             "expected missing-live-cell error, got: {}",
             err
         );
