@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,65 @@ fn main() {
         script_json,
     )
     .expect("failed to write bundled_script_labels.json");
+
+    // --- UDT-compatible script code_hashes ---
+    // Extract code_hashes from scripts with decoderType "udt", excluding the 3
+    // well-known UDT code_hashes (SUDT, xUDT data1, xUDT type) that are already
+    // hardcoded in the activity builder.
+    let excluded_udt_code_hashes: HashSet<&str> = [
+        "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5", // SUDT
+        "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95", // xUDT data1
+        "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb", // xUDT type
+    ]
+    .into_iter()
+    .collect();
+
+    let mut udt_script_code_hashes: Vec<String> = Vec::new();
+    for entry in &script_entries {
+        // Only scripts with decoderType "udt"
+        let is_udt = entry.get("decoderType").and_then(|v| v.as_str()) == Some("udt");
+        if !is_udt {
+            continue;
+        }
+
+        // Iterate deployments -> each network -> array of deployments
+        let deployments = match entry.get("deployments").and_then(|d| d.as_object()) {
+            Some(d) => d,
+            None => continue,
+        };
+        for (_network, network_deployments) in deployments {
+            let deployment_list = match network_deployments.as_array() {
+                Some(a) => a,
+                None => continue,
+            };
+            for deployment in deployment_list {
+                // Skip deprecated deployments
+                let is_deprecated = deployment
+                    .get("deprecated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_deprecated {
+                    continue;
+                }
+
+                if let Some(code_hash) = deployment.get("codeHash").and_then(|v| v.as_str()) {
+                    if !code_hash.is_empty() && !excluded_udt_code_hashes.contains(code_hash) {
+                        udt_script_code_hashes.push(code_hash.to_string());
+                    }
+                }
+            }
+        }
+    }
+    udt_script_code_hashes.sort();
+    udt_script_code_hashes.dedup();
+
+    let udt_code_hashes_json = serde_json::to_string(&udt_script_code_hashes)
+        .expect("failed to serialize UDT script code_hashes");
+    fs::write(
+        Path::new(&out_dir).join("bundled_udt_script_code_hashes.json"),
+        udt_code_hashes_json,
+    )
+    .expect("failed to write bundled_udt_script_code_hashes.json");
 
     // --- Script name overrides ---
     let overrides_content = if overrides_file.exists() {
