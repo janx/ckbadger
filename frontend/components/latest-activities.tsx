@@ -367,12 +367,21 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
 function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }) {
   const { activity, primaryScriptCall } = classified;
   const badge = getTypeBadge(classified);
+  const protocolName = primaryScriptCall?.protocolName;
 
   return (
     <>
       <div className="flex items-center justify-between gap-2">
         <span className={cn('min-w-0 truncate font-mono text-xs', badge.colorClass)}>
-          {badge.icon} Script call{' '}
+          {badge.icon}{' '}
+          {protocolName ? (
+            <>
+              <span className="text-amber">{protocolName}</span>
+              <span className="text-text-dim"> · </span>
+            </>
+          ) : (
+            'Script call '
+          )}
           {primaryScriptCall ? <ScriptCallExpr sc={primaryScriptCall} /> : null}
         </span>
         <span className="text-text-dim shrink-0 font-mono text-[10px]">

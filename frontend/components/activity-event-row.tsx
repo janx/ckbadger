@@ -214,7 +214,19 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
 
 function getScriptEventParts(sc: ActivityScriptCall): EventParts {
   return {
-    badge: <span className="text-amber font-mono text-xs">{'\u2699'} Script call</span>,
+    badge: (
+      <span className="text-amber font-mono text-xs">
+        {'\u2699'}{' '}
+        {sc.protocolName ? (
+          <>
+            {sc.protocolName}
+            <span className="text-text-dim"> · </span>
+          </>
+        ) : (
+          'Script call'
+        )}
+      </span>
+    ),
     value: (
       <span className="font-mono text-xs">
         <ScriptCallExpr sc={sc} />

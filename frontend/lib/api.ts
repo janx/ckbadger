@@ -448,6 +448,7 @@ interface ActivityScriptCall {
   typeArgs: string;
   scriptHash: string;
   scriptName?: string;
+  protocolName?: string;
 }
 
 interface Activity {
