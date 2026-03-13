@@ -16,7 +16,6 @@ use crate::cache::CacheInvalidator;
 use crate::config::Config;
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{BatchWriter, Repository};
-use crate::sync::latest_activities::LatestActivitiesBuffer;
 use ckb_store_reader::CkbChainReader;
 
 use crate::rpc::CkbRpcClient;
@@ -212,7 +211,6 @@ pub struct Indexer {
     pub(crate) label_import_started: std::sync::atomic::AtomicBool,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
-    pub(crate) latest_activities: Arc<LatestActivitiesBuffer>,
 }
 
 impl Indexer {
@@ -306,7 +304,6 @@ impl Indexer {
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
-            latest_activities: Arc::new(LatestActivitiesBuffer::new()),
         })
     }
 

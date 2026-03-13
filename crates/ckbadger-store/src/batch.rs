@@ -575,7 +575,7 @@ impl<'a> StoreBatch<'a> {
 
     pub fn put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32, tx_hash: &[u8]) {
         let key = keys::encode_addr_tx_key(lock_hash, block_num, tx_idx, tx_hash);
-        self.put_cf(self.store.cf_addr_txs(), &key, tx_hash);
+        self.put_cf(self.store.cf_addr_txs(), &key, []);
     }
 
     pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
@@ -958,6 +958,16 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Activities ----
 
+    pub fn put_tx_activity_bundle(&mut self, bundle: &TxActivityBundle) {
+        let key = keys::encode_tx_activity_bundle_key(
+            bundle.block_number,
+            bundle.tx_index,
+            &bundle.tx_hash,
+        );
+        let value = bincode::serialize(bundle).expect("serialize TxActivityBundle");
+        self.put_cf(self.store.cf_activities(), key, &value);
+    }
+
     pub fn put_activity(
         &mut self,
         lock_hash: &[u8],
@@ -1230,20 +1240,75 @@ mod tests {
         assert_eq!(i64::from_le_bytes(val[..8].try_into().unwrap()), 7);
     }
 
-    fn make_activity(block_num: i64, tx_idx: i32, delta: i128) -> ActivityEntry {
-        ActivityEntry {
+    fn make_single_owner_bundle(
+        lock_hash: &[u8],
+        tx_hash: &[u8],
+        block_hash: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        delta: i128,
+    ) -> TxActivityBundle {
+        TxActivityBundle {
+            tx_hash: tx_hash.to_vec(),
+            block_hash: block_hash.to_vec(),
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            is_cellbase: tx_idx == 0,
+            owners: vec![OwnerActivityDelta {
+                lock_hash: lock_hash.to_vec(),
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x22; 20],
+                ckb_delta: delta,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0x11; 32]],
+                asset_changes: vec![],
+                script_calls: None,
+                peers: vec![],
+            }],
+        }
+    }
+
+    fn put_single_owner_activity(
+        batch: &mut StoreBatch<'_>,
+        lock_hash: &[u8],
+        block_num: i64,
+        tx_idx: i32,
+        delta: i128,
+    ) {
+        let tx_hash = vec![block_num as u8; 32];
+        let block_hash = vec![0x80 | (block_num as u8); 32];
+        let bundle =
+            make_single_owner_bundle(lock_hash, &tx_hash, &block_hash, block_num, tx_idx, delta);
+        batch.put_tx_activity_bundle(&bundle);
+        batch.put_addr_tx(lock_hash, block_num, tx_idx, &tx_hash);
+    }
+
+    fn make_tx_activity_bundle(block_num: i64, tx_idx: i32, owners: usize) -> TxActivityBundle {
+        TxActivityBundle {
             tx_hash: vec![block_num as u8; 32],
             block_hash: vec![0x80 | (block_num as u8); 32],
             block_number: block_num,
             tx_index: tx_idx,
             timestamp: 1_700_000_000 + block_num,
-            ckb_delta: delta,
-            used_delta: 0,
             is_cellbase: tx_idx == 0,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
+            owners: (0..owners)
+                .map(|i| OwnerActivityDelta {
+                    lock_hash: vec![i as u8; 32],
+                    lock_code_hash: vec![0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0x22; 20],
+                    ckb_delta: i as i128,
+                    used_delta: 0,
+                    has_type_script: false,
+                    involved_script_code_hashes: vec![vec![0x33; 32]],
+                    asset_changes: vec![],
+                    script_calls: None,
+                    peers: vec![],
+                })
+                .collect(),
         }
     }
 
@@ -1264,9 +1329,9 @@ mod tests {
         let lock = [0xAAu8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 500));
-        batch.put_activity(&lock, 200, 0, &make_activity(200, 0, -300));
-        batch.put_activity(&lock, 300, 1, &make_activity(300, 1, 1000));
+        put_single_owner_activity(&mut batch, &lock, 100, 0, 500);
+        put_single_owner_activity(&mut batch, &lock, 200, 0, -300);
+        put_single_owner_activity(&mut batch, &lock, 300, 1, 1000);
         batch.commit().unwrap();
 
         let results = store.list_activities(&lock, 100, None, None).unwrap();
@@ -1281,6 +1346,41 @@ mod tests {
     }
 
     #[test]
+    fn test_put_tx_activity_bundle_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let bundle = make_tx_activity_bundle(100, 0, 2);
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_activity_bundle(&bundle);
+        batch.commit().unwrap();
+
+        let loaded = store
+            .get_tx_activity_bundle(100, 0, &bundle.tx_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.block_number, 100);
+        assert_eq!(loaded.tx_index, 0);
+        assert_eq!(loaded.owners.len(), 2);
+    }
+
+    #[test]
+    fn test_put_addr_tx_stores_empty_value() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock = [0xAD; 32];
+        let tx_hash = [0xBE; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 100, 0, &tx_hash);
+        batch.commit().unwrap();
+
+        let key = keys::encode_addr_tx_key(&lock, 100, 0, &tx_hash);
+        let value = store.get_cf(store.cf_addr_txs(), &key).unwrap().unwrap();
+        assert!(value.is_empty());
+    }
+
+    #[test]
     fn test_list_activities_with_limit() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
@@ -1288,7 +1388,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         for i in 1..=5 {
-            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+            put_single_owner_activity(&mut batch, &lock, i * 100, 0, i as i128);
         }
         batch.commit().unwrap();
 
@@ -1306,7 +1406,7 @@ mod tests {
 
         let mut batch = StoreBatch::new(&store);
         for i in 1..=5 {
-            batch.put_activity(&lock, i * 100, 0, &make_activity(i * 100, 0, i as i128));
+            put_single_owner_activity(&mut batch, &lock, i * 100, 0, i as i128);
         }
         batch.commit().unwrap();
 
@@ -1338,9 +1438,9 @@ mod tests {
         let lock_b = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock_a, 100, 0, &make_activity(100, 0, 10));
-        batch.put_activity(&lock_a, 200, 0, &make_activity(200, 0, 20));
-        batch.put_activity(&lock_b, 100, 0, &make_activity(100, 0, 30));
+        put_single_owner_activity(&mut batch, &lock_a, 100, 0, 10);
+        put_single_owner_activity(&mut batch, &lock_a, 200, 0, 20);
+        put_single_owner_activity(&mut batch, &lock_b, 100, 0, 30);
         batch.commit().unwrap();
 
         let a = store.list_activities(&lock_a, 100, None, None).unwrap();
@@ -1381,7 +1481,7 @@ mod tests {
         let lock = [0xABu8; 32];
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &make_activity(100, 0, 1));
+        put_single_owner_activity(&mut batch, &lock, 100, 0, 1);
         batch.commit().unwrap();
 
         let results = store
@@ -1455,33 +1555,25 @@ mod tests {
     }
 
     #[test]
-    fn test_append_only_activity_preserves_competing_block_hash_history() {
+    fn test_domain_activity_bundle_overwrites_same_key() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xA2u8; 32];
         let tx_hash = [0xC3u8; 32];
 
-        let mut first = make_activity(100, 0, 1);
-        first.tx_hash = tx_hash.to_vec();
-        first.block_hash = vec![0x11; 32];
-
-        let mut second = make_activity(100, 0, 2);
-        second.tx_hash = tx_hash.to_vec();
-        second.block_hash = vec![0x22; 32];
+        let first = make_single_owner_bundle(&lock, &tx_hash, &[0x11; 32], 100, 0, 1);
+        let second = make_single_owner_bundle(&lock, &tx_hash, &[0x22; 32], 100, 0, 2);
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_activity(&lock, 100, 0, &first);
-        batch.put_activity(&lock, 100, 0, &second);
+        batch.put_tx_activity_bundle(&first);
+        batch.put_tx_activity_bundle(&second);
+        batch.put_addr_tx(&lock, 100, 0, &tx_hash);
         batch.commit().unwrap();
 
         let rows = store.list_activities(&lock, 10, None, None).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert!(rows
-            .iter()
-            .any(|(_, _, entry)| entry.block_hash == vec![0x11; 32]));
-        assert!(rows
-            .iter()
-            .any(|(_, _, entry)| entry.block_hash == vec![0x22; 32]));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2.block_hash, vec![0x22; 32]);
+        assert_eq!(rows[0].2.ckb_delta, 2);
     }
 
     #[test]
@@ -1597,42 +1689,18 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let lock = [0xA1u8; 32];
         let tx_hash = [0x01u8; 32];
-        let first_entry = ActivityEntry {
-            tx_hash: tx_hash.to_vec(),
-            block_hash: vec![0x11; 32],
-            block_number: 100,
-            tx_index: 0,
-            timestamp: 1_700_000_000,
-            ckb_delta: 1,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
-        };
-        let overwrite_entry = ActivityEntry {
-            tx_hash: tx_hash.to_vec(),
-            block_hash: vec![0x11; 32],
-            block_number: 100,
-            tx_index: 0,
-            timestamp: 1_700_000_001,
-            ckb_delta: 2,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
-        };
+        let first_bundle = make_single_owner_bundle(&lock, &tx_hash, &[0x11; 32], 100, 0, 1);
+        let overwrite_bundle = make_single_owner_bundle(&lock, &tx_hash, &[0x11; 32], 100, 0, 2);
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_activity(&lock, 100, 0, &first_entry);
+        first_batch.put_tx_activity_bundle(&first_bundle);
+        first_batch.put_addr_tx(&lock, 100, 0, &tx_hash);
         first_batch.commit().unwrap();
 
         store.set_bulk_sync_compaction_options();
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_activity(&lock, 100, 0, &overwrite_entry);
+        overwrite_batch.put_tx_activity_bundle(&overwrite_bundle);
+        overwrite_batch.put_addr_tx(&lock, 100, 0, &tx_hash);
         overwrite_batch.commit().unwrap();
         store.restore_normal_compaction_options();
 
@@ -2011,8 +2079,8 @@ mod tests {
         let mut a = StoreBatch::new(&store);
         let mut b = StoreBatch::new(&store);
 
-        a.put_activity(&lock, 100, 0, &make_activity(100, 0, 500));
-        b.put_activity(&lock, 200, 0, &make_activity(200, 0, 600));
+        put_single_owner_activity(&mut a, &lock, 100, 0, 500);
+        put_single_owner_activity(&mut b, &lock, 200, 0, 600);
 
         a.merge_from(b);
         a.commit().unwrap();

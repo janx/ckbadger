@@ -4,7 +4,6 @@ pub(crate) mod dao_helpers;
 mod diagnostics;
 mod helpers;
 mod indexer;
-pub mod latest_activities;
 mod nft_helpers;
 mod pipeline;
 mod progress;

@@ -69,17 +69,14 @@ impl CkbadgerStore {
                 break;
             }
             if key.len() == crate::keys::ADDR_TX_KEY_SIZE {
-                let (_, block_num, tx_idx, tx_hash_from_key) =
-                    crate::keys::decode_addr_tx_key(&key);
-                let tx_hash = value.to_vec();
-                if tx_hash != tx_hash_from_key {
+                let (_, block_num, tx_idx, tx_hash) = crate::keys::decode_addr_tx_key(&key);
+                if !value.is_empty() {
                     anyhow::bail!(
-                        "addr_txs key/value tx_hash mismatch in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, key_tx_hash=0x{}, value_tx_hash=0x{}",
+                        "addr_txs expects empty value in list_addr_txs_recent: lock_hash=0x{}, block_num={}, tx_idx={}, value_len={}",
                         bytes_to_hex(lock_hash),
                         block_num,
                         tx_idx,
-                        bytes_to_hex(&tx_hash_from_key),
-                        bytes_to_hex(&tx_hash)
+                        value.len()
                     );
                 }
                 results.push((block_num, tx_idx, tx_hash));
@@ -123,6 +120,23 @@ mod tests {
 
         let rows = store.list_addr_txs_recent(&lock, 0, None).unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_list_addr_txs_recent_reads_tx_hash_from_key_with_empty_value() {
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock = [0xAC; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_addr_tx(&lock, 100, 1, &[0x10; 32]);
+        batch.put_addr_tx(&lock, 99, 0, &[0x20; 32]);
+        batch.commit().unwrap();
+
+        let rows = store.list_addr_txs_recent(&lock, 10, None).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], (100, 1, vec![0x10; 32]));
+        assert_eq!(rows[1], (99, 0, vec![0x20; 32]));
     }
 
     #[test]

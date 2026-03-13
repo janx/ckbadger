@@ -517,7 +517,9 @@ async fn get_latest_activities(
 mod tests {
     use super::*;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{CachedBlockHeader, TxIndexEntry};
+    use ckbadger_store::types::{
+        CachedBlockHeader, OwnerActivityDelta, TxActivityBundle, TxIndexEntry,
+    };
 
     fn make_header(hash_byte: u8) -> CachedBlockHeader {
         CachedBlockHeader {
@@ -531,35 +533,34 @@ mod tests {
         }
     }
 
-    fn make_activity_with_block_hash(
+    fn make_bundle_with_block_hash(
         tx_hash: &[u8],
         block_hash: &[u8],
         block_number: i64,
         tx_index: i32,
-    ) -> ActivityEntry {
-        ActivityEntry {
+        lock_hash: &[u8],
+    ) -> TxActivityBundle {
+        TxActivityBundle {
             tx_hash: tx_hash.to_vec(),
             block_hash: block_hash.to_vec(),
             block_number,
             tx_index,
             timestamp: 1_700_000_000 + block_number,
-            ckb_delta: 0,
-            used_delta: 0,
             is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
+            owners: vec![OwnerActivityDelta {
+                lock_hash: lock_hash.to_vec(),
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x22; 20],
+                ckb_delta: 0,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0x33; 32]],
+                asset_changes: vec![],
+                script_calls: None,
+                peers: vec![],
+            }],
         }
-    }
-
-    fn make_activity(tx_hash: &[u8], block_number: i64, tx_index: i32) -> ActivityEntry {
-        make_activity_with_block_hash(
-            tx_hash,
-            &[0x60 | (block_number as u8); 32],
-            block_number,
-            tx_index,
-        )
     }
 
     #[test]
@@ -598,10 +599,18 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain);
-        // Activities are now in domain store
-        domain_batch.put_activity(&lock_hash, 30, 0, &make_activity(&stale_tx, 30, 0));
-        domain_batch.put_activity(&lock_hash, 20, 0, &make_activity(&canonical_tx_new, 20, 0));
-        domain_batch.put_activity(&lock_hash, 10, 0, &make_activity(&canonical_tx_old, 10, 0));
+        let stale_bundle =
+            make_bundle_with_block_hash(&stale_tx, &[0x60 | 30; 32], 30, 0, &lock_hash);
+        let canonical_new_bundle =
+            make_bundle_with_block_hash(&canonical_tx_new, &[0x60 | 20; 32], 20, 0, &lock_hash);
+        let canonical_old_bundle =
+            make_bundle_with_block_hash(&canonical_tx_old, &[0x60 | 10; 32], 10, 0, &lock_hash);
+        domain_batch.put_tx_activity_bundle(&stale_bundle);
+        domain_batch.put_tx_activity_bundle(&canonical_new_bundle);
+        domain_batch.put_tx_activity_bundle(&canonical_old_bundle);
+        domain_batch.put_addr_tx(&lock_hash, 30, 0, &stale_tx);
+        domain_batch.put_addr_tx(&lock_hash, 20, 0, &canonical_tx_new);
+        domain_batch.put_addr_tx(&lock_hash, 10, 0, &canonical_tx_old);
         // Simulate stale/orphan-like mapping without canonical tx_index entry.
         domain_batch.put_tx_hash_map(&stale_tx, 30, 0);
         domain_batch.put_tx_hash_map(&canonical_tx_new, 20, 0);
@@ -640,19 +649,11 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain);
-        // Activities are now in domain store
-        domain_batch.put_activity(
-            &lock_hash,
-            20,
-            0,
-            &make_activity_with_block_hash(&tx_hash, &[0xAA; 32], 20, 0),
-        );
-        domain_batch.put_activity(
-            &lock_hash,
-            20,
-            0,
-            &make_activity_with_block_hash(&tx_hash, &[0xBB; 32], 20, 0),
-        );
+        let first_bundle = make_bundle_with_block_hash(&tx_hash, &[0xAA; 32], 20, 0, &lock_hash);
+        let second_bundle = make_bundle_with_block_hash(&tx_hash, &[0xBB; 32], 20, 0, &lock_hash);
+        domain_batch.put_tx_activity_bundle(&first_bundle);
+        domain_batch.put_tx_activity_bundle(&second_bundle);
+        domain_batch.put_addr_tx(&lock_hash, 20, 0, &tx_hash);
         domain_batch.put_tx_hash_map(&tx_hash, 20, 0);
         domain_batch.put_tx_index(20, 0, &tx_index);
         domain_batch.put_block_header(20, &make_header(0xBB));

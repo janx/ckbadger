@@ -1,7 +1,9 @@
 //! Integration tests for chain reorganization (rollback) handling via ckbadger-store.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::types::{ActivityEntry, AddressBalance, ScriptInfo, TokenInfo};
+use ckbadger_store::types::{
+    AddressBalance, OwnerActivityDelta, ScriptInfo, TokenInfo, TxActivityBundle,
+};
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{
     CachedBlockHeader, DeepForkInfo, LiveCellInfo, PositionedCellInfo, RollbackResult, TxIndexEntry,
@@ -395,21 +397,30 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
     let mut domain_batch = StoreBatch::new(&domain);
     for i in 1..=5i64 {
         let block = i * 100;
-        let entry = ActivityEntry {
-            tx_hash: vec![i as u8; 32],
+        let tx_hash = vec![i as u8; 32];
+        let bundle = TxActivityBundle {
+            tx_hash: tx_hash.clone(),
             block_hash: vec![0xD0 | (i as u8); 32],
             block_number: block,
             tx_index: 0,
             timestamp: 1_700_000_000 + block,
-            ckb_delta: block as i128 * 100_000_000,
-            used_delta: 0,
             is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
+            owners: vec![OwnerActivityDelta {
+                lock_hash: lock_hash.clone(),
+                lock_code_hash: vec![0x11; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x22; 20],
+                ckb_delta: block as i128 * 100_000_000,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0x11; 32]],
+                asset_changes: vec![],
+                script_calls: None,
+                peers: vec![],
+            }],
         };
-        domain_batch.put_activity(&lock_hash, block, 0, &entry);
+        domain_batch.put_tx_activity_bundle(&bundle);
+        domain_batch.put_addr_tx(&lock_hash, block, 0, &tx_hash);
     }
     // Also insert block headers so rollback_to_block works
     for i in 1..=5i64 {

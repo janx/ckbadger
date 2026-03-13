@@ -374,7 +374,7 @@ mod tests {
     use std::sync::Arc;
 
     use ckbadger_store::{
-        AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch, TxIndexEntry,
+        AddressBalance, CachedBlockHeader, CkbadgerStore, StoreBatch, SyncStatus, TxIndexEntry,
     };
     use tempfile::TempDir;
 
@@ -410,6 +410,14 @@ mod tests {
             fee: 1,
             tx_size: 1,
             cycles: None,
+        }
+    }
+
+    fn make_tx_index_entry_with_counts(inputs_count: i16, outputs_count: i16) -> TxIndexEntry {
+        TxIndexEntry {
+            inputs_count,
+            outputs_count,
+            ..make_tx_index_entry()
         }
     }
 
@@ -584,6 +592,41 @@ mod tests {
 
         // Block 1 should be cleaned up
         assert!(store.get_block_header(1).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_init_sync_start_cleanup_rolls_back_sync_status_totals() {
+        let (_dir, store, append_store, writer) = setup();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(0, &make_header(0x70, 1_700_000_000_000));
+        batch.put_block_header(1, &make_header(0x71, 1_700_000_010_000));
+        batch.put_tx_index(0, 0, &make_tx_index_entry_with_counts(1, 2));
+        batch.put_tx_index(1, 0, &make_tx_index_entry_with_counts(3, 5));
+        batch.put_tx_index(1, 1, &make_tx_index_entry_with_counts(2, 4));
+        batch.commit().unwrap();
+
+        store
+            .set_sync_status(&SyncStatus {
+                tip_block_number: 1,
+                tip_block_hash: vec![0x71; 32],
+                total_transactions: 3,
+                total_cells_created: 11,
+                total_cells_consumed: 6,
+                ..Default::default()
+            })
+            .unwrap();
+
+        writer
+            .init_sync_start_with_options(append_store.as_ref(), 0, false, true)
+            .unwrap();
+
+        let status = store.get_sync_status().unwrap();
+        assert_eq!(status.tip_block_number, 0);
+        assert_eq!(status.tip_block_hash, vec![0x70; 32]);
+        assert_eq!(status.total_transactions, 1);
+        assert_eq!(status.total_cells_created, 2);
+        assert_eq!(status.total_cells_consumed, 1);
     }
 
     #[test]

@@ -15,10 +15,10 @@ use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
     ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
     DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
-    IdentityExtra, IdentityStandard, LatestActivityItem, LiveCellInfo, MinerStats,
-    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
-    ObjectExtra, ObjectStandard, ReorgEvent, ScriptCallEntry, ScriptDailyDelta, ScriptInfo,
-    SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxIndexEntry,
+    IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
+    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
+    OwnerActivityDelta, ReorgEvent, ScriptCallEntry, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -207,6 +207,30 @@ fn insert_committed_transaction(store: &Arc<CkbadgerStore>, tx_hash: &[u8]) {
         },
     );
     batch.commit().unwrap();
+}
+
+fn make_single_owner_bundle(lock_hash: &[u8], activity: &ActivityEntry) -> TxActivityBundle {
+    TxActivityBundle {
+        tx_hash: activity.tx_hash.clone(),
+        block_hash: activity.block_hash.clone(),
+        block_number: activity.block_number,
+        tx_index: activity.tx_index,
+        timestamp: activity.timestamp,
+        is_cellbase: activity.is_cellbase,
+        owners: vec![OwnerActivityDelta {
+            lock_hash: lock_hash.to_vec(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
+            ckb_delta: activity.ckb_delta,
+            used_delta: activity.used_delta,
+            has_type_script: activity.has_type_script,
+            involved_script_code_hashes: vec![vec![0x11; 32]],
+            asset_changes: activity.asset_changes.clone(),
+            script_calls: activity.script_calls.clone(),
+            peers: activity.peers.clone(),
+        }],
+    }
 }
 
 #[tokio::test]
@@ -7130,7 +7154,9 @@ async fn test_address_activities_reads_from_derived_store() {
     assert_eq!(json["data"].as_array().unwrap().len(), 0);
 
     let mut derived_batch = StoreBatch::new(append_only_store.as_ref());
-    derived_batch.put_activity(&lock_hash, 10, 0, &activity);
+    let bundle = make_single_owner_bundle(&lock_hash, &activity);
+    derived_batch.put_tx_activity_bundle(&bundle);
+    derived_batch.put_addr_tx(&lock_hash, 10, 0, &activity.tx_hash);
     derived_batch.commit().unwrap();
 
     let request = Request::builder()
@@ -7211,7 +7237,9 @@ async fn test_address_activities_return_script_calls_separately_and_support_scri
     };
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_activity(&lock_hash, 88, 0, &activity);
+    let bundle = make_single_owner_bundle(&lock_hash, &activity);
+    core_batch.put_tx_activity_bundle(&bundle);
+    core_batch.put_addr_tx(&lock_hash, 88, 0, &tx_hash);
     core_batch.put_tx_hash_map(&tx_hash, 88, 0);
     core_batch.put_tx_index(
         88,
@@ -7326,16 +7354,28 @@ async fn test_latest_activities_return_asset_changes_and_script_calls_as_separat
             ..Default::default()
         },
     );
-    core_batch.commit().unwrap();
-    core_store
-        .put_latest_activities(&[LatestActivityItem {
+    core_batch.put_tx_activity_bundle(&TxActivityBundle {
+        tx_hash: entry.tx_hash.clone(),
+        block_hash: entry.block_hash.clone(),
+        block_number: entry.block_number,
+        tx_index: entry.tx_index,
+        timestamp: entry.timestamp,
+        is_cellbase: entry.is_cellbase,
+        owners: vec![OwnerActivityDelta {
             lock_hash,
             lock_code_hash,
             lock_hash_type: 1,
             lock_args,
-            entry,
-        }])
-        .unwrap();
+            ckb_delta: entry.ckb_delta,
+            used_delta: entry.used_delta,
+            has_type_script: entry.has_type_script,
+            involved_script_code_hashes: vec![vec![0x24; 32], type_code_hash.clone()],
+            asset_changes: entry.asset_changes.clone(),
+            script_calls: entry.script_calls.clone(),
+            peers: entry.peers.clone(),
+        }],
+    });
+    core_batch.commit().unwrap();
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;

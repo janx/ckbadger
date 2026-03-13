@@ -1,9 +1,13 @@
 //! Activity builder: derives per-owner position changes from parsed block data.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 
-use ckbadger_store::types::{ActivityEntry, AssetAction, AssetChange, ScriptCallEntry};
+#[cfg(test)]
+use ckbadger_store::types::ActivityEntry;
+use ckbadger_store::types::{
+    AssetAction, AssetChange, OwnerActivityDelta, ScriptCallEntry, TxActivityBundle,
+};
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;
@@ -78,6 +82,8 @@ impl CodeHashes {
 pub struct InputCellView {
     pub lock_script_hash: Vec<u8>,
     pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
     pub capacity: i64,
     pub occupied_capacity: i64,
     pub type_code_hash: Option<Vec<u8>>,
@@ -102,29 +108,40 @@ pub struct TxView<'a> {
 }
 
 /// `(lock_hash, involved_script_code_hashes, ActivityEntry)` — one per owner per transaction.
+#[cfg(test)]
 pub type OwnerActivity = (Vec<u8>, Vec<Vec<u8>>, ActivityEntry);
+
+/// Build tx-scoped activity bundles for all transactions in a block.
+pub fn build_activity_bundles_for_block(
+    txs: &[TxView<'_>],
+    token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
+) -> Vec<TxActivityBundle> {
+    let hashes = code_hashes();
+    txs.iter()
+        .map(|tx| build_tx_activity_bundle(tx, hashes, token_info_cache))
+        .collect()
+}
 
 /// Build activities for all transactions in a block.
 ///
 /// Returns `OwnerActivity` triples — one per owner per transaction.
+#[cfg(test)]
 pub fn build_activities_for_block(
     txs: &[TxView<'_>],
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
 ) -> Vec<OwnerActivity> {
-    let hashes = code_hashes();
-    let mut all_activities = Vec::new();
-
-    for tx in txs {
-        let activities = build_tx_activities(tx, hashes, token_info_cache);
-        all_activities.extend(activities);
-    }
-
-    all_activities
+    build_activity_bundles_for_block(txs, token_info_cache)
+        .into_iter()
+        .flat_map(flatten_tx_activity_bundle)
+        .collect()
 }
 
 /// Accumulator for per-owner position within one transaction.
 #[derive(Default)]
 struct OwnerAccum {
+    lock_code_hash: Option<Vec<u8>>,
+    lock_hash_type: Option<i16>,
+    lock_args: Option<Vec<u8>>,
     input_capacity: i128,
     output_capacity: i128,
     input_used: i64,
@@ -154,7 +171,7 @@ struct OwnerAccum {
     /// did:ckb IDs seen as outputs
     did_ckb_outputs: Vec<Vec<u8>>,
     /// Distinct script code_hashes involved (lock + type)
-    involved_scripts: HashSet<Vec<u8>>,
+    involved_scripts: BTreeSet<Vec<u8>>,
     /// Whether any cell for this owner has a type script
     has_type_script: bool,
     /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
@@ -164,11 +181,45 @@ struct OwnerAccum {
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
 const DOTBIT_DATA_HASH_PREFIX_LEN: usize = 32;
 
-fn build_tx_activities(
+fn record_owner_lock_script(
+    accum: &mut OwnerAccum,
+    lock_code_hash: &[u8],
+    lock_hash_type: i16,
+    lock_args: &[u8],
+) {
+    match (
+        accum.lock_code_hash.as_ref(),
+        accum.lock_hash_type,
+        accum.lock_args.as_ref(),
+    ) {
+        (Some(existing_code_hash), Some(existing_hash_type), Some(existing_args)) => {
+            assert_eq!(
+                existing_code_hash, lock_code_hash,
+                "owner lock_code_hash mismatch for same lock hash"
+            );
+            assert_eq!(
+                existing_hash_type, lock_hash_type,
+                "owner lock_hash_type mismatch for same lock hash"
+            );
+            assert_eq!(
+                existing_args, lock_args,
+                "owner lock_args mismatch for same lock hash"
+            );
+        }
+        (None, None, None) => {
+            accum.lock_code_hash = Some(lock_code_hash.to_vec());
+            accum.lock_hash_type = Some(lock_hash_type);
+            accum.lock_args = Some(lock_args.to_vec());
+        }
+        _ => panic!("owner lock script state partially initialized"),
+    }
+}
+
+fn build_tx_activity_bundle(
     tx: &TxView<'_>,
     hashes: &CodeHashes,
     token_info_cache: &HashMap<Vec<u8>, (Option<String>, Option<u8>)>,
-) -> Vec<OwnerActivity> {
+) -> TxActivityBundle {
     let mut owners: HashMap<Vec<u8>, OwnerAccum> = HashMap::new();
 
     // Process inputs (skip inputs with unknown cell info — empty lock_script_hash)
@@ -177,6 +228,12 @@ fn build_tx_activities(
             continue;
         }
         let accum = owners.entry(input.lock_script_hash.clone()).or_default();
+        record_owner_lock_script(
+            accum,
+            &input.lock_code_hash,
+            input.lock_hash_type,
+            &input.lock_args,
+        );
         accum.involved_scripts.insert(input.lock_code_hash.clone());
         accum.input_capacity += input.capacity as i128;
         accum.input_used += input.occupied_capacity;
@@ -201,6 +258,12 @@ fn build_tx_activities(
     // Process outputs
     for cell in tx.outputs {
         let accum = owners.entry(cell.lock_script_hash.clone()).or_default();
+        record_owner_lock_script(
+            accum,
+            &cell.lock_code_hash,
+            cell.lock_hash_type,
+            &cell.lock_args,
+        );
         accum.involved_scripts.insert(cell.lock_code_hash.clone());
         accum.output_capacity += cell.capacity as i128;
 
@@ -230,15 +293,21 @@ fn build_tx_activities(
         }
     }
 
-    let mut result = Vec::with_capacity(owners.len());
+    let mut owner_hashes: Vec<Vec<u8>> = owners.keys().cloned().collect();
+    owner_hashes.sort();
 
-    for (lock_hash, accum) in &owners {
+    let mut bundle_owners = Vec::with_capacity(owner_hashes.len());
+
+    for lock_hash in &owner_hashes {
+        let accum = owners
+            .get(lock_hash)
+            .expect("owner hash collected from owners map must exist");
         let ckb_delta = accum.output_capacity - accum.input_capacity;
         let used_delta = accum.output_used - accum.input_used;
 
         // Peers = all other lock_hashes in this tx
-        let peers: Vec<Vec<u8>> = owners
-            .keys()
+        let peers: Vec<Vec<u8>> = owner_hashes
+            .iter()
             .filter(|h| h.as_slice() != lock_hash.as_slice())
             .cloned()
             .collect();
@@ -332,26 +401,63 @@ fn build_tx_activities(
                 .collect()
         });
 
-        let entry = ActivityEntry {
-            tx_hash: tx.tx_hash.to_vec(),
-            block_hash: tx.block_hash.to_vec(),
-            block_number: tx.block_number,
-            tx_index: tx.tx_index,
-            timestamp: tx.timestamp,
+        bundle_owners.push(OwnerActivityDelta {
+            lock_hash: lock_hash.clone(),
+            lock_code_hash: accum
+                .lock_code_hash
+                .clone()
+                .expect("owner lock_code_hash must be recorded"),
+            lock_hash_type: accum
+                .lock_hash_type
+                .expect("owner lock_hash_type must be recorded"),
+            lock_args: accum
+                .lock_args
+                .clone()
+                .expect("owner lock_args must be recorded"),
             ckb_delta,
             used_delta,
-            is_cellbase: tx.is_cellbase,
             has_type_script: accum.has_type_script,
+            involved_script_code_hashes: accum.involved_scripts.iter().cloned().collect(),
             asset_changes,
             script_calls,
             peers,
-        };
-
-        let scripts: Vec<Vec<u8>> = accum.involved_scripts.iter().cloned().collect();
-        result.push((lock_hash.clone(), scripts, entry));
+        });
     }
 
-    result
+    TxActivityBundle {
+        tx_hash: tx.tx_hash.to_vec(),
+        block_hash: tx.block_hash.to_vec(),
+        block_number: tx.block_number,
+        tx_index: tx.tx_index,
+        timestamp: tx.timestamp,
+        is_cellbase: tx.is_cellbase,
+        owners: bundle_owners,
+    }
+}
+
+#[cfg(test)]
+fn flatten_tx_activity_bundle(bundle: TxActivityBundle) -> Vec<OwnerActivity> {
+    bundle
+        .owners
+        .into_iter()
+        .map(|owner| {
+            let entry = ActivityEntry {
+                tx_hash: bundle.tx_hash.clone(),
+                block_hash: bundle.block_hash.clone(),
+                block_number: bundle.block_number,
+                tx_index: bundle.tx_index,
+                timestamp: bundle.timestamp,
+                ckb_delta: owner.ckb_delta,
+                used_delta: owner.used_delta,
+                is_cellbase: bundle.is_cellbase,
+                has_type_script: owner.has_type_script,
+                asset_changes: owner.asset_changes,
+                script_calls: owner.script_calls,
+                peers: owner.peers,
+            };
+            (owner.lock_hash, owner.involved_script_code_hashes, entry)
+        })
+        .collect()
 }
 
 fn classify_input(
@@ -633,6 +739,8 @@ mod tests {
         InputCellView {
             lock_script_hash: vec![lock_hash_byte; 32],
             lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x22; 20],
             capacity,
             occupied_capacity: occupied,
             type_code_hash: None,
@@ -643,6 +751,63 @@ mod tests {
             data: vec![],
             is_dao_withdraw_request: false,
         }
+    }
+
+    #[test]
+    fn test_build_activity_bundles_preserves_input_only_owner_lock_script() {
+        let owner = 0xAA;
+        let outputs = Vec::new();
+
+        let tx = TxView {
+            tx_hash: &[0x21; 32],
+            block_hash: &[0xA1; 32],
+            tx_index: 1,
+            block_number: 1000,
+            timestamp: 1_700_000_000,
+            is_cellbase: false,
+            inputs: vec![make_input(owner, 100_00000000, 61_00000000)],
+            outputs: &outputs,
+        };
+
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].owners.len(), 1);
+
+        let owner_delta = &bundles[0].owners[0];
+        assert_eq!(owner_delta.lock_hash, vec![owner; 32]);
+        assert_eq!(owner_delta.lock_code_hash, vec![0x11; 32]);
+        assert_eq!(owner_delta.lock_hash_type, 1);
+        assert_eq!(owner_delta.lock_args, vec![0x22; 20]);
+    }
+
+    #[test]
+    fn test_build_activity_bundles_sorts_owners_by_lock_hash() {
+        let alice = 0xAA;
+        let bob = 0xBB;
+        let outputs = vec![
+            make_output(alice, 100_00000000, None, None, None, vec![]),
+            make_output(bob, 100_00000000, None, None, None, vec![]),
+        ];
+
+        let tx = TxView {
+            tx_hash: &[0x22; 32],
+            block_hash: &[0xA2; 32],
+            tx_index: 1,
+            block_number: 1001,
+            timestamp: 1_700_000_010,
+            is_cellbase: false,
+            inputs: vec![make_input(bob, 200_00000000, 61_00000000)],
+            outputs: &outputs,
+        };
+
+        let bundles = build_activity_bundles_for_block(&[tx], &HashMap::new());
+        assert_eq!(bundles.len(), 1);
+        let owner_hashes: Vec<Vec<u8>> = bundles[0]
+            .owners
+            .iter()
+            .map(|owner| owner.lock_hash.clone())
+            .collect();
+        assert_eq!(owner_hashes, vec![vec![alice; 32], vec![bob; 32]]);
     }
 
     #[test]
