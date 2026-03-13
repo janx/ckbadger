@@ -964,6 +964,43 @@ pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>, Vec<u8>) 
     (lock_hash, block_num, tx_idx, block_hash, tx_hash)
 }
 
+/// Tx-activity bundle key: block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B)
+pub const TX_ACTIVITY_BUNDLE_KEY_SIZE: usize = 44;
+
+pub fn encode_tx_activity_bundle_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8> {
+    assert!(
+        tx_hash.len() >= 32,
+        "encode_tx_activity_bundle_key: tx_hash must be >= 32 bytes, got {}",
+        tx_hash.len()
+    );
+    let mut key = Vec::with_capacity(TX_ACTIVITY_BUNDLE_KEY_SIZE);
+    key.extend_from_slice(&encode_desc_block_num(block_num));
+    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
+    key.extend_from_slice(&tx_hash[..32]);
+    key
+}
+
+pub fn encode_tx_activity_bundle_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8> {
+    let mut key = Vec::with_capacity(TX_ACTIVITY_BUNDLE_KEY_SIZE);
+    key.extend_from_slice(&encode_desc_block_num(block_num));
+    key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
+    key.extend_from_slice(&[0xFF; 32]);
+    key
+}
+
+pub fn decode_tx_activity_bundle_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
+    assert!(
+        key.len() == TX_ACTIVITY_BUNDLE_KEY_SIZE,
+        "decode_tx_activity_bundle_key: expected {} bytes, got {}",
+        TX_ACTIVITY_BUNDLE_KEY_SIZE,
+        key.len()
+    );
+    let block_num = decode_desc_block_num(&key[0..8]);
+    let tx_idx = decode_desc_tx_idx(&key[8..12]);
+    let tx_hash = key[12..44].to_vec();
+    (block_num, tx_idx, tx_hash)
+}
+
 /// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
 pub const DAO_BY_BLOCK_KEY_SIZE: usize = 42;
 /// DAO-by-lock index key: lock_hash(32B) + deposit_block_desc(8B BE) + outpoint(34B) = 74 bytes
@@ -1618,6 +1655,29 @@ mod tests {
         assert_eq!(decoded_idx, 7);
         assert_eq!(decoded_block_hash, block_hash.to_vec());
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
+    }
+
+    #[test]
+    fn test_tx_activity_bundle_key_roundtrip() {
+        let key = encode_tx_activity_bundle_key(123, 7, &[0x44; 32]);
+        assert_eq!(key.len(), TX_ACTIVITY_BUNDLE_KEY_SIZE);
+
+        let (block_num, tx_idx, tx_hash) = decode_tx_activity_bundle_key(&key);
+        assert_eq!(block_num, 123);
+        assert_eq!(tx_idx, 7);
+        assert_eq!(tx_hash, vec![0x44; 32]);
+    }
+
+    #[test]
+    fn test_tx_activity_bundle_key_descending_sort_order() {
+        let k1 = encode_tx_activity_bundle_key(300, 0, &[0x11; 32]);
+        let k2 = encode_tx_activity_bundle_key(200, 0, &[0x22; 32]);
+        let k3 = encode_tx_activity_bundle_key(100, 5, &[0x33; 32]);
+        let k4 = encode_tx_activity_bundle_key(100, 1, &[0x44; 32]);
+
+        assert!(k1 < k2);
+        assert!(k2 < k3);
+        assert!(k3 < k4);
     }
 
     #[test]

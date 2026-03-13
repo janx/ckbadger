@@ -959,6 +959,32 @@ pub struct ScriptCallEntry {
     pub type_args: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OwnerActivityDelta {
+    pub lock_hash: Vec<u8>,
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
+    pub ckb_delta: i128,
+    pub used_delta: i64,
+    pub has_type_script: bool,
+    pub involved_script_code_hashes: Vec<Vec<u8>>,
+    pub asset_changes: Vec<AssetChange>,
+    pub script_calls: Option<Vec<ScriptCallEntry>>,
+    pub peers: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxActivityBundle {
+    pub tx_hash: Vec<u8>,
+    pub block_hash: Vec<u8>,
+    pub block_number: i64,
+    pub tx_index: i32,
+    pub timestamp: i64,
+    pub is_cellbase: bool,
+    pub owners: Vec<OwnerActivityDelta>,
+}
+
 /// A single activity item for the global latest-activities feed.
 /// Includes lock script components so the API can compute CKB addresses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1569,6 +1595,39 @@ mod tests {
         assert_eq!(script_calls[0].type_hash_type, 1);
         assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
         assert_eq!(decoded.asset_changes.len(), 1);
+    }
+
+    #[test]
+    fn test_tx_activity_bundle_roundtrip() {
+        let bundle = TxActivityBundle {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index: 3,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            owners: vec![OwnerActivityDelta {
+                lock_hash: vec![0xAA; 32],
+                lock_code_hash: vec![0xBB; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0xCC; 20],
+                ckb_delta: 42,
+                used_delta: 0,
+                has_type_script: false,
+                involved_script_code_hashes: vec![vec![0xDD; 32]],
+                asset_changes: vec![],
+                script_calls: None,
+                peers: vec![],
+            }],
+        };
+
+        let bytes = bincode::serialize(&bundle).unwrap();
+        let decoded: TxActivityBundle = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(decoded.block_number, 100);
+        assert_eq!(decoded.tx_index, 3);
+        assert_eq!(decoded.owners.len(), 1);
+        assert_eq!(decoded.owners[0].lock_hash_type, 1);
+        assert_eq!(decoded.owners[0].lock_args, vec![0xCC; 20]);
     }
 
     // ---- ObjectStandard ----
