@@ -575,7 +575,15 @@ fn weighted_avg_block_time_ms_from_distribution(points: &[ChartDataPoint]) -> Op
 fn compare_exact_i64(ours: i64, theirs: &str, date: &str, label: &str) -> Option<Finding> {
     let their_val: i64 = match theirs.parse() {
         Ok(v) => v,
-        Err(_) => return None,
+        Err(_) => {
+            return Some(Finding {
+                entity: date.to_string(),
+                details: vec![format!(
+                    "{}: explorer value '{}' could not be parsed as i64",
+                    label, theirs,
+                )],
+            })
+        }
     };
     if ours != their_val {
         Some(Finding {
@@ -622,7 +630,15 @@ fn compare_tolerance_f64(
 ) -> Option<Finding> {
     let their_val: f64 = match theirs.parse() {
         Ok(v) => v,
-        Err(_) => return None,
+        Err(_) => {
+            return Some(Finding {
+                entity: date.to_string(),
+                details: vec![format!(
+                    "{}: explorer value '{}' could not be parsed as f64",
+                    label, theirs,
+                )],
+            })
+        }
     };
     if their_val == 0.0 && ours == 0.0 {
         return None;
@@ -745,6 +761,21 @@ fn run_exact_i128_explorer_check_with_offset(
         progress.inc(1);
     }
 
+    if checked == 0 {
+        return CheckResult {
+            passed: true,
+            items_checked: 0,
+            items_failed: 0,
+            detail: None,
+            findings: vec![Finding {
+                entity: "overlap".to_string(),
+                details: vec![
+                    "no overlapping dates found between local and explorer data".to_string()
+                ],
+            }],
+        };
+    }
+
     if findings.is_empty() {
         CheckResult::pass(checked)
     } else {
@@ -825,6 +856,21 @@ fn run_tolerance_explorer_check_internal(
             checked += 1;
         }
         progress.inc(1);
+    }
+
+    if checked == 0 {
+        return CheckResult {
+            passed: true,
+            items_checked: 0,
+            items_failed: 0,
+            detail: None,
+            findings: vec![Finding {
+                entity: "overlap".to_string(),
+                details: vec![
+                    "no overlapping dates found between local and explorer data".to_string()
+                ],
+            }],
+        };
     }
 
     if findings.is_empty() {

@@ -17,10 +17,17 @@ impl CkbadgerStore {
 
     pub fn get_block_number_by_hash(&self, hash: &[u8]) -> anyhow::Result<Option<i64>> {
         match self.get_cf(self.cf_block_hash_index(), hash)? {
+            None => Ok(None),
             Some(value) if value.len() == 8 => {
                 Ok(Some(i64::from_le_bytes(value[..8].try_into().unwrap())))
             }
-            _ => Ok(None),
+            Some(value) => {
+                anyhow::bail!(
+                    "block_hash_index: corrupt value length {} (expected 8) for hash 0x{}",
+                    value.len(),
+                    crate::bytes_to_hex(hash)
+                )
+            }
         }
     }
 

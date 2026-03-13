@@ -107,8 +107,8 @@ impl ConsumedCellInfo {
 }
 
 /// Decode consumed cell metadata from the canonical schema.
-pub fn decode_consumed_cell_meta(value: &[u8]) -> Option<ConsumedCellMeta> {
-    bincode::deserialize::<ConsumedCellMeta>(value).ok()
+pub fn decode_consumed_cell_meta(value: &[u8]) -> Result<ConsumedCellMeta, bincode::Error> {
+    bincode::deserialize::<ConsumedCellMeta>(value)
 }
 
 /// Decode created_at_block from the live cell marker value (8 bytes LE).
@@ -1173,14 +1173,14 @@ mod tests {
         let info = sample_live_cell_info();
         let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 888, None, 123);
         let bytes = bincode::serialize(&legacy).unwrap();
-        assert!(decode_consumed_cell_meta(&bytes).is_none());
+        assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
 
     #[test]
     fn test_decode_consumed_cell_meta_rejects_live_cell_schema() {
         let info = sample_live_cell_info();
         let bytes = bincode::serialize(&info).unwrap();
-        assert!(decode_consumed_cell_meta(&bytes).is_none());
+        assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
 
     #[test]

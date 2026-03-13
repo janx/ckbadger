@@ -205,6 +205,19 @@ fn max_supply_status(
     }
 }
 
+fn parse_block_tx_cursor(cursor: &str) -> Result<(i64, i32), ApiRouteError> {
+    let (block_str, tx_str) = cursor
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?;
+    let block_num = block_str
+        .parse::<i64>()
+        .map_err(|_| ApiError::bad_request("invalid cursor format"))?;
+    let tx_idx = tx_str
+        .parse::<i32>()
+        .map_err(|_| ApiError::bad_request("invalid cursor format"))?;
+    Ok((block_num, tx_idx))
+}
+
 fn parse_token_list_cursor(cursor: &str) -> Result<(i64, &str), ApiRouteError> {
     let (holders_count, token_id) = cursor
         .split_once(':')
@@ -548,16 +561,10 @@ async fn get_token_activities(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = params.cursor.as_ref().and_then(|c| {
-        let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() == 2 {
-            let block_num = parts[0].parse::<i64>().ok()?;
-            let tx_idx = parts[1].parse::<i32>().ok()?;
-            Some((block_num, tx_idx))
-        } else {
-            None
-        }
-    });
+    let cursor = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(c) => Some(parse_block_tx_cursor(c)?),
+    };
 
     let results = state
         .store
@@ -646,16 +653,10 @@ async fn get_token_transfers(
     let limit = params.limit.clamp(1, 100) as usize;
 
     // Parse cursor: "block_num:tx_idx"
-    let cursor = params.cursor.as_ref().and_then(|c| {
-        let parts: Vec<&str> = c.split(':').collect();
-        if parts.len() == 2 {
-            let block_num = parts[0].parse::<i64>().ok()?;
-            let tx_idx = parts[1].parse::<i32>().ok()?;
-            Some((block_num, tx_idx))
-        } else {
-            None
-        }
-    });
+    let cursor = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(c) => Some(parse_block_tx_cursor(c)?),
+    };
 
     let results = state
         .store

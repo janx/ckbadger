@@ -174,11 +174,12 @@ impl CkbadgerStore {
             return Ok(None);
         };
 
-        let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+        let meta = decode_consumed_cell_meta(&value).map_err(|e| {
             anyhow::anyhow!(
-                "failed to decode consumed cell meta: outpoint=0x{}:{}",
+                "failed to decode consumed cell meta: outpoint=0x{}:{}, error={}",
                 bytes_to_hex(tx_hash),
-                output_index
+                output_index,
+                e
             )
         })?;
         let cell = cells_store.get_cell_by_outpoint_key(&key)?.ok_or_else(|| {
@@ -224,10 +225,11 @@ impl CkbadgerStore {
         for (i, value_result) in consumed_values.into_iter().enumerate() {
             match value_result {
                 Ok(Some(value)) => {
-                    let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+                    let meta = decode_consumed_cell_meta(&value).map_err(|e| {
                         anyhow::anyhow!(
-                            "failed to decode consumed cell meta in get_consumed_cells_batch: outpoint=0x{}",
-                            bytes_to_hex(&keys[i])
+                            "failed to decode consumed cell meta in get_consumed_cells_batch: outpoint=0x{}, error={}",
+                            bytes_to_hex(&keys[i]),
+                            e
                         )
                     })?;
                     metas[i] = Some(meta);
@@ -319,10 +321,11 @@ impl CkbadgerStore {
         for (i, value_result) in consumed_values.into_iter().enumerate() {
             match value_result {
                 Ok(Some(value)) => {
-                    let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+                    let meta = decode_consumed_cell_meta(&value).map_err(|e| {
                         anyhow::anyhow!(
-                            "failed to decode consumed cell meta in get_consumed_cell_meta_batch: outpoint=0x{}",
-                            bytes_to_hex(&keys[i])
+                            "failed to decode consumed cell meta in get_consumed_cell_meta_batch: outpoint=0x{}, error={}",
+                            bytes_to_hex(&keys[i]),
+                            e
                         )
                     })?;
                     metas[i] = Some(meta);

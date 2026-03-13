@@ -9,10 +9,17 @@ use ckb_store_reader::CkbChainReader;
 use ckbadger_common::hardforks_for_network;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
 use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
+use crate::routes::hardforks::HardforkResourceResponse;
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -29,13 +36,6 @@ pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HardforkResourceResponse {
-    pub label: String,
-    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,11 +93,11 @@ async fn list_blocks(
         }
     }
 
-    let total = state
+    let sync = state
         .store
         .get_sync_status()
-        .map(|s| s.tip_block_number + 1)
-        .unwrap_or(0);
+        .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?;
+    let total = sync.tip_block_number + 1;
 
     // Use from_block: for cursor pagination, we want blocks with number < cursor
     // list_blocks_desc takes from_block as the starting point (inclusive in scan, but we want exclusive)
@@ -509,7 +509,7 @@ async fn get_mining_reward(
         return Some(cached);
     }
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
     let response = client
         .post(rpc_url)
         .json(&serde_json::json!({

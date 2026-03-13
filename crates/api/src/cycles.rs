@@ -1,9 +1,9 @@
 use ckbadger_common::cycles_task::{normalize_tx_hash, CyclesTaskResult};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -36,9 +36,12 @@ impl CyclesResultStore {
         }
     }
 
-    pub async fn get(&self, tx_hash: &str) -> Option<CyclesTaskResult> {
+    pub fn get(&self, tx_hash: &str) -> Option<CyclesTaskResult> {
         let normalized = normalize_tx_hash(tx_hash);
-        let map = self.results.lock().await;
+        let map = self
+            .results
+            .lock()
+            .expect("cycles result store lock poisoned");
         map.get(&normalized).cloned()
     }
 }
@@ -105,7 +108,7 @@ impl CyclesClient {
     }
 
     pub async fn get_task_result(&self, tx_hash: &str) -> Result<Option<CyclesTaskResult>, String> {
-        Ok(self.result_store.get(tx_hash).await)
+        Ok(self.result_store.get(tx_hash))
     }
 }
 

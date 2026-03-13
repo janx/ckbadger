@@ -6,8 +6,14 @@ use ckb_store_reader::{
     RpcCellDep, RpcCellInput, RpcCellOutput, RpcOutPoint, RpcScript, RpcTransactionView,
 };
 use ckb_types::prelude::Entity;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct RpcRequest<T> {
@@ -177,7 +183,7 @@ pub(crate) async fn fetch_transaction_lookup(
     url: &str,
     hash: &str,
 ) -> Result<Option<TransactionLookup>, String> {
-    let client = Client::new();
+    let client = get_http_client();
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "get_transaction",

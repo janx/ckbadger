@@ -5,7 +5,7 @@ mod cells;
 mod dao;
 mod forks;
 mod graph;
-mod hardforks;
+pub(crate) mod hardforks;
 mod identities;
 mod mempool;
 mod scripts;

@@ -172,8 +172,8 @@ async fn list_transactions(
         state
             .store
             .get_sync_status()
-            .map(|s| s.total_transactions)
-            .unwrap_or(0)
+            .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
+            .total_transactions
     };
 
     let store = state.store.clone();
@@ -744,10 +744,14 @@ async fn get_transaction_detail(
     let tip_block = state
         .store
         .get_sync_status()
-        .map(|s| s.tip_block_number)
-        .unwrap_or(0);
+        .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
+        .tip_block_number;
 
-    let confirmations = tip_block - block_number + 1;
+    let confirmations = if tip_block >= block_number {
+        tip_block - block_number + 1
+    } else {
+        0
+    };
 
     let final_tx_size = if tx_size > 0 { Some(tx_size) } else { None };
 
@@ -1818,8 +1822,16 @@ async fn get_transaction_lifecycle(
     let tip = state
         .store
         .get_sync_status()
-        .map(|s| s.tip_block_number)
-        .unwrap_or(0);
+        .map_err(|e| ApiError::internal(format!("sync status unavailable: {}", e)))?
+        .tip_block_number;
+
+    let compute_confirmations = |block_num: i64| -> i64 {
+        if tip >= block_num {
+            tip - block_num + 1
+        } else {
+            0
+        }
+    };
 
     if is_cellbase {
         return ok(TransactionLifecycleResponse {
@@ -1835,7 +1847,7 @@ async fn get_transaction_lifecycle(
             commitment_distance: None,
             commitment_window: CommitmentWindow::default(),
             is_cellbase: true,
-            confirmations: Some(tip - commit_block_number + 1),
+            confirmations: Some(compute_confirmations(commit_block_number)),
         });
     }
 
@@ -1912,7 +1924,7 @@ async fn get_transaction_lifecycle(
         commitment_distance,
         commitment_window: CommitmentWindow::default(),
         is_cellbase: false,
-        confirmations: Some(tip - commit_block_number + 1),
+        confirmations: Some(compute_confirmations(commit_block_number)),
     })
 }
 

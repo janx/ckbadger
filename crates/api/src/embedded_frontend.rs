@@ -78,11 +78,13 @@ fn serve_embedded(path: &str) -> Option<Response> {
 }
 
 /// Returns `true` if the path looks like a file request (has an extension).
+/// Dot-prefixed segments like `.bit` are SPA route params, not files.
 fn path_looks_like_file(path: &str) -> bool {
-    match path.rsplit_once('/') {
-        Some((_, segment)) => segment.contains('.'),
-        None => path.contains('.'),
-    }
+    let segment = match path.rsplit_once('/') {
+        Some((_, s)) => s,
+        None => path,
+    };
+    segment.contains('.') && !segment.starts_with('.')
 }
 
 #[cfg(test)]
@@ -98,6 +100,9 @@ mod tests {
         assert!(!path_looks_like_file(""));
         assert!(!path_looks_like_file("blocks"));
         assert!(!path_looks_like_file("address/ckb1qz"));
+        // Dot-prefixed segments are SPA route params, not files
+        assert!(!path_looks_like_file("identities/.bit"));
+        assert!(!path_looks_like_file(".hidden"));
     }
 
     #[test]

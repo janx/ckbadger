@@ -53,11 +53,14 @@ pub async fn start_block_broadcaster(
 ) {
     let mut last_block_number: Option<i64> = None;
     let mut ticker = interval(Duration::from_secs(2));
+    let http_client = reqwest::Client::new();
 
     loop {
         ticker.tick().await;
 
-        let tip_block = fetch_tip_block(&ckb_rpc_url).await.unwrap_or(0) as i64;
+        let tip_block = fetch_tip_block(&http_client, &ckb_rpc_url)
+            .await
+            .unwrap_or(0) as i64;
 
         // Get latest block from store
         let latest_block = match store.get_sync_tip_block() {
@@ -448,7 +451,7 @@ fn build_sync_status(store: &CkbadgerStore, tip_block: i64) -> SyncStatus {
     }
 }
 
-async fn fetch_tip_block(ckb_rpc_url: &str) -> Result<u64, String> {
+async fn fetch_tip_block(client: &reqwest::Client, ckb_rpc_url: &str) -> Result<u64, String> {
     #[derive(serde::Serialize)]
     struct RpcRequest {
         jsonrpc: &'static str,
@@ -462,7 +465,6 @@ async fn fetch_tip_block(ckb_rpc_url: &str) -> Result<u64, String> {
         result: Option<String>,
     }
 
-    let client = reqwest::Client::new();
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "get_tip_block_number",

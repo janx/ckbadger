@@ -124,7 +124,7 @@ pub(crate) fn put_tx_context_undo_entries(
     Ok(())
 }
 
-pub(crate) fn put_addr_tx_with_undo_log(
+pub(crate) fn put_addr_tx(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,
     lock_hash: &[u8],
@@ -136,7 +136,7 @@ pub(crate) fn put_addr_tx_with_undo_log(
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
 }
 
-pub(crate) fn put_tx_activity_bundle_with_undo_log(
+pub(crate) fn put_tx_activity_bundle(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,
     block_num: i64,
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn test_put_tx_activity_bundle_with_undo_log_writes_to_domain_without_undo() {
+    fn test_put_tx_activity_bundle_writes_to_domain_without_undo() {
         let domain_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
         let bundle = ckbadger_store::types::TxActivityBundle {
@@ -322,12 +322,7 @@ mod tests {
 
         let mut domain_batch = StoreBatch::new(&domain_store);
         let mut undo_seq_by_block = HashMap::new();
-        put_tx_activity_bundle_with_undo_log(
-            &mut domain_batch,
-            &mut undo_seq_by_block,
-            42,
-            &bundle,
-        );
+        put_tx_activity_bundle(&mut domain_batch, &mut undo_seq_by_block, 42, &bundle);
         domain_batch.commit().unwrap();
 
         let iter = domain_store.iterator_cf(
@@ -464,8 +459,8 @@ mod tests {
     #[test]
     fn test_no_undo_entries_written_when_bulk_skip_pattern_used() {
         // Demonstrates the bulk-sync pattern: write data without undo log.
-        // During bulk sync, callers use put_addr_tx/put_activity directly
-        // instead of put_addr_tx_with_undo_log/put_activity_with_undo_log.
+        // During bulk sync, callers use batch.put_addr_tx/put_activity directly
+        // instead of the undo helper wrappers.
         let domain_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
         let lock_hash = [0x44; 32];

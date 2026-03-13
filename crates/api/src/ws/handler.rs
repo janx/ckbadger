@@ -91,64 +91,104 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     _ => {}
                 }
             }
-            msg = async {
+            result = async {
                 if let Some(ref mut rx) = block_rx {
-                    rx.recv().await.ok()
+                    Some(rx.recv().await)
                 } else {
-                    std::future::pending::<Option<BroadcastMessage>>().await
+                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
                 }
             } => {
-                if let Some(broadcast_msg) = msg {
-                    if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                        if sender.send(Message::Text(json.into())).await.is_err() {
-                            break;
+                match result {
+                    Some(Ok(broadcast_msg)) => {
+                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
+                            if sender.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
                         }
                     }
+                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
+                        tracing::warn!("WebSocket client lagged on block channel, skipped {} messages", n);
+                        continue;
+                    }
+                    Some(Err(broadcast::error::RecvError::Closed)) => {
+                        break;
+                    }
+                    None => {}
                 }
             }
-            msg = async {
+            result = async {
                 if let Some(ref mut rx) = tx_rx {
-                    rx.recv().await.ok()
+                    Some(rx.recv().await)
                 } else {
-                    std::future::pending::<Option<BroadcastMessage>>().await
+                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
                 }
             } => {
-                if let Some(broadcast_msg) = msg {
-                    if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                        if sender.send(Message::Text(json.into())).await.is_err() {
-                            break;
+                match result {
+                    Some(Ok(broadcast_msg)) => {
+                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
+                            if sender.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
                         }
                     }
+                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
+                        tracing::warn!("WebSocket client lagged on transaction channel, skipped {} messages", n);
+                        continue;
+                    }
+                    Some(Err(broadcast::error::RecvError::Closed)) => {
+                        break;
+                    }
+                    None => {}
                 }
             }
-            msg = async {
+            result = async {
                 if let Some(ref mut rx) = reorg_rx {
-                    rx.recv().await.ok()
+                    Some(rx.recv().await)
                 } else {
-                    std::future::pending::<Option<BroadcastMessage>>().await
+                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
                 }
             } => {
-                if let Some(broadcast_msg) = msg {
-                    if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                        if sender.send(Message::Text(json.into())).await.is_err() {
-                            break;
+                match result {
+                    Some(Ok(broadcast_msg)) => {
+                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
+                            if sender.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
                         }
                     }
+                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
+                        tracing::warn!("WebSocket client lagged on reorg channel, skipped {} messages", n);
+                        continue;
+                    }
+                    Some(Err(broadcast::error::RecvError::Closed)) => {
+                        break;
+                    }
+                    None => {}
                 }
             }
-            msg = async {
+            result = async {
                 if let Some(ref mut rx) = activity_rx {
-                    rx.recv().await.ok()
+                    Some(rx.recv().await)
                 } else {
-                    std::future::pending::<Option<BroadcastMessage>>().await
+                    std::future::pending::<Option<Result<BroadcastMessage, broadcast::error::RecvError>>>().await
                 }
             } => {
-                if let Some(broadcast_msg) = msg {
-                    if let Ok(json) = serde_json::to_string(&broadcast_msg) {
-                        if sender.send(Message::Text(json.into())).await.is_err() {
-                            break;
+                match result {
+                    Some(Ok(broadcast_msg)) => {
+                        if let Ok(json) = serde_json::to_string(&broadcast_msg) {
+                            if sender.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
                         }
                     }
+                    Some(Err(broadcast::error::RecvError::Lagged(n))) => {
+                        tracing::warn!("WebSocket client lagged on activity channel, skipped {} messages", n);
+                        continue;
+                    }
+                    Some(Err(broadcast::error::RecvError::Closed)) => {
+                        break;
+                    }
+                    None => {}
                 }
             }
         }

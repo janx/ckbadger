@@ -15,7 +15,7 @@ pub struct HardforksQuery {
     pub network: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HardforkResourceResponse {
     pub label: String,

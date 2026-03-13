@@ -1,5 +1,7 @@
-use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
+
+use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::script::ScriptParser;
 
@@ -11,6 +13,13 @@ pub const XUDT_CODE_HASH_DATA1: &str =
 
 pub const XUDT_CODE_HASH_TYPE: &str =
     "0x25c29dc317811a6f6f3985a7a9ebc4838bd388d19d0feeecf0bcd60f6c0975bb";
+
+static SUDT_CODE_HASH_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(SUDT_CODE_HASH));
+static XUDT_CODE_HASH_DATA1_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(XUDT_CODE_HASH_DATA1));
+static XUDT_CODE_HASH_TYPE_BYTES: LazyLock<Vec<u8>> =
+    LazyLock::new(|| parse_hex_to_bytes(XUDT_CODE_HASH_TYPE));
 
 #[derive(Debug, Clone)]
 pub enum UdtStandard {
@@ -87,16 +96,12 @@ impl UdtParser {
     }
 
     pub fn is_udt_code_hash_bytes(code_hash: &[u8], hash_type: i16) -> Option<UdtStandard> {
-        let sudt_hash = crate::rpc::parse_hex_to_bytes(SUDT_CODE_HASH);
-        let xudt_data1_hash = crate::rpc::parse_hex_to_bytes(XUDT_CODE_HASH_DATA1);
-        let xudt_type_hash = crate::rpc::parse_hex_to_bytes(XUDT_CODE_HASH_TYPE);
-
-        if code_hash == sudt_hash && hash_type == 1 {
+        if code_hash == SUDT_CODE_HASH_BYTES.as_slice() && hash_type == 1 {
             return Some(UdtStandard::Sudt);
         }
 
-        if (code_hash == xudt_data1_hash && hash_type == 2)
-            || (code_hash == xudt_type_hash && hash_type == 1)
+        if (code_hash == XUDT_CODE_HASH_DATA1_BYTES.as_slice() && hash_type == 2)
+            || (code_hash == XUDT_CODE_HASH_TYPE_BYTES.as_slice() && hash_type == 1)
         {
             return Some(UdtStandard::Xudt);
         }

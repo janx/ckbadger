@@ -1712,29 +1712,31 @@ impl Indexer {
                                 map
                             }
                             Ok(Ok(Err(e))) => {
-                                warn!(
-                                    start_block,
-                                    end_block,
-                                    "Parser: dotbit outpoint fallback DB query failed: {}",
-                                    e
+                                let msg = format!(
+                                    "dotbit outpoint fallback DB query failed for range {}-{}: {}",
+                                    start_block, end_block, e
                                 );
-                                HashMap::new()
+                                error!(start_block, end_block, "{}", msg);
+                                record_worker_exit_reason(&parser_exit_reason_for_parser, msg);
+                                return;
                             }
                             Ok(Err(e)) => {
-                                warn!(
-                                    start_block,
-                                    end_block,
-                                    "Parser: dotbit outpoint fallback task failed: {}",
-                                    e
+                                let msg = format!(
+                                    "dotbit outpoint fallback task failed for range {}-{}: {}",
+                                    start_block, end_block, e
                                 );
-                                HashMap::new()
+                                error!(start_block, end_block, "{}", msg);
+                                record_worker_exit_reason(&parser_exit_reason_for_parser, msg);
+                                return;
                             }
                             Err(_) => {
-                                warn!(
-                                    start_block,
-                                    end_block, "Parser: dotbit outpoint fallback timed out"
+                                let msg = format!(
+                                    "dotbit outpoint fallback timed out for range {}-{}",
+                                    start_block, end_block
                                 );
-                                HashMap::new()
+                                error!(start_block, end_block, "{}", msg);
+                                record_worker_exit_reason(&parser_exit_reason_for_parser, msg);
+                                return;
                             }
                         }
                     }

@@ -391,19 +391,8 @@ impl MnftParser {
     }
 
     fn extract_json_field(data: &[u8], field: &str) -> Option<String> {
-        let text = bytes_to_safe_string(data);
-        let key = format!("\"{}\"", field);
-        let start = text.find(&key)?;
-        let colon_pos = text[start..].find(':')?;
-        let value_start = start + colon_pos + 1;
-
-        let trimmed = text[value_start..].trim_start();
-        if let Some(stripped) = trimmed.strip_prefix('"') {
-            let quote_end = stripped.find('"')?;
-            Some(stripped[..quote_end].to_string())
-        } else {
-            None
-        }
+        let value: serde_json::Value = serde_json::from_slice(data).ok()?;
+        value.get(field)?.as_str().map(|s| s.to_string())
     }
 }
 

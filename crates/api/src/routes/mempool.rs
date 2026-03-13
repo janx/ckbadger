@@ -1,14 +1,19 @@
 #![allow(clippy::manual_is_multiple_of)]
 
 use axum::{extract::State, routing::get, Router};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::cache::CacheTtl;
-use crate::response::{ok, ApiError, ApiResult};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::AppState;
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -43,6 +48,13 @@ pub struct MempoolTransaction {
     pub ancestors_count: u64,
     pub timestamp: u64,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MempoolTransactionsResponse {
+    pub transactions: Vec<MempoolTransaction>,
+    pub total: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,13 +133,14 @@ struct RpcError {
     message: String,
 }
 
-fn parse_hex(hex: &str) -> u64 {
-    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    u64::from_str_radix(hex, 16).unwrap_or(0)
+fn parse_hex(hex_str: &str) -> Result<u64, ApiRouteError> {
+    let stripped = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    u64::from_str_radix(stripped, 16)
+        .map_err(|_| ApiError::internal(format!("invalid hex value: {}", hex_str)))
 }
 
 async fn fetch_tx_pool_info(url: &str) -> Result<RpcTxPoolInfo, String> {
-    let client = Client::new();
+    let client = get_http_client();
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "tx_pool_info",
@@ -153,7 +166,7 @@ async fn fetch_tx_pool_info(url: &str) -> Result<RpcTxPoolInfo, String> {
 }
 
 async fn fetch_raw_tx_pool_verbose(url: &str) -> Result<RpcTxPoolVerbose, String> {
-    let client = Client::new();
+    let client = get_http_client();
     let request = RpcRequest {
         jsonrpc: "2.0",
         method: "get_raw_tx_pool",
@@ -189,15 +202,15 @@ async fn get_mempool_info(State(state): State<Arc<AppState>>) -> ApiResult<Mempo
         .map_err(ApiError::internal)?;
 
     let result = MempoolInfo {
-        pending_count: parse_hex(&info.pending),
-        proposed_count: parse_hex(&info.proposed),
-        orphan_count: parse_hex(&info.orphan),
-        total_size: parse_hex(&info.total_tx_size),
-        total_cycles: parse_hex(&info.total_tx_cycles),
-        min_fee_rate: parse_hex(&info.min_fee_rate),
-        tip_number: parse_hex(&info.tip_number),
+        pending_count: parse_hex(&info.pending)?,
+        proposed_count: parse_hex(&info.proposed)?,
+        orphan_count: parse_hex(&info.orphan)?,
+        total_size: parse_hex(&info.total_tx_size)?,
+        total_cycles: parse_hex(&info.total_tx_cycles)?,
+        min_fee_rate: parse_hex(&info.min_fee_rate)?,
+        tip_number: parse_hex(&info.tip_number)?,
         tip_hash: info.tip_hash,
-        last_updated_at: parse_hex(&info.last_txs_updated_at),
+        last_updated_at: parse_hex(&info.last_txs_updated_at)?,
     };
 
     state
@@ -208,11 +221,18 @@ async fn get_mempool_info(State(state): State<Arc<AppState>>) -> ApiResult<Mempo
     ok(result)
 }
 
+/// Cap response size to prevent DoS from large mempools.
+const MAX_MEMPOOL_RESPONSE: usize = 500;
+
 async fn get_mempool_transactions(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<Vec<MempoolTransaction>> {
+) -> ApiResult<MempoolTransactionsResponse> {
     let cache_key = "mempool:transactions";
-    if let Some(cached) = state.cache.get::<Vec<MempoolTransaction>>(cache_key).await {
+    if let Some(cached) = state
+        .cache
+        .get::<MempoolTransactionsResponse>(cache_key)
+        .await
+    {
         return ok(cached);
     }
 
@@ -223,8 +243,8 @@ async fn get_mempool_transactions(
     let mut transactions: Vec<MempoolTransaction> = Vec::new();
 
     for (hash, entry) in pool.pending.iter() {
-        let size = parse_hex(&entry.size);
-        let fee = parse_hex(&entry.fee);
+        let size = parse_hex(&entry.size)?;
+        let fee = parse_hex(&entry.fee)?;
         let fee_rate = if size > 0 {
             fee as f64 / size as f64
         } else {
@@ -235,17 +255,17 @@ async fn get_mempool_transactions(
             tx_hash: hash.clone(),
             fee,
             size,
-            cycles: parse_hex(&entry.cycles),
+            cycles: parse_hex(&entry.cycles)?,
             fee_rate,
-            ancestors_count: parse_hex(&entry.ancestors_count),
-            timestamp: parse_hex(&entry.timestamp),
+            ancestors_count: parse_hex(&entry.ancestors_count)?,
+            timestamp: parse_hex(&entry.timestamp)?,
             status: "pending".to_string(),
         });
     }
 
     for (hash, entry) in pool.proposed.iter() {
-        let size = parse_hex(&entry.size);
-        let fee = parse_hex(&entry.fee);
+        let size = parse_hex(&entry.size)?;
+        let fee = parse_hex(&entry.fee)?;
         let fee_rate = if size > 0 {
             fee as f64 / size as f64
         } else {
@@ -256,22 +276,30 @@ async fn get_mempool_transactions(
             tx_hash: hash.clone(),
             fee,
             size,
-            cycles: parse_hex(&entry.cycles),
+            cycles: parse_hex(&entry.cycles)?,
             fee_rate,
-            ancestors_count: parse_hex(&entry.ancestors_count),
-            timestamp: parse_hex(&entry.timestamp),
+            ancestors_count: parse_hex(&entry.ancestors_count)?,
+            timestamp: parse_hex(&entry.timestamp)?,
             status: "proposed".to_string(),
         });
     }
 
     transactions.sort_by(|a, b| b.fee_rate.total_cmp(&a.fee_rate));
 
+    let total_count = transactions.len();
+    transactions.truncate(MAX_MEMPOOL_RESPONSE);
+
+    let result = MempoolTransactionsResponse {
+        transactions,
+        total: total_count,
+    };
+
     state
         .cache
-        .set(cache_key, &transactions, CacheTtl::MEMPOOL_INFO)
+        .set(cache_key, &result, CacheTtl::MEMPOOL_INFO)
         .await;
 
-    ok(transactions)
+    ok(result)
 }
 
 const CKB_BLOCK_SIZE_LIMIT: u64 = 597_000;
@@ -294,9 +322,9 @@ async fn get_mempool_blocks(
     let mut all_txs: Vec<(String, u64, u64, u64, f64)> = Vec::new();
 
     for (hash, entry) in pool.pending.iter().chain(pool.proposed.iter()) {
-        let size = parse_hex(&entry.size);
-        let fee = parse_hex(&entry.fee);
-        let cycles = parse_hex(&entry.cycles);
+        let size = parse_hex(&entry.size)?;
+        let fee = parse_hex(&entry.fee)?;
+        let cycles = parse_hex(&entry.cycles)?;
         let fee_rate = if size > 0 {
             fee as f64 / size as f64
         } else {

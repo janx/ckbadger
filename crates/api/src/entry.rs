@@ -3,6 +3,7 @@ use axum::extract::State;
 use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Router};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
@@ -86,7 +87,11 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     info!("Starting API server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -229,11 +234,26 @@ async fn frontend_runtime_config_handler(config: FrontendRuntimeConfig) -> Respo
 async fn frontend_filesystem_handler(State(state): State<FrontendFsState>, uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
 
+    // Prevent path traversal
+    if path.contains("..") {
+        return (StatusCode::BAD_REQUEST, "bad request").into_response();
+    }
+
     if path.is_empty() {
         return serve_frontend_file(&state.index_path, "").await;
     }
 
     let candidate = state.root_dir.join(path);
+
+    // Defense-in-depth: verify resolved path is within root_dir
+    if let (Ok(canonical), Ok(root_canonical)) =
+        (candidate.canonicalize(), state.root_dir.canonicalize())
+    {
+        if !canonical.starts_with(&root_canonical) {
+            return (StatusCode::BAD_REQUEST, "bad request").into_response();
+        }
+    }
+
     if candidate.is_file() {
         return serve_frontend_file(&candidate, path).await;
     }

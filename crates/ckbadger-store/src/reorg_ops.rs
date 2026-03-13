@@ -865,10 +865,11 @@ impl CkbadgerStore {
                         keys::OUTPOINT_KEY_SIZE
                     );
                 }
-                let meta = decode_consumed_cell_meta(&value).ok_or_else(|| {
+                let meta = decode_consumed_cell_meta(&value).map_err(|e| {
                     anyhow::anyhow!(
-                        "failed to decode consumed cell metadata during rollback fallback: outpoint=0x{}",
-                        bytes_to_hex(&key)
+                        "failed to decode consumed cell metadata during rollback fallback: outpoint=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
                     )
                 })?;
                 if meta.consumed_at_block <= rollback_to {

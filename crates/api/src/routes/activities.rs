@@ -433,10 +433,13 @@ async fn get_address_activities(
 
     let limit = params.limit.clamp(1, 100) as usize;
 
-    let cursor = params
-        .cursor
-        .as_ref()
-        .and_then(|c| parse_activity_cursor(c));
+    let cursor = match params.cursor.as_deref() {
+        None | Some("") => None,
+        Some(c) => Some(
+            parse_activity_cursor(c)
+                .ok_or_else(|| ApiError::bad_request("invalid cursor format"))?,
+        ),
+    };
 
     let results = list_canonical_activities_page(
         state.store.as_ref(),

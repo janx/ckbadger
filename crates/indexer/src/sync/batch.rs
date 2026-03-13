@@ -2531,12 +2531,18 @@ impl Indexer {
                                 &mut stats.dao_daily_withdrawals_delta,
                             )?;
 
-                            let cells_created: i32 =
-                                tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
+                            let cells_created: i32 = tx_slice
+                                .iter()
+                                .map(|tx| {
+                                    i32::try_from(tx.cells.len()).expect("output count exceeds i32")
+                                })
+                                .sum();
                             let cells_consumed: i32 = tx_slice
                                 .iter()
                                 .filter(|tx| !tx.is_cellbase)
-                                .map(|tx| tx.inputs.len() as i32)
+                                .map(|tx| {
+                                    i32::try_from(tx.inputs.len()).expect("input count exceeds i32")
+                                })
                                 .sum();
                             let capacity_transferred: i128 = tx_slice
                                 .iter()
@@ -3062,7 +3068,7 @@ impl Indexer {
 
             // Write addr_txs entries
             for (lock_hash, block_num, tx_idx, tx_hash) in &addr_tx_entries {
-                put_addr_tx_with_undo_log(
+                put_addr_tx(
                     &mut append_history_batch,
                     &mut append_undo_seq_by_block,
                     lock_hash,
@@ -4058,7 +4064,7 @@ impl Indexer {
                                 hourly_activity_addrs.entry(hour).or_default().insert(hash);
                             }
                         }
-                        put_tx_activity_bundle_with_undo_log(
+                        put_tx_activity_bundle(
                             &mut activity_batch,
                             &mut append_undo_seq_by_block,
                             bundle.block_number,
@@ -4153,11 +4159,14 @@ impl Indexer {
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
                 block_tx_idx += tx_count_for_block;
 
-                let cells_created: i32 = tx_slice.iter().map(|tx| tx.cells.len() as i32).sum();
+                let cells_created: i32 = tx_slice
+                    .iter()
+                    .map(|tx| i32::try_from(tx.cells.len()).expect("output count exceeds i32"))
+                    .sum();
                 let cells_consumed: i32 = tx_slice
                     .iter()
                     .filter(|tx| !tx.is_cellbase)
-                    .map(|tx| tx.inputs.len() as i32)
+                    .map(|tx| i32::try_from(tx.inputs.len()).expect("input count exceeds i32"))
                     .sum();
                 let capacity_transferred: i128 = tx_slice
                     .iter()

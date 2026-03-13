@@ -95,10 +95,9 @@ where
         let ip = extract_client_ip(&req);
 
         Box::pin(async move {
-            if let Some(ip) = ip {
-                if limiter.check_key(&ip).is_err() {
-                    return Ok(RateLimitError.into_response());
-                }
+            let ip = ip.unwrap_or(IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+            if limiter.check_key(&ip).is_err() {
+                return Ok(RateLimitError.into_response());
             }
             inner.call(req).await
         })

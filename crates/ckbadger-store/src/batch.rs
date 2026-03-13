@@ -47,11 +47,11 @@ impl<'a> StoreBatch<'a> {
 
     /// Get the number of operations in the batch.
     pub fn len(&self) -> usize {
-        self.batch.len()
+        self.batch.len() + self.append_ops.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.batch.is_empty()
+        self.batch.is_empty() && self.append_ops.is_empty()
     }
 
     /// Get the approximate size of the batch in bytes.
@@ -69,6 +69,10 @@ impl<'a> StoreBatch<'a> {
     /// RocksDB's serialized representation (`data()` / `from_data()`).
     /// Append-only ops and pending DAO deposits are merged by extending
     /// the corresponding collections.
+    // NOTE: This relies on the RocksDB WriteBatch internal wire format:
+    // [0..8] sequence number (u64 LE), [8..12] entry count (u32 LE), [12..] operations.
+    // Validated against rust-rocksdb 0.22.x / RocksDB 9.x. If upgrading RocksDB,
+    // verify this format hasn't changed.
     pub fn merge_from(&mut self, other: StoreBatch<'a>) {
         assert!(
             std::ptr::eq(self.store, other.store),
@@ -97,7 +101,9 @@ impl<'a> StoreBatch<'a> {
                     .try_into()
                     .expect("WriteBatch header must be at least 12 bytes"),
             );
-            let total_count = self_count + other_count;
+            let total_count = self_count.checked_add(other_count).expect(
+                "StoreBatch::merge_from: operation count overflow merging WriteBatch entries",
+            );
 
             let mut merged = Vec::with_capacity(self_data.len() + other_data.len() - 12);
             merged.extend_from_slice(&self_data[..8]); // sequence from self

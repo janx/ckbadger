@@ -123,13 +123,17 @@ impl DaoParser {
         tx_hash: &[u8],
         cells: &[super::cell::ParsedCell],
     ) -> Vec<ParsedDaoDeposit> {
-        let dao_hash = parse_hex_to_bytes(DAO_CODE_HASH);
+        let dao_hash = &*DAO_CODE_HASH_BYTES;
         cells
             .iter()
             .enumerate()
             .filter_map(|(idx, cell)| {
                 let type_code_hash = cell.type_code_hash.as_ref()?;
-                if type_code_hash != &dao_hash {
+                if type_code_hash != dao_hash {
+                    return None;
+                }
+                // hash_type must be "type" (value 1) to match is_dao_cell() behavior
+                if cell.type_hash_type != Some(1) {
                     return None;
                 }
                 if cell.data_size != 8 {

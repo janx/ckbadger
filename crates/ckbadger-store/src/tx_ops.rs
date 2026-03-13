@@ -31,12 +31,19 @@ impl CkbadgerStore {
     /// Look up block_num and tx_idx by transaction hash.
     pub fn get_tx_location(&self, tx_hash: &[u8]) -> anyhow::Result<Option<(i64, i32)>> {
         match self.get_cf(self.cf_tx_hash_map(), tx_hash)? {
+            None => Ok(None),
             Some(value) if value.len() == 12 => {
                 let block_num = keys::decode_block_num(&value[..8]);
                 let tx_idx = keys::decode_tx_idx(&value[8..12]);
                 Ok(Some((block_num, tx_idx)))
             }
-            _ => Ok(None),
+            Some(value) => {
+                anyhow::bail!(
+                    "tx_hash_map: corrupt value length {} (expected 12) for tx_hash=0x{}",
+                    value.len(),
+                    bytes_to_hex(tx_hash)
+                )
+            }
         }
     }
 
@@ -206,6 +213,8 @@ impl CkbadgerStore {
     }
 
     /// Update cycles for a transaction at a known location.
+    // SAFETY: Called only from the cycles worker after batch commit completes for
+    // the target block. No concurrent batch can write the same tx_index key.
     pub fn update_tx_cycles(&self, block_num: i64, tx_idx: i32, cycles: i64) -> anyhow::Result<()> {
         let mut entry = self
             .get_tx_index(block_num, tx_idx)?

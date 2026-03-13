@@ -1,7 +1,7 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
 //! Fast tier (F1-F6): few API calls, seconds.
-//! Sampling tier (S1-S22): N API calls or chart validation, minutes.
+//! Sampling tier (S1-S23): N API calls or chart validation, minutes.
 
 use super::checks::*;
 use super::report::format_number;
@@ -866,7 +866,19 @@ impl Check for DaoStatisticsSane {
         let dao: DaoStatisticsResponse = api_get(ctx, "dao/statistics")?;
         let mut findings = vec![];
 
-        let total_deposited: f64 = dao.total_deposited.parse().unwrap_or(0.0);
+        let total_deposited: f64 = match dao.total_deposited.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                findings.push(Finding {
+                    entity: "dao_statistics".to_string(),
+                    details: vec![format!(
+                        "could not parse totalDeposited: '{}'",
+                        dao.total_deposited
+                    )],
+                });
+                return Ok(CheckResult::fail(1, findings));
+            }
+        };
         if total_deposited <= 0.0 {
             findings.push(Finding {
                 entity: "dao_statistics".to_string(),
@@ -874,7 +886,19 @@ impl Check for DaoStatisticsSane {
             });
         }
 
-        let apc: f64 = dao.estimated_apc.parse().unwrap_or(0.0);
+        let apc: f64 = match dao.estimated_apc.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                findings.push(Finding {
+                    entity: "dao_statistics".to_string(),
+                    details: vec![format!(
+                        "could not parse estimatedApc: '{}'",
+                        dao.estimated_apc
+                    )],
+                });
+                return Ok(CheckResult::fail(1, findings));
+            }
+        };
         if apc <= 0.0 {
             findings.push(Finding {
                 entity: "dao_statistics".to_string(),
@@ -1954,8 +1978,7 @@ fn shannons_to_rounded_whole_ckb(shannons: i128) -> Option<i128> {
     if shannons < 0 {
         return None;
     }
-    let rounded = format!("{:.0}", shannons as f64 / SHANNONS_PER_CKB as f64);
-    rounded.parse::<i128>().ok()
+    Some((shannons + 50_000_000) / SHANNONS_PER_CKB)
 }
 
 /// S14: GET /charts/hodl-wave → required series present and percentage sum sane.
