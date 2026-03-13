@@ -36,6 +36,10 @@ pub(crate) struct PreParsedNftData {
     pub(crate) mnft_tokens: Vec<(usize, usize, ParsedMnftToken)>,
     pub(crate) dotbit_accounts: Vec<(usize, ParsedDotbitAccountOutput)>,
     pub(crate) consumed_dotbit: Vec<DotbitConsumptionEvent>,
+    #[allow(dead_code)] // consumed by subsequent bulk-sync NFT tasks
+    pub(crate) consumed_spore: Vec<SporeConsumptionEvent>,
+    #[allow(dead_code)] // consumed by subsequent bulk-sync NFT tasks
+    pub(crate) consumed_mnft: Vec<MnftConsumptionEvent>,
     /// DAS action string per transaction (tx_global_index -> action).
     pub(crate) dotbit_tx_actions: HashMap<usize, String>,
 }
@@ -45,6 +49,22 @@ pub(crate) struct DotbitConsumptionEvent {
     pub(crate) block_number: i64,
     pub(crate) consuming_tx_hash: [u8; 32],
     /// Pre-computed index into the flat tx array, avoids O(n) search in writer.
+    pub(crate) tx_global_index: usize,
+}
+
+#[allow(dead_code)] // consumed by subsequent bulk-sync NFT tasks
+pub(crate) struct SporeConsumptionEvent {
+    pub(crate) spore_id: Vec<u8>,
+    pub(crate) block_number: i64,
+    pub(crate) consuming_tx_hash: [u8; 32],
+    pub(crate) tx_global_index: usize,
+}
+
+#[allow(dead_code)] // consumed by subsequent bulk-sync NFT tasks
+pub(crate) struct MnftConsumptionEvent {
+    pub(crate) token_id: Vec<u8>,
+    pub(crate) block_number: i64,
+    pub(crate) consuming_tx_hash: [u8; 32],
     pub(crate) tx_global_index: usize,
 }
 

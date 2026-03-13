@@ -285,6 +285,8 @@ fn run_nft_precompute(
         mnft_tokens,
         dotbit_accounts,
         consumed_dotbit,
+        consumed_spore: Vec::new(),
+        consumed_mnft: Vec::new(),
         dotbit_tx_actions,
     })
 }
