@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, type GlobalActivity } from '@/lib/api';
 import { classifyActivity, type ClassifiedActivity } from '@/lib/activity-classify';
 import {
-  getScriptDetailHref,
   getObjectDetailHref,
   getIdentityItemDetailHref,
   getTokenDetailHref,
@@ -17,6 +16,12 @@ import {
   TerminalPanelHeader,
   TerminalPanelContent,
 } from '@/components/ui/terminal-panel';
+import {
+  CkbDelta,
+  formatStandard,
+  capitalizeAction,
+  ScriptCallExpr,
+} from '@/components/activity-event-row';
 
 const MAX_STREAM_ITEMS = 20;
 
@@ -49,19 +54,6 @@ function formatAddress(address: string): string {
     return truncateAddress(address);
   }
   return truncateHash(address);
-}
-
-function formatStandard(standard: string): string {
-  if (standard === 'spore') return 'Spore';
-  if (standard === 'm-nft') return 'M-NFT';
-  if (standard === 'dotbit') return '.bit';
-  if (standard === 'did_ckb') return 'did:ckb';
-  return standard.charAt(0).toUpperCase() + standard.slice(1);
-}
-
-function capitalizeAction(action: string): string {
-  if (!action) return '';
-  return action.charAt(0).toUpperCase() + action.slice(1);
 }
 
 function itemKey(activity: GlobalActivity): string {
@@ -117,27 +109,6 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
     default:
       return { icon: '\u2197', label: 'Transfer', colorClass: 'text-jade' };
   }
-}
-
-function CkbDelta({ delta }: { delta: string }) {
-  const value = BigInt(delta);
-  const formatted = formatCkbAmount(delta);
-  const isPositive = value > BigInt(0);
-  const isNegative = value < BigInt(0);
-
-  return (
-    <span
-      className={cn(
-        'font-mono text-xs tabular-nums',
-        isPositive && 'text-positive',
-        isNegative && 'text-negative',
-        !isPositive && !isNegative && 'text-text-dim'
-      )}
-    >
-      {isPositive ? '+' : ''}
-      {formatted.full} CKB
-    </span>
-  );
 }
 
 function AddressLink({ address }: { address: string }) {
@@ -389,52 +360,6 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
           <span className="text-text-dim font-mono text-xs">--</span>
         )}
       </div>
-    </>
-  );
-}
-
-function formatScriptRef(sc: {
-  scriptHash: string;
-  typeHashType: string;
-  scriptName?: string;
-}): string {
-  if (sc.scriptName?.trim()) return sc.scriptName!.trim();
-  // script_kind:<first 4 bytes of script_hash>
-  const hashPrefix = sc.scriptHash.slice(0, 10); // "0x" + 8 hex chars = 4 bytes
-  return `${sc.typeHashType}:${hashPrefix}`;
-}
-
-function ScriptCallExpr({
-  sc,
-}: {
-  sc: {
-    typeCodeHash: string;
-    typeHashType: string;
-    typeArgs: string;
-    scriptHash: string;
-    scriptName?: string;
-  };
-}) {
-  const fnName = formatScriptRef(sc);
-  const args = truncateHash(sc.typeArgs, 6, 4);
-
-  return (
-    <>
-      <Link
-        href={getScriptDetailHref({
-          name: sc.scriptName,
-          codeHash: sc.typeCodeHash,
-          hashType: sc.typeHashType,
-          scriptKind: 'type',
-        })}
-        className="text-gold hover:text-gold/80 transition-colors"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {fnName}
-      </Link>
-      <span className="text-text-dim">(</span>
-      <span className="text-aqua/70">{args}</span>
-      <span className="text-text-dim">)</span>
     </>
   );
 }
