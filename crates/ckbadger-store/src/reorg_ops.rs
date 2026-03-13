@@ -17,7 +17,11 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
         .map_err(|e| anyhow::anyhow!("invalid cutoff date '{}': {}", cutoff_str, e))
 }
 
-fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow::Result<bool> {
+fn should_delete_stats_for_replay(
+    key: &[u8],
+    cutoff_yyyymmdd: &[u8],
+    cutoff_hour: i64,
+) -> anyhow::Result<bool> {
     if key.is_empty() {
         return Ok(false);
     }
@@ -97,15 +101,27 @@ fn should_delete_stats_for_replay(key: &[u8], cutoff_yyyymmdd: &[u8]) -> anyhow:
         keys::STATS_PREFIX_ACTIVITY_HOURLY => {
             Ok(suffix.len() >= 10 && &suffix[..8] >= cutoff_yyyymmdd)
         }
-        // non-date-scoped outpoint/index entries: always delete for replay
-        keys::STATS_PREFIX_SPORE_OUTPOINT
-        | keys::STATS_PREFIX_SPORE_OUTPOINT_BY_ID
-        | keys::STATS_PREFIX_SPORE_TYPE_INDEX
-        | keys::STATS_PREFIX_MNFT_CLASS_OUTPOINT
-        | keys::STATS_PREFIX_MNFT_TOKEN_OUTPOINT
-        | keys::STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
-        | keys::STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
-        | keys::STATS_PREFIX_NFT_TYPE_INDEX => Ok(true),
+        // per-asset hourly transfer counters: entity_hash(32B) + hour_bucket(8B BE i64)
+        keys::STATS_PREFIX_TOKEN_HOURLY
+        | keys::STATS_PREFIX_SPORE_HOURLY
+        | keys::STATS_PREFIX_NFT_HOURLY => {
+            if suffix.len() < 40 {
+                return Ok(false);
+            }
+            let hour_bucket = i64::from_be_bytes(suffix[32..40].try_into().map_err(|_| {
+                anyhow::anyhow!(
+                    "invalid per-asset hourly key suffix length: {}",
+                    suffix.len()
+                )
+            })?);
+            Ok(hour_bucket >= cutoff_hour)
+        }
+        // Outpoint/index entries are NOT deleted here. They are append-only
+        // historical indexes that cannot be rebuilt from ObjectEntry alone
+        // (ObjectEntry lacks the current outpoint). Blanket deletion would
+        // destroy outpoint lookups for entities created before rollback_to,
+        // since only blocks > rollback_to are replayed. Instead, stage 10
+        // selectively cleans up outpoint entries for deleted entities.
         _ => Ok(false),
     }
 }
@@ -571,11 +587,15 @@ impl CkbadgerStore {
         let mut rollback_total_cells_consumed = 0i64;
         let rollback_started_at = Instant::now();
         let replay_start = rollback_to + 1;
-        let replay_cutoff_date = self.get_block_header(replay_start)?.map(|h| {
+        let replay_start_header = self.get_block_header(replay_start)?;
+        let replay_cutoff_date = replay_start_header.as_ref().map(|h| {
             ckbadger_common::block_date_from_ms(h.timestamp)
                 .format("%Y%m%d")
                 .to_string()
         });
+        let replay_cutoff_hour = replay_start_header
+            .as_ref()
+            .map(|h| h.timestamp / 3_600_000);
 
         info!(rollback_to, replay_start, "Rollback cleanup started");
 
@@ -1154,6 +1174,8 @@ impl CkbadgerStore {
         // These are additive snapshots and would be double-counted after replay.
         // Scan all split stats CFs that may contain date-scoped prefixes.
         if let Some(cutoff) = replay_cutoff_date.as_deref() {
+            let cutoff_hour =
+                replay_cutoff_hour.expect("cutoff_hour must be set when cutoff_date is set");
             let mut stats_removed = 0u64;
             let mut stage = RollbackStageProgress::new("delete_stats_from_cutoff");
             let stats_cfs = [
@@ -1174,7 +1196,7 @@ impl CkbadgerStore {
                             e
                         )
                     })?;
-                    if should_delete_stats_for_replay(&key, cutoff.as_bytes())? {
+                    if should_delete_stats_for_replay(&key, cutoff.as_bytes(), cutoff_hour)? {
                         batch.delete_cf(cf, &key);
                         stats_removed += 1;
                     }
@@ -1640,6 +1662,27 @@ impl CkbadgerStore {
 
             if entry.created_at_block > rollback_to {
                 batch.delete_cf(self.cf_spore_data(), &key);
+                // Clean up outpoint entries for this deleted spore using the
+                // reverse index (SPORE_OUTPOINT_BY_ID → outpoints).
+                let by_id_prefix = keys::encode_spore_outpoint_by_id_prefix(&spore_id);
+                let by_id_iter = self.prefix_iterator_cf(self.cf_stats_spore(), &by_id_prefix);
+                for by_id_item in by_id_iter {
+                    let (by_id_key, _) = by_id_item.map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to iterate spore_outpoint_by_id during rollback cleanup: spore_id=0x{}, error={}",
+                            bytes_to_hex(&spore_id),
+                            e
+                        )
+                    })?;
+                    if !by_id_key.starts_with(&by_id_prefix) {
+                        break;
+                    }
+                    let (tx_hash, output_index) = keys::decode_spore_outpoint_by_id_key(&by_id_key);
+                    let fwd_key = keys::encode_spore_outpoint_key(&tx_hash, output_index);
+                    batch.delete_cf(self.cf_stats_spore(), fwd_key);
+                    batch.delete_cf(self.cf_stats_spore(), &by_id_key);
+                    secondary_keys_deleted += 1;
+                }
                 spore_deleted += 1;
                 stage.tick(
                     spore_deleted
@@ -1857,6 +1900,30 @@ impl CkbadgerStore {
 
             if entry.created_at_block > rollback_to {
                 batch.delete_cf(self.cf_identity_data(), &key);
+                // Clean up dotbit outpoint entries for deleted identities.
+                if entry.standard == IdentityStandard::DotBit && identity_id.len() >= 20 {
+                    let by_id_prefix =
+                        keys::encode_dotbit_outpoint_by_account_id_prefix(&identity_id);
+                    let by_id_iter = self.prefix_iterator_cf(self.cf_stats_object(), &by_id_prefix);
+                    for by_id_item in by_id_iter {
+                        let (by_id_key, _) = by_id_item.map_err(|e| {
+                            anyhow::anyhow!(
+                                "failed to iterate dotbit_outpoint_by_account_id during rollback cleanup: identity_id=0x{}, error={}",
+                                bytes_to_hex(&identity_id),
+                                e
+                            )
+                        })?;
+                        if !by_id_key.starts_with(&by_id_prefix) {
+                            break;
+                        }
+                        let (tx_hash, output_index) =
+                            keys::decode_dotbit_outpoint_by_account_id_key(&by_id_key);
+                        let fwd_key =
+                            keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
+                        batch.delete_cf(self.cf_stats_object(), fwd_key);
+                        batch.delete_cf(self.cf_stats_object(), &by_id_key);
+                    }
+                }
                 secondary_keys_deleted += 1;
                 stage.tick(
                     spore_deleted
@@ -2226,21 +2293,21 @@ mod tests {
     fn test_should_delete_stats_for_replay_daily_prefix() {
         let cutoff = b"20260210";
         let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260211");
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
         let key_old = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260209");
-        assert!(!should_delete_stats_for_replay(&key_old, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key_old, cutoff, 0).unwrap());
     }
 
     #[test]
     fn test_should_delete_stats_for_replay_hourly_and_miner_prefix() {
         let cutoff = b"20260210";
         let hourly = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_HOURLY, b"2026021001");
-        assert!(should_delete_stats_for_replay(&hourly, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&hourly, cutoff, 0).unwrap());
 
         let miner_suffix = [b"20260210".as_slice(), &[0xAA; 32]].concat();
         let miner = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_MINER, &miner_suffix);
-        assert!(should_delete_stats_for_replay(&miner, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&miner, cutoff, 0).unwrap());
     }
 
     #[test]
@@ -2249,10 +2316,10 @@ mod tests {
         let code_hash = [0xAA; 32];
 
         let new_key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, 0).unwrap());
 
         let old_key = crate::keys::encode_script_daily_key(&code_hash, true, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, 0).unwrap());
     }
 
     #[test]
@@ -2261,10 +2328,10 @@ mod tests {
         let type_hash = [0xBB; 32];
 
         let new_key = crate::keys::encode_token_daily_key(&type_hash, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, 0).unwrap());
 
         let old_key = crate::keys::encode_token_daily_key(&type_hash, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, 0).unwrap());
     }
 
     #[test]
@@ -2273,10 +2340,10 @@ mod tests {
         let cluster_id = [0xCC; 32];
 
         let new_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, 0).unwrap());
 
         let old_key = crate::keys::encode_cluster_daily_key(&cluster_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, 0).unwrap());
     }
 
     #[test]
@@ -2285,10 +2352,10 @@ mod tests {
         let spore_id = [0xDD; 32];
 
         let new_key = crate::keys::encode_spore_daily_key(&spore_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, 0).unwrap());
 
         let old_key = crate::keys::encode_spore_daily_key(&spore_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, 0).unwrap());
     }
 
     #[test]
@@ -2297,14 +2364,16 @@ mod tests {
         let collection_id = [0xEE; 24];
 
         let new_key = crate::keys::encode_nft_daily_key(&collection_id, 20260211);
-        assert!(should_delete_stats_for_replay(&new_key, cutoff).unwrap());
+        assert!(should_delete_stats_for_replay(&new_key, cutoff, 0).unwrap());
 
         let old_key = crate::keys::encode_nft_daily_key(&collection_id, 20260209);
-        assert!(!should_delete_stats_for_replay(&old_key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&old_key, cutoff, 0).unwrap());
     }
 
     #[test]
-    fn test_should_delete_stats_for_replay_outpoint_and_index_prefixes_always_deleted() {
+    fn test_should_delete_stats_for_replay_outpoint_and_index_prefixes_preserved() {
+        // Outpoint/index entries are NOT deleted by should_delete_stats_for_replay
+        // to prevent data loss for entities created before rollback_to.
         let cutoff = b"20260210";
         let tx_hash = [0xAA; 32];
         let output_index: i16 = 0;
@@ -2312,41 +2381,67 @@ mod tests {
         let account_id = [0xCC; 20];
         let type_script_hash = [0xDD; 32];
 
-        // STATS_PREFIX_SPORE_OUTPOINT
         let key = crate::keys::encode_spore_outpoint_key(&tx_hash, output_index);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_SPORE_OUTPOINT_BY_ID
         let key = crate::keys::encode_spore_outpoint_by_id_key(&spore_id, &tx_hash, output_index);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_SPORE_TYPE_INDEX
         let key = crate::keys::encode_spore_type_index_key(&type_script_hash);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_MNFT_CLASS_OUTPOINT
         let key = crate::keys::encode_mnft_class_outpoint_key(&tx_hash, output_index);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_MNFT_TOKEN_OUTPOINT
         let key = crate::keys::encode_mnft_token_outpoint_key(&tx_hash, output_index);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT
         let key = crate::keys::encode_dotbit_account_outpoint_key(&tx_hash, output_index);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_DOTBIT_OUTPOINT_BY_ACCOUNT_ID
         let key = crate::keys::encode_dotbit_outpoint_by_account_id_key(
             &account_id,
             &tx_hash,
             output_index,
         );
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
 
-        // STATS_PREFIX_NFT_TYPE_INDEX
         let key = crate::keys::encode_nft_type_index_key(&type_script_hash);
-        assert!(should_delete_stats_for_replay(&key, cutoff).unwrap());
+        assert!(!should_delete_stats_for_replay(&key, cutoff, 0).unwrap());
+    }
+
+    #[test]
+    fn test_should_delete_stats_for_replay_per_asset_hourly_prefixes() {
+        let cutoff = b"20260210";
+        let type_hash = [0xAA; 32];
+        let cluster_id = [0xBB; 32];
+        let collection_id = [0xCC; 24];
+        // cutoff_hour = 492_960 (arbitrary, corresponds to ~2026-03-10)
+        let cutoff_hour: i64 = 492_960;
+
+        // TOKEN_HOURLY at cutoff_hour → deleted
+        let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour);
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hour).unwrap());
+
+        // TOKEN_HOURLY before cutoff → preserved
+        let key = crate::keys::encode_token_hourly_key(&type_hash, cutoff_hour - 1);
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hour).unwrap());
+
+        // SPORE_HOURLY at cutoff_hour → deleted
+        let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour);
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hour).unwrap());
+
+        // SPORE_HOURLY before cutoff → preserved
+        let key = crate::keys::encode_spore_hourly_key(&cluster_id, cutoff_hour - 1);
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hour).unwrap());
+
+        // NFT_HOURLY at cutoff_hour → deleted
+        let key = crate::keys::encode_nft_hourly_key(&collection_id, cutoff_hour);
+        assert!(should_delete_stats_for_replay(&key, cutoff, cutoff_hour).unwrap());
+
+        // NFT_HOURLY before cutoff → preserved
+        let key = crate::keys::encode_nft_hourly_key(&collection_id, cutoff_hour - 1);
+        assert!(!should_delete_stats_for_replay(&key, cutoff, cutoff_hour).unwrap());
     }
 
     #[test]
@@ -2354,7 +2449,7 @@ mod tests {
         let cutoff = b"invalid-cutoff";
         let code_hash = [0xAA; 32];
         let key = crate::keys::encode_script_daily_key(&code_hash, false, 20260211);
-        let err = should_delete_stats_for_replay(&key, cutoff).unwrap_err();
+        let err = should_delete_stats_for_replay(&key, cutoff, 0).unwrap_err();
         assert!(err.to_string().contains("invalid cutoff date"));
     }
 

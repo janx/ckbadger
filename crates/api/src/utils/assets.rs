@@ -24,28 +24,18 @@ struct ScriptNameOverridesDoc {
     nft_storage_tier_overrides: HashMap<String, String>,
 }
 
-static NFT_STORAGE_TIER_OVERRIDES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
-    let parsed = load_script_name_overrides_doc();
+static NFT_STORAGE_TIER_OVERRIDES: LazyLock<HashMap<String, String>> =
+    LazyLock::new(|| match load_and_validate_nft_storage_tier_overrides() {
+        Ok(overrides) => overrides,
+        Err(e) => panic!("nft_storage_tier_overrides initialization failed: {e}"),
+    });
 
-    let mut overrides = HashMap::new();
-    for (standard, tier) in parsed.nft_storage_tier_overrides {
-        let standard = normalize_standard_alias_key(&standard);
-        let normalized_tier = tier.trim().to_ascii_lowercase();
-        if !matches!(
-            normalized_tier.as_str(),
-            "fully_onchain" | "decentralized_external" | "centralized_dependent" | "unknown"
-        ) {
-            eprintln!(
-                "WARNING: invalid nft_storage_tier_overrides tier for standard='{}': {}, skipping",
-                standard, normalized_tier
-            );
-            continue;
-        }
-        overrides.insert(standard, normalized_tier);
-    }
-
-    overrides
-});
+const VALID_TIERS: &[&str] = &[
+    "fully_onchain",
+    "decentralized_external",
+    "centralized_dependent",
+    "unknown",
+];
 
 fn default_nft_storage_tier_overrides() -> HashMap<String, String> {
     let mut defaults = HashMap::new();
@@ -58,29 +48,41 @@ fn default_nft_storage_tier_overrides() -> HashMap<String, String> {
     defaults
 }
 
-fn load_script_name_overrides_doc() -> ScriptNameOverridesDoc {
+fn load_and_validate_nft_storage_tier_overrides() -> Result<HashMap<String, String>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/script-name-overrides.json");
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
         Err(_) => {
-            return ScriptNameOverridesDoc {
-                nft_storage_tier_overrides: default_nft_storage_tier_overrides(),
-            };
+            // File may not exist in deployed binaries (CARGO_MANIFEST_DIR is
+            // baked at compile time). Fall back to hardcoded defaults.
+            return Ok(default_nft_storage_tier_overrides());
         }
     };
 
-    match serde_json::from_str(&content) {
-        Ok(doc) => doc,
-        Err(err) => {
-            eprintln!(
-                "WARNING: invalid docs/script-name-overrides.json at {}: {err}, using defaults",
-                path.display()
+    let parsed: ScriptNameOverridesDoc = serde_json::from_str(&content).map_err(|e| {
+        anyhow!(
+            "malformed docs/script-name-overrides.json at {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+
+    let mut overrides = HashMap::new();
+    for (standard, tier) in parsed.nft_storage_tier_overrides {
+        let standard = normalize_standard_alias_key(&standard);
+        let normalized_tier = tier.trim().to_ascii_lowercase();
+        if !VALID_TIERS.contains(&normalized_tier.as_str()) {
+            bail!(
+                "invalid nft_storage_tier_overrides tier for standard='{}': '{}' (valid: {})",
+                standard,
+                normalized_tier,
+                VALID_TIERS.join(", ")
             );
-            ScriptNameOverridesDoc {
-                nft_storage_tier_overrides: default_nft_storage_tier_overrides(),
-            }
         }
+        overrides.insert(standard, normalized_tier);
     }
+
+    Ok(overrides)
 }
 
 fn normalize_standard_alias_key(standard: &str) -> String {
