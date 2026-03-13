@@ -3,130 +3,458 @@
 import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { api, type ActivityAssetChange, type ActivityScriptCall } from '@/lib/api';
-import { getScriptDetailHref } from '@/lib/detail-routes';
+import { api, type GlobalActivity } from '@/lib/api';
+import { classifyActivity, type ClassifiedActivity } from '@/lib/activity-classify';
 import {
-  buildLatestActivityGroupSummary,
-  groupLatestActivitiesByTx,
-} from '@/lib/latest-activity-groups';
-import { formatTimeAgo, cn } from '@/lib/utils';
+  getScriptDetailHref,
+  getObjectDetailHref,
+  getIdentityItemDetailHref,
+  getTokenDetailHref,
+} from '@/lib/detail-routes';
+import { formatTimeAgo, formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import {
   TerminalPanel,
   TerminalPanelHeader,
   TerminalPanelContent,
-  TerminalRow,
 } from '@/components/ui/terminal-panel';
-import { HexDisplay } from '@/components/ui/hex-display';
-import { formatCkbAmount } from '@/lib/utils';
 
-function AssetBadge({ change }: { change: ActivityAssetChange }) {
-  switch (change.type) {
-    case 'token': {
-      const delta = BigInt(change.delta);
-      const sign = delta > BigInt(0) ? '+' : '';
-      const color = delta > BigInt(0) ? 'text-positive' : 'text-negative';
-      const label = change.symbol ?? `${change.typeScriptHash.slice(0, 10)}...`;
-      return (
-        <span
-          className={cn(
-            'border-base-border/60 bg-base-elevated/80 rounded border px-1.5 py-0.5 font-mono text-[10px]',
-            color
-          )}
-        >
-          {label} {sign}
-          {change.delta}
-        </span>
-      );
-    }
-    case 'object':
-      return (
-        <span className="border-base-border/60 bg-base-elevated/80 text-text rounded border px-1.5 py-0.5 text-[10px]">
-          {change.standard === 'm-nft' ? 'M-NFT' : 'Spore'} {change.action}
-        </span>
-      );
-    case 'identity':
-      return (
-        <span className="border-base-border/60 bg-base-elevated/80 text-text rounded border px-1.5 py-0.5 text-[10px]">
-          {change.standard === 'did_ckb' ? 'did:ckb' : '.bit'} {change.action}
-        </span>
-      );
-    case 'daoDeposit':
-      return (
-        <span className="border-base-border/60 bg-base-elevated/80 text-text rounded border px-1.5 py-0.5 text-[10px]">
-          DAO Deposit {formatCkbAmount(change.capacity).integer} CKB
-        </span>
-      );
-    case 'daoWithdrawRequest':
-      return (
-        <span className="border-gold-dim/50 bg-gold/10 text-gold rounded border px-1.5 py-0.5 text-[10px]">
-          DAO Withdraw Request
-        </span>
-      );
-    case 'daoWithdrawComplete':
-      return (
-        <span className="text-positive border-positive/30 bg-positive/10 rounded border px-1.5 py-0.5 text-[10px]">
-          DAO Withdraw +{formatCkbAmount(change.compensation).integer} CKB
-        </span>
-      );
-    default:
-      return null;
-  }
-}
-
-function truncateHex(value: string, startChars = 10, endChars = 8): string {
-  if (value.length <= startChars + endChars + 3) {
-    return value;
-  }
-  return `${value.slice(0, startChars)}...${value.slice(-endChars)}`;
-}
-
-function scriptCallLabel(change: ActivityScriptCall): string {
-  const name = change.scriptName?.trim();
-  if (name) {
-    return name;
-  }
-  return truncateHex(change.typeCodeHash);
-}
-
-function ScriptCallItem({ change }: { change: ActivityScriptCall }) {
-  return (
-    <div className="border-base-border/60 bg-base-elevated/50 rounded border px-1.5 py-1">
-      <div className="flex items-center gap-1.5">
-        <Link
-          href={getScriptDetailHref({
-            name: change.scriptName,
-            codeHash: change.typeCodeHash,
-            hashType: change.typeHashType,
-            scriptKind: 'type',
-          })}
-          className="text-gold hover:text-gold-bright font-mono text-[10px] transition-colors"
-        >
-          {scriptCallLabel(change)}
-        </Link>
-        <span className="border-base-border/60 text-text-dim rounded border px-1 py-0.5 font-mono text-[9px] uppercase">
-          {change.typeHashType}
-        </span>
-      </div>
-      <div className="text-text-dim mt-0.5 font-mono text-[10px]">
-        args {truncateHex(change.typeArgs)}
-      </div>
-    </div>
-  );
-}
+const MAX_STREAM_ITEMS = 20;
 
 function truncateAddress(addr: string): string {
   return `${addr.slice(0, 8)}...${addr.slice(-6)}`;
+}
+
+function formatAddress(address: string): string {
+  if (address.startsWith('ckb1') || address.startsWith('ckt1')) {
+    return truncateAddress(address);
+  }
+  return truncateHash(address);
+}
+
+function formatStandard(standard: string): string {
+  if (standard === 'spore') return 'Spore';
+  if (standard === 'm-nft') return 'M-NFT';
+  if (standard === 'dotbit') return '.bit';
+  if (standard === 'did_ckb') return 'did:ckb';
+  return standard.charAt(0).toUpperCase() + standard.slice(1);
+}
+
+function capitalizeAction(action: string): string {
+  if (!action) return '';
+  return action.charAt(0).toUpperCase() + action.slice(1);
+}
+
+function itemKey(activity: GlobalActivity): string {
+  return `${activity.txHash}:${activity.address}`;
+}
+
+interface TypeBadgeInfo {
+  icon: string;
+  label: string;
+  colorClass: string;
+}
+
+function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
+  const { type, primaryAssetChange, primaryScriptCall } = classified;
+
+  switch (type) {
+    case 'daoDeposit':
+      return { icon: '\u25C6', label: 'DAO Deposit', colorClass: 'text-gold' };
+    case 'daoWithdrawRequest':
+      return { icon: '\u25C6', label: 'DAO Withdraw Request', colorClass: 'text-gold' };
+    case 'daoWithdrawComplete':
+      return { icon: '\u25C6', label: 'DAO Withdraw Complete', colorClass: 'text-positive' };
+    case 'token': {
+      const change = primaryAssetChange;
+      if (change && change.type === 'token') {
+        const label = change.symbol ?? truncateHash(change.typeScriptHash, 8, 6);
+        return { icon: '\u25CE', label: `${label} Transfer`, colorClass: 'text-[#ff66aa]' };
+      }
+      return { icon: '\u25CE', label: 'Token Transfer', colorClass: 'text-[#ff66aa]' };
+    }
+    case 'object': {
+      const change = primaryAssetChange;
+      if (change && change.type === 'object') {
+        const std = formatStandard(change.standard);
+        const action = capitalizeAction(change.action);
+        return { icon: '\u2B21', label: `${std} ${action}`, colorClass: 'text-lavender' };
+      }
+      return { icon: '\u2B21', label: 'Object', colorClass: 'text-lavender' };
+    }
+    case 'identity': {
+      const change = primaryAssetChange;
+      if (change && change.type === 'identity') {
+        const std = formatStandard(change.standard);
+        const action = capitalizeAction(change.action);
+        return { icon: '\u2726', label: `${std} ${action}`, colorClass: 'text-aqua' };
+      }
+      return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
+    }
+    case 'scriptCall': {
+      const sc = primaryScriptCall;
+      if (sc) {
+        const name = sc.scriptName?.trim() || truncateHash(sc.typeCodeHash, 8, 6);
+        return { icon: '\u2699', label: `Script: ${name}`, colorClass: 'text-amber' };
+      }
+      return { icon: '\u2699', label: 'Script Call', colorClass: 'text-amber' };
+    }
+    case 'ckbTransfer':
+      return { icon: '\u2197', label: 'CKB Transfer', colorClass: 'text-jade' };
+    default:
+      return { icon: '\u2197', label: 'Transfer', colorClass: 'text-jade' };
+  }
+}
+
+function CkbDelta({ delta }: { delta: string }) {
+  const value = BigInt(delta);
+  const formatted = formatCkbAmount(delta);
+  const isPositive = value > BigInt(0);
+  const isNegative = value < BigInt(0);
+
+  return (
+    <span
+      className={cn(
+        'font-mono text-xs tabular-nums',
+        isPositive && 'text-positive',
+        isNegative && 'text-negative',
+        !isPositive && !isNegative && 'text-text-dim'
+      )}
+    >
+      {isPositive ? '+' : ''}
+      {formatted.full} CKB
+    </span>
+  );
+}
+
+function AddressLink({ address }: { address: string }) {
+  return (
+    <Link
+      href={`/address/${address}`}
+      className="text-text hover:text-aqua font-mono text-xs transition-colors"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {formatAddress(address)}
+    </Link>
+  );
+}
+
+function StreamItemCkbTransfer({ classified }: { classified: ClassifiedActivity }) {
+  const { activity } = classified;
+  const badge = getTypeBadge(classified);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <CkbDelta delta={activity.ckbDelta} />
+      </div>
+    </>
+  );
+}
+
+function StreamItemDaoDeposit({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryAssetChange } = classified;
+  const badge = getTypeBadge(classified);
+  const capacity =
+    primaryAssetChange && primaryAssetChange.type === 'daoDeposit'
+      ? primaryAssetChange.capacity
+      : '0';
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <span className="text-positive font-mono text-xs tabular-nums">
+          +{formatCkbAmount(capacity).full} CKB locked
+        </span>
+      </div>
+    </>
+  );
+}
+
+function StreamItemDaoWithdrawRequest({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryAssetChange } = classified;
+  const badge = getTypeBadge(classified);
+  const capacity =
+    primaryAssetChange && primaryAssetChange.type === 'daoWithdrawRequest'
+      ? primaryAssetChange.capacity
+      : '0';
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <span className="text-gold font-mono text-xs tabular-nums">
+          {formatCkbAmount(capacity).full} CKB
+        </span>
+      </div>
+    </>
+  );
+}
+
+function StreamItemDaoWithdrawComplete({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryAssetChange } = classified;
+  const badge = getTypeBadge(classified);
+  const capacity =
+    primaryAssetChange && primaryAssetChange.type === 'daoWithdrawComplete'
+      ? primaryAssetChange.capacity
+      : '0';
+  const compensation =
+    primaryAssetChange && primaryAssetChange.type === 'daoWithdrawComplete'
+      ? primaryAssetChange.compensation
+      : '0';
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <span className="text-positive font-mono text-xs tabular-nums">
+          +{formatCkbAmount(capacity).full} CKB
+        </span>
+      </div>
+      <div className="flex justify-end">
+        <span className="text-positive font-mono text-[10px] tabular-nums">
+          +{formatCkbAmount(compensation).full} CKB compensation
+        </span>
+      </div>
+    </>
+  );
+}
+
+function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryAssetChange } = classified;
+  const badge = getTypeBadge(classified);
+
+  let tokenDelta = '';
+  let tokenSymbol = '';
+  let typeScriptHash = '';
+  if (primaryAssetChange && primaryAssetChange.type === 'token') {
+    const delta = BigInt(primaryAssetChange.delta);
+    const sign = delta > BigInt(0) ? '+' : '';
+    tokenSymbol = primaryAssetChange.symbol ?? '';
+    typeScriptHash = primaryAssetChange.typeScriptHash;
+    tokenDelta = `${sign}${primaryAssetChange.delta}${tokenSymbol ? ` ${tokenSymbol}` : ''}`;
+  }
+
+  const ckbValue = BigInt(activity.ckbDelta);
+  const showCkbDelta = ckbValue !== BigInt(0);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        {typeScriptHash ? (
+          <Link
+            href={getTokenDetailHref(typeScriptHash)}
+            className="font-mono text-xs tabular-nums text-[#ff66aa] transition-colors hover:text-[#ff88bb]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {tokenDelta}
+          </Link>
+        ) : (
+          <span className="font-mono text-xs tabular-nums text-[#ff66aa]">{tokenDelta}</span>
+        )}
+      </div>
+      {showCkbDelta && (
+        <div className="flex justify-end">
+          <CkbDelta delta={activity.ckbDelta} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function StreamItemObject({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryAssetChange } = classified;
+  const badge = getTypeBadge(classified);
+
+  let objectId = '';
+  if (primaryAssetChange && primaryAssetChange.type === 'object') {
+    objectId = primaryAssetChange.objectId;
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        {objectId ? (
+          <Link
+            href={getObjectDetailHref(objectId)}
+            className="text-lavender hover:text-lavender-bright font-mono text-xs transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {truncateHash(objectId, 8, 6)}
+          </Link>
+        ) : (
+          <span className="text-text-dim font-mono text-xs">--</span>
+        )}
+      </div>
+    </>
+  );
+}
+
+function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryAssetChange } = classified;
+  const badge = getTypeBadge(classified);
+
+  let identityId = '';
+  let standard = '';
+  if (primaryAssetChange && primaryAssetChange.type === 'identity') {
+    identityId = primaryAssetChange.identityId;
+    standard = primaryAssetChange.standard;
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon} {badge.label}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        {identityId ? (
+          <Link
+            href={getIdentityItemDetailHref(standard, identityId)}
+            className="text-aqua hover:text-aqua-bright font-mono text-xs transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {truncateHash(identityId, 8, 6)}
+          </Link>
+        ) : (
+          <span className="text-text-dim font-mono text-xs">--</span>
+        )}
+      </div>
+    </>
+  );
+}
+
+function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryScriptCall } = classified;
+  const badge = getTypeBadge(classified);
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className={cn('font-mono text-xs', badge.colorClass)}>
+          {badge.icon}{' '}
+          {primaryScriptCall ? (
+            <Link
+              href={getScriptDetailHref({
+                name: primaryScriptCall.scriptName,
+                codeHash: primaryScriptCall.typeCodeHash,
+                hashType: primaryScriptCall.typeHashType,
+                scriptKind: 'type',
+              })}
+              className="text-amber hover:text-amber-bright transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {badge.label}
+            </Link>
+          ) : (
+            badge.label
+          )}
+        </span>
+        <span className="text-text-dim font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <CkbDelta delta={activity.ckbDelta} />
+      </div>
+      {primaryScriptCall && (
+        <div className="flex justify-end">
+          <span className="text-text-dim font-mono text-[10px]">
+            args {truncateHash(primaryScriptCall.typeArgs, 8, 6)}
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
+function StreamItem({ classified }: { classified: ClassifiedActivity }) {
+  switch (classified.type) {
+    case 'ckbTransfer':
+      return <StreamItemCkbTransfer classified={classified} />;
+    case 'daoDeposit':
+      return <StreamItemDaoDeposit classified={classified} />;
+    case 'daoWithdrawRequest':
+      return <StreamItemDaoWithdrawRequest classified={classified} />;
+    case 'daoWithdrawComplete':
+      return <StreamItemDaoWithdrawComplete classified={classified} />;
+    case 'token':
+      return <StreamItemToken classified={classified} />;
+    case 'object':
+      return <StreamItemObject classified={classified} />;
+    case 'identity':
+      return <StreamItemIdentity classified={classified} />;
+    case 'scriptCall':
+      return <StreamItemScriptCall classified={classified} />;
+    default:
+      return <StreamItemCkbTransfer classified={classified} />;
+  }
 }
 
 interface LatestActivitiesProps {
   isRealtime?: boolean;
 }
 
-const MAX_ACTIVITY_GROUPS = 5;
-
 export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) {
-  const [newActivityKey, setNewActivityKey] = useState<string | null>(null);
-  const prevKeysRef = useRef<string[]>([]);
+  const [newItemKeys, setNewItemKeys] = useState<Set<string>>(new Set());
+  const prevKeysRef = useRef<Set<string>>(new Set());
 
   const {
     data: activities,
@@ -134,39 +462,46 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
     isFetching,
   } = useQuery({
     queryKey: ['latest-activities'],
-    queryFn: () => api.getLatestActivities(16),
+    queryFn: () => api.getLatestActivities(32),
     refetchInterval: 10000,
   });
 
   const itemCount = activities?.length ?? 0;
   const showSkeleton = isLoading || (itemCount === 0 && isFetching);
-  const groups = activities
-    ? groupLatestActivitiesByTx(activities).slice(0, MAX_ACTIVITY_GROUPS)
+
+  const classifiedItems: ClassifiedActivity[] = activities
+    ? activities.slice(0, MAX_STREAM_ITEMS).map((a) => classifyActivity(a))
     : [];
 
   useEffect(() => {
-    if (groups.length > 0) {
-      const currentKeys = groups.map((group) => group.txHash);
+    if (classifiedItems.length > 0) {
+      const currentKeys = new Set(classifiedItems.map((c) => itemKey(c.activity)));
       const prevKeys = prevKeysRef.current;
 
-      if (prevKeys.length > 0) {
-        const newKey = currentKeys.find((k) => !prevKeys.includes(k));
-        if (newKey) {
-          setNewActivityKey(newKey);
-          setTimeout(() => setNewActivityKey(null), 2000);
+      if (prevKeys.size > 0) {
+        const freshKeys = new Set<string>();
+        for (const key of currentKeys) {
+          if (!prevKeys.has(key)) {
+            freshKeys.add(key);
+          }
+        }
+        if (freshKeys.size > 0) {
+          setNewItemKeys(freshKeys);
+          const timer = setTimeout(() => setNewItemKeys(new Set()), 2000);
+          return () => clearTimeout(timer);
         }
       }
 
       prevKeysRef.current = currentKeys;
     }
-  }, [groups]);
+  }, [classifiedItems]);
 
   const headerActions = (
     <Link
       href="/activities"
       className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
     >
-      VIEW ALL →
+      VIEW ALL &rarr;
     </Link>
   );
 
@@ -178,169 +513,39 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
       <TerminalPanelContent padding="none" className="min-h-0 flex-1">
         <div data-testid="latest-activities-content" className="h-full overflow-hidden">
           {showSkeleton
-            ? Array.from({ length: MAX_ACTIVITY_GROUPS }).map((_, i) => (
-                <TerminalRow key={i} hoverable={false}>
-                  <div className="animate-pulse space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="bg-base-elevated h-4 w-28 rounded" />
-                      <div className="flex items-center gap-2">
-                        <div className="bg-base-elevated h-4 w-16 rounded" />
-                        <div className="bg-base-elevated h-3 w-14 rounded" />
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <div className="bg-base-elevated h-3 w-24 rounded" />
-                      <div className="bg-base-elevated h-3 w-20 rounded" />
-                    </div>
+            ? Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="border-base-border/50 animate-pulse border-b px-3 py-2 last:border-b-0"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="bg-base-elevated h-4 w-28 rounded" />
+                    <div className="bg-base-elevated h-3 w-14 rounded" />
                   </div>
-                </TerminalRow>
+                  <div className="mt-1.5 flex items-center justify-between">
+                    <div className="bg-base-elevated h-3 w-24 rounded" />
+                    <div className="bg-base-elevated h-3 w-20 rounded" />
+                  </div>
+                </div>
               ))
-            : groups.map((group) => {
-                const visibleParticipants = group.participants.slice(0, 3);
-                const hiddenParticipantCount = Math.max(
-                  group.participantCount - visibleParticipants.length,
-                  0
-                );
-                const summary = buildLatestActivityGroupSummary(group);
+            : classifiedItems.map((classified) => {
+                const key = itemKey(classified.activity);
+                const isNew = newItemKeys.has(key);
+
                 return (
-                  <TerminalRow
-                    key={group.txHash}
+                  <Link
+                    key={key}
+                    href={`/tx/${classified.activity.txHash}`}
                     className={cn(
-                      'transition-all duration-500',
-                      newActivityKey === group.txHash && 'bg-jade/10 shadow-glow-jade'
+                      'border-base-border/50 block border-b px-3 py-2 no-underline last:border-b-0',
+                      'hover:bg-base-elevated/50 transition-all duration-300',
+                      isNew && 'bg-jade/10'
                     )}
                   >
-                    <div className="space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <Link href={`/tx/${group.txHash}`} className="group min-w-0 flex-1">
-                          <HexDisplay
-                            value={group.txHash}
-                            truncate
-                            startChars={8}
-                            endChars={6}
-                            color="aqua"
-                            size="sm"
-                            showGroupHighlight={false}
-                          />
-                        </Link>
-                        <div className="flex shrink-0 flex-col items-end gap-0.5">
-                          <Link
-                            href={`/blocks/${group.blockNumber}`}
-                            className="text-text-dim hover:text-aqua font-mono text-[10px] transition-colors"
-                          >
-                            #{group.blockNumber.toLocaleString()}
-                          </Link>
-                          <span className="text-text-dim font-mono text-[10px]">
-                            {formatTimeAgo(group.timestamp)}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="text-text font-mono text-[11px] leading-tight">{summary}</div>
-                      <div className="space-y-1.5">
-                        {visibleParticipants.map((participant) => {
-                          const delta = BigInt(participant.ckbDelta);
-                          const usedDelta = BigInt(participant.usedDelta);
-                          const isCkbAddress =
-                            participant.address.startsWith('ckb1') ||
-                            participant.address.startsWith('ckt1');
-                          const visibleAssetChanges = participant.assetChanges.slice(0, 2);
-                          const hiddenAssetCount = Math.max(participant.assetChanges.length - 2, 0);
-                          const visibleScriptCalls = participant.scriptCalls.slice(0, 1);
-                          const hiddenScriptCallCount = Math.max(
-                            participant.scriptCalls.length - visibleScriptCalls.length,
-                            0
-                          );
-
-                          return (
-                            <div
-                              key={`${group.txHash}:${participant.address}`}
-                              className="border-base-border/40 bg-base-elevated/30 rounded border px-2 py-1.5"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0 flex-1">
-                                  <Link
-                                    href={`/address/${participant.address}`}
-                                    className="text-text font-mono text-xs transition-opacity hover:opacity-80"
-                                  >
-                                    {isCkbAddress ? (
-                                      truncateAddress(participant.address)
-                                    ) : (
-                                      <HexDisplay
-                                        value={participant.address}
-                                        truncate
-                                        startChars={8}
-                                        endChars={6}
-                                        size="sm"
-                                        showGroupHighlight={false}
-                                      />
-                                    )}
-                                  </Link>
-                                  {participant.assetChanges.length > 0 && (
-                                    <div className="mt-1.5 space-y-1">
-                                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                        Assets
-                                      </div>
-                                      <div className="flex flex-wrap items-center gap-1">
-                                        {visibleAssetChanges.map((change, idx) => (
-                                          <AssetBadge key={idx} change={change} />
-                                        ))}
-                                        {hiddenAssetCount > 0 && (
-                                          <span className="text-text-dim font-mono text-[10px]">
-                                            +{hiddenAssetCount} assets
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {participant.scriptCalls.length > 0 && (
-                                    <div className="mt-1.5 space-y-1">
-                                      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                        Scripts
-                                      </div>
-                                      <div className="space-y-1">
-                                        {visibleScriptCalls.map((change, idx) => (
-                                          <ScriptCallItem key={idx} change={change} />
-                                        ))}
-                                        {hiddenScriptCallCount > 0 && (
-                                          <div className="text-text-dim font-mono text-[10px]">
-                                            +{hiddenScriptCallCount} scripts
-                                          </div>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="flex shrink-0 flex-col items-end gap-0.5 text-right">
-                                  <span
-                                    className={cn(
-                                      'font-mono text-xs tabular-nums',
-                                      delta > BigInt(0) && 'text-positive',
-                                      delta < BigInt(0) && 'text-negative',
-                                      delta === BigInt(0) && 'text-text-dim'
-                                    )}
-                                  >
-                                    {delta > BigInt(0) ? '+' : ''}
-                                    {formatCkbAmount(participant.ckbDelta).full} CKB
-                                  </span>
-                                  {usedDelta !== BigInt(0) && (
-                                    <span className="text-jade/60 font-mono text-[10px] tabular-nums">
-                                      {usedDelta > BigInt(0) ? '+' : ''}
-                                      {formatCkbAmount(participant.usedDelta).integer} KB
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                        {hiddenParticipantCount > 0 && (
-                          <div className="text-text-dim font-mono text-[10px]">
-                            +{hiddenParticipantCount} more
-                          </div>
-                        )}
-                      </div>
+                    <div className="space-y-1">
+                      <StreamItem classified={classified} />
                     </div>
-                  </TerminalRow>
+                  </Link>
                 );
               })}
         </div>
