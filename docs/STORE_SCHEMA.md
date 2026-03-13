@@ -46,7 +46,7 @@ The indexer opens both stores read-write; the API opens both in secondary (read-
 | `identity_agg`                   | collection_id (sentinel 32B)                          | IdentityCollectionAgg   | Identity collection aggregate stats (domain)                 |
 | `identity_collection_activities` | collection_id + block + tx                            | ActivityRecord          | Pre-computed Identity collection activity feed (domain)      |
 | `stats_identity`                 | collection_id + lock_hash                             | i64 (owner count)       | Per-owner identity counts by collection                      |
-| `activities`                     | addr/token/entity + block+tx                          | ActivityRecord          | Unified activity feed                                        |
+| `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)          | TxActivityBundle        | Per-tx activity bundle (all owner deltas)                    |
 | `pending_proposals`              | proposal_id (10B hex string)                          | CachedProposal (JSON)   | Ephemeral pending proposal cache (live sync only)            |
 | `cluster_agg`                    | cluster_id                                            | ClusterAgg              | Spore cluster aggregate stats                                |
 | `script_info`                    | code_hash (32B)                                       | ScriptInfo              | Known script metadata                                        |

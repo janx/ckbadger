@@ -41,23 +41,39 @@ Financial ledger precision. If Alice sends CKB to Bob in a transaction that also
 
 ## Data Model
 
-### ActivityEntry (store type)
+### TxActivityBundle (canonical store type)
+
+One bundle per canonical transaction. Contains all owner position changes.
 
 ```rust
-pub struct ActivityEntry {
+pub struct TxActivityBundle {
     pub tx_hash: Vec<u8>,        // 32-byte transaction hash
     pub block_hash: Vec<u8>,     // 32-byte block hash
     pub block_number: i64,
     pub tx_index: i32,
     pub timestamp: i64,          // Unix timestamp
-    pub ckb_delta: i128,         // Net CKB change (shannons) — i128 for overflow safety
-    pub occupied_delta: i64,     // Net occupied capacity change (shannons)
     pub is_cellbase: bool,
+    pub owners: Vec<OwnerActivityDelta>,
+}
+
+pub struct OwnerActivityDelta {
+    pub lock_hash: Vec<u8>,
+    pub lock_code_hash: Vec<u8>,
+    pub lock_hash_type: i16,
+    pub lock_args: Vec<u8>,
+    pub ckb_delta: i128,         // Net CKB change (shannons) — i128 for overflow safety
+    pub used_delta: i64,         // Net occupied capacity change (shannons)
     pub has_type_script: bool,   // Whether any cell for this owner had a type script
+    pub involved_script_code_hashes: Vec<Vec<u8>>,
     pub asset_changes: Vec<AssetChange>,
+    pub script_calls: Option<Vec<ScriptCallEntry>>,
     pub peers: Vec<Vec<u8>>,     // Lock hashes of other parties
 }
 ```
+
+### ActivityEntry (read-model helper)
+
+`ActivityEntry` is still used as an API/read-model type materialized on-the-fly from a bundle + owner delta. It is not stored directly.
 
 ### AssetChange (tagged enum)
 
@@ -130,30 +146,34 @@ Each activity is exclusively classified for stats aggregation using `has_type_sc
 
 ## Storage Schema
 
-### Column Family
+### Column Families
 
-`CF_ACTIVITIES` — registered in `DOMAIN_CFS` and `HIGH_WRITE_CFS` (large batch optimization tier). Lives in the domain store (mutable, supports delete on rollback).
+**`CF_ACTIVITIES`** — registered in `DOMAIN_CFS` and `HIGH_WRITE_CFS` (large batch optimization tier). Lives in the domain store (mutable, supports delete on rollback). Stores one `TxActivityBundle` per canonical transaction.
 
-### Key Encoding
+**`CF_ADDR_TXS`** — lightweight secondary index. Key encodes `lock_hash + block_num_desc + tx_idx_desc + tx_hash`. Value is **empty** (tx_hash is extracted from the key). Used to look up which bundles an address participated in.
+
+### Key Encoding (CF_ACTIVITIES)
 
 ```
-lock_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B) = 108 bytes
+block_num_desc(8B BE) + tx_idx_desc(4B BE) + tx_hash(32B) = 44 bytes
 ```
 
-`block_num_desc = i64::MAX - block_num`, `tx_idx_desc = i32::MAX - tx_idx` — descending order so prefix scan returns newest activities first.
+`block_num_desc = i64::MAX - block_num`, `tx_idx_desc = i32::MAX - tx_idx` — descending order so forward iteration yields newest transactions first.
 
 ```rust
-pub fn encode_activity_key(lock_hash: &[u8], block_num: i64, tx_idx: i32, block_hash: &[u8], tx_hash: &[u8]) -> Vec<u8>;
-pub fn decode_activity_key(key: &[u8]) -> (Vec<u8>, i64, i32, Vec<u8>, Vec<u8>);
+pub fn encode_tx_activity_bundle_key(block_num: i64, tx_idx: i32, tx_hash: &[u8]) -> Vec<u8>;
+pub fn decode_tx_activity_bundle_key(key: &[u8]) -> (i64, i32, Vec<u8>);
 ```
 
 ### Value Encoding
 
-`bincode::serialize(ActivityEntry)` — compact binary, fast to serialize/deserialize.
+`bincode::serialize(TxActivityBundle)` — compact binary, fast to serialize/deserialize.
 
-### Query Pattern
+### Query Patterns
 
-Prefix scan on `lock_hash[..32]`, forward iteration (which yields descending block order due to key encoding). Cursor-based pagination with `(block_num, tx_idx)` tuple.
+**Global latest activities**: Forward scan on `CF_ACTIVITIES` from start, expanding `OwnerActivityDelta` entries from each bundle, skipping cellbase. No secondary index needed.
+
+**Per-address activities**: Scan `CF_ADDR_TXS` by lock_hash prefix → `multi_get` bundle rows from `CF_ACTIVITIES` → resolve per-owner `ActivityEntry` from bundle.
 
 ```rust
 impl CkbadgerStore {
@@ -162,7 +182,10 @@ impl CkbadgerStore {
         lock_hash: &[u8],
         limit: usize,
         cursor: Option<(i64, i32)>,
+        filter: Option<&str>,
     ) -> Result<Vec<(i64, i32, ActivityEntry)>>;
+
+    pub fn get_latest_activities(&self) -> Result<Vec<LatestActivityItem>>;
 }
 ```
 
@@ -170,7 +193,7 @@ impl CkbadgerStore {
 
 Activities live in the domain store and are directly deleted during reorg rollback:
 
-- Rollback performs a range scan on `CF_ACTIVITIES` for each affected lock_hash and deletes entries belonging to rolled-back blocks.
+- Rollback performs a full scan on `CF_ACTIVITIES` and deletes 44-byte bundle keys belonging to rolled-back blocks.
 - Same approach applies to `CF_ADDR_TXS` and collection activity CFs (`CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES`).
 - No ghost entries, no canonical filtering needed — direct deletion keeps the domain store clean.
 
@@ -189,25 +212,29 @@ The API endpoint `GET /stats/activity-summary-24h` aggregates all hourly buckets
 
 ## Activity Builder Algorithm
 
-The builder is a pure function: given transaction data and pre-fetched cell info, it emits `(lock_hash, ActivityEntry)` pairs with no side effects.
+The builder is a pure function: given transaction data and pre-fetched cell info, it emits one `TxActivityBundle` per transaction with no side effects. Owners within a bundle are sorted deterministically by `lock_hash`.
 
 ### Per-transaction logic
 
 ```
 1. For each input:
    - Group by lock_script_hash
+   - Record lock script components (code_hash, hash_type, args)
    - Sum capacity, occupied_capacity
    - Classify by type_code_hash → accumulate UDT amounts, DOB/NFT IDs
 
 2. For each output:
    - Group by lock_script_hash
+   - Record lock script components (code_hash, hash_type, args)
    - Sum capacity, compute occupied_capacity from script sizes
    - Classify by type_code_hash → accumulate UDT amounts, DOB/NFT IDs, DAO ops
 
-3. For each distinct lock_hash:
+3. For each distinct lock_hash (sorted by lock_hash):
    - ckb_delta = Σ output_capacity - Σ input_capacity
-   - occupied_delta = Σ output_occupied - Σ input_occupied
+   - used_delta = Σ output_occupied - Σ input_occupied
    - peers = all other lock_hashes in this transaction
    - Derive asset_changes from accumulated data
-   - Emit (lock_hash, ActivityEntry)
+   - Emit OwnerActivityDelta
+
+4. Wrap all OwnerActivityDelta entries into a single TxActivityBundle
 ```

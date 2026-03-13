@@ -136,19 +136,6 @@ pub(crate) fn put_addr_tx_with_undo_log(
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash);
 }
 
-#[cfg(test)]
-pub(crate) fn put_activity_with_undo_log(
-    batch: &mut StoreBatch<'_>,
-    _undo_seq_by_block: &mut HashMap<i64, u64>,
-    lock_hash: &[u8],
-    block_num: i64,
-    tx_idx: i32,
-    entry: &ckbadger_store::types::ActivityEntry,
-) {
-    // activities is now in domain store; rollback deletes entries directly (no undo log needed)
-    batch.put_activity(lock_hash, block_num, tx_idx, entry);
-}
-
 pub(crate) fn put_tx_activity_bundle_with_undo_log(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -308,63 +295,6 @@ mod tests {
             .is_some());
         assert!(append_store
             .get_cf(append_store.cf_cells(), &cell_key_drop)
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
-    fn test_put_activity_with_undo_log_writes_to_domain_without_undo() {
-        // After dual-store refactor, activities are in domain store.
-        // put_activity_with_undo_log writes directly to domain batch
-        // without creating undo log entries (domain rollback deletes
-        // activity entries directly via range-delete).
-        let domain_dir = tempfile::tempdir().unwrap();
-        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let lock_hash = [0x44; 32];
-        let entry = ckbadger_store::types::ActivityEntry {
-            tx_hash: vec![0xAB; 32],
-            block_hash: vec![0xBC; 32],
-            block_number: 42,
-            tx_index: 3,
-            timestamp: 1_700_000_000,
-            ckb_delta: 0,
-            used_delta: 0,
-            is_cellbase: false,
-            has_type_script: false,
-            asset_changes: vec![],
-            script_calls: None,
-            peers: vec![],
-        };
-
-        let mut domain_batch = StoreBatch::new(&domain_store);
-        let mut undo_seq_by_block = HashMap::new();
-        put_activity_with_undo_log(
-            &mut domain_batch,
-            &mut undo_seq_by_block,
-            &lock_hash,
-            42,
-            3,
-            &entry,
-        );
-        domain_batch.commit().unwrap();
-
-        // Verify NO undo entries were written
-        let iter = domain_store.iterator_cf(
-            domain_store.cf_reorg_undo_log_by_block(),
-            rocksdb::IteratorMode::Start,
-        );
-        assert_eq!(
-            iter.count(),
-            0,
-            "activities are domain CFs now; no undo entries should be written"
-        );
-
-        // Verify activity was written to domain store
-        assert!(domain_store
-            .get_cf(
-                domain_store.cf_activities(),
-                &keys::encode_activity_key(&lock_hash, 42, 3, &entry.block_hash, &entry.tx_hash)
-            )
             .unwrap()
             .is_some());
     }

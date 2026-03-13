@@ -968,24 +968,6 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_activities(), key, &value);
     }
 
-    pub fn put_activity(
-        &mut self,
-        lock_hash: &[u8],
-        block_num: i64,
-        tx_idx: i32,
-        entry: &ActivityEntry,
-    ) {
-        let key = keys::encode_activity_key(
-            lock_hash,
-            block_num,
-            tx_idx,
-            &entry.block_hash,
-            &entry.tx_hash,
-        );
-        let value = bincode::serialize(entry).expect("serialize ActivityEntry");
-        self.put_cf(self.store.cf_activities(), key, &value);
-    }
-
     // ---- Object collection activities ----
 
     pub fn put_object_collection_activity(
@@ -1440,7 +1422,8 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         put_single_owner_activity(&mut batch, &lock_a, 100, 0, 10);
         put_single_owner_activity(&mut batch, &lock_a, 200, 0, 20);
-        put_single_owner_activity(&mut batch, &lock_b, 100, 0, 30);
+        // Use a different tx position to avoid overwriting lock_a's bundle at (100, 0)
+        put_single_owner_activity(&mut batch, &lock_b, 100, 1, 30);
         batch.commit().unwrap();
 
         let a = store.list_activities(&lock_a, 100, None, None).unwrap();
