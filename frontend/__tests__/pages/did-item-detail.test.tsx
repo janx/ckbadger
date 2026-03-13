@@ -71,7 +71,7 @@ describe('DidCkbItemDetailPage', () => {
     });
   });
 
-  it('renders did:ckb detail sections', async () => {
+  it('renders did:ckb wrapper labels and recycled identity state', async () => {
     vi.mocked(api.getDidCkbItemDetail).mockResolvedValue({
       nftId: '0xabc',
       name: 'did:alice.ckb',
@@ -86,12 +86,16 @@ describe('DidCkbItemDetailPage', () => {
     render(<DidCkbItemDetailPage identityId="0xabc" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
+      expect(screen.getByText('DID:CKB')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Identity & Ownership')).toBeInTheDocument();
-    expect(screen.getByText('Cell Status')).toBeInTheDocument();
-    expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Back to did:ckb Collection/ })).toHaveAttribute(
+      'href',
+      '/identities/did:ckb'
+    );
+    expect(screen.getByText('did:ckb Name')).toBeInTheDocument();
+    expect(screen.getByText('DID ID')).toBeInTheDocument();
+    expect(screen.queryByText('Expires At')).not.toBeInTheDocument();
     expect(screen.getAllByText('did:alice.ckb').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
     expect(screen.getByText('Recycled did:ckb identity has no live cell.')).toBeInTheDocument();

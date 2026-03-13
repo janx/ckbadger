@@ -4,6 +4,8 @@ import { render } from '../utils/test-utils';
 import MostUtilizedAssetsPage from '@/app/charts/most-utilized-assets/page';
 import { api } from '@/lib/api';
 
+const stackedAreaChartMock = vi.fn((_: unknown) => <div data-testid="stacked-area-chart" />);
+
 vi.mock('@/lib/api', () => ({
   api: {
     getMostUtilizedAssetsChart: vi.fn(),
@@ -15,7 +17,7 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 vi.mock('@/components/ui/stacked-area-chart', () => ({
-  StackedAreaChart: () => <div data-testid="stacked-area-chart" />,
+  StackedAreaChart: (props: unknown) => stackedAreaChartMock(props),
 }));
 
 describe('MostUtilizedAssetsPage', () => {
@@ -47,16 +49,46 @@ describe('MostUtilizedAssetsPage', () => {
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Assets Used & Total CKBytes')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
+      'href',
+      '/charts'
+    );
 
     await waitFor(() => {
+      expect(api.getMostUtilizedAssetsChart).toHaveBeenCalledTimes(1);
       expect(screen.getByText('Used CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(screen.getByText('Total CKBytes Share (%) - Top 20 + Others')).toBeInTheDocument();
       expect(screen.getAllByTestId('stacked-area-chart')).toHaveLength(2);
-      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');
-      expect(screen.getByText('Description')).toBeInTheDocument();
-      expect(
-        screen.getByText('Ranks token and Object collection assets by utilization in live state.')
-      ).toBeInTheDocument();
+      expect(screen.getByTitle('Token A (token)')).toBeInTheDocument();
+      expect(screen.getByTitle('Cluster A (nft)')).toBeInTheDocument();
+      expect(screen.getByText(/Drag to select range/i)).toBeInTheDocument();
     });
+
+    expect(stackedAreaChartMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        height: 360,
+        isPercentage: true,
+        valueUnit: 'shannon',
+        data: [{ date: '2024-01-01', values: { top0: '100', others: '20' } }],
+        series: [
+          { key: 'top0', label: 'Token A (token)', color: '#00c389' },
+          { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+      })
+    );
+    expect(stackedAreaChartMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        height: 360,
+        isPercentage: true,
+        valueUnit: 'shannon',
+        data: [{ date: '2024-01-01', values: { top0: '200', others: '30' } }],
+        series: [
+          { key: 'top0', label: 'Cluster A (nft)', color: '#00c389' },
+          { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+      })
+    );
   });
 });

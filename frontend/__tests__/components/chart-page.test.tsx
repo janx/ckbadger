@@ -4,6 +4,11 @@ import { render } from '../utils/test-utils';
 import { ChartPage } from '@/components/charts/chart-page';
 import { api } from '@/lib/api';
 
+const lineChartMock = vi.fn((_: unknown) => <div data-testid="line-chart" />);
+const chartCalculationNoteMock = vi.fn((_: unknown) => (
+  <div data-testid="chart-calculation-note" />
+));
+
 vi.mock('@/lib/api', () => ({
   api: {
     getNetworkStats: vi.fn(),
@@ -15,9 +20,11 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 vi.mock('@/components/ui/line-chart', () => ({
-  LineChart: ({ chartType }: { chartType?: string }) => (
-    <div data-testid="line-chart">{chartType ?? 'line'}</div>
-  ),
+  LineChart: (props: unknown) => lineChartMock(props),
+}));
+
+vi.mock('@/components/charts/chart-calculation-note', () => ({
+  ChartCalculationNote: (props: unknown) => chartCalculationNoteMock(props),
 }));
 
 describe('ChartPage', () => {
@@ -81,16 +88,31 @@ describe('ChartPage', () => {
       expect(screen.getByTestId('line-chart')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('bar')).toBeInTheDocument();
-    expect(screen.getByText('Description')).toBeInTheDocument();
-    expect(screen.getByText('Legend Item Calculation')).toBeInTheDocument();
-    expect(
-      screen.getByText(/Shows how live cells are distributed across size buckets/i)
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /For each bucket: count live cells whose serialized size falls within that size range/i
-      )
-    ).toBeInTheDocument();
+    expect(api.getNetworkStats).toHaveBeenCalledTimes(1);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
+      'href',
+      '/charts'
+    );
+    expect(screen.getByText('Cell Size Distribution')).toBeInTheDocument();
+    expect(screen.getByText('Count')).toBeInTheDocument();
+    expect(screen.getByText(/Drag to select range/i)).toBeInTheDocument();
+    expect(lineChartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chartType: 'bar',
+        defaultLogScale: false,
+        height: 400,
+        yAxisLabel: 'Count',
+        y2AxisLabel: undefined,
+        data: [{ date: '0-1KB', value: '100' }],
+      })
+    );
+    expect(chartCalculationNoteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: expect.objectContaining({
+          overview: expect.stringMatching(/live cells are distributed/i),
+        }),
+      })
+    );
   });
 });

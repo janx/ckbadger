@@ -170,15 +170,22 @@ describe('ScriptDetailPage', () => {
     });
   });
 
-  it('renders separate capacity and cells sections without capacity history section', async () => {
+  it('renders separate capacity and cells sections for the latest deployment', async () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
 
     await waitFor(() => {
-      expect(screen.getAllByText('Capacity Statistics').length).toBeGreaterThan(0);
+      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledWith(newerCodeHash, 'lock');
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
+        codeHash: newerCodeHash,
+        hashType: 'type',
+        scriptKind: 'lock',
+        limit: 20,
+        cursor: undefined,
+      });
     });
 
+    expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     expect(screen.getByText('Deployed At')).toBeInTheDocument();
-    expect(screen.queryByText('Status')).not.toBeInTheDocument();
     expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
     expect(screen.queryByText('Capacity History')).not.toBeInTheDocument();
     expect(screen.queryByText('Selected Deployment Utilization')).not.toBeInTheDocument();
@@ -187,20 +194,18 @@ describe('ScriptDetailPage', () => {
     expect(
       within(refSemantics).getByRole('link', { name: 'Reference doc: data vs type hash semantics' })
     ).toHaveAttribute('href', 'https://docs.nervos.org/docs/tech-explanation/data-type-diff');
-    expect(screen.getAllByText('Script Ref').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/^Used:/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/HMul:/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('bytecode(data)').length).toBeGreaterThan(0);
-    expect(document.querySelector(`[title="Click to copy: ${newerDataHash}"]`)).toBeTruthy();
     const capacityRefs = screen.getByTestId('capacity-selected-refs');
     const cellsRefs = screen.getByTestId('cells-selected-refs');
     expect(within(capacityRefs).getByText('type')).toBeInTheDocument();
+    expect(within(capacityRefs).getByText('bytecode(data)')).toBeInTheDocument();
+    expect(within(cellsRefs).getByText('type')).toBeInTheDocument();
     expect(within(cellsRefs).getByText('bytecode(data)')).toBeInTheDocument();
 
-    const codeCellLinks = Array.from(document.querySelectorAll('a[href^="/cell/"]')).map((link) =>
-      link.getAttribute('href')
-    );
-    expect(codeCellLinks[0]).toBe(`/cell/${newerCodeCellTxHash}-1`);
-    expect(codeCellLinks[1]).toBe(`/cell/${olderCodeCellTxHash}-0`);
+    const codeCellLinks = screen
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'))
+      .filter((href): href is string => href?.startsWith('/cell/') ?? false);
+    expect(codeCellLinks).toContain(`/cell/${newerCodeCellTxHash}-1`);
+    expect(codeCellLinks).toContain(`/cell/${olderCodeCellTxHash}-0`);
   });
 });

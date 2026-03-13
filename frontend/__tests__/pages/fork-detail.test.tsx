@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ForkDetailPage from '@/app/forks/[id]/client-page';
 import { api } from '@/lib/api';
@@ -69,16 +69,30 @@ describe('ForkDetailPage', () => {
 
     render(<ForkDetailPage />);
 
-    expect(screen.getByTestId('header')).toBeInTheDocument();
-
     await waitFor(() => {
       expect(api.getForkDetail).toHaveBeenCalledWith(1);
       expect(screen.getByText('Fork Event #1')).toBeInTheDocument();
     });
 
+    expect(screen.getByText('REORG')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '#198' })).toHaveAttribute('href', '/blocks/198');
     expect(screen.getByText('Orphaned Blocks (1)')).toBeInTheDocument();
     expect(screen.getByText('Orphaned Transactions (1)')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '#199' })).toHaveAttribute('href', '/blocks/199');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Orphaned Transactions (1)' }));
+
+    await waitFor(() => {
+      expect(
+        screen
+          .getAllByRole('link')
+          .some(
+            (link) =>
+              link.getAttribute('href') ===
+              '/tx/0x2222222222222222222222222222222222222222222222222222222222222222'
+          )
+      ).toBe(true);
+    });
+    expect(screen.getAllByText('1 / 2').length).toBeGreaterThan(0);
   });
 });

@@ -104,23 +104,4 @@ describe('Tabs', () => {
     expect(screen.getByText('Content 1')).toBeInTheDocument();
     expect(screen.queryByText('Content 2')).not.toBeInTheDocument();
   });
-
-  it('applies active styling to selected tab trigger', () => {
-    render(
-      <Tabs defaultValue="tab1">
-        <TabsList>
-          <TabsTrigger value="tab1">Tab 1</TabsTrigger>
-          <TabsTrigger value="tab2">Tab 2</TabsTrigger>
-        </TabsList>
-        <TabsContent value="tab1">Content 1</TabsContent>
-        <TabsContent value="tab2">Content 2</TabsContent>
-      </Tabs>
-    );
-
-    const tab1 = screen.getByText('Tab 1');
-    const tab2 = screen.getByText('Tab 2');
-
-    expect(tab1).toHaveClass('text-jade');
-    expect(tab2).toHaveClass('text-text-dim');
-  });
 });

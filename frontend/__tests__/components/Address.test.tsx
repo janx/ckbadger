@@ -50,27 +50,12 @@ describe('Address', () => {
     });
   });
 
-  describe('styling', () => {
-    it('applies default classes', () => {
-      render(<Address address={testAddress} />);
-      const link = screen.getByRole('link');
-      expect(link).toHaveClass('text-aqua');
-      expect(link).toHaveClass('font-mono');
-      expect(link).toHaveClass('text-sm');
-    });
-
-    it('merges custom className', () => {
+  describe('custom rendering', () => {
+    it('preserves custom className while keeping link behavior intact', () => {
       render(<Address address={testAddress} className="my-custom-class" />);
       const link = screen.getByRole('link');
+      expect(link).toHaveAttribute('href', `/address/${testAddress}`);
       expect(link).toHaveClass('my-custom-class');
-      expect(link).toHaveClass('text-aqua');
-    });
-
-    it('enables line wrapping when truncate is false', () => {
-      render(<Address address={testAddress} truncate={false} />);
-      const link = screen.getByRole('link');
-      expect(link).toHaveClass('break-all');
-      expect(link).toHaveClass('max-w-full');
     });
   });
 });

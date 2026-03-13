@@ -86,7 +86,7 @@ describe('IdentityItemDetail', () => {
     });
   });
 
-  it('renders dotbit standard labels', async () => {
+  it('renders dotbit labels, back link, and live cell link', async () => {
     mockFetchDetail.mockResolvedValue({
       nftId: '0xabc',
       name: 'alice.bit',
@@ -105,9 +105,16 @@ describe('IdentityItemDetail', () => {
       expect(screen.getByText('DOTBIT')).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('link', { name: /Back to \.bit Collection/ })).toHaveAttribute(
+      'href',
+      '/identities/dotbit'
+    );
     expect(screen.getByText('.bit Name')).toBeInTheDocument();
     expect(screen.getByText('Account ID')).toBeInTheDocument();
     expect(screen.getByText('Expires At')).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/cell/0xtx-2')
+    ).toBe(true);
   });
 
   it('renders did:ckb standard labels without expiry', async () => {
@@ -133,20 +140,16 @@ describe('IdentityItemDetail', () => {
     expect(screen.queryByText('Expires At')).not.toBeInTheDocument();
   });
 
-  it('shows not found message for dotbit', async () => {
+  it('shows config-specific not found messages', async () => {
     mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
 
-    render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
+    const { rerender } = render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('.bit item not found')).toBeInTheDocument();
     });
-  });
 
-  it('shows not found message for did:ckb', async () => {
-    mockFetchDetail.mockRejectedValue(new Error('API error: 404'));
-
-    render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
+    rerender(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
 
     await waitFor(() => {
       expect(screen.getByText('did:ckb item not found')).toBeInTheDocument();

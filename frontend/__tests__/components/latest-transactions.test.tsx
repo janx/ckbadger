@@ -28,7 +28,7 @@ describe('LatestTransactions', () => {
     vi.clearAllMocks();
   });
 
-  it('renders Block label with improved readable contrast', async () => {
+  it('renders latest transaction details with transaction and block links', async () => {
     const txs: Transaction[] = [mockTx('0xtx1')];
 
     vi.mocked(api.getTransactions).mockResolvedValue({
@@ -45,6 +45,15 @@ describe('LatestTransactions', () => {
       expect(screen.getByText('Block')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Block')).toHaveClass('text-text-dim');
+    expect(screen.getByRole('link', { name: '#8,775,638' })).toHaveAttribute(
+      'href',
+      '/blocks/8775638'
+    );
+    expect(screen.getByTitle('Click to copy: 0xtx1').closest('a')).toHaveAttribute(
+      'href',
+      '/tx/0xtx1'
+    );
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
   });
 });

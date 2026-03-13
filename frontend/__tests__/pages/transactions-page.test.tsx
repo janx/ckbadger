@@ -19,7 +19,7 @@ describe('TransactionsPage', () => {
     vi.clearAllMocks();
   });
 
-  it('renders transactions with accent hash and block links', async () => {
+  it('renders transaction and block links from fetched transactions', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
         {
@@ -44,20 +44,32 @@ describe('TransactionsPage', () => {
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Transactions')).toBeInTheDocument();
+    expect(screen.getByText('Browse all transactions on the CKB network')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 25 });
     });
 
     await waitFor(() => {
-      expect(document.querySelector('a[href="/blocks/123456"]')).toBeTruthy();
+      expect(screen.getAllByRole('link', { name: '#123,456' })).toHaveLength(2);
     });
-    expect(document.querySelector('a[href="/blocks/123456"]')).toHaveClass('text-emphasis');
-    expect(screen.getAllByText('→')[0]).toHaveClass('text-text-dim');
     expect(
-      document.querySelector(
-        '[title="Click to copy: 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"] .text-aqua-dim'
-      )
-    ).toBeTruthy();
+      screen
+        .getAllByRole('link', { name: '#123,456' })
+        .every((link) => link.getAttribute('href') === '/blocks/123456')
+    ).toBe(true);
+
+    expect(screen.getAllByTitle(/Click to copy: 0xaaaaaaaa/i)).toHaveLength(2);
+    expect(
+      screen
+        .getAllByTitle(/Click to copy: 0xaaaaaaaa/i)
+        .every(
+          (hashDisplay) =>
+            hashDisplay.closest('a')?.getAttribute('href') ===
+            '/tx/0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        )
+    ).toBe(true);
+    expect(screen.getAllByText('2')).toHaveLength(2);
+    expect(screen.getAllByText('3')).toHaveLength(2);
   });
 });

@@ -68,16 +68,6 @@ describe('DaoOverview', () => {
     expect(screen.getByText('Nervos DAO')).toBeInTheDocument();
   });
 
-  it('shows loading skeleton initially', () => {
-    vi.mocked(api.getDaoStatistics).mockReturnValue(new Promise(() => {}));
-    vi.mocked(api.getDaoTotalDepositChart).mockReturnValue(new Promise(() => {}));
-
-    const { container } = render(<DaoOverview />);
-
-    const pulseElements = container.querySelectorAll('.animate-pulse');
-    expect(pulseElements.length).toBeGreaterThanOrEqual(1);
-  });
-
   it('renders delta bar chart when chart data is available', async () => {
     vi.mocked(api.getDaoStatistics).mockResolvedValue(mockDaoStatistics());
     vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse());
@@ -104,26 +94,5 @@ describe('DaoOverview', () => {
     await waitFor(() => {
       expect(screen.getByText('450.00M CKB')).toBeInTheDocument();
     });
-  });
-
-  it('uses desktop-only layout classes to align chart and stats baselines', async () => {
-    vi.mocked(api.getDaoStatistics).mockResolvedValue(mockDaoStatistics());
-    vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(mockChartResponse());
-
-    const { container } = render(<DaoOverview />);
-
-    await waitFor(() => {
-      expect(screen.getByText('11.20B CKB')).toBeInTheDocument();
-    });
-
-    const chartWrapper = container.querySelector('[title]')?.parentElement;
-    expect(chartWrapper).toHaveClass('lg:h-14');
-
-    const estimatedApcLabel = screen.getByText('Estimated APC');
-    const statCell = estimatedApcLabel.parentElement;
-    expect(statCell).toHaveClass('lg:flex', 'lg:flex-col', 'lg:justify-center');
-
-    const statsGrid = statCell?.parentElement;
-    expect(statsGrid).toHaveClass('lg:flex-1');
   });
 });

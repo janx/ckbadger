@@ -146,47 +146,24 @@ describe('BlockDetailPage', () => {
     );
   });
 
-  it('does not show activation badge when block is not a hardfork block', async () => {
-    vi.mocked(api.getBlock).mockResolvedValue({
-      ...mockBlock,
-      hardforkActivation: null,
-    });
-
+  it('hides hardfork banner on regular blocks and supports keyboard navigation', async () => {
     render(<BlockDetailPage />);
 
     await waitFor(() => {
-      expect(api.getBlock).toHaveBeenCalledWith(BLOCK_ID);
+      expect(screen.getByText('Block #8,775,638')).toBeInTheDocument();
     });
 
     expect(screen.queryByText(/HARDFORK ACTIVATION/i)).not.toBeInTheDocument();
-  });
-
-  it('navigates to previous block with ArrowLeft and h', async () => {
-    render(<BlockDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Block #8,775,638')).toBeInTheDocument();
-    });
 
     fireEvent.keyDown(window, { key: 'ArrowLeft' });
     fireEvent.keyDown(window, { key: 'h' });
-
-    expect(pushMock).toHaveBeenNthCalledWith(1, `/blocks/${mockBlock.number - 1}`);
-    expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number - 1}`);
-  });
-
-  it('navigates to next block with ArrowRight and l', async () => {
-    render(<BlockDetailPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Block #8,775,638')).toBeInTheDocument();
-    });
-
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     fireEvent.keyDown(window, { key: 'l' });
 
-    expect(pushMock).toHaveBeenNthCalledWith(1, `/blocks/${mockBlock.number + 1}`);
-    expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number + 1}`);
+    expect(pushMock).toHaveBeenNthCalledWith(1, `/blocks/${mockBlock.number - 1}`);
+    expect(pushMock).toHaveBeenNthCalledWith(2, `/blocks/${mockBlock.number - 1}`);
+    expect(pushMock).toHaveBeenNthCalledWith(3, `/blocks/${mockBlock.number + 1}`);
+    expect(pushMock).toHaveBeenNthCalledWith(4, `/blocks/${mockBlock.number + 1}`);
   });
 
   it('loads hardfork resources from timeline when block payload has no resources', async () => {

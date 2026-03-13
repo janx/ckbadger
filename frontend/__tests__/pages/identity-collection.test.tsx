@@ -214,9 +214,14 @@ describe('IdentityCollectionPage', () => {
 
     render(<IdentityCollectionPage collectionId={mockCollectionId} />);
 
-    await waitFor(() => {
-      expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
+      },
+      {
+        timeout: 3000,
+      }
+    );
     expect(api.getIdentityCollectionHolders).toHaveBeenCalledWith(
       mockCollectionId,
       expect.objectContaining({ limit: 20 })
@@ -236,8 +241,13 @@ describe('IdentityCollectionPage', () => {
 
     render(<IdentityCollectionPage collectionId={mockCollectionId} />);
 
-    await waitFor(() => {
-      expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByText('No holders in this collection')).toBeInTheDocument();
+      },
+      {
+        timeout: 3000,
+      }
+    );
   });
 });

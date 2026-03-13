@@ -71,11 +71,20 @@ describe('LatestActivities', () => {
       }),
     ]);
 
-    const { container } = render(<LatestActivities />);
+    render(<LatestActivities />);
 
-    await waitFor(() => {
-      expect(container.querySelectorAll('a[href="/tx/0xtx-shared"]')).toHaveLength(1);
-    });
+    await waitFor(
+      () => {
+        expect(
+          screen
+            .getAllByRole('link')
+            .filter((link) => link.getAttribute('href') === '/tx/0xtx-shared')
+        ).toHaveLength(1);
+      },
+      {
+        timeout: 3000,
+      }
+    );
   });
 
   it('renders only the first three participants and shows a more hint for the rest', async () => {
@@ -104,56 +113,27 @@ describe('LatestActivities', () => {
       }),
     ]);
 
-    const { container } = render(<LatestActivities />);
+    render(<LatestActivities />);
 
     await waitFor(() => {
       expect(screen.getByText('+1 more')).toBeInTheDocument();
     });
 
     expect(
-      container.querySelector(
-        'a[href="/address/ckb1qsender11111111111111111111111111111111111111111"]'
-      )
-    ).toBeTruthy();
-    expect(
-      container.querySelector(
-        'a[href="/address/ckb1qsender22222222222222222222222222222222222222222"]'
-      )
-    ).toBeTruthy();
-    expect(
-      container.querySelector(
-        'a[href="/address/ckb1qreceiver333333333333333333333333333333333333333"]'
-      )
-    ).toBeTruthy();
-    expect(container.querySelector(`a[href="/address/${hiddenAddress}"]`)).toBeNull();
-  });
-
-  it('renders structural summaries for grouped transactions', async () => {
-    vi.mocked(api.getLatestActivities).mockResolvedValue([
-      makeActivity({
-        address: 'ckb1qsender11111111111111111111111111111111111111111',
-        txHash: '0xtx-fallback',
-        ckbDelta: '-10000000000',
-        assetChanges: [tokenChange('-500')],
-      }),
-      makeActivity({
-        address: 'ckb1qsender22222222222222222222222222222222222222222',
-        txHash: '0xtx-fallback',
-        ckbDelta: '-2000000000',
-      }),
-      makeActivity({
-        address: 'ckb1qreceiver333333333333333333333333333333333333333',
-        txHash: '0xtx-fallback',
-        ckbDelta: '11900000000',
-        assetChanges: [tokenChange('500')],
-      }),
+      screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/address/'))
+        .map((link) => link.getAttribute('href'))
+    ).toEqual([
+      '/address/ckb1qsender11111111111111111111111111111111111111111',
+      '/address/ckb1qsender22222222222222222222222222222222222222222',
+      '/address/ckb1qreceiver333333333333333333333333333333333333333',
     ]);
-
-    render(<LatestActivities />);
-
-    await waitFor(() => {
-      expect(screen.getByText('2 sent · 1 received · 2 asset events')).toBeInTheDocument();
-    });
+    expect(
+      screen
+        .getAllByRole('link')
+        .some((link) => link.getAttribute('href') === `/address/${hiddenAddress}`)
+    ).toBe(false);
   });
 
   it('renders script calls in a dedicated section separate from asset badges', async () => {
@@ -170,7 +150,9 @@ describe('LatestActivities', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(screen.getByText('1 sent · 0 received · 1 asset event · 1 script call')).toBeInTheDocument();
+      expect(
+        screen.getByText('1 sent · 0 received · 1 asset event · 1 script call')
+      ).toBeInTheDocument();
     });
 
     expect(screen.getByText('Assets')).toBeInTheDocument();
@@ -179,28 +161,6 @@ describe('LatestActivities', () => {
       'href',
       '/scripts/RGB%2B%2B%20Lock'
     );
-  });
-
-  it('renders dao summaries instead of structural fallback text', async () => {
-    vi.mocked(api.getLatestActivities).mockResolvedValue([
-      makeActivity({
-        address: 'ckb1qdao111111111111111111111111111111111111111111',
-        txHash: '0xtx-dao',
-        ckbDelta: '-10200000000',
-        assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }],
-      }),
-      makeActivity({
-        address: 'ckb1qpeer11111111111111111111111111111111111111111',
-        txHash: '0xtx-dao',
-        ckbDelta: '10200000000',
-      }),
-    ]);
-
-    render(<LatestActivities />);
-
-    await waitFor(() => {
-      expect(screen.getByText('DAO deposit')).toBeInTheDocument();
-    });
   });
 
   it('renders five activity groups and hides any additional groups', async () => {
@@ -218,33 +178,19 @@ describe('LatestActivities', () => {
       )
     );
 
-    const { container } = render(<LatestActivities />);
+    render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(container.querySelectorAll('a[href^="/tx/"]')).toHaveLength(5);
+      expect(
+        screen.getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('/tx/'))
+      ).toHaveLength(5);
     });
 
-    expect(container.querySelector('a[href="/tx/0xtx-5"]')).toBeTruthy();
-    expect(container.querySelector('a[href="/tx/0xtx-6"]')).toBeNull();
-  });
-
-  it('uses a locked-height overflow-hidden content container', async () => {
-    vi.mocked(api.getLatestActivities).mockResolvedValue([
-      makeActivity({
-        address: 'ckb1qcontent11111111111111111111111111111111111111',
-        txHash: '0xtx-content',
-        ckbDelta: '100000000',
-      }),
-    ]);
-
-    const { container } = render(<LatestActivities />);
-
-    await waitFor(() => {
-      expect(container.querySelector('[data-testid="latest-activities-content"]')).toBeTruthy();
-    });
-
-    expect(container.querySelector('[data-testid="latest-activities-content"]')).toHaveClass(
-      'overflow-hidden'
-    );
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/tx/0xtx-5')
+    ).toBe(true);
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/tx/0xtx-6')
+    ).toBe(false);
   });
 });

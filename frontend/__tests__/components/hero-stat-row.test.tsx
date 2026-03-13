@@ -44,7 +44,7 @@ function mockStats(overrides: Partial<NetworkStats> = {}): NetworkStats {
 }
 
 describe('HeroStatRow', () => {
-  it('renders all 5 stat labels with data', () => {
+  it('renders formatted stat values and links to detail pages', () => {
     render(<HeroStatRow stats={mockStats()} />);
 
     expect(screen.getByText('Knowledge Size')).toBeInTheDocument();
@@ -52,35 +52,35 @@ describe('HeroStatRow', () => {
     expect(screen.getByText('DAO Locked')).toBeInTheDocument();
     expect(screen.getByText('Block Height')).toBeInTheDocument();
     expect(screen.getByText('Epoch')).toBeInTheDocument();
-  });
-
-  it('renders formatted values', () => {
-    render(<HeroStatRow stats={mockStats()} />);
-
-    // Block height should be formatted with commas and # prefix
     expect(screen.getByText('#14,235,678')).toBeInTheDocument();
-
-    // Epoch should extract number and format with commas
     expect(screen.getByText('#8,234')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Knowledge Size/i })).toHaveAttribute(
+      'href',
+      '/charts/knowledge-size'
+    );
+    expect(screen.getByRole('link', { name: /Circulating/i })).toHaveAttribute(
+      'href',
+      '/charts/total-supply'
+    );
+    expect(screen.getByRole('link', { name: /DAO Locked/i })).toHaveAttribute(
+      'href',
+      '/nervos-dao'
+    );
+    expect(screen.getByRole('link', { name: /Block Height/i })).toHaveAttribute(
+      'href',
+      '/blocks/14235678'
+    );
+    expect(screen.getByRole('link', { name: /Epoch/i })).toHaveAttribute(
+      'href',
+      '/charts/epoch-time-length'
+    );
   });
 
-  it('renders links to correct pages', () => {
-    render(<HeroStatRow stats={mockStats()} />);
+  it('hides stat links while loading', () => {
+    render(<HeroStatRow stats={null} />);
 
-    const links = screen.getAllByRole('link');
-    const hrefs = links.map((l) => l.getAttribute('href'));
-
-    expect(hrefs).toContain('/charts/knowledge-size');
-    expect(hrefs).toContain('/charts/total-supply');
-    expect(hrefs).toContain('/nervos-dao');
-    expect(hrefs).toContain('/blocks/14235678');
-    expect(hrefs).toContain('/charts/epoch-time-length');
-  });
-
-  it('renders skeleton placeholders when stats is null', () => {
-    const { container } = render(<HeroStatRow stats={null} />);
-
-    const pulseElements = container.querySelectorAll('.animate-pulse');
-    expect(pulseElements.length).toBeGreaterThanOrEqual(5);
+    expect(screen.queryAllByRole('link')).toHaveLength(0);
+    expect(screen.queryByText('Knowledge Size')).not.toBeInTheDocument();
+    expect(screen.queryByText('Block Height')).not.toBeInTheDocument();
   });
 });

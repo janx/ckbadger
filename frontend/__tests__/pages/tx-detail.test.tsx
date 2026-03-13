@@ -181,8 +181,8 @@ describe('TransactionDetailPage', () => {
     vi.useRealTimers();
   });
 
-  it('renders pending placeholders and keeps committed-only queries disabled', async () => {
-    vi.mocked(api.getTransactionDetail).mockResolvedValueOnce(createPendingTransactionDetail());
+  it('renders pending placeholders while committed-only queries stay disabled', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
 
     render(<TransactionDetailPage />);
 

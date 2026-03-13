@@ -65,11 +65,19 @@ describe('HardforksPage', () => {
       expect(screen.getByText('CKB Edition Meepo')).toBeInTheDocument();
     });
 
+    expect(screen.getByText(/Network: mainnet/)).toBeInTheDocument();
+    expect(screen.getByText(/Tip epoch: 13,000/)).toBeInTheDocument();
+    expect(screen.getByText(/Tip block: #19,000,000/)).toBeInTheDocument();
     expect(screen.getByText('CKB Edition Mirana')).toBeInTheDocument();
     expect(screen.getAllByText('ACTIVATED').length).toBeGreaterThanOrEqual(2);
     const activationLinks = screen.getAllByRole('link', { name: 'View activation block' });
     expect(activationLinks.length).toBe(2);
-    expect(activationLinks[0]).toHaveClass('text-emphasis');
+    expect(activationLinks[0]).toHaveAttribute('href', '/blocks/18430000');
+    expect(activationLinks[1]).toHaveAttribute('href', '/blocks/8775638');
+    expect(screen.getByRole('link', { name: 'CKB2023' })).toHaveAttribute(
+      'href',
+      'https://example.com/ckb2023'
+    );
   });
 
   it('shows error state on fetch failure', async () => {

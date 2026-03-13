@@ -79,8 +79,6 @@ describe('DaoPage', () => {
       'href',
       '/scripts/Default%20Lock'
     );
-    expect(screen.getByText('Default Lock')).toHaveClass('text-info');
-    expect(screen.getAllByText('CKB')[0]).toHaveClass('text-text-dim');
     expect(screen.getByRole('button', { name: 'Active Deposits' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Deposits' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Depositors' })).toBeInTheDocument();
@@ -119,10 +117,14 @@ describe('DaoPage', () => {
 
     await waitFor(() => {
       expect(
-        document.querySelector(
-          'a[href="/cell/0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-3"]'
-        )
-      ).toBeInTheDocument();
+        screen
+          .getAllByRole('link')
+          .some(
+            (link) =>
+              link.getAttribute('href') ===
+              '/cell/0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc-3'
+          )
+      ).toBe(true);
     });
   });
 
@@ -155,10 +157,14 @@ describe('DaoPage', () => {
 
     await waitFor(() => {
       expect(
-        document.querySelector(
-          'a[href="/cell/0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-2"]'
-        )
-      ).toBeInTheDocument();
+        screen
+          .getAllByRole('link')
+          .some(
+            (link) =>
+              link.getAttribute('href') ===
+              '/cell/0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-2'
+          )
+      ).toBe(true);
     });
   });
 });

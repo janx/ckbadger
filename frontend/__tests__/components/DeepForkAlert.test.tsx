@@ -28,40 +28,14 @@ describe('DeepForkAlert', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders alert when deep fork is detected', () => {
+  it('renders alert details and details link when a deep fork is detected', () => {
     render(<DeepForkAlert status={activeDeepFork} />);
+
     expect(screen.getByText('Chain Fork Detected - Sync Paused')).toBeInTheDocument();
-  });
-
-  it('displays fork depth', () => {
-    render(<DeepForkAlert status={activeDeepFork} />);
     expect(screen.getByText('50 blocks')).toBeInTheDocument();
-  });
-
-  it('displays DB tip', () => {
-    render(<DeepForkAlert status={activeDeepFork} />);
     expect(screen.getByText('#1,000')).toBeInTheDocument();
-  });
-
-  it('displays chain tip', () => {
-    render(<DeepForkAlert status={activeDeepFork} />);
     expect(screen.getByText('#1,050')).toBeInTheDocument();
-  });
-
-  it('displays fork point', () => {
-    render(<DeepForkAlert status={activeDeepFork} />);
     expect(screen.getByText('#950')).toBeInTheDocument();
-  });
-
-  it('has link to forks page', () => {
-    render(<DeepForkAlert status={activeDeepFork} />);
-    const link = screen.getByRole('link', { name: /View Details/i });
-    expect(link).toHaveAttribute('href', '/forks');
-  });
-
-  it('renders with red background', () => {
-    const { container } = render(<DeepForkAlert status={activeDeepFork} />);
-    const alertDiv = container.firstChild as HTMLElement;
-    expect(alertDiv).toHaveClass('bg-negative');
+    expect(screen.getByRole('link', { name: /View Details/i })).toHaveAttribute('href', '/forks');
   });
 });

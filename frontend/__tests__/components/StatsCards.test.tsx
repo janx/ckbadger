@@ -21,6 +21,33 @@ function createWrapper() {
   );
 }
 
+function createNetworkResponse(syncStatus?: Record<string, unknown>) {
+  return {
+    latestBlock: 1000000,
+    avgBlockTime: '10.5s',
+    hashRate: '1.23 EH/s',
+    difficulty: '2.34 P',
+    epoch: '500 (45%)',
+    tps: '1.23',
+    syncStatus,
+  };
+}
+
+function createBulkSyncStatus(overrides?: Record<string, unknown>) {
+  return {
+    isSyncing: true,
+    syncedBlock: 500000,
+    tipBlock: 1000000,
+    progress: 50.0,
+    estimatedTime: '2h 30m',
+    chartDataMayBeIncomplete: false,
+    blocksPerSecond: 1500.5,
+    emaBlocksPerSecond: 1200.0,
+    syncMode: 'bulk',
+    ...overrides,
+  };
+}
+
 describe('StatsCards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -40,60 +67,18 @@ describe('StatsCards', () => {
     expect(screen.getByText('TPS (24H)')).toBeInTheDocument();
   });
 
-  it('shows sync banner when bulk syncing', async () => {
+  it('shows bulk sync progress details when available', async () => {
     server.use(
       http.get(`${API_BASE}/statistics/network`, () => {
-        return HttpResponse.json({
-          latestBlock: 1000000,
-          avgBlockTime: '10.5s',
-          hashRate: '1.23 EH/s',
-          difficulty: '2.34 P',
-          epoch: '500 (45%)',
-          tps: '1.23',
-          syncStatus: {
-            isSyncing: true,
-            syncedBlock: 500000,
-            tipBlock: 1000000,
-            progress: 50.0,
-            estimatedTime: '2h 30m',
-            chartDataMayBeIncomplete: false,
-            blocksPerSecond: 1500.5,
-            emaBlocksPerSecond: 1200.0,
-            syncMode: 'bulk',
-          },
-        });
-      })
-    );
-
-    render(<StatsCards />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('BULK SYNCING...')).toBeInTheDocument();
-    });
-  });
-
-  it('shows sync speed when available', async () => {
-    server.use(
-      http.get(`${API_BASE}/statistics/network`, () => {
-        return HttpResponse.json({
-          latestBlock: 1000000,
-          avgBlockTime: '10.5s',
-          hashRate: '1.23 EH/s',
-          difficulty: '2.34 P',
-          epoch: '500 (45%)',
-          tps: '1.23',
-          syncStatus: {
-            isSyncing: true,
-            syncedBlock: 500000,
-            tipBlock: 1000000,
-            progress: 50.0,
-            estimatedTime: '2h 30m',
-            chartDataMayBeIncomplete: false,
-            blocksPerSecond: 1500.5,
-            emaBlocksPerSecond: 1200.0,
-            syncMode: 'bulk',
-          },
-        });
+        return HttpResponse.json(
+          createNetworkResponse(
+            createBulkSyncStatus({
+              elapsedTime: '1h 10m',
+              txsPerSecond: 10500.0,
+              emaTxsPerSecond: 9800.0,
+            })
+          )
+        );
       })
     );
 
@@ -103,73 +88,30 @@ describe('StatsCards', () => {
       expect(screen.getByText('BULK SYNCING...')).toBeInTheDocument();
     });
 
-    // Should show EMA blocks per second formatted as "1.2K blocks/s"
     expect(screen.getByText('1.2K')).toBeInTheDocument();
     expect(screen.getByText('blocks/s')).toBeInTheDocument();
-  });
-
-  it('shows elapsed time and txns per second when available', async () => {
-    server.use(
-      http.get(`${API_BASE}/statistics/network`, () => {
-        return HttpResponse.json({
-          latestBlock: 1000000,
-          avgBlockTime: '10.5s',
-          hashRate: '1.23 EH/s',
-          difficulty: '2.34 P',
-          epoch: '500 (45%)',
-          tps: '1.23',
-          syncStatus: {
-            isSyncing: true,
-            syncedBlock: 500000,
-            tipBlock: 1000000,
-            progress: 50.0,
-            estimatedTime: '2h 30m',
-            elapsedTime: '1h 10m',
-            chartDataMayBeIncomplete: false,
-            blocksPerSecond: 1500.5,
-            emaBlocksPerSecond: 1200.0,
-            txsPerSecond: 10500.0,
-            emaTxsPerSecond: 9800.0,
-            syncMode: 'bulk',
-          },
-        });
-      })
-    );
-
-    render(<StatsCards />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('BULK SYNCING...')).toBeInTheDocument();
-    });
-
     expect(screen.getByText('Elapsed: 1h 10m')).toBeInTheDocument();
     expect(screen.getByText('9.8K')).toBeInTheDocument();
     expect(screen.getByText('txns/s')).toBeInTheDocument();
+    expect(screen.getByText('ETA: 2h 30m')).toBeInTheDocument();
   });
 
   it('does not show sync banner during non-bulk syncing', async () => {
     server.use(
       http.get(`${API_BASE}/statistics/network`, () => {
-        return HttpResponse.json({
-          latestBlock: 1000000,
-          avgBlockTime: '10.5s',
-          hashRate: '1.23 EH/s',
-          difficulty: '2.34 P',
-          epoch: '500 (45%)',
-          tps: '1.23',
-          syncStatus: {
-            isSyncing: true,
-            syncedBlock: 999100,
-            tipBlock: 1000000,
-            progress: 99.9,
-            estimatedTime: '3m',
-            elapsedTime: '15m',
-            chartDataMayBeIncomplete: false,
-            blocksPerSecond: 20,
-            emaBlocksPerSecond: 18,
-            syncMode: 'normal',
-          },
-        });
+        return HttpResponse.json(
+          createNetworkResponse(
+            createBulkSyncStatus({
+              syncedBlock: 999100,
+              progress: 99.9,
+              estimatedTime: '3m',
+              elapsedTime: '15m',
+              blocksPerSecond: 20,
+              emaBlocksPerSecond: 18,
+              syncMode: 'normal',
+            })
+          )
+        );
       })
     );
 

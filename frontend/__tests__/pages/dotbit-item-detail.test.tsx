@@ -72,7 +72,7 @@ describe('DotbitItemDetailPage', () => {
     });
   });
 
-  it('renders dotbit detail sections', async () => {
+  it('renders dotbit labels, back link, and recycled status message', async () => {
     vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
       nftId: '0xabc',
       name: 'alice.bit',
@@ -91,10 +91,12 @@ describe('DotbitItemDetailPage', () => {
       expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('link', { name: /Back to \.bit Collection/ })).toHaveAttribute(
+      'href',
+      '/identities/dotbit'
+    );
     expect(screen.getByText('Identity & Ownership')).toBeInTheDocument();
     expect(screen.getByText('Cell Status')).toBeInTheDocument();
-    expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
-    expect(screen.queryByRole('button', { name: 'Transactions' })).not.toBeInTheDocument();
     expect(screen.getAllByText('alice.bit').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Recycled').length).toBeGreaterThan(0);
     expect(screen.getByText('Recycled .bit account has no live cell.')).toBeInTheDocument();
@@ -137,11 +139,10 @@ describe('DotbitItemDetailPage', () => {
       expect(screen.getAllByText('recycled, transfer').length).toBeGreaterThan(0);
     });
     expect(screen.getByText(/2023/)).toBeInTheDocument();
-
-    const txLinks = document.querySelectorAll('a[href*="/tx/"]');
-    expect(txLinks.length).toBeGreaterThan(0);
-    const blockLinks = document.querySelectorAll('a[href*="/blocks/456"]');
-    expect(blockLinks.length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: '#456' })).toHaveAttribute('href', '/blocks/456');
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/tx/0xacttx')
+    ).toBe(true);
   });
 
   it('applies cursor pagination', async () => {

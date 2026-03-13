@@ -48,7 +48,7 @@ describe('MnftItemDetailPage', () => {
     } as any);
   });
 
-  it('renders mnft detail sections', async () => {
+  it('renders mnft identity, ownership, and lifecycle links', async () => {
     vi.mocked(api.getMnftItemDetail).mockResolvedValue({
       nftId: '0xmnft',
       standard: 'm-nft',
@@ -99,18 +99,31 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId="0xmnft" />);
 
     await waitFor(() => {
-      expect(screen.getByText('Asset Snapshot')).toBeInTheDocument();
+      expect(screen.getByText('Class A #99')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Identity Graph')).toBeInTheDocument();
-    expect(screen.getByText('On-chain State')).toBeInTheDocument();
-    expect(screen.getByText('Ownership & Live Cell')).toBeInTheDocument();
-    expect(screen.getByText('Class Context')).toBeInTheDocument();
-    expect(screen.getByText('Lifecycle')).toBeInTheDocument();
-    expect(screen.getByText('Activities')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Back to Class/ })).toHaveAttribute(
+      'href',
+      '/objects/0xclass'
+    );
+    expect(screen.getByRole('link', { name: /Back to Objects/ })).toHaveAttribute(
+      'href',
+      '/assets?type=object'
+    );
+    expect(screen.getByText('M-NFT')).toBeInTheDocument();
+    expect(screen.getByText('locked')).toBeInTheDocument();
+    expect(screen.getByText('transferable, burnable')).toBeInTheDocument();
     expect(screen.getByText('Class A')).toBeInTheDocument();
     expect(screen.getByText('Issuer A')).toBeInTheDocument();
-    expect(screen.getByText('Class A #99')).toBeInTheDocument();
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/blocks/123')
+    ).toBe(true);
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/cell/0xtx-4')
+    ).toBe(true);
+    expect(
+      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/objects/0xclass')
+    ).toBe(true);
   });
 
   it('renders not found panel when item is missing', async () => {

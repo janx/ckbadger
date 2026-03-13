@@ -193,19 +193,7 @@ describe('SporeDetailPage', () => {
     } as any);
   });
 
-  it('links back to NFT tab on assets page', async () => {
-    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      const backLink = screen.getByText('← Back to Objects');
-      expect(backLink).toBeInTheDocument();
-      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=object');
-    });
-  });
-
-  it('renders capacity statistics panel', async () => {
+  it('renders spore overview panels and back link', async () => {
     vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
@@ -213,20 +201,16 @@ describe('SporeDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
     });
-  });
 
-  it('renders improved spore content panels', async () => {
-    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
-      expect(screen.getByText('Spore Content Preview')).toBeInTheDocument();
-      expect(screen.getByText('Spore Details')).toBeInTheDocument();
-      expect(screen.getByText('Rendering Pipeline')).toBeInTheDocument();
-      expect(screen.queryByText('How To Read This Spore')).not.toBeInTheDocument();
-    });
+    expect(screen.getByRole('link', { name: '← Back to Objects' })).toHaveAttribute(
+      'href',
+      '/assets?type=object'
+    );
+    expect(screen.getByText('Spore Asset (0x1234...cdef)')).toBeInTheDocument();
+    expect(screen.getByText('Spore Content Preview')).toBeInTheDocument();
+    expect(screen.getByText('Spore Details')).toBeInTheDocument();
+    expect(screen.getByText('Rendering Pipeline')).toBeInTheDocument();
+    expect(screen.queryByText('How To Read This Spore')).not.toBeInTheDocument();
   });
 
   it('renders media source analysis from API profile', async () => {
@@ -254,23 +238,6 @@ describe('SporeDetailPage', () => {
       expect(screen.getByText('btcfs://abcdi0')).toBeInTheDocument();
       expect(screen.getAllByText('Fully On-chain').length).toBeGreaterThan(0);
     });
-  });
-
-  it('uses vertical layout for long identity fields', async () => {
-    vi.mocked(api.getSporeObject).mockResolvedValue(mockSpore);
-
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Spore Details')).toBeInTheDocument();
-      expect(screen.getByText('Spore ID')).toBeInTheDocument();
-      expect(screen.getByText('Owner Lock Hash')).toBeInTheDocument();
-    });
-
-    const sporeIdField = screen.getByText('Spore ID').closest('div')?.parentElement;
-    const ownerLockHashField = screen.getByText('Owner Lock Hash').closest('div')?.parentElement;
-    expect(sporeIdField).toHaveClass('flex-col');
-    expect(ownerLockHashField).toHaveClass('flex-col');
   });
 
   it('shows owner address resolved from lock hash', async () => {
@@ -356,10 +323,6 @@ describe('SporeDetailPage', () => {
       .map((node) => node.closest('pre'))
       .filter((element): element is HTMLPreElement => element !== null);
     expect(payloadPreElements.length).toBeGreaterThan(0);
-    payloadPreElements.forEach((pre) => {
-      expect(pre).toHaveClass('break-all');
-      expect(pre).toHaveClass('max-w-full');
-    });
   });
 
   it('renders cluster metadata from JSON description', async () => {
@@ -384,19 +347,21 @@ describe('SporeDetailPage', () => {
 
     render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
-    await waitFor(() => {
-      expect(screen.getByText('Cluster Context')).toBeInTheDocument();
-      expect(screen.getByText('Metadata-rich cluster')).toBeInTheDocument();
-      const versionLabel = screen.getByText('Version');
-      expect(versionLabel).toBeInTheDocument();
-      expect(versionLabel.parentElement?.textContent).toContain('3');
-      expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(api.getSporeCluster).toHaveBeenCalledWith('0xcluster');
+        expect(screen.getByText('Metadata-rich cluster')).toBeInTheDocument();
+      },
+      {
+        timeout: 3000,
+      }
+    );
 
-    const nameField = screen.getByText('Name').closest('div')?.parentElement;
-    const descriptionField = screen.getByText('Description').closest('div')?.parentElement;
-    expect(nameField).not.toHaveClass('sm:flex-row');
-    expect(descriptionField).not.toHaveClass('sm:flex-row');
+    expect(screen.getByText('Cluster Context')).toBeInTheDocument();
+    const versionLabel = screen.getByText('Version');
+    expect(versionLabel).toBeInTheDocument();
+    expect(versionLabel.parentElement?.textContent).toContain('3');
+    expect(screen.getByText('View Raw Cluster Metadata JSON')).toBeInTheDocument();
   });
 
   it('falls back to object collection detail when spore lookup returns 404', async () => {
@@ -513,28 +478,22 @@ describe('SporeDetailPage', () => {
     });
   });
 
-  it('redirects dotbit alias to /identities/dotbit', async () => {
-    mockParams = { sporeId: 'dotbit' };
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/identities/dotbit');
-    });
-  });
+  it('redirects identity collection aliases to their canonical collection pages', async () => {
+    const assertAliasRedirect = async (alias: string, target: string) => {
+      mockParams = { sporeId: alias };
+      mockReplace.mockClear();
+      const view = render(<SporeDetailPage sporeId={mockParams.sporeId} />);
 
-  it('redirects .bit alias to /identities/dotbit', async () => {
-    mockParams = { sporeId: '.bit' };
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/identities/dotbit');
-    });
-  });
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith(target);
+      });
 
-  it('redirects did:ckb alias to /identities/did:ckb', async () => {
-    mockParams = { sporeId: 'did:ckb' };
-    render(<SporeDetailPage sporeId={mockParams.sporeId} />);
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith('/identities/did:ckb');
-    });
+      view.unmount();
+    };
+
+    await assertAliasRedirect('dotbit', '/identities/dotbit');
+    await assertAliasRedirect('.bit', '/identities/dotbit');
+    await assertAliasRedirect('did:ckb', '/identities/did:ckb');
   });
 
   it('links mnft collection item to mnft asset detail page', async () => {

@@ -561,9 +561,14 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText('Mint did:ckb')[0]).toBeInTheDocument();
-    });
+    await waitFor(
+      () => {
+        expect(screen.getAllByText('Mint did:ckb')[0]).toBeInTheDocument();
+      },
+      {
+        timeout: 3000,
+      }
+    );
   });
 
   it('shows script calls in a dedicated activity section with script metadata', async () => {

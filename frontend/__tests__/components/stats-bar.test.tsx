@@ -50,17 +50,29 @@ describe('GlobalStatsBar', () => {
     });
   });
 
-  it('renders stats data without a trailing blinking cursor', async () => {
-    const { container } = render(<GlobalStatsBar />);
+  it('renders fetched stats with chart and block links', async () => {
+    render(<GlobalStatsBar />);
 
     await waitFor(() => {
       expect(screen.getByText('block')).toBeInTheDocument();
     });
 
-    expect(screen.queryByTestId('global-stats-prompt')).not.toBeInTheDocument();
-    expect(screen.queryByText('>')).not.toBeInTheDocument();
+    expect(api.getNetworkStats).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('link', { name: /block/i })).toHaveAttribute(
+      'href',
+      '/blocks/18823834'
+    );
+    expect(screen.getByRole('link', { name: /epoch/i })).toHaveAttribute(
+      'href',
+      '/charts/epoch-time-length'
+    );
+    expect(screen.getByRole('link', { name: /hash/i })).toHaveAttribute(
+      'href',
+      '/charts/hash-rate'
+    );
+    expect(screen.getByText('13,814')).toBeInTheDocument();
+    expect(screen.getByText('828/947 87.4%')).toBeInTheDocument();
     expect(screen.getByText('334.18 PH/s')).toBeInTheDocument();
     expect(screen.getByText('5.00s')).toBeInTheDocument();
-    expect(container.querySelector('.animate-blink-cursor')).toBeNull();
   });
 });

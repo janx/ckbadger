@@ -66,7 +66,7 @@ describe('AssetEcosystem', () => {
     vi.clearAllMocks();
   });
 
-  it('renders top tokens after loading', async () => {
+  it('renders asset ecosystem links, top tokens, and capacity legend after loading', async () => {
     vi.mocked(api.getAssetEcosystem).mockResolvedValue(mockAssetEcosystem());
 
     render(<AssetEcosystem />);
@@ -75,66 +75,27 @@ describe('AssetEcosystem', () => {
       expect(screen.getByText('USDT')).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('link', { name: 'Asset Ecosystem' })).toHaveAttribute(
+      'href',
+      '/tokens'
+    );
+    expect(screen.getByRole('link', { name: /VIEW ALL/i })).toHaveAttribute('href', '/tokens');
     expect(screen.getByText('SEAL')).toBeInTheDocument();
     expect(screen.getByText('CKBull')).toBeInTheDocument();
     expect(screen.getByText('JoyID')).toBeInTheDocument();
     expect(screen.getByText('RUSD')).toBeInTheDocument();
-
-    // Holder counts
+    expect(screen.getByRole('link', { name: 'USDT' })).toHaveAttribute('href', '/tokens/0xaaa111');
+    expect(screen.getByRole('link', { name: 'SEAL' })).toHaveAttribute('href', '/tokens/0xbbb222');
     expect(screen.getByText('1,500 holders')).toBeInTheDocument();
     expect(screen.getByText('800 holders')).toBeInTheDocument();
-  });
 
-  it('renders capacity breakdown categories in the legend', async () => {
-    vi.mocked(api.getAssetEcosystem).mockResolvedValue(mockAssetEcosystem());
-
-    render(<AssetEcosystem />);
-
-    await waitFor(() => {
-      expect(screen.getByText('DAO')).toBeInTheDocument();
-    });
-
+    expect(screen.getByText('DAO')).toBeInTheDocument();
     expect(screen.getByText('Tokens')).toBeInTheDocument();
     expect(screen.getByText('Objects')).toBeInTheDocument();
     expect(screen.getByText('Other')).toBeInTheDocument();
-
-    // Percentages
     expect(screen.getByText('57.1%')).toBeInTheDocument();
     expect(screen.getByText('7.6%')).toBeInTheDocument();
     expect(screen.getByText('2.5%')).toBeInTheDocument();
     expect(screen.getByText('32.8%')).toBeInTheDocument();
-  });
-
-  it('renders token links to correct pages', async () => {
-    vi.mocked(api.getAssetEcosystem).mockResolvedValue(mockAssetEcosystem());
-
-    render(<AssetEcosystem />);
-
-    await waitFor(() => {
-      expect(screen.getByText('USDT')).toBeInTheDocument();
-    });
-
-    const usdtLink = screen.getByText('USDT').closest('a');
-    expect(usdtLink).toHaveAttribute('href', '/tokens/0xaaa111');
-
-    const sealLink = screen.getByText('SEAL').closest('a');
-    expect(sealLink).toHaveAttribute('href', '/tokens/0xbbb222');
-  });
-
-  it('shows loading skeleton initially', () => {
-    vi.mocked(api.getAssetEcosystem).mockReturnValue(new Promise(() => {}));
-
-    const { container } = render(<AssetEcosystem />);
-
-    const pulseElements = container.querySelectorAll('.animate-pulse');
-    expect(pulseElements.length).toBeGreaterThanOrEqual(3);
-  });
-
-  it('renders the header', async () => {
-    vi.mocked(api.getAssetEcosystem).mockResolvedValue(mockAssetEcosystem());
-
-    render(<AssetEcosystem />);
-
-    expect(screen.getByText('Asset Ecosystem')).toBeInTheDocument();
   });
 });

@@ -39,7 +39,7 @@ describe('LatestBlocks', () => {
     vi.clearAllMocks();
   });
 
-  it('renders hardfork badge for activation block', async () => {
+  it('renders hardfork badge only for the activation block and keeps block links', async () => {
     const blocks: Block[] = [
       {
         ...mockBlock(8_775_638),
@@ -67,8 +67,16 @@ describe('LatestBlocks', () => {
     await waitFor(() => {
       expect(screen.getByTestId('latest-block-hardfork-8775638')).toBeInTheDocument();
     });
+
     expect(screen.getByText('HF · MIRANA')).toBeInTheDocument();
     expect(screen.queryByTestId('latest-block-hardfork-8775639')).not.toBeInTheDocument();
-    expect(screen.getAllByText('#')[0]).toHaveClass('text-text-dim');
+    expect(screen.getByRole('link', { name: /#\s*8,775,638/i })).toHaveAttribute(
+      'href',
+      '/blocks/8775638'
+    );
+    expect(screen.getByRole('link', { name: /#\s*8,775,639/i })).toHaveAttribute(
+      'href',
+      '/blocks/8775639'
+    );
   });
 });

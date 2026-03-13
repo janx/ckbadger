@@ -89,60 +89,7 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenActivities).mockResolvedValue(mockActivities);
   });
 
-  it('renders cells count stat', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Cells')).toBeInTheDocument();
-      expect(screen.getByText('150')).toBeInTheDocument();
-    });
-  });
-
-  it('renders cells capacity inside capacity utilization', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.queryByText('Capacity Snapshot')).not.toBeInTheDocument();
-      expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
-    });
-  });
-
-  it('renders capacity utilization bar', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
-      expect(screen.getByText(/^Used:/)).toBeInTheDocument();
-      expect(screen.getByText(/\(\d+\.\d% used\)/)).toBeInTheDocument();
-    });
-  });
-
-  it('renders used and unused breakdown', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText(/^Used:/)).toBeInTheDocument();
-      expect(screen.getByText(/^Unused:/)).toBeInTheDocument();
-    });
-  });
-
-  it('renders basic token info', async () => {
+  it('renders token overview and capacity statistics', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
 
     render(
@@ -151,23 +98,19 @@ describe('TokenDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('TEST')).toBeInTheDocument();
-      expect(screen.getByText('XUDT')).toBeInTheDocument();
-      expect(screen.getByText('A test token')).toBeInTheDocument();
     });
-  });
 
-  it('renders circulation label and unknown max supply for xUDT without cap observation', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Total Circulation')).toBeInTheDocument();
-      expect(screen.getByText('Maximum Supply')).toBeInTheDocument();
-      expect(screen.getByText('Unknown')).toBeInTheDocument();
-    });
+    expect(screen.getByText('XUDT')).toBeInTheDocument();
+    expect(screen.getByText('A test token')).toBeInTheDocument();
+    expect(screen.getByText('Total Circulation')).toBeInTheDocument();
+    expect(screen.getByText('Maximum Supply')).toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
+    expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
+    expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
+    expect(screen.getByText(/^Used:/)).toBeInTheDocument();
+    expect(screen.getByText(/^Unused:/)).toBeInTheDocument();
+    expect(screen.getAllByText('Cells').length).toBeGreaterThan(0);
+    expect(screen.getByText('150')).toBeInTheDocument();
   });
 
   it('renders unlimited max supply when status is unlimited', async () => {
@@ -186,32 +129,7 @@ describe('TokenDetailPage', () => {
     });
   });
 
-  it('renders capacity statistics panel', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
-    });
-  });
-
-  it('defaults to activities tab', async () => {
-    vi.mocked(api.getToken).mockResolvedValue(mockToken);
-
-    render(
-      <TokenDetailPage typeHash="0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef" />
-    );
-
-    await waitFor(() => {
-      const elements = screen.getAllByText('Activities');
-      expect(elements.length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  it('renders activities with transfer details', async () => {
+  it('defaults to activities tab and renders transfer details', async () => {
     vi.mocked(api.getToken).mockResolvedValue(mockToken);
     vi.mocked(api.getTokenActivities).mockResolvedValue({
       data: [
@@ -253,9 +171,21 @@ describe('TokenDetailPage', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('mint')).toBeInTheDocument();
-      expect(screen.getByText('transfer')).toBeInTheDocument();
       expect(screen.getByText('Mint')).toBeInTheDocument();
     });
+
+    expect(screen.getAllByText('Activities').length).toBeGreaterThan(0);
+    expect(screen.getByText('mint')).toBeInTheDocument();
+    expect(screen.getByText('transfer')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '#12,345' })).toHaveAttribute('href', '/blocks/12345');
+    expect(
+      screen
+        .getAllByRole('link')
+        .some(
+          (link) =>
+            link.getAttribute('href') ===
+            '/tx/0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234'
+        )
+    ).toBe(true);
   });
 });

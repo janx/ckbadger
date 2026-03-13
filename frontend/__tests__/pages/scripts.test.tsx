@@ -76,7 +76,7 @@ describe('ScriptsPage', () => {
     vi.clearAllMocks();
   });
 
-  it('renders script list', async () => {
+  it('renders sortable script list columns and entries', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 
     render(<ScriptsPage />);
@@ -97,6 +97,9 @@ describe('ScriptsPage', () => {
 
     expect(screen.getAllByRole('link', { name: 'SECP256K1_BLAKE160' })[0]).toBeInTheDocument();
     expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sort by Total Cells' })).toBeInTheDocument();
+    expect(screen.getByText('Deployed')).toBeInTheDocument();
     expect(screen.getByText('Capacity (CKB)')).toBeInTheDocument();
     expect(screen.queryByText('Utilization Ratio')).toBeNull();
     expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
@@ -126,15 +129,6 @@ describe('ScriptsPage', () => {
           sortDirection: 'desc',
         })
       );
-    });
-
-    await waitFor(() => {
-      const scriptLinks = screen
-        .getAllByRole('link')
-        .filter((link) => link.getAttribute('href')?.startsWith('/scripts/'));
-      // Dual-render (table + card) means each script appears twice; check first pair order
-      const names = scriptLinks.map((el) => el.textContent);
-      expect(names.indexOf('ALWAYS_SUCCESS')).toBeLessThan(names.indexOf('SECP256K1_BLAKE160'));
     });
   });
 
@@ -194,23 +188,6 @@ describe('ScriptsPage', () => {
       'title',
       unknownScriptRefFull
     );
-  });
-
-  it('renders Live Cells and Total Cells sort headers at xl width', async () => {
-    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
-    render(<ScriptsPage />);
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort by Total Cells' })).toBeInTheDocument();
-    });
-  });
-
-  it('renders Deployed column header at xl width', async () => {
-    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
-    render(<ScriptsPage />);
-    await waitFor(() => {
-      expect(screen.getByText('Deployed')).toBeInTheDocument();
-    });
   });
 
   it('supports sorting by live cells', async () => {

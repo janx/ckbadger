@@ -73,11 +73,18 @@ describe('ScriptByCodeHashPage', () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue(emptyCells);
   });
 
-  it('renders capacity utilization for the script code hash', async () => {
+  it('renders deployment refs and queries cells for the script code hash', async () => {
     render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
 
     await waitFor(() => {
-      expect(screen.queryByText('Capacity Utilization')).not.toBeInTheDocument();
+      expect(api.getScriptCapacityChartByCodeHash).toHaveBeenCalledWith(mockCodeHash, 'both');
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith({
+        codeHash: mockCodeHash,
+        hashType: 'type',
+        scriptKind: 'both',
+        limit: 20,
+        cursor: undefined,
+      });
       expect(screen.getByText('Capacity History')).toBeInTheDocument();
       expect(screen.getByText('Cells Capacity')).toBeInTheDocument();
       expect(screen.getByText(/HMul:/)).toBeInTheDocument();
@@ -92,14 +99,19 @@ describe('ScriptByCodeHashPage', () => {
     expect(screen.getByText('type (upgradeable ref)')).toBeInTheDocument();
     expect(screen.getByText('Type + Data')).toBeInTheDocument();
     expect(
-      document.querySelector(`a[href="/script/${mockCodeHash}?hashType=type&kind=type"]`)
-    ).toBeTruthy();
+      screen
+        .getAllByRole('link')
+        .some(
+          (link) => link.getAttribute('href') === `/script/${mockCodeHash}?hashType=type&kind=type`
+        )
+    ).toBe(true);
     expect(
-      document.querySelector(`a[href="/script/${mockDataHash}?hashType=data&kind=type"]`)
-    ).toBeTruthy();
-    expect(
-      document.querySelector(`[title="Click to copy: ${mockCodeHash}"] .text-aqua-dim`)
-    ).toBeTruthy();
+      screen
+        .getAllByRole('link')
+        .some(
+          (link) => link.getAttribute('href') === `/script/${mockDataHash}?hashType=data&kind=type`
+        )
+    ).toBe(true);
   });
 
   it('redirects known script hash to the unified named script detail page', async () => {

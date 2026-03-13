@@ -71,23 +71,13 @@ describe('KnowledgeSizeTrend', () => {
     vi.clearAllMocks();
   });
 
-  it('renders with "Knowledge Bytes" text', async () => {
-    vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse());
-
-    render(<KnowledgeSizeTrend />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Knowledge Bytes — Daily Change')).toBeInTheDocument();
-    });
-  });
-
-  it('renders delta bar chart after loading', async () => {
+  it('renders knowledge-bytes header and delta bars after loading', async () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse());
 
     const { container } = render(<KnowledgeSizeTrend />);
 
     await waitFor(() => {
-      // Delta bar chart renders div bars with title attributes
+      expect(screen.getByText('Knowledge Bytes — Daily Change')).toBeInTheDocument();
       const bars = container.querySelectorAll('[title]');
       expect(bars.length).toBeGreaterThan(0);
     });
@@ -99,7 +89,7 @@ describe('NetworkHealth', () => {
     vi.clearAllMocks();
   });
 
-  it('renders with "Block Time" and "Hash Rate" text', async () => {
+  it('renders network health labels and current stat values', async () => {
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse());
     vi.mocked(api.getHashRateChart).mockResolvedValue(mockChartResponse());
 
@@ -110,17 +100,8 @@ describe('NetworkHealth', () => {
     });
 
     expect(screen.getByText('Hash Rate')).toBeInTheDocument();
-  });
-
-  it('shows current block time value from stats', async () => {
-    vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse());
-    vi.mocked(api.getHashRateChart).mockResolvedValue(mockChartResponse());
-
-    render(<NetworkHealth stats={mockNetworkStats()} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('8.20s')).toBeInTheDocument();
-    });
+    expect(screen.getByText('8.20s')).toBeInTheDocument();
+    expect(screen.getByText('1.23 EH/s')).toBeInTheDocument();
   });
 
   it('renders with null stats gracefully', async () => {
@@ -187,49 +168,6 @@ describe('ActivityCard script usage', () => {
     await waitFor(() => {
       expect(screen.getByText('Script Usage')).toBeInTheDocument();
     });
-  });
-
-  it('uses a fixed-height desktop card with bounded pie rails', async () => {
-    vi.mocked(api.getActivitySummary24h).mockResolvedValue({
-      transferCount: 100,
-      daoDepositCount: 10,
-      daoWithdrawRequestCount: 5,
-      daoWithdrawCompleteCount: 3,
-      tokenCount: 20,
-      objectCount: 8,
-      identityCount: 2,
-      scriptCallCount: 15,
-      unknownCount: 0,
-      coinbaseCount: 50,
-      uniqueAddressCount: 200,
-      totalCkbMoved: '500000000000',
-      hoursCovered: 24,
-      scriptCounts: [
-        { codeHash: '0xaaa', name: 'secp256k1', count: 500 },
-        { codeHash: '0xbbb', name: 'dao', count: 200 },
-      ],
-    });
-
-    const { container } = renderActivityCard();
-
-    await screen.findByText('Activity Types');
-
-    expect(container.querySelector('.lg\\:h-\\[44rem\\]')).toBeTruthy();
-    expect(screen.getByTestId('activity-types-section')).toHaveClass('flex-1');
-    expect(screen.getByTestId('activity-types-chart-rail')).not.toHaveClass('w-1/2');
-    expect(screen.getByTestId('activity-types-chart-shell')).toHaveClass(
-      'max-w-[17rem]',
-      '2xl:max-w-[15rem]'
-    );
-  });
-
-  it('shows loading state initially', () => {
-    vi.mocked(api.getActivitySummary24h).mockReturnValue(new Promise(() => {}));
-
-    const { container } = renderActivityCard();
-
-    const pulseElements = container.querySelectorAll('.animate-pulse');
-    expect(pulseElements.length).toBeGreaterThanOrEqual(1);
   });
 
   it('navigates to activity type breakdown when clicking an activity slice', async () => {

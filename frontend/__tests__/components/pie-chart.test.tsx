@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '../utils/test-utils';
 import { PieChart } from '@/components/ui/pie-chart';
 import { CHART_PRIMARY_COLOR, CHART_SECONDARY_COLOR } from '@/lib/chart-colors';
 
@@ -36,20 +36,24 @@ describe('PieChart', () => {
     expect(slices[1]).toHaveAttribute('fill', CHART_SECONDARY_COLOR);
   });
 
-  it('renders a bounded chart shell for full-width pies when requested', () => {
+  it('calls the slice click handler with the clicked slice index', () => {
+    const onSliceClick = vi.fn();
+
     render(
       <PieChart
         data={[
           { label: 'A', value: 60 },
           { label: 'B', value: 40 },
         ]}
-        fullWidth
         showLegend={false}
-        chartClassName="max-w-[15rem]"
-        testIdPrefix="bounded"
+        onSliceClick={onSliceClick}
+        testIdPrefix="interactive"
       />
     );
 
-    expect(screen.getByTestId('bounded-chart-shell')).toHaveClass('max-w-[15rem]');
+    fireEvent.click(screen.getByTestId('interactive-slice-1'));
+
+    expect(onSliceClick).toHaveBeenCalledTimes(1);
+    expect(onSliceClick.mock.calls[0]?.[0]).toBe(1);
   });
 });

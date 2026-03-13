@@ -4,6 +4,8 @@ import { render } from '../utils/test-utils';
 import TotalSupplyPage from '@/app/charts/total-supply/page';
 import { api } from '@/lib/api';
 
+const stackedAreaChartMock = vi.fn((_: unknown) => <div data-testid="stacked-area-chart" />);
+
 vi.mock('@/lib/api', () => ({
   api: {
     getTotalSupplyChart: vi.fn(),
@@ -15,7 +17,7 @@ vi.mock('@/components/layout/header', () => ({
 }));
 
 vi.mock('@/components/ui/stacked-area-chart', () => ({
-  StackedAreaChart: () => <div data-testid="stacked-area-chart" />,
+  StackedAreaChart: (props: unknown) => stackedAreaChartMock(props),
 }));
 
 describe('TotalSupplyPage', () => {
@@ -36,12 +38,23 @@ describe('TotalSupplyPage', () => {
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Total Supply')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Back to Charts/i })).toHaveAttribute(
+      'href',
+      '/charts'
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId('stacked-area-chart')).toBeInTheDocument();
       expect(screen.getByText('Primary Issuance')).toBeInTheDocument();
       expect(screen.getByText('Secondary Issuance')).toBeInTheDocument();
-      expect(screen.getByText(/Drag to select range/i)).toHaveClass('text-text-dim');
+      expect(screen.getByText(/Drag to select range/i)).toBeInTheDocument();
     });
+
+    expect(stackedAreaChartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        height: 400,
+        data: [{ date: '2026-02-23', values: { primary: '70', secondary: '30' } }],
+      })
+    );
   });
 });

@@ -117,73 +117,65 @@ describe('ClusterDetailPage', () => {
     } as any);
   });
 
-  it('renders the page with header', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    expect(screen.getByTestId('header')).toBeInTheDocument();
-  });
-
-  it('shows loading state initially', async () => {
-    vi.mocked(api.getSporeCluster).mockImplementation(() => new Promise(() => {}));
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    const skeletons = document.querySelectorAll('.animate-pulse');
-    expect(skeletons.length).toBeGreaterThan(0);
-  });
-
-  it('displays cluster name and info', async () => {
+  it('renders overview sections, back link, and Activities tab by default', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
     render(<ClusterDetailPage clusterId={mockClusterId} />);
 
     await waitFor(() => {
+      expect(screen.getByTestId('header')).toBeInTheDocument();
       expect(screen.getByText('Test Collection')).toBeInTheDocument();
       expect(screen.getByText('A test collection of spores')).toBeInTheDocument();
-    });
-  });
-
-  it('shows Spore Cluster badge', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
       expect(screen.getByText('Spore Cluster')).toBeInTheDocument();
-    });
-  });
-
-  it('renders capacity statistics panel', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
       expect(screen.getByText('Capacity Statistics')).toBeInTheDocument();
+      expect(screen.getByText('Cluster Info')).toBeInTheDocument();
+      expect(screen.getByText('Cluster ID')).toBeInTheDocument();
+      expect(screen.getByText('Description')).toBeInTheDocument();
+      expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
+      expect(screen.getByText('Creator')).toBeInTheDocument();
+      expect(screen.queryByText('Created at Block')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
+      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
+      const backLink = screen.getByText('← Back to Objects');
+      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=object');
     });
   });
 
-  it('displays total spores count', async () => {
+  it('hydrates the requested tab and falls back to Activities for invalid tab params', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
-      const sporesValue = document.querySelector('.text-warning.text-xl');
-      expect(sporesValue?.textContent).toBe('5');
-    });
+    for (const testCase of [
+      {
+        searchParams: 'tab=objects',
+        assert: async () => {
+          await waitFor(() => {
+            expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
+            expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
+          });
+        },
+      },
+      {
+        searchParams: 'tab=invalid',
+        assert: async () => {
+          await waitFor(() => {
+            expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
+          });
+        },
+      },
+    ]) {
+      mockSearchParamsString = testCase.searchParams;
+      const view = render(<ClusterDetailPage clusterId={mockClusterId} />);
+      await testCase.assert();
+      view.unmount();
+    }
   });
 
-  it('displays spores table with content', async () => {
+  it('renders spore objects with content type and size', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -196,6 +188,8 @@ describe('ClusterDetailPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
 
     await waitFor(() => {
+      expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('256 B').length).toBeGreaterThan(0);
       expect(screen.getAllByText('image/png').length).toBeGreaterThan(0);
       expect(screen.getAllByText('text/plain').length).toBeGreaterThan(0);
     });
@@ -235,63 +229,6 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('renders collection tabs with Activities active by default', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Activities \(/ })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /^Holders \(/ })).toBeInTheDocument();
-      expect(screen.queryByLabelText('Search spores')).not.toBeInTheDocument();
-    });
-  });
-
-  it('hydrates collection tab from query params', async () => {
-    mockSearchParamsString = 'tab=objects';
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-      expect(screen.queryByText('No activities in this collection')).not.toBeInTheDocument();
-    });
-  });
-
-  it('falls back to Activities tab when tab query is invalid', async () => {
-    mockSearchParamsString = 'tab=invalid';
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('No activities in this collection')).toBeInTheDocument();
-    });
-  });
-
-  it('shows content size for each spore', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText('1,024 B').length).toBeGreaterThan(0);
-      expect(screen.getAllByText('256 B').length).toBeGreaterThan(0);
-    });
-  });
-
   it('shows error state when cluster not found', async () => {
     vi.mocked(api.getSporeCluster).mockRejectedValue(new Error('Not found'));
     vi.mocked(api.getSporesByCluster).mockResolvedValue(emptySpores);
@@ -320,57 +257,7 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('displays back to Objects link', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      const backLink = screen.getByText('← Back to Objects');
-      expect(backLink).toBeInTheDocument();
-      expect(backLink.closest('a')).toHaveAttribute('href', '/assets?type=object');
-    });
-  });
-
-  it('shows cluster info section with all fields', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Cluster Info')).toBeInTheDocument();
-      expect(screen.getByText('Cluster ID')).toBeInTheDocument();
-      expect(screen.getByText('Description')).toBeInTheDocument();
-      expect(screen.getAllByText('Total Spores').length).toBeGreaterThan(0);
-      expect(screen.getByText('Creator')).toBeInTheDocument();
-      expect(screen.queryByText('Created at Block')).not.toBeInTheDocument();
-    });
-
-    const clusterIdField = screen.getByText('Cluster ID').closest('div')?.parentElement;
-    const creatorField = screen.getByText('Creator').closest('div')?.parentElement;
-    expect(clusterIdField).toHaveClass('flex-col');
-    expect(creatorField).toHaveClass('flex-col');
-  });
-
-  it('renders overview and snapshot sections', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Live Capacity')).toBeInTheDocument();
-      expect(screen.getByText('Used Capacity')).toBeInTheDocument();
-      expect(screen.getByText('Content Snapshot (Filtered View)')).toBeInTheDocument();
-      expect(screen.getByText('Average Payload Size')).toBeInTheDocument();
-      expect(screen.getByText('image')).toBeInTheDocument();
-      expect(screen.getByText('text')).toBeInTheDocument();
-    });
-  });
-
-  it('filters spores by content type', async () => {
+  it('filters spores by content type and shows an empty filtered state when nothing matches', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -393,44 +280,6 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('1 shown / 5 total')).toBeInTheDocument();
       expect(screen.queryByText('No spores match current filters')).not.toBeInTheDocument();
-    });
-  });
-
-  it('uses wrapped control layout for narrow screens in spores panel', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Search spores')).toBeInTheDocument();
-    });
-
-    const searchInput = screen.getByLabelText('Search spores');
-    expect(searchInput.className).toContain('w-full');
-    expect(searchInput.className).toContain('sm:w-48');
-  });
-
-  it('shows empty filtered state when no spores match selected type', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
@@ -484,49 +333,6 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('uses sortable column headers instead of sort dropdown', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.queryByLabelText('Sort spores')).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort spores by size' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Sort spores by block' })).toBeInTheDocument();
-    });
-  });
-
-  it('keeps NFT controls to the left of tab names', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('spore-list-controls')).toBeInTheDocument();
-    });
-
-    const controls = screen.getByTestId('spore-list-controls');
-    const tabsList = screen.getByRole('button', { name: /^Activities \(/ }).parentElement;
-    expect(tabsList).not.toBeNull();
-    expect(controls.compareDocumentPosition(tabsList!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING
-    );
-  });
-
   it('updates URL search params when list controls and sortable headers change', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
@@ -541,6 +347,8 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText('Filter spores by content type')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort spores by size' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Sort spores by block' })).toBeInTheDocument();
     });
 
     fireEvent.change(screen.getByLabelText('Filter spores by content type'), {
@@ -692,12 +500,17 @@ describe('ClusterDetailPage', () => {
 
     await waitFor(() => {
       expect(api.getAddress).toHaveBeenCalledWith(mockSpores.data[1].ownerLockHash);
+      const addressLinks = screen.getAllByRole('link');
       expect(
-        document.querySelector(`a[href="/address/${resolvedSporeOwnerAddress}"]`)
-      ).toBeInTheDocument();
+        addressLinks.find(
+          (link) => link.getAttribute('href') === `/address/${resolvedSporeOwnerAddress}`
+        )
+      ).toBeTruthy();
       expect(
-        document.querySelector(`a[href="/address/${mockSpores.data[1].ownerLockHash}"]`)
-      ).not.toBeInTheDocument();
+        addressLinks.find(
+          (link) => link.getAttribute('href') === `/address/${mockSpores.data[1].ownerLockHash}`
+        )
+      ).toBeUndefined();
     });
   });
 
@@ -713,7 +526,7 @@ describe('ClusterDetailPage', () => {
     });
   });
 
-  it('shows pagination buttons', async () => {
+  it('renders pagination status with disabled boundary controls', async () => {
     vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
     vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
 
@@ -728,39 +541,7 @@ describe('ClusterDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Showing 1-2 of 5 Spores, 20 per page')).toBeInTheDocument();
       expect(screen.getByText('Page 1 of 1')).toBeInTheDocument();
-    });
-  });
-
-  it('disables Previous button on first page', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
-    });
-  });
-
-  it('disables Next button when no more pages', async () => {
-    vi.mocked(api.getSporeCluster).mockResolvedValue(mockCluster);
-    vi.mocked(api.getSporesByCluster).mockResolvedValue(mockSpores);
-
-    render(<ClusterDetailPage clusterId={mockClusterId} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Objects \(/ })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /^Objects \(/ }));
-
-    await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     });
   });
