@@ -301,6 +301,73 @@ static PROTOCOL_ACTION_LOCKS: LazyLock<HashSet<Vec<u8>>> = LazyLock::new(|| {
     // Future: add UTXOSwap intentLock, Fiber funding_lock, etc.
 });
 
+type ArgsDecoder = fn(&[u8]) -> Option<serde_json::Value>;
+
+/// Parse a 0x-prefixed hex string into bytes. Panics on invalid hex (compile-time constants only).
+fn parse_hex_code_hash(hex_str: &str) -> Vec<u8> {
+    let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    hex::decode(hex).expect("invalid hex in lock args decoder constant")
+}
+
+static LOCK_ARGS_DECODERS: LazyLock<HashMap<Vec<u8>, ArgsDecoder>> = LazyLock::new(|| {
+    let mut m: HashMap<Vec<u8>, ArgsDecoder> = HashMap::new();
+    // RGB++ lock
+    for hex in [
+        "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936", // mainnet
+        "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248", // testnet
+        "0xd07598deec7ce7b5665310386b4abd06a6d48843e953c5cc2112ad0d5a220364", // signet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_rgbpp_lock_args as ArgsDecoder,
+        );
+    }
+    // BTC time lock
+    for hex in [
+        "0x70d64497a075bd651e98ac030455ea200637ee325a12ad08aff03f1a117e5a62", // mainnet
+        "0x00cdf8fab0f8ac638758ebf5ea5e4052b1d71e8a77b9f43139718621f6849326", // testnet
+        "0x80a09eca26d77cea1f5a69471c59481be7404febf40ee90f886c36a948385b55", // signet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_btc_time_lock_args as ArgsDecoder,
+        );
+    }
+    m
+});
+
+fn decode_rgbpp_lock_args(args: &[u8]) -> Option<serde_json::Value> {
+    if args.len() < 36 {
+        return None;
+    }
+    let out_index = u32::from_le_bytes(args[0..4].try_into().ok()?);
+    let mut btc_txid = args[4..36].to_vec();
+    btc_txid.reverse(); // little-endian to big-endian for display
+    Some(serde_json::json!({
+        "protocol": "rgbpp",
+        "btcTxid": hex::encode(&btc_txid),
+        "outIndex": out_index,
+    }))
+}
+
+fn decode_btc_time_lock_args(args: &[u8]) -> Option<serde_json::Value> {
+    // BTC time lock args: first 32 bytes = lock_script hash,
+    // next 4 bytes = after (u32 LE), next 32 bytes = btc_txid (LE)
+    // Total minimum: 68 bytes
+    if args.len() < 68 {
+        return None;
+    }
+    let after = u32::from_le_bytes(args[32..36].try_into().ok()?);
+    let mut btc_txid = args[36..68].to_vec();
+    btc_txid.reverse();
+    Some(serde_json::json!({
+        "protocol": "rgbpp",
+        "action": "btcTimeLock",
+        "btcTxid": hex::encode(&btc_txid),
+        "after": after,
+    }))
+}
+
 fn lock_call_role(code_hash: &[u8]) -> &'static str {
     if PROTOCOL_ACTION_LOCKS.contains(code_hash) {
         "protocol_action"
@@ -336,7 +403,9 @@ fn convert_lock_call(
         script_hash: format!("0x{}", hex::encode(script_hash)),
         script_name: normalized_script_name(script_info),
         role: role.to_string(),
-        decoded: None, // Decoders added in Task 5
+        decoded: LOCK_ARGS_DECODERS
+            .get(call.lock_code_hash.as_slice())
+            .and_then(|decoder| decoder(&call.lock_args)),
     })
 }
 
@@ -763,5 +832,52 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].2.tx_hash, tx_hash);
         assert_eq!(rows[0].2.block_hash, vec![0xBB; 32]);
+    }
+
+    #[test]
+    fn test_decode_rgbpp_lock_args_valid() {
+        // out_index=2 (LE), btc_txid=32 bytes
+        let mut args = vec![0; 36];
+        args[0..4].copy_from_slice(&2u32.to_le_bytes());
+        // btc_txid: stored little-endian, reversed for display
+        for i in 0..32 {
+            args[4 + i] = (32 - i) as u8;
+        }
+        let result = decode_rgbpp_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "rgbpp");
+        assert_eq!(result["outIndex"], 2);
+        // After reverse, should be 01020304...
+        let txid = result["btcTxid"].as_str().unwrap();
+        assert!(txid.starts_with("0102"));
+    }
+
+    #[test]
+    fn test_decode_rgbpp_lock_args_too_short() {
+        let args = vec![0; 35]; // 1 byte short
+        assert!(decode_rgbpp_lock_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_decode_btc_time_lock_args_valid() {
+        let mut args = vec![0; 68];
+        // lock_script_hash: 32 bytes (don't care for decoding)
+        // after: u32 LE at [32..36]
+        args[32..36].copy_from_slice(&100u32.to_le_bytes());
+        // btc_txid at [36..68] stored LE
+        for i in 0..32 {
+            args[36 + i] = (32 - i) as u8;
+        }
+        let result = decode_btc_time_lock_args(&args).unwrap();
+        assert_eq!(result["protocol"], "rgbpp");
+        assert_eq!(result["action"], "btcTimeLock");
+        assert_eq!(result["after"], 100);
+        let txid = result["btcTxid"].as_str().unwrap();
+        assert!(txid.starts_with("0102"));
+    }
+
+    #[test]
+    fn test_decode_btc_time_lock_args_too_short() {
+        let args = vec![0; 67]; // 1 byte short
+        assert!(decode_btc_time_lock_args(&args).is_none());
     }
 }
