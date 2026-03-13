@@ -5,7 +5,7 @@ use axum::{
 };
 use ckbadger_store::{
     types::{
-        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, ScriptCallEntry, ScriptInfo,
+        ActivityEntry, AssetAction, AssetChange, LatestActivityItem, ScriptInfo, TypeCallEntry,
     },
     CkbadgerStore,
 };
@@ -45,7 +45,7 @@ pub struct ActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
-    pub script_calls: Vec<ScriptCallResponse>,
+    pub type_calls: Vec<ScriptCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -108,7 +108,7 @@ pub struct GlobalActivityResponse {
     pub used_delta: String,
     pub is_cellbase: bool,
     pub asset_changes: Vec<AssetChangeResponse>,
-    pub script_calls: Vec<ScriptCallResponse>,
+    pub type_calls: Vec<ScriptCallResponse>,
     pub peers: Vec<String>,
 }
 
@@ -241,7 +241,7 @@ fn resolve_script_info_cached<'a>(
 fn convert_script_call(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    call: &ScriptCallEntry,
+    call: &TypeCallEntry,
 ) -> anyhow::Result<ScriptCallResponse> {
     let hash_type = hash_type_to_str(call.type_hash_type);
     if hash_type == "unknown" {
@@ -267,10 +267,10 @@ fn convert_script_call(
     })
 }
 
-fn convert_script_calls(
+fn convert_type_calls(
     store: &CkbadgerStore,
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    calls: Option<&Vec<ScriptCallEntry>>,
+    calls: Option<&Vec<TypeCallEntry>>,
 ) -> anyhow::Result<Vec<ScriptCallResponse>> {
     calls
         .into_iter()
@@ -297,7 +297,7 @@ pub(crate) fn build_activity_response(
             .iter()
             .map(convert_asset_change)
             .collect(),
-        script_calls: convert_script_calls(store, script_info_cache, entry.script_calls.as_ref())?,
+        type_calls: convert_type_calls(store, script_info_cache, entry.type_calls.as_ref())?,
         peers: entry
             .peers
             .iter()
@@ -339,11 +339,7 @@ pub(crate) fn build_global_activity_response(
             .iter()
             .map(convert_asset_change)
             .collect(),
-        script_calls: convert_script_calls(
-            store,
-            script_info_cache,
-            item.entry.script_calls.as_ref(),
-        )?,
+        type_calls: convert_type_calls(store, script_info_cache, item.entry.type_calls.as_ref())?,
         peers: item
             .entry
             .peers
@@ -584,7 +580,7 @@ mod tests {
                 has_type_script: false,
                 involved_script_code_hashes: vec![vec![0x33; 32]],
                 asset_changes: vec![],
-                script_calls: None,
+                type_calls: None,
                 peers: vec![],
             }],
         }

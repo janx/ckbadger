@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 #[cfg(test)]
 use ckbadger_store::types::ActivityEntry;
 use ckbadger_store::types::{
-    AssetAction, AssetChange, OwnerActivityDelta, ScriptCallEntry, TxActivityBundle,
+    AssetAction, AssetChange, OwnerActivityDelta, TxActivityBundle, TypeCallEntry,
 };
 
 use crate::parser::cell::ParsedCell;
@@ -190,7 +190,7 @@ struct OwnerAccum {
     /// Whether any cell for this owner has a type script
     has_type_script: bool,
     /// Unrecognized type script instances keyed by (code_hash, hash_type, args)
-    unrecognized_script_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
+    unrecognized_type_calls: BTreeSet<(Vec<u8>, i16, Vec<u8>)>,
 }
 
 const DOTBIT_TYPE_ARGS_LEN: usize = 20;
@@ -402,12 +402,12 @@ fn build_tx_activity_bundle(
             &mut asset_changes,
         );
 
-        let script_calls = (!accum.unrecognized_script_calls.is_empty()).then(|| {
+        let type_calls = (!accum.unrecognized_type_calls.is_empty()).then(|| {
             accum
-                .unrecognized_script_calls
+                .unrecognized_type_calls
                 .iter()
                 .map(
-                    |(type_code_hash, type_hash_type, type_args)| ScriptCallEntry {
+                    |(type_code_hash, type_hash_type, type_args)| TypeCallEntry {
                         type_code_hash: type_code_hash.clone(),
                         type_hash_type: *type_hash_type,
                         type_args: type_args.clone(),
@@ -434,7 +434,7 @@ fn build_tx_activity_bundle(
             has_type_script: accum.has_type_script,
             involved_script_code_hashes: accum.involved_scripts.iter().cloned().collect(),
             asset_changes,
-            script_calls,
+            type_calls,
             peers,
         });
     }
@@ -467,7 +467,7 @@ fn flatten_tx_activity_bundle(bundle: TxActivityBundle) -> Vec<OwnerActivity> {
                 is_cellbase: bundle.is_cellbase,
                 has_type_script: owner.has_type_script,
                 asset_changes: owner.asset_changes,
-                script_calls: owner.script_calls,
+                type_calls: owner.type_calls,
                 peers: owner.peers,
             };
             (owner.lock_hash, owner.involved_script_code_hashes, entry)
@@ -623,7 +623,7 @@ fn record_script_call(
         )
     });
     accum
-        .unrecognized_script_calls
+        .unrecognized_type_calls
         .insert((type_code_hash.to_vec(), hash_type, args.to_vec()));
 }
 
@@ -1383,14 +1383,14 @@ mod tests {
             .unwrap();
         assert!(alice_act.has_type_script);
         assert!(alice_act.asset_changes.is_empty());
-        let alice_script_calls = alice_act
-            .script_calls
+        let alice_type_calls = alice_act
+            .type_calls
             .as_ref()
             .expect("should have script calls for unrecognized type script");
-        assert_eq!(alice_script_calls.len(), 1);
-        assert_eq!(alice_script_calls[0].type_code_hash, vec![0xFF; 32]);
-        assert_eq!(alice_script_calls[0].type_hash_type, 1);
-        assert_eq!(alice_script_calls[0].type_args, alice_type_args);
+        assert_eq!(alice_type_calls.len(), 1);
+        assert_eq!(alice_type_calls[0].type_code_hash, vec![0xFF; 32]);
+        assert_eq!(alice_type_calls[0].type_hash_type, 1);
+        assert_eq!(alice_type_calls[0].type_args, alice_type_args);
 
         let bob_act = activities
             .iter()
@@ -1399,14 +1399,14 @@ mod tests {
             .unwrap();
         assert!(bob_act.has_type_script);
         assert!(bob_act.asset_changes.is_empty());
-        let bob_script_calls = bob_act
-            .script_calls
+        let bob_type_calls = bob_act
+            .type_calls
             .as_ref()
             .expect("bob should have script calls");
-        assert_eq!(bob_script_calls.len(), 1);
-        assert_eq!(bob_script_calls[0].type_code_hash, vec![0xFF; 32]);
-        assert_eq!(bob_script_calls[0].type_hash_type, 1);
-        assert_eq!(bob_script_calls[0].type_args, bob_type_args);
+        assert_eq!(bob_type_calls.len(), 1);
+        assert_eq!(bob_type_calls[0].type_code_hash, vec![0xFF; 32]);
+        assert_eq!(bob_type_calls[0].type_hash_type, 1);
+        assert_eq!(bob_type_calls[0].type_args, bob_type_args);
     }
 
     #[test]
@@ -1488,14 +1488,14 @@ mod tests {
             .asset_changes
             .iter()
             .any(|c| matches!(c, AssetChange::Token { .. })));
-        let script_calls = entry
-            .script_calls
+        let type_calls = entry
+            .type_calls
             .as_ref()
             .expect("script calls should exist");
-        assert_eq!(script_calls.len(), 1);
-        assert_eq!(script_calls[0].type_code_hash, unknown_code_hash);
-        assert_eq!(script_calls[0].type_hash_type, 1);
-        assert_eq!(script_calls[0].type_args, vec![0xEE; 20]);
+        assert_eq!(type_calls.len(), 1);
+        assert_eq!(type_calls[0].type_code_hash, unknown_code_hash);
+        assert_eq!(type_calls[0].type_hash_type, 1);
+        assert_eq!(type_calls[0].type_args, vec![0xEE; 20]);
     }
 
     #[test]
@@ -1582,8 +1582,8 @@ mod tests {
             .map(|(_, _, e)| e)
             .unwrap();
         assert!(
-            alice_act.script_calls.is_none() || alice_act.script_calls.as_ref().unwrap().is_empty(),
-            "xudt_compatible should not produce script_calls"
+            alice_act.type_calls.is_none() || alice_act.type_calls.as_ref().unwrap().is_empty(),
+            "xudt_compatible should not produce type_calls"
         );
         let has_token_change = alice_act
             .asset_changes

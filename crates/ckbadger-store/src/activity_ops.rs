@@ -48,7 +48,7 @@ fn bundle_owner_to_activity_entry(
         is_cellbase: bundle.is_cellbase,
         has_type_script: owner.has_type_script,
         asset_changes: owner.asset_changes.clone(),
-        script_calls: owner.script_calls.clone(),
+        type_calls: owner.type_calls.clone(),
         peers: owner.peers.clone(),
     }
 }
@@ -318,7 +318,7 @@ impl CkbadgerStore {
                 )
             }),
             Some("script_call") => entry
-                .script_calls
+                .type_calls
                 .as_ref()
                 .is_some_and(|calls| !calls.is_empty()),
             Some(_) => false,
@@ -351,7 +351,7 @@ mod tests {
                     has_type_script: false,
                     involved_script_code_hashes: vec![vec![0x33; 32]],
                     asset_changes: vec![],
-                    script_calls: None,
+                    type_calls: None,
                     peers: vec![],
                 })
                 .collect(),
@@ -381,7 +381,7 @@ mod tests {
                 has_type_script: false,
                 involved_script_code_hashes: vec![vec![0x33; 32]],
                 asset_changes: vec![],
-                script_calls: None,
+                type_calls: None,
                 peers: vec![],
             }],
         }

@@ -17,8 +17,8 @@ use ckbadger_store::types::{
     DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
     IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
     ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
-    OwnerActivityDelta, ReorgEvent, ScriptCallEntry, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
-    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry,
+    OwnerActivityDelta, ReorgEvent, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry, TypeCallEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -227,7 +227,7 @@ fn make_single_owner_bundle(lock_hash: &[u8], activity: &ActivityEntry) -> TxAct
             has_type_script: activity.has_type_script,
             involved_script_code_hashes: vec![vec![0x11; 32]],
             asset_changes: activity.asset_changes.clone(),
-            script_calls: activity.script_calls.clone(),
+            type_calls: activity.type_calls.clone(),
             peers: activity.peers.clone(),
         }],
     }
@@ -7100,7 +7100,7 @@ async fn test_address_activities_reads_from_derived_store() {
         is_cellbase: false,
         has_type_script: false,
         asset_changes: vec![],
-        script_calls: None,
+        type_calls: None,
         peers: vec![],
     };
 
@@ -7204,7 +7204,7 @@ async fn test_address_activities_rejects_unknown_filter() {
 }
 
 #[tokio::test]
-async fn test_address_activities_return_script_calls_separately_and_support_script_call_filter() {
+async fn test_address_activities_return_type_calls_separately_and_support_script_call_filter() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let lock_hash = vec![0x12; 32];
@@ -7228,7 +7228,7 @@ async fn test_address_activities_return_script_calls_separately_and_support_scri
         is_cellbase: false,
         has_type_script: true,
         asset_changes: vec![],
-        script_calls: Some(vec![ScriptCallEntry {
+        type_calls: Some(vec![TypeCallEntry {
             type_code_hash: type_code_hash.clone(),
             type_hash_type: 1,
             type_args: type_args.clone(),
@@ -7294,23 +7294,23 @@ async fn test_address_activities_return_script_calls_separately_and_support_scri
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["assetChanges"].as_array().unwrap().len(), 0);
-    let script_calls = data[0]["scriptCalls"].as_array().unwrap();
-    assert_eq!(script_calls.len(), 1);
+    let type_calls = data[0]["scriptCalls"].as_array().unwrap();
+    assert_eq!(type_calls.len(), 1);
     assert_eq!(
-        script_calls[0]["typeCodeHash"],
+        type_calls[0]["typeCodeHash"],
         format!("0x{}", hex::encode(&type_code_hash))
     );
-    assert_eq!(script_calls[0]["typeHashType"], "type");
+    assert_eq!(type_calls[0]["typeHashType"], "type");
     assert_eq!(
-        script_calls[0]["typeArgs"],
+        type_calls[0]["typeArgs"],
         format!("0x{}", hex::encode(&type_args))
     );
-    assert_eq!(script_calls[0]["scriptHash"], expected_script_hash);
-    assert_eq!(script_calls[0]["scriptName"], "RGB++ Lock");
+    assert_eq!(type_calls[0]["scriptHash"], expected_script_hash);
+    assert_eq!(type_calls[0]["scriptName"], "RGB++ Lock");
 }
 
 #[tokio::test]
-async fn test_latest_activities_return_asset_changes_and_script_calls_as_separate_lists() {
+async fn test_latest_activities_return_asset_changes_and_type_calls_as_separate_lists() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let lock_hash = vec![0x13; 32];
@@ -7336,7 +7336,7 @@ async fn test_latest_activities_return_asset_changes_and_script_calls_as_separat
         asset_changes: vec![AssetChange::DaoDeposit {
             capacity: 102_00000000,
         }],
-        script_calls: Some(vec![ScriptCallEntry {
+        type_calls: Some(vec![TypeCallEntry {
             type_code_hash: type_code_hash.clone(),
             type_hash_type: 1,
             type_args: type_args.clone(),
@@ -7371,7 +7371,7 @@ async fn test_latest_activities_return_asset_changes_and_script_calls_as_separat
             has_type_script: entry.has_type_script,
             involved_script_code_hashes: vec![vec![0x24; 32], type_code_hash.clone()],
             asset_changes: entry.asset_changes.clone(),
-            script_calls: entry.script_calls.clone(),
+            type_calls: entry.type_calls.clone(),
             peers: entry.peers.clone(),
         }],
     });
@@ -7391,11 +7391,11 @@ async fn test_latest_activities_return_asset_changes_and_script_calls_as_separat
     let items = json.as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["assetChanges"].as_array().unwrap().len(), 1);
-    let script_calls = items[0]["scriptCalls"].as_array().unwrap();
-    assert_eq!(script_calls.len(), 1);
-    assert_eq!(script_calls[0]["typeHashType"], "type");
-    assert_eq!(script_calls[0]["scriptHash"], expected_script_hash);
-    assert_eq!(script_calls[0]["scriptName"], "RGB++ Lock");
+    let type_calls = items[0]["scriptCalls"].as_array().unwrap();
+    assert_eq!(type_calls.len(), 1);
+    assert_eq!(type_calls[0]["typeHashType"], "type");
+    assert_eq!(type_calls[0]["scriptHash"], expected_script_hash);
+    assert_eq!(type_calls[0]["scriptName"], "RGB++ Lock");
 }
 
 #[tokio::test]
