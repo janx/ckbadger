@@ -457,7 +457,9 @@ impl CkbadgerStore {
         }
     }
 
-    pub fn get_latest_cell_distribution(&self) -> anyhow::Result<Option<DailyCellDistribution>> {
+    pub fn get_latest_cell_distribution(
+        &self,
+    ) -> anyhow::Result<Option<(String, DailyCellDistribution)>> {
         let prefix = [stats_prefix::CELL_DISTRIBUTION];
         let seek_key = [stats_prefix::CELL_DISTRIBUTION + 1];
         let iter = self.iterator_cf(
@@ -478,6 +480,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 continue;
             }
+            let date_str = String::from_utf8_lossy(&key[1..]).to_string();
             let snapshot: DailyCellDistribution =
                 bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
@@ -486,7 +489,7 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-            return Ok(Some(snapshot));
+            return Ok(Some((date_str, snapshot)));
         }
 
         Ok(None)
@@ -512,7 +515,9 @@ impl CkbadgerStore {
         }
     }
 
-    pub fn get_latest_address_cohort(&self) -> anyhow::Result<Option<DailyAddressCohort>> {
+    pub fn get_latest_address_cohort(
+        &self,
+    ) -> anyhow::Result<Option<(String, DailyAddressCohort)>> {
         let prefix = [stats_prefix::ADDR_COHORT];
         let seek_key = [stats_prefix::ADDR_COHORT + 1];
         let iter = self.iterator_cf(
@@ -533,6 +538,7 @@ impl CkbadgerStore {
             if !key.starts_with(&prefix) {
                 continue;
             }
+            let date_str = String::from_utf8_lossy(&key[1..]).to_string();
             let snapshot: DailyAddressCohort =
                 bincode::deserialize(&value).map_err(|e| {
                     anyhow::anyhow!(
@@ -541,7 +547,7 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-            return Ok(Some(snapshot));
+            return Ok(Some((date_str, snapshot)));
         }
 
         Ok(None)
@@ -1525,7 +1531,8 @@ mod cell_distribution_tests {
         store.put_cell_distribution("20240113", &d1).unwrap();
         store.put_cell_distribution("20240117", &d3).unwrap();
 
-        let latest = store.get_latest_cell_distribution().unwrap().unwrap();
+        let (date, latest) = store.get_latest_cell_distribution().unwrap().unwrap();
+        assert_eq!(date, "20240117");
         assert_eq!(latest.age_band_lt1d, 300); // most recent by key sort
     }
 
@@ -1587,7 +1594,8 @@ mod cell_distribution_tests {
         store.put_address_cohort("20240115", &c1).unwrap();
         store.put_address_cohort("20240215", &c2).unwrap();
 
-        let latest = store.get_latest_address_cohort().unwrap().unwrap();
+        let (date, latest) = store.get_latest_address_cohort().unwrap().unwrap();
+        assert_eq!(date, "20240215");
         assert_eq!(latest.cohorts.len(), 1);
         assert_eq!(latest.cohorts[0].cohort_month, "2024-02");
     }

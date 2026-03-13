@@ -9,6 +9,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
 use ckbadger_common::dao::GENESIS_BURNT;
 use ckbadger_common::sync::{format_duration_smart, SyncProgressData};
+use ckbadger_store::types::{DailyAddressCohort, DailyCellDistribution};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
@@ -1508,226 +1509,41 @@ async fn get_common_knowledge_composition_chart(
     ok(response)
 }
 
-pub(crate) const CACHE_KEY_DATE_TRANSITIONS: &str = "internal:block-date-transitions";
-
-pub(crate) fn load_block_date_transitions(
-    store: &ckbadger_store::CkbadgerStore,
-) -> Result<Vec<(i64, NaiveDate)>, String> {
-    if let Some(state) = store.get_hodl_tracker_state().map_err(|e| e.to_string())? {
-        let mut transitions: Vec<(i64, NaiveDate)> = state
-            .date_transitions
-            .into_iter()
-            .filter_map(|(block, date_str)| {
-                NaiveDate::parse_from_str(&date_str, "%Y%m%d")
-                    .ok()
-                    .map(|date| (block, date))
-            })
-            .collect();
-        transitions.sort_by_key(|(block, _)| *block);
-        transitions.dedup_by_key(|(block, _)| *block);
-        if !transitions.is_empty() {
-            return Ok(transitions);
-        }
-    }
-
-    let mut transitions: Vec<(i64, NaiveDate)> = Vec::new();
-    let mut last_date: Option<NaiveDate> = None;
-    let iter = store.iterator_cf(store.cf_block_headers(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (key, value) = item;
-        if key.len() != 8 {
-            continue;
-        }
-        let block_number = i64::from_be_bytes(key[..8].try_into().unwrap_or([0; 8]));
-        if let Ok(header) = bincode::deserialize::<ckbadger_store::CachedBlockHeader>(&value) {
-            if let Some(dt) = DateTime::from_timestamp_millis(header.timestamp) {
-                let date = ckbadger_common::block_date(dt);
-                if last_date != Some(date) {
-                    transitions.push((block_number, date));
-                    last_date = Some(date);
-                }
-            }
-        }
-    }
-    Ok(transitions)
-}
-
-pub(crate) fn load_block_date_transitions_cached(
-    state: &AppState,
-) -> Result<Vec<(i64, NaiveDate)>, String> {
-    if let Some(cached) = state
-        .mem_cache
-        .get::<Vec<(i64, NaiveDate)>>(CACHE_KEY_DATE_TRANSITIONS)
-    {
-        return Ok(cached);
-    }
-    let transitions = load_block_date_transitions(state.store.as_ref())?;
-    state
-        .mem_cache
-        .set(CACHE_KEY_DATE_TRANSITIONS, &transitions, CacheTtl::CHART);
-    Ok(transitions)
-}
-
-pub(crate) fn block_number_to_date(
-    transitions: &[(i64, NaiveDate)],
-    block_number: i64,
-) -> Option<NaiveDate> {
-    if transitions.is_empty() {
-        return None;
-    }
-    let idx =
-        transitions.partition_point(|(transition_block, _)| *transition_block <= block_number);
-    if idx == 0 {
-        Some(transitions[0].1)
-    } else {
-        Some(transitions[idx - 1].1)
-    }
-}
-
-pub(crate) fn current_snapshot_date(
-    store: &ckbadger_store::CkbadgerStore,
-) -> Result<NaiveDate, String> {
-    let tip = store.get_sync_tip_block().map_err(|e| e.to_string())?;
-    let date = tip
-        .and_then(|(_, header)| DateTime::from_timestamp_millis(header.timestamp))
-        .map(ckbadger_common::block_date)
-        .unwrap_or_else(|| ckbadger_common::block_date(Utc::now()));
-    Ok(date)
-}
-
-const LIVE_CELL_SCAN_BATCH_SIZE: usize = 2_048;
-
-pub(crate) fn visit_live_cells_in_batches<F>(
-    store: &ckbadger_store::CkbadgerStore,
-    cells_store: &ckbadger_store::CkbadgerStore,
-    mut visit: F,
-) -> Result<(), String>
-where
-    F: FnMut(&ckbadger_store::PositionedCellInfo) -> Result<(), String>,
-{
-    let mut batch: Vec<(Vec<u8>, i16)> = Vec::with_capacity(LIVE_CELL_SCAN_BATCH_SIZE);
-
-    let mut flush_batch = |batch: &mut Vec<(Vec<u8>, i16)>| -> Result<(), String> {
-        if batch.is_empty() {
-            return Ok(());
-        }
-
-        let outpoints: Vec<(&[u8], i16)> = batch
-            .iter()
-            .map(|(tx_hash, output_index)| (tx_hash.as_slice(), *output_index))
-            .collect();
-        let cells = store
-            .get_cells_batch(&outpoints, cells_store)
-            .map_err(|e| e.to_string())?;
-
-        for cell in cells.values() {
-            visit(cell)?;
-        }
-
-        batch.clear();
-        Ok(())
-    };
-
-    let iter = store.iterator_cf(store.cf_live_cells(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (key, _) = item;
-        if key.len() != ckbadger_store::keys::OUTPOINT_KEY_SIZE {
-            continue;
-        }
-        let (tx_hash, output_index) = ckbadger_store::keys::decode_outpoint(&key);
-        batch.push((tx_hash, output_index));
-
-        if batch.len() >= LIVE_CELL_SCAN_BATCH_SIZE {
-            flush_batch(&mut batch)?;
-        }
-    }
-
-    flush_batch(&mut batch)
-}
-
-pub(crate) fn occupied_capacity_bucket_index(occupied_shannons: i128) -> usize {
-    let ckb_100 = 100_i128 * SHANNONS_PER_CKB;
-    let ckb_1k = 1_000_i128 * SHANNONS_PER_CKB;
-    let ckb_10k = 10_000_i128 * SHANNONS_PER_CKB;
-    let ckb_100k = 100_000_i128 * SHANNONS_PER_CKB;
-    let ckb_1m = 1_000_000_i128 * SHANNONS_PER_CKB;
-
-    if occupied_shannons < ckb_100 {
-        0
-    } else if occupied_shannons < ckb_1k {
-        1
-    } else if occupied_shannons < ckb_10k {
-        2
-    } else if occupied_shannons < ckb_100k {
-        3
-    } else if occupied_shannons < ckb_1m {
-        4
-    } else {
-        5
-    }
-}
-
-async fn get_cell_age_vs_occupied_capacity_chart(
-    State(state): State<Arc<AppState>>,
-) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:cell-age-vs-occupied-capacity:v1";
-    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
-        return ok(cached);
-    }
-
-    let snapshot_date = current_snapshot_date(state.store.as_ref()).map_err(ApiError::internal)?;
-    let transitions = load_block_date_transitions_cached(&state).map_err(ApiError::internal)?;
-
-    let mut lt_1d: i128 = 0;
-    let mut d1_7d: i128 = 0;
-    let mut d7_30d: i128 = 0;
-    let mut d30_180d: i128 = 0;
-    let mut gt_180d: i128 = 0;
-
-    visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
-        let Some(created_date) = block_number_to_date(&transitions, cell.created_at_block) else {
-            return Ok(());
-        };
-        let age_days_raw = (snapshot_date - created_date).num_days();
-        if age_days_raw < 0 {
-            return Err(format!(
-                "negative cell age detected: snapshot_date={}, created_date={}, created_at_block={}",
-                snapshot_date, created_date, cell.created_at_block
-            ));
-        }
-        let age_days = age_days_raw;
-        let used_cap = cell.occupied_capacity as i128;
-        if used_cap < 0 {
-            return Err(format!(
-                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, used_cap
-            ));
-        }
-        match age_days {
-            0 => lt_1d += used_cap,
-            1..=6 => d1_7d += used_cap,
-            7..=29 => d7_30d += used_cap,
-            30..=179 => d30_180d += used_cap,
-            _ => gt_180d += used_cap,
-        }
-        Ok(())
-    })
-    .map_err(ApiError::internal)?;
-
+/// Build the cell-age-vs-occupied-capacity chart response from a materialized snapshot.
+pub(crate) fn build_cell_age_response(
+    snapshot: &DailyCellDistribution,
+    snapshot_date_key: &str,
+) -> StackedAreaChartResponse {
     let snapshot_values = HashMap::from([
-        ("lt1d".to_string(), shannon_to_ckb_string(lt_1d)),
-        ("d1to7d".to_string(), shannon_to_ckb_string(d1_7d)),
-        ("d7to30d".to_string(), shannon_to_ckb_string(d7_30d)),
-        ("d30to180d".to_string(), shannon_to_ckb_string(d30_180d)),
-        ("gt180d".to_string(), shannon_to_ckb_string(gt_180d)),
+        (
+            "lt1d".to_string(),
+            shannon_to_ckb_string(snapshot.age_band_lt1d),
+        ),
+        (
+            "d1to7d".to_string(),
+            shannon_to_ckb_string(snapshot.age_band_1d_7d),
+        ),
+        (
+            "d7to30d".to_string(),
+            shannon_to_ckb_string(snapshot.age_band_7d_30d),
+        ),
+        (
+            "d30to180d".to_string(),
+            shannon_to_ckb_string(snapshot.age_band_30d_180d),
+        ),
+        (
+            "gt180d".to_string(),
+            shannon_to_ckb_string(snapshot.age_band_gt180d),
+        ),
     ]);
 
-    let snapshot_label = snapshot_date.format("%Y-%m-%d").to_string();
-    let previous_label = (snapshot_date - Duration::days(1))
-        .format("%Y-%m-%d")
-        .to_string();
+    let snapshot_label = format_date_key(snapshot_date_key);
+    // Parse the date to compute previous day label
+    let previous_label = NaiveDate::parse_from_str(snapshot_date_key, "%Y%m%d")
+        .map(|d| (d - Duration::days(1)).format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|_| snapshot_label.clone());
 
-    let response = StackedAreaChartResponse {
+    StackedAreaChartResponse {
         data: vec![
             StackedAreaDataPoint {
                 date: previous_label,
@@ -1766,8 +1582,84 @@ async fn get_cell_age_vs_occupied_capacity_chart(
             },
         ],
         title: "Cell Age vs Used Capacity".to_string(),
-    };
+    }
+}
 
+/// Build the cell-size-distribution chart response from a materialized snapshot.
+pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> ChartResponse {
+    let bucket_labels = [
+        "<100 CKB",
+        "100-1k CKB",
+        "1k-10k CKB",
+        "10k-100k CKB",
+        "100k-1m CKB",
+        ">=1m CKB",
+    ];
+
+    let data = bucket_labels
+        .iter()
+        .enumerate()
+        .map(|(idx, label)| ChartDataPoint {
+            date: (*label).to_string(),
+            value: snapshot.size_bucket_counts[idx].to_string(),
+            value2: Some(shannon_to_ckb_string(snapshot.size_bucket_capacities[idx])),
+        })
+        .collect();
+
+    ChartResponse {
+        data,
+        title: "Cell Size Distribution".to_string(),
+        y_axis_label: "Live Cells".to_string(),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+    }
+}
+
+/// Build the address-cohort-retention chart response from a materialized snapshot.
+pub(crate) fn build_address_cohort_response(cohort: &DailyAddressCohort) -> ChartResponse {
+    let mut sorted_cohorts: Vec<_> = cohort.cohorts.iter().collect();
+    sorted_cohorts.sort_by(|a, b| a.cohort_month.cmp(&b.cohort_month));
+
+    let data = sorted_cohorts
+        .into_iter()
+        .map(|entry| {
+            let retention = if entry.total_balance > 0 {
+                entry.used_capacity as f64 * 100.0 / entry.total_balance as f64
+            } else {
+                0.0
+            };
+            ChartDataPoint {
+                date: entry.cohort_month.clone(),
+                value: format!("{retention:.6}"),
+                value2: Some(shannon_to_ckb_string(entry.used_capacity)),
+            }
+        })
+        .collect();
+
+    ChartResponse {
+        data,
+        title: "Address Cohort Retention".to_string(),
+        y_axis_label: "Used / Balance (%)".to_string(),
+        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
+    }
+}
+
+async fn get_cell_age_vs_occupied_capacity_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<StackedAreaChartResponse> {
+    let cache_key = "chart:cell-age-vs-occupied-capacity:v1";
+    if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
+        return ok(cached);
+    }
+
+    let (date_key, snapshot) = state
+        .store
+        .get_latest_cell_distribution()
+        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?
+        .ok_or_else(|| {
+            ApiError::internal("cell distribution data not yet available".to_string())
+        })?;
+
+    let response = build_cell_age_response(&snapshot, &date_key);
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
     ok(response)
 }
@@ -1854,49 +1746,15 @@ async fn get_cell_size_distribution_chart(
         return ok(cached);
     }
 
-    let bucket_labels = [
-        "<100 CKB",
-        "100-1k CKB",
-        "1k-10k CKB",
-        "10k-100k CKB",
-        "100k-1m CKB",
-        ">=1m CKB",
-    ];
-    let mut bucket_counts = vec![0_i128; bucket_labels.len()];
-    let mut bucket_used = vec![0_i128; bucket_labels.len()];
+    let (_, snapshot) = state
+        .store
+        .get_latest_cell_distribution()
+        .map_err(|e| ApiError::internal(format!("failed to read cell distribution: {e}")))?
+        .ok_or_else(|| {
+            ApiError::internal("cell distribution data not yet available".to_string())
+        })?;
 
-    visit_live_cells_in_batches(state.store.as_ref(), state.append_only_store.as_ref(), |cell| {
-        let used_cap = cell.occupied_capacity as i128;
-        if used_cap < 0 {
-            return Err(format!(
-                "negative occupied_capacity in live cell: created_at_block={}, occupied_capacity={}",
-                cell.created_at_block, used_cap
-            ));
-        }
-        let idx = occupied_capacity_bucket_index(used_cap);
-        bucket_counts[idx] += 1;
-        bucket_used[idx] += used_cap;
-        Ok(())
-    })
-    .map_err(ApiError::internal)?;
-
-    let data = bucket_labels
-        .iter()
-        .enumerate()
-        .map(|(idx, label)| ChartDataPoint {
-            date: (*label).to_string(),
-            value: bucket_counts[idx].to_string(),
-            value2: Some(shannon_to_ckb_string(bucket_used[idx])),
-        })
-        .collect();
-
-    let response = ChartResponse {
-        data,
-        title: "Cell Size Distribution".to_string(),
-        y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
-    };
-
+    let response = build_cell_size_response(&snapshot);
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
     ok(response)
 }
@@ -1909,106 +1767,13 @@ async fn get_address_cohort_retention_chart(
         return ok(cached);
     }
 
-    // Try pre-computed cohort data from warmup (piggybacked on addr_balance scan)
-    if let Some(cohorts) = state
-        .mem_cache
-        .get::<BTreeMap<String, (i128, i128)>>("internal:address-cohort-data")
-    {
-        if !cohorts.is_empty() {
-            let data = cohorts
-                .into_iter()
-                .map(|(cohort, (used_ckb, total_balance))| {
-                    let retention = if total_balance > 0 {
-                        used_ckb as f64 * 100.0 / total_balance as f64
-                    } else {
-                        0.0
-                    };
-                    ChartDataPoint {
-                        date: cohort,
-                        value: format!("{retention:.6}"),
-                        value2: Some(shannon_to_ckb_string(used_ckb)),
-                    }
-                })
-                .collect();
-
-            let response = ChartResponse {
-                data,
-                title: "Address Cohort Retention".to_string(),
-                y_axis_label: "Used / Balance (%)".to_string(),
-                y2_axis_label: Some("Used Capacity (CKB)".to_string()),
-            };
-
-            state.cache.set(cache_key, &response, CacheTtl::CHART).await;
-            return ok(response);
-        }
-    }
-
-    // Fallback: full scan when warmup hasn't populated cohort data yet
-    let transitions = load_block_date_transitions_cached(&state).map_err(ApiError::internal)?;
-    let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
-
-    let iter = state
+    let (_, snapshot) = state
         .store
-        .iterator_cf(state.store.cf_addr_balance(), rocksdb::IteratorMode::Start);
-    for item in iter.flatten() {
-        let (_, value) = item;
-        let Ok(balance) = bincode::deserialize::<ckbadger_store::AddressBalance>(&value) else {
-            continue;
-        };
-        let Some(first_seen_date) = block_number_to_date(&transitions, balance.first_seen_block)
-        else {
-            continue;
-        };
+        .get_latest_address_cohort()
+        .map_err(|e| ApiError::internal(format!("failed to read address cohort: {e}")))?
+        .ok_or_else(|| ApiError::internal("address cohort data not yet available".to_string()))?;
 
-        let cohort = first_seen_date.format("%Y-%m").to_string();
-        let used_cap_addr = balance.used_capacity;
-        let total_balance = balance.balance;
-        if used_cap_addr < 0 {
-            return Err(ApiError::internal(format!(
-                "negative address used_capacity: first_seen_block={}, used_capacity={}",
-                balance.first_seen_block, used_cap_addr
-            )));
-        }
-        if total_balance < 0 {
-            return Err(ApiError::internal(format!(
-                "negative address balance: first_seen_block={}, balance={}",
-                balance.first_seen_block, total_balance
-            )));
-        }
-        if used_cap_addr > total_balance {
-            return Err(ApiError::internal(format!(
-                "address used capacity exceeds balance: first_seen_block={}, used_capacity={}, balance={}",
-                balance.first_seen_block, used_cap_addr, total_balance
-            )));
-        }
-        let entry = cohorts.entry(cohort).or_insert((0, 0));
-        entry.0 += used_cap_addr;
-        entry.1 += total_balance;
-    }
-
-    let data = cohorts
-        .into_iter()
-        .map(|(cohort, (used_ckb, total_balance))| {
-            let retention = if total_balance > 0 {
-                used_ckb as f64 * 100.0 / total_balance as f64
-            } else {
-                0.0
-            };
-            ChartDataPoint {
-                date: cohort,
-                value: format!("{retention:.6}"),
-                value2: Some(shannon_to_ckb_string(used_ckb)),
-            }
-        })
-        .collect();
-
-    let response = ChartResponse {
-        data,
-        title: "Address Cohort Retention".to_string(),
-        y_axis_label: "Used / Balance (%)".to_string(),
-        y2_axis_label: Some("Used Capacity (CKB)".to_string()),
-    };
-
+    let response = build_address_cohort_response(&snapshot);
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
     ok(response)
 }
@@ -3906,110 +3671,6 @@ mod tests {
     }
 
     #[test]
-    fn test_block_number_to_date_resolves_transition_ranges() {
-        let transitions = vec![
-            (0, NaiveDate::from_ymd_opt(2026, 2, 18).unwrap()),
-            (100, NaiveDate::from_ymd_opt(2026, 2, 19).unwrap()),
-            (220, NaiveDate::from_ymd_opt(2026, 2, 20).unwrap()),
-        ];
-
-        assert_eq!(
-            block_number_to_date(&transitions, 0),
-            NaiveDate::from_ymd_opt(2026, 2, 18)
-        );
-        assert_eq!(
-            block_number_to_date(&transitions, 150),
-            NaiveDate::from_ymd_opt(2026, 2, 19)
-        );
-        assert_eq!(
-            block_number_to_date(&transitions, 999),
-            NaiveDate::from_ymd_opt(2026, 2, 20)
-        );
-        assert_eq!(block_number_to_date(&[], 0), None);
-    }
-
-    #[test]
-    fn test_occupied_capacity_bucket_index_boundaries() {
-        assert_eq!(occupied_capacity_bucket_index(99 * SHANNONS_PER_CKB), 0);
-        assert_eq!(occupied_capacity_bucket_index(100 * SHANNONS_PER_CKB), 1);
-        assert_eq!(occupied_capacity_bucket_index(1_000 * SHANNONS_PER_CKB), 2);
-        assert_eq!(occupied_capacity_bucket_index(10_000 * SHANNONS_PER_CKB), 3);
-        assert_eq!(
-            occupied_capacity_bucket_index(100_000 * SHANNONS_PER_CKB),
-            4
-        );
-        assert_eq!(
-            occupied_capacity_bucket_index(1_000_000 * SHANNONS_PER_CKB),
-            5
-        );
-    }
-
-    #[test]
-    fn test_visit_live_cells_in_batches_reads_only_live_cells() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let live_a = ckbadger_store::LiveCellInfo {
-            capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x33; 20],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 61_00000000,
-            udt_amount: None,
-        };
-        let live_b = ckbadger_store::LiveCellInfo {
-            capacity: 200_00000000,
-            lock_script_hash: vec![0x44; 32],
-            lock_code_hash: vec![0x55; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x66; 20],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 61_00000000,
-            udt_amount: None,
-        };
-        let consumed_only = ckbadger_store::LiveCellInfo {
-            capacity: 300_00000000,
-            lock_script_hash: vec![0x77; 32],
-            lock_code_hash: vec![0x88; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x99; 20],
-            type_script_hash: None,
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            occupied_capacity: 61_00000000,
-            udt_amount: None,
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&[0xA1; 32], 0, &live_a, 10);
-        batch.put_cell(&[0xA2; 32], 0, &live_b, 20);
-        batch.put_consumed_cell(&[0xA3; 32], 0, &consumed_only, 30, 99);
-        batch.commit().unwrap();
-
-        let mut seen_blocks = Vec::new();
-        visit_live_cells_in_batches(&store, &store, |cell| {
-            seen_blocks.push(cell.created_at_block);
-            Ok(())
-        })
-        .unwrap();
-
-        seen_blocks.sort_unstable();
-        assert_eq!(seen_blocks, vec![10, 20]);
-    }
-
-    #[test]
     fn test_asset_ecosystem_response_serializes_camel_case() {
         let response = AssetEcosystemResponse {
             top_tokens: vec![TopTokenEntry {
@@ -4078,5 +3739,84 @@ mod tests {
         assert_eq!(deserialized.top_tokens[1].holders_count, 100);
         assert_eq!(deserialized.capacity_breakdown[0].category, "dao");
         assert_eq!(deserialized.capacity_breakdown[1].percentage, "60.00");
+    }
+
+    #[test]
+    fn test_build_cell_age_response_from_snapshot() {
+        let snapshot = DailyCellDistribution {
+            age_band_lt1d: 100_00000001, // 100.00000001 CKB (fractional to test formatting)
+            age_band_1d_7d: 200_00000000,
+            age_band_7d_30d: 300_00000000,
+            age_band_30d_180d: 400_00000000,
+            age_band_gt180d: 500_00000000,
+            size_bucket_counts: [0; 6],
+            size_bucket_capacities: [0; 6],
+        };
+        let response = build_cell_age_response(&snapshot, "20240115");
+        assert_eq!(response.title, "Cell Age vs Used Capacity");
+        assert_eq!(response.series.len(), 5);
+        assert_eq!(response.data.len(), 2);
+        assert_eq!(response.data[0].date, "2024-01-14"); // previous day
+        assert_eq!(response.data[1].date, "2024-01-15"); // snapshot day
+                                                         // shannon_to_ckb_string strips trailing zeros: 100.00000001
+        assert_eq!(response.data[1].values.get("lt1d").unwrap(), "100.00000001");
+        // Exact CKB amounts have no decimal: "500"
+        assert_eq!(response.data[1].values.get("gt180d").unwrap(), "500");
+    }
+
+    #[test]
+    fn test_build_cell_size_response_from_snapshot() {
+        let snapshot = DailyCellDistribution {
+            age_band_lt1d: 0,
+            age_band_1d_7d: 0,
+            age_band_7d_30d: 0,
+            age_band_30d_180d: 0,
+            age_band_gt180d: 0,
+            size_bucket_counts: [10, 20, 30, 40, 50, 60],
+            size_bucket_capacities: [
+                100_50000000, // 100.5 CKB
+                200_00000000,
+                300_00000000,
+                400_00000000,
+                500_00000000,
+                600_00000000,
+            ],
+        };
+        let response = build_cell_size_response(&snapshot);
+        assert_eq!(response.title, "Cell Size Distribution");
+        assert_eq!(response.data.len(), 6);
+        assert_eq!(response.data[0].date, "<100 CKB");
+        assert_eq!(response.data[0].value, "10");
+        assert_eq!(response.data[0].value2.as_deref(), Some("100.5"));
+        assert_eq!(response.data[5].date, ">=1m CKB");
+        assert_eq!(response.data[5].value, "60");
+    }
+
+    #[test]
+    fn test_build_address_cohort_response_from_snapshot() {
+        let cohort = DailyAddressCohort {
+            cohorts: vec![
+                ckbadger_store::AddressCohortEntry {
+                    cohort_month: "2024-02".to_string(),
+                    used_capacity: 200_00000000,
+                    total_balance: 800_00000000,
+                },
+                ckbadger_store::AddressCohortEntry {
+                    cohort_month: "2024-01".to_string(),
+                    used_capacity: 100_00000000,
+                    total_balance: 500_00000000,
+                },
+            ],
+        };
+        let response = build_address_cohort_response(&cohort);
+        assert_eq!(response.title, "Address Cohort Retention");
+        assert_eq!(response.data.len(), 2);
+        // Should be sorted by cohort_month
+        assert_eq!(response.data[0].date, "2024-01");
+        assert_eq!(response.data[1].date, "2024-02");
+        // retention = used / balance * 100
+        // 2024-01: 100/500 * 100 = 20.0
+        assert_eq!(response.data[0].value, "20.000000");
+        assert_eq!(response.data[0].value2.as_deref(), Some("100"));
     }
 }
