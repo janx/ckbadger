@@ -75,7 +75,7 @@ interface TypeBadgeInfo {
 }
 
 function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
-  const { type, primaryAssetChange, primaryScriptCall } = classified;
+  const { type, primaryAssetChange } = classified;
 
   switch (type) {
     case 'daoDeposit':
