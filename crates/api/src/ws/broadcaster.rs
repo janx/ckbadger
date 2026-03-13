@@ -48,6 +48,7 @@ pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
+    ckb_network: String,
     ckb_store: Option<Arc<CkbChainReader>>,
 ) {
     let mut last_block_number: Option<i64> = None;
@@ -172,7 +173,7 @@ pub async fn start_block_broadcaster(
             }
 
             // Broadcast latest activities after new blocks
-            broadcast_latest_activities(&store, &ws_manager);
+            broadcast_latest_activities(&store, &ws_manager, &ckb_network);
         }
     }
 }
@@ -246,7 +247,11 @@ fn broadcast_block_transactions(
     }
 }
 
-fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager>) {
+fn broadcast_latest_activities(
+    store: &CkbadgerStore,
+    ws_manager: &Arc<WsManager>,
+    ckb_network: &str,
+) {
     match store.get_latest_activities() {
         Ok(items) if !items.is_empty() => {
             let mut script_info_cache = HashMap::new();
@@ -256,7 +261,7 @@ fn broadcast_latest_activities(store: &CkbadgerStore, ws_manager: &Arc<WsManager
                 .filter_map(|item| {
                     match build_global_activity_response(
                         store,
-                        "mainnet", // TODO: derive from config if needed
+                        ckb_network,
                         &item,
                         &mut script_info_cache,
                     ) {

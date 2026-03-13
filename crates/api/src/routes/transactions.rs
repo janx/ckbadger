@@ -15,7 +15,8 @@ use tokio::time::{sleep, Instant};
 use crate::cache::InMemoryCache;
 use crate::cycles::{CyclesStatus, CyclesStatusResponse};
 use crate::response::{
-    decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
+    decode_cursor, default_limit, encode_cursor, hash_type_to_str, ok, ApiError, ApiResult,
+    ApiRouteError, CursorPaginatedResponse, ScriptResponse,
 };
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::script_to_address;
@@ -23,7 +24,6 @@ use crate::AppState;
 
 /// (block_number, tx_hash, tx_index, tx_index_entry, block_hash)
 type TxListEntry = (i64, Vec<u8>, i32, ckbadger_store::TxIndexEntry, Vec<u8>);
-type RouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 type TxIoBundle = (
     Vec<TransactionInputResponse>,
     Vec<TransactionOutputResponse>,
@@ -75,10 +75,6 @@ pub struct ListParams {
     limit: i64,
     block_number: Option<i64>,
     cursor: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,27 +269,40 @@ async fn list_transactions(
         let txs_result =
             tokio::task::spawn_blocking(move || -> Result<Vec<TxListEntry>, anyhow::Error> {
                 let mut results = Vec::with_capacity(fetch_limit);
-                // Start from cursor_block and go backwards
-                let blocks = store_c.list_blocks_desc(Some(cursor_block), fetch_limit * 2)?;
+                let mut scan_from = Some(cursor_block);
 
-                for (block_num, header) in &blocks {
-                    let block_txs = store_c.list_block_txs(*block_num)?;
-                    let block_tx_hashes =
-                        get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, *block_num);
-                    // For the first block (cursor_block), filter by cursor_index
-                    for (tx_idx, entry) in block_txs.into_iter().rev() {
-                        if *block_num == cursor_block && tx_idx >= cursor_index {
-                            continue;
+                // Fetch blocks in batches until we have enough transactions.
+                // A single batch may not suffice when blocks contain few txs.
+                while results.len() < fetch_limit {
+                    let blocks = store_c.list_blocks_desc(scan_from, fetch_limit)?;
+                    if blocks.is_empty() {
+                        break;
+                    }
+
+                    for (block_num, header) in &blocks {
+                        let block_txs = store_c.list_block_txs(*block_num)?;
+                        let block_tx_hashes =
+                            get_block_tx_hashes_cached(&mem_cache_c, &ckb_store_c, *block_num);
+                        for (tx_idx, entry) in block_txs.into_iter().rev() {
+                            if *block_num == cursor_block && tx_idx >= cursor_index {
+                                continue;
+                            }
+                            let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
+                                .unwrap_or_default();
+                            results.push((*block_num, header.hash.clone(), tx_idx, entry, tx_hash));
+                            if results.len() >= fetch_limit {
+                                break;
+                            }
                         }
-                        let tx_hash = tx_hash_from_prefetched_hashes(&block_tx_hashes, tx_idx)
-                            .unwrap_or_default();
-                        results.push((*block_num, header.hash.clone(), tx_idx, entry, tx_hash));
                         if results.len() >= fetch_limit {
                             break;
                         }
                     }
-                    if results.len() >= fetch_limit {
-                        break;
+
+                    // Continue scanning from block before the last one fetched
+                    match blocks.last() {
+                        Some((num, _)) if *num > 0 => scan_from = Some(*num - 1),
+                        _ => break,
                     }
                 }
                 Ok(results)
@@ -400,14 +409,6 @@ async fn get_transaction(
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScriptResponse {
-    pub code_hash: String,
-    pub hash_type: String,
-    pub args: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TransactionInputResponse {
     pub previous_output: Option<PreviousOutput>,
     pub since: String,
@@ -476,16 +477,6 @@ pub struct TransactionDetailResponse {
     pub witnesses_available: bool,
 }
 
-fn hash_type_to_string(hash_type: i16) -> String {
-    match hash_type {
-        0 => "data".to_string(),
-        1 => "type".to_string(),
-        2 => "data1".to_string(),
-        4 => "data2".to_string(),
-        _ => "unknown".to_string(),
-    }
-}
-
 #[cfg(test)]
 fn hash_type_byte_to_i16(byte: u8) -> i16 {
     match byte {
@@ -497,7 +488,7 @@ fn hash_type_byte_to_i16(byte: u8) -> i16 {
     }
 }
 
-fn parse_hash_type_label_to_i16(hash_type: &str) -> Result<i16, RouteError> {
+fn parse_hash_type_label_to_i16(hash_type: &str) -> Result<i16, ApiRouteError> {
     match hash_type {
         "data" => Ok(0),
         "type" => Ok(1),
@@ -515,7 +506,7 @@ fn decode_hex_bytes_with_context(
     field: &str,
     context: &str,
     expected_len: Option<usize>,
-) -> Result<Vec<u8>, RouteError> {
+) -> Result<Vec<u8>, ApiRouteError> {
     let bytes = hex::decode(raw.strip_prefix("0x").unwrap_or(raw)).map_err(|e| {
         ApiError::internal(format!(
             "invalid hex for {} while {}: value='{}', error={}",
@@ -540,7 +531,7 @@ fn parse_u64_hex_field_with_context(
     raw: &str,
     field: &str,
     context: &str,
-) -> Result<u64, RouteError> {
+) -> Result<u64, ApiRouteError> {
     u64::from_str_radix(raw.strip_prefix("0x").unwrap_or(raw), 16).map_err(|e| {
         ApiError::internal(format!(
             "invalid hex u64 for {} while {}: value='{}', error={}",
@@ -563,7 +554,7 @@ fn compute_tx_fee_from_io(
     has_dao_type_input: bool,
     block_number: i64,
     tx_hash: &[u8],
-) -> Result<u128, RouteError> {
+) -> Result<u128, ApiRouteError> {
     if is_cellbase {
         return Ok(0);
     }
@@ -599,10 +590,10 @@ fn resolve_stored_input_type_hash_type(
     store: &ckbadger_store::CkbadgerStore,
     type_script_hash: Option<&[u8]>,
     type_code_hash: &[u8],
-) -> Result<String, RouteError> {
+) -> Result<String, ApiRouteError> {
     if let Some(type_hash) = type_script_hash {
         match core_store.get_token(type_hash) {
-            Ok(Some(token)) => return Ok(hash_type_to_string(token.hash_type as i16)),
+            Ok(Some(token)) => return Ok(hash_type_to_str(token.hash_type as i16).to_string()),
             Ok(None) => {}
             Err(e) => {
                 return Err(ApiError::internal(format!(
@@ -615,7 +606,7 @@ fn resolve_stored_input_type_hash_type(
     }
 
     match store.get_script_info(type_code_hash) {
-        Ok(Some(script)) => Ok(hash_type_to_string(script.hash_type as i16)),
+        Ok(Some(script)) => Ok(hash_type_to_str(script.hash_type as i16).to_string()),
         Ok(None) => Ok("unknown".to_string()),
         Err(e) => Err(ApiError::internal(format!(
             "failed to resolve script hash_type for type_code_hash=0x{}: {}",
@@ -850,7 +841,7 @@ fn build_inputs_outputs_from_rpc_pending(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
-) -> Result<PendingTxIoBundle, RouteError> {
+) -> Result<PendingTxIoBundle, ApiRouteError> {
     if rpc_tx.outputs.len() != rpc_tx.outputs_data.len() {
         return Err(ApiError::internal(format!(
             "pending transaction outputs mismatch: tx_hash={}, outputs={}, outputs_data={}",
@@ -876,7 +867,7 @@ fn build_inputs_outputs_from_rpc_pending(
     let inputs = rpc_tx
         .inputs
         .iter()
-        .map(|input| -> Result<TransactionInputResponse, RouteError> {
+        .map(|input| -> Result<TransactionInputResponse, ApiRouteError> {
             let prev_tx_hash_hex = &input.previous_output.tx_hash;
             let prev_index_hex = &input.previous_output.index;
             let input_context = format!(
@@ -928,13 +919,13 @@ fn build_inputs_outputs_from_rpc_pending(
 
                     let lock_resp = ScriptResponse {
                         code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                        hash_type: hash_type_to_string(info.lock_hash_type),
+                        hash_type: hash_type_to_str(info.lock_hash_type).to_string(),
                         args: format!("0x{}", hex::encode(&info.lock_args)),
                     };
                     let type_resp = info
                         .type_code_hash
                         .as_ref()
-                        .map(|type_code_hash| -> Result<ScriptResponse, RouteError> {
+                        .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
                             Ok(ScriptResponse {
                                 code_hash: format!("0x{}", hex::encode(type_code_hash)),
                                 hash_type: resolve_stored_input_type_hash_type(
@@ -995,7 +986,7 @@ fn build_inputs_outputs_from_rpc_pending(
         .iter()
         .enumerate()
         .map(
-            |(output_idx, output)| -> Result<TransactionOutputResponse, RouteError> {
+            |(output_idx, output)| -> Result<TransactionOutputResponse, ApiRouteError> {
                 let output_context = format!(
                     "building pending output for tx={} output_index={}",
                     tx_hash_hex, output_idx
@@ -1132,7 +1123,7 @@ fn build_inputs_outputs_from_ckb(
     store: &ckbadger_store::CkbadgerStore,
     network: &str,
     block_number: i64,
-) -> Result<TxIoBundle, RouteError> {
+) -> Result<TxIoBundle, ApiRouteError> {
     let rpc_tx = ckb_store_reader::convert_transaction_view(tx_view);
     let witnesses = rpc_tx.witnesses.clone();
 
@@ -1143,7 +1134,7 @@ fn build_inputs_outputs_from_ckb(
     let inputs: Vec<TransactionInputResponse> = rpc_tx
         .inputs
         .iter()
-        .map(|input| -> Result<TransactionInputResponse, RouteError> {
+        .map(|input| -> Result<TransactionInputResponse, ApiRouteError> {
             let prev_tx_hash_hex = &input.previous_output.tx_hash;
             let prev_index_hex = &input.previous_output.index;
             let input_context = format!(
@@ -1202,13 +1193,13 @@ fn build_inputs_outputs_from_ckb(
 
                         let lock_resp = ScriptResponse {
                             code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
-                            hash_type: hash_type_to_string(info.lock_hash_type),
+                            hash_type: hash_type_to_str(info.lock_hash_type).to_string(),
                             args: format!("0x{}", hex::encode(&info.lock_args)),
                         };
                         let type_resp = info
                             .type_code_hash
                             .as_ref()
-                            .map(|type_code_hash| -> Result<ScriptResponse, RouteError> {
+                            .map(|type_code_hash| -> Result<ScriptResponse, ApiRouteError> {
                                 Ok(ScriptResponse {
                                     code_hash: format!("0x{}", hex::encode(type_code_hash)),
                                     hash_type: resolve_stored_input_type_hash_type(
@@ -1269,7 +1260,7 @@ fn build_inputs_outputs_from_ckb(
         .iter()
         .enumerate()
         .map(
-            |(output_idx, output)| -> Result<TransactionOutputResponse, RouteError> {
+            |(output_idx, output)| -> Result<TransactionOutputResponse, ApiRouteError> {
                 let output_context = format!(
                     "building output for tx=0x{} output_index={}",
                     hex::encode(&tx_hash),
@@ -1570,7 +1561,7 @@ async fn trigger_cycles_calculation(
 async fn load_tx_cycles_state(
     state: &Arc<AppState>,
     hash_bytes: &[u8],
-) -> Result<Option<(Option<i64>, bool)>, RouteError> {
+) -> Result<Option<(Option<i64>, bool)>, ApiRouteError> {
     let store = state.store.clone();
     let hash_c = hash_bytes.to_vec();
     let row = tokio::task::spawn_blocking(move || store.get_tx_by_hash(&hash_c))
@@ -1585,7 +1576,7 @@ async fn wait_cycles_result(
     state: &Arc<AppState>,
     hash: &str,
     hash_bytes: &[u8],
-) -> Result<CyclesStatusResponse, RouteError> {
+) -> Result<CyclesStatusResponse, ApiRouteError> {
     let deadline = Instant::now() + state.cycles_client.wait_timeout();
 
     loop {
@@ -1700,7 +1691,7 @@ fn lookup_tx_block_number_in_ckb_store(
         .map(|(_, block_number)| block_number)
 }
 
-fn missing_tx_lookup_error(hash_bytes: &[u8], ckb_block_number: Option<u64>) -> RouteError {
+fn missing_tx_lookup_error(hash_bytes: &[u8], ckb_block_number: Option<u64>) -> ApiRouteError {
     let tx_hash_hex = format!("0x{}", hex::encode(hash_bytes));
     match ckb_block_number {
         Some(block_number) => ApiError::internal(format!(
@@ -2011,12 +2002,12 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_type_to_string() {
-        assert_eq!(hash_type_to_string(0), "data");
-        assert_eq!(hash_type_to_string(1), "type");
-        assert_eq!(hash_type_to_string(2), "data1");
-        assert_eq!(hash_type_to_string(4), "data2");
-        assert_eq!(hash_type_to_string(99), "unknown");
+    fn test_hash_type_to_str() {
+        assert_eq!(hash_type_to_str(0), "data");
+        assert_eq!(hash_type_to_str(1), "type");
+        assert_eq!(hash_type_to_str(2), "data1");
+        assert_eq!(hash_type_to_str(4), "data2");
+        assert_eq!(hash_type_to_str(99), "unknown");
     }
 
     #[test]

@@ -111,8 +111,36 @@ pub fn decode_cursor_single(cursor: &str) -> Option<i64> {
 
 pub type ApiResult<T> = Result<Json<T>, (StatusCode, Json<ApiError>)>;
 
+/// Common error type used by route handlers.
+pub type ApiRouteError = (StatusCode, Json<ApiError>);
+
 pub fn ok<T: Serialize>(data: T) -> ApiResult<T> {
     Ok(Json(data))
+}
+
+/// Default pagination limit shared across all route modules.
+pub fn default_limit() -> i64 {
+    20
+}
+
+/// Map CKB script hash_type integer to its string representation.
+pub fn hash_type_to_str(hash_type: i16) -> &'static str {
+    match hash_type {
+        0 => "data",
+        1 => "type",
+        2 => "data1",
+        4 => "data2",
+        _ => "unknown",
+    }
+}
+
+/// Shared script response type used by transaction, cell, and other route modules.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptResponse {
+    pub code_hash: String,
+    pub hash_type: String,
+    pub args: String,
 }
 
 #[cfg(test)]
@@ -198,5 +226,32 @@ mod tests {
         let json = serde_json::to_value(&err).unwrap();
         assert_eq!(json["error"], "test_error");
         assert_eq!(json["message"], "something went wrong");
+    }
+
+    #[test]
+    fn test_default_limit() {
+        assert_eq!(default_limit(), 20);
+    }
+
+    #[test]
+    fn test_hash_type_to_str() {
+        assert_eq!(hash_type_to_str(0), "data");
+        assert_eq!(hash_type_to_str(1), "type");
+        assert_eq!(hash_type_to_str(2), "data1");
+        assert_eq!(hash_type_to_str(4), "data2");
+        assert_eq!(hash_type_to_str(99), "unknown");
+    }
+
+    #[test]
+    fn test_script_response_serialization() {
+        let script = ScriptResponse {
+            code_hash: "0xabc".to_string(),
+            hash_type: "type".to_string(),
+            args: "0x1234".to_string(),
+        };
+        let json = serde_json::to_value(&script).unwrap();
+        assert_eq!(json["codeHash"], "0xabc");
+        assert_eq!(json["hashType"], "type");
+        assert_eq!(json["args"], "0x1234");
     }
 }

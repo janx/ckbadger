@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult};
 use crate::routes::tx_lookup::fetch_transaction_lookup;
-use crate::utils::{address_to_lock_script_hash, is_ckb_address};
+use crate::utils::{address_to_lock_script_hash, is_ckb_address, is_known_script_name};
 use crate::warmup::{
     CachedAssetEntry, CachedScriptEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN,
     CACHE_KEY_SCRIPTS_NAMED, CACHE_KEY_SPORES_ALL,
@@ -216,14 +216,6 @@ fn parse_outpoint(value: &str) -> Option<ParsedOutpoint> {
         output_index,
         normalized,
     })
-}
-
-fn is_known_script_name(name: Option<&str>) -> bool {
-    let Some(name) = name else {
-        return false;
-    };
-    let trimmed = name.trim();
-    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("unknown")
 }
 
 fn normalized_query_for_response(query: &str) -> String {

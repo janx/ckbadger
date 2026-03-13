@@ -14,14 +14,12 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
-use crate::response::{ok, ApiError, ApiResult};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::utils::{apply_live_capacity_delta, format_duration};
 use crate::warmup::{
     CachedAssetEntry, CACHE_KEY_ASSETS_NFT, CACHE_KEY_ASSETS_TOKEN, CACHE_KEY_SCRIPTS_ALL,
 };
 use crate::AppState;
-
-type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 fn load_script_infos_cached(
     state: &Arc<AppState>,

@@ -35,10 +35,11 @@ static NFT_STORAGE_TIER_OVERRIDES: LazyLock<HashMap<String, String>> = LazyLock:
             normalized_tier.as_str(),
             "fully_onchain" | "decentralized_external" | "centralized_dependent" | "unknown"
         ) {
-            panic!(
-                "invalid nft_storage_tier_overrides tier for standard='{}': {}",
+            eprintln!(
+                "WARNING: invalid nft_storage_tier_overrides tier for standard='{}': {}, skipping",
                 standard, normalized_tier
             );
+            continue;
         }
         overrides.insert(standard, normalized_tier);
     }
@@ -68,12 +69,18 @@ fn load_script_name_overrides_doc() -> ScriptNameOverridesDoc {
         }
     };
 
-    serde_json::from_str(&content).unwrap_or_else(|err| {
-        panic!(
-            "invalid docs/script-name-overrides.json at {}: {err}",
-            path.display()
-        );
-    })
+    match serde_json::from_str(&content) {
+        Ok(doc) => doc,
+        Err(err) => {
+            eprintln!(
+                "WARNING: invalid docs/script-name-overrides.json at {}: {err}, using defaults",
+                path.display()
+            );
+            ScriptNameOverridesDoc {
+                nft_storage_tier_overrides: default_nft_storage_tier_overrides(),
+            }
+        }
+    }
 }
 
 fn normalize_standard_alias_key(standard: &str) -> String {

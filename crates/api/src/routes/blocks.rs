@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse};
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -29,10 +29,6 @@ pub struct ListParams {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<i64>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,8 +387,13 @@ async fn get_block(
             let miner_address =
                 get_miner_address_from_store(&ckb_store, &header.hash, &state.ckb_network);
 
-            let reward_info =
-                get_mining_reward(&state.ckb_rpc_url, &block_hash, &store, &state.cache).await;
+            let reward_info = get_mining_reward(
+                &state.ckb_rpc_url,
+                &block_hash,
+                state.ckb_store.as_ref(),
+                &state.cache,
+            )
+            .await;
             let (mining_reward, mining_reward_tx_hash) = match reward_info {
                 Some(info) => (Some(info.reward), info.cellbase_tx_hash),
                 None => (None, None),
@@ -500,7 +501,7 @@ fn parse_hex_u128(hex: &str) -> u128 {
 async fn get_mining_reward(
     rpc_url: &str,
     block_hash: &str,
-    store: &Arc<ckbadger_store::CkbadgerStore>,
+    ckb_store: Option<&Arc<CkbChainReader>>,
     cache: &CacheBackend,
 ) -> Option<MiningRewardInfo> {
     let cache_key = CacheKeys::mining_reward(block_hash);
@@ -531,7 +532,7 @@ async fn get_mining_reward(
 
     let total = primary + secondary + committed + proposal;
 
-    let cellbase_tx_hash = get_cellbase_tx_hash(store, &economic_state.finalized_at);
+    let cellbase_tx_hash = get_cellbase_tx_hash(ckb_store, &economic_state.finalized_at);
 
     let info = MiningRewardInfo {
         reward: total.to_string(),
@@ -543,36 +544,29 @@ async fn get_mining_reward(
     Some(info)
 }
 
-/// Get cellbase tx hash by looking up the block hash, then finding tx_index=0.
+/// Get cellbase tx hash by looking up the block in the CKB node's RocksDB.
 fn get_cellbase_tx_hash(
-    store: &ckbadger_store::CkbadgerStore,
+    ckb_store: Option<&Arc<CkbChainReader>>,
     finalized_at_hash: &str,
 ) -> Option<String> {
-    let hash_bytes = hex::decode(
+    let hash_vec = hex::decode(
         finalized_at_hash
             .strip_prefix("0x")
             .unwrap_or(finalized_at_hash),
     )
     .ok()?;
 
-    let block_num = store.get_block_number_by_hash(&hash_bytes).ok()??;
-    // List txs for this block and find tx_index=0 (cellbase)
-    let txs = store.list_block_txs(block_num).ok()?;
-    // The tx hash is stored in tx_hash_map as value -> (block_num, tx_idx),
-    // but we need the reverse: given block_num+tx_idx=0, get the tx_hash.
-    // We don't have a direct reverse lookup, so we use the CKB store if available,
-    // or iterate the tx_hash_map. For now, return None if we can't find it easily.
-    // However, we can scan the tx_hash_map looking for the matching (block_num, 0).
-    // That's expensive. Instead, let's return None for the cellbase hash.
-    // The mining reward info still has the reward amount.
-    if txs.is_empty() {
+    if hash_vec.len() != 32 {
         return None;
     }
-    // The tx hash is not stored in TxIndexEntry. We need to do a reverse lookup.
-    // The tx_hash_map maps tx_hash -> (block_num, tx_idx).
-    // Without a reverse index, we can't efficiently get tx_hash from (block_num, tx_idx).
-    // Return None for now - the reward amount is still available.
-    None
+
+    let ckb = ckb_store?;
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&hash_vec);
+    let block = ckb.get_block(&hash)?;
+    let txs = block.transactions();
+    let cellbase = txs.first()?;
+    Some(format!("0x{}", hex::encode(cellbase.hash().raw_data())))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -644,29 +638,22 @@ async fn get_block_fee_stats(
         }
     }
 
-    let avg_fee_rate = if fee_rates.is_empty() {
-        0.0
+    let (avg_fee_rate, min_fee_rate, max_fee_rate) = if fee_rates.is_empty() {
+        (0.0, 0.0, 0.0)
     } else {
-        fee_rates.iter().sum::<f64>() / fee_rates.len() as f64
+        let avg = fee_rates.iter().sum::<f64>() / fee_rates.len() as f64;
+        let min = fee_rates.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = fee_rates.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        (avg, min, max)
     };
-    let min_fee_rate = fee_rates.iter().copied().fold(f64::INFINITY, f64::min);
-    let max_fee_rate = fee_rates.iter().copied().fold(f64::NEG_INFINITY, f64::max);
 
     ok(BlockFeeStatsResponse {
         block_number,
         total_size,
         total_cycles,
         avg_fee_rate,
-        min_fee_rate: if fee_rates.is_empty() {
-            0.0
-        } else {
-            min_fee_rate
-        },
-        max_fee_rate: if fee_rates.is_empty() {
-            0.0
-        } else {
-            max_fee_rate
-        },
+        min_fee_rate,
+        max_fee_rate,
         transaction_count: non_cellbase_count,
     })
 }
@@ -725,8 +712,10 @@ async fn get_block_proposals(
                             BlockProposal {
                                 proposal_index: i as i16,
                                 proposal_id: format!("0x{}", hex::encode(&proposal_bytes)),
-                                // Committed tx lookup would require scanning tx_hash_map
-                                // for matching prefix - omit for now
+                                // TODO: CKB proposal IDs are 10-byte tx hash prefixes.
+                                // Resolving committed_tx requires a prefix scan of the
+                                // tx_hash_map which is expensive; omitted until a
+                                // dedicated proposal→tx reverse index exists.
                                 committed_tx_hash: None,
                                 committed_block_number: None,
                             }

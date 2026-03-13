@@ -10,14 +10,15 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+};
 use crate::utils::shannon_to_ckb;
 use crate::AppState;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);
 const DAO_ADDRESS_SUMMARY_CACHE_TTL: Duration = Duration::from_secs(30);
-type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -41,10 +42,6 @@ pub struct ListParams {
     limit: i64,
     status: Option<i16>,
     cursor: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 fn parse_dao_cursor_key(

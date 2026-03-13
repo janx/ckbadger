@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::cache::InMemoryCache;
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
 use crate::utils::{
     apply_live_capacity_delta, date_keys_inclusive, parse_chart_date_range,
     resolve_collection_standard, resolve_nft_collection_name,
@@ -46,6 +46,9 @@ fn get_collection_aggregate(
             use ckbadger_store::types::ObjectStandard;
             ObjectCollectionAggregate {
                 name: id_agg.name,
+                // ObjectStandard has no DotBit/DidCkb variants; Spore is a
+                // placeholder.  Display-level standard is resolved by
+                // resolve_collection_standard() using collection_id, not this field.
                 standard: match id_agg.standard {
                     ckbadger_store::types::IdentityStandard::DotBit => ObjectStandard::Spore,
                     ckbadger_store::types::IdentityStandard::DidCkb => ObjectStandard::Spore,
@@ -61,7 +64,6 @@ fn get_collection_aggregate(
     }
 }
 
-type ApiRouteError = (axum::http::StatusCode, Json<ApiError>);
 const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
 const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(30);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);

@@ -13,11 +13,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::response::{ok, ApiError, ApiResult, CursorPaginatedResponse};
+use crate::response::{
+    default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
+    CursorPaginatedResponse,
+};
 use crate::utils::address::{address_to_lock_script_hash, compute_script_hash, script_to_address};
 use crate::AppState;
-
-type ApiRouteError = (axum::http::StatusCode, axum::Json<ApiError>);
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -31,10 +32,6 @@ pub struct ActivityParams {
     limit: i64,
     cursor: Option<String>,
     filter: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -186,19 +183,6 @@ fn convert_asset_change(change: &AssetChange) -> AssetChangeResponse {
     }
 }
 
-fn hash_type_to_string(hash_type: i16) -> anyhow::Result<&'static str> {
-    match hash_type {
-        0 => Ok("data"),
-        1 => Ok("type"),
-        2 => Ok("data1"),
-        4 => Ok("data2"),
-        other => Err(anyhow::anyhow!(
-            "unsupported script hash_type {} in activity script_call",
-            other
-        )),
-    }
-}
-
 fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
     info.and_then(|item| item.name.as_deref())
         .map(str::trim)
@@ -226,7 +210,13 @@ fn convert_script_call(
     cache: &mut HashMap<Vec<u8>, Option<ScriptInfo>>,
     call: &ScriptCallEntry,
 ) -> anyhow::Result<ScriptCallResponse> {
-    let hash_type = hash_type_to_string(call.type_hash_type)?;
+    let hash_type = hash_type_to_str(call.type_hash_type);
+    if hash_type == "unknown" {
+        return Err(anyhow::anyhow!(
+            "unsupported script hash_type {} in activity script_call",
+            call.type_hash_type
+        ));
+    }
     let script_hash = compute_script_hash(
         &call.type_code_hash,
         call.type_hash_type as u8,

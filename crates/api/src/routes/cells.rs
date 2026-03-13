@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
-    decode_cursor, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
+    decode_cursor, default_limit, encode_cursor, ok, ApiError, ApiResult, CursorPaginatedResponse,
+    ScriptResponse,
 };
 use crate::utils::{
     address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
@@ -30,7 +31,6 @@ use crate::AppState;
 use ckbadger_store::{keys, CkbadgerStore};
 
 const SHANNONS_PER_CKB: i64 = 100_000_000;
-const UNKNOWN_SCRIPT_NAME: &str = "unknown";
 const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
 const SUDT_CODE_HASH: &str = "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5";
 const XUDT_CODE_HASH_DATA1: &str =
@@ -57,11 +57,6 @@ const CLUSTER_CODE_HASHES: [&str; 3] = [
     "0x598d793defef36e2eeba54a9b45130e4ca92822e1d193671f490950c3b856080",
 ];
 const ADDR_TX_SCAN_CHUNK_SIZE: usize = 128;
-
-fn is_known_script_label(name: &str) -> bool {
-    let trimmed = name.trim();
-    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
-}
 
 fn format_script_code_hash_label(code_hash: &[u8]) -> String {
     let full = hex::encode(code_hash);
@@ -1389,12 +1384,7 @@ pub struct ListCellsByScriptParams {
     hash_type: String,
     #[serde(default = "default_script_kind")]
     script_kind: String,
-    #[allow(dead_code)]
     cursor: Option<String>,
-}
-
-fn default_limit() -> i64 {
-    20
 }
 
 fn default_script_kind() -> String {
@@ -1419,14 +1409,6 @@ pub struct CellResponse {
     pub virtual_used_capacity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub udt_amount: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptResponse {
-    pub code_hash: String,
-    pub hash_type: String,
-    pub args: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1608,7 +1590,6 @@ pub struct AddressTxParams {
 pub struct AddressTokensParams {
     #[serde(default = "default_limit")]
     limit: i64,
-    #[allow(dead_code)]
     cursor: Option<String>,
 }
 
@@ -2841,7 +2822,7 @@ async fn get_address_transactions(
                         .map_err(|e| ApiError::internal(e.to_string()))?
                         .and_then(|si| si.name)
                         .map(|name| name.trim().to_string())
-                        .filter(|name| is_known_script_label(name));
+                        .filter(|name| is_known_script_name(Some(name)));
                     Ok(known_name.unwrap_or_else(|| format_script_code_hash_label(ch)))
                     },
                 )
@@ -3658,10 +3639,10 @@ mod tests {
 
     #[test]
     fn test_is_known_script_label() {
-        assert!(!is_known_script_label("unknown"));
-        assert!(!is_known_script_label(" Unknown "));
-        assert!(!is_known_script_label(" "));
-        assert!(is_known_script_label("Secp256k1"));
+        assert!(!is_known_script_name(Some("unknown")));
+        assert!(!is_known_script_name(Some(" Unknown ")));
+        assert!(!is_known_script_name(Some(" ")));
+        assert!(is_known_script_name(Some("Secp256k1")));
     }
 
     #[test]
