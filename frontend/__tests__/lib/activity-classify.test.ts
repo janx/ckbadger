@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobalActivity } from '@/lib/api';
-import { classifyActivity, type ActivityType } from '@/lib/activity-classify';
+import { classifyActivity } from '@/lib/activity-classify';
 
 function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
   return {
