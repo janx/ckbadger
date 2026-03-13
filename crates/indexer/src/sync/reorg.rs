@@ -11,9 +11,12 @@ use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
 use crate::rpc::CkbRpcClient;
 
-use super::dao_helpers::derive_pre_batch_live_cells;
+use super::dao_helpers::{derive_pre_batch_live_cells, occupied_capacity_shannons_i64};
 use super::helpers::*;
-use super::indexer::{mempool_short_tx_id, rebuild_hodl_tracker_from_state, Indexer};
+use super::indexer::{
+    mempool_short_tx_id, rebuild_cell_dist_tracker_from_state, rebuild_hodl_tracker_from_state,
+    Indexer,
+};
 use super::types::{ReorgAction, TxData};
 
 impl Indexer {
@@ -110,6 +113,78 @@ impl Indexer {
 
         // Phase 3: Persist tracker state
         store.put_hodl_tracker_state(&tracker.to_state())?;
+
+        Ok(())
+    }
+
+    pub(crate) fn reconcile_cell_dist_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
+        let state = self.writer.store().get_cell_dist_tracker_state()?;
+        let rebuilt = rebuild_cell_dist_tracker_from_state(state, tip_block)?;
+
+        let mut tracker = self.cell_dist_tracker.lock().unwrap();
+        *tracker = rebuilt;
+        Ok(())
+    }
+
+    /// Feed parsed block data into the cell distribution tracker and write snapshots at day boundaries.
+    pub(crate) fn update_cell_distribution(
+        &self,
+        all_parsed_blocks: &[crate::parser::block::ParsedBlock],
+        all_tx_data: &[TxData],
+        input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    ) -> Result<()> {
+        let mut tracker = self.cell_dist_tracker.lock().unwrap();
+        let store = self.writer.store();
+
+        let mut block_tx_idx = 0usize;
+        for parsed in all_parsed_blocks {
+            let block_date = ckbadger_common::block_date(parsed.timestamp);
+            tracker.record_block_date(parsed.number, block_date);
+
+            let tx_count = parsed.transactions_count as usize;
+            let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
+            block_tx_idx += tx_count;
+
+            for tx_data in tx_slice {
+                // Cell creates — compute occupied capacity from cell fields
+                for cell in &tx_data.cells {
+                    let occ = occupied_capacity_shannons_i64(
+                        cell.lock_args.len(),
+                        cell.type_args.as_ref().map(|args| args.len()),
+                        cell.data_size,
+                    );
+                    tracker.cell_created(block_date, occ);
+                }
+                // Cell consumes
+                if !tx_data.is_cellbase {
+                    for input in &tx_data.inputs {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "cell_dist_tracker",
+                            ),
+                        );
+                        let info = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key));
+                        if let Some(info) = info {
+                            tracker.cell_consumed(info.created_at_block, info.occupied_capacity)?;
+                        }
+                    }
+                }
+            }
+
+            // Check for day boundary and write snapshot
+            if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
+                let date_str = snapshot_date.format("%Y%m%d").to_string();
+                store.put_cell_distribution(&date_str, &snapshot)?;
+            }
+        }
+
+        // Persist tracker state
+        store.put_cell_dist_tracker_state(&tracker.to_state())?;
 
         Ok(())
     }

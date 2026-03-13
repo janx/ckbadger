@@ -4527,6 +4527,14 @@ impl Indexer {
             &address_balance_changes,
         )?;
 
+        // Cell distribution tracker update
+        self.update_cell_distribution(
+            all_parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &batch_cell_infos,
+        )?;
+
         // Lightweight async cache update (no DB write)
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();

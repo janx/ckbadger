@@ -8,12 +8,13 @@ use ckbadger_common::PipelineProgressData;
 use dashmap::DashMap;
 use tracing::{debug, info, warn};
 
-use ckbadger_store::types::HodlTrackerState;
+use ckbadger_store::types::{CellDistributionTrackerState, HodlTrackerState};
 use ckbadger_store::CkbadgerStore;
 
 use crate::bulk_sync_perf::{BatchSample, BulkSyncPerfRun, HeartbeatSample, RocksDbConfig};
 use crate::cache::CacheInvalidator;
 use crate::config::Config;
+use crate::db::writer::cell_distribution::CellDistributionTracker;
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::db::{BatchWriter, Repository};
 use ckb_store_reader::CkbChainReader;
@@ -70,6 +71,51 @@ pub(super) fn rebuild_hodl_tracker_from_state(
     match state {
         Some(s) => Ok(HodlWaveTracker::from_state(s)?),
         None => Ok(HodlWaveTracker::new()),
+    }
+}
+
+fn ensure_cell_dist_tracker_state_consistent(
+    state: Option<&CellDistributionTrackerState>,
+    tip_block: i64,
+) -> Result<()> {
+    if tip_block <= 0 {
+        return Ok(());
+    }
+    let state = state.ok_or_else(|| {
+        anyhow!(
+            "missing cell distribution tracker state at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            tip_block
+        )
+    })?;
+    if state.date_transitions.is_empty() {
+        bail!(
+            "invalid cell distribution tracker state: empty date_transitions at tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+            tip_block
+        );
+    }
+    if let Some((last_block, _)) = state.date_transitions.last() {
+        if *last_block > tip_block {
+            bail!(
+                "invalid cell distribution tracker state: last transition block {} ahead of sync tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                last_block,
+                tip_block
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn rebuild_cell_dist_tracker_from_state(
+    state: Option<CellDistributionTrackerState>,
+    tip_block: i64,
+) -> Result<CellDistributionTracker> {
+    ensure_cell_dist_tracker_state_consistent(state.as_ref(), tip_block)?;
+    if tip_block <= 0 {
+        return Ok(CellDistributionTracker::new());
+    }
+    match state {
+        Some(s) => Ok(CellDistributionTracker::from_state(s)?),
+        None => Ok(CellDistributionTracker::new()),
     }
 }
 
@@ -211,6 +257,7 @@ pub struct Indexer {
     pub(crate) label_import_started: std::sync::atomic::AtomicBool,
     pub(crate) ckb_store: Option<Arc<CkbChainReader>>,
     pub(crate) hodl_tracker: std::sync::Mutex<HodlWaveTracker>,
+    pub(crate) cell_dist_tracker: std::sync::Mutex<CellDistributionTracker>,
 }
 
 impl Indexer {
@@ -270,6 +317,21 @@ impl Indexer {
             }
         };
 
+        let cell_dist_tracker = match store.get_cell_dist_tracker_state()? {
+            Some(state) => {
+                info!(
+                    "Restored cell distribution tracker: {} date entries, {} transitions",
+                    state.capacity_by_date_and_bucket.len(),
+                    state.date_transitions.len(),
+                );
+                CellDistributionTracker::from_state(state)?
+            }
+            None => {
+                info!("Starting fresh cell distribution tracker");
+                CellDistributionTracker::new()
+            }
+        };
+
         let incident_dir = PathBuf::from(&config.domain_data_path).join("incidents");
 
         Ok(Self {
@@ -303,6 +365,7 @@ impl Indexer {
             label_import_started: std::sync::atomic::AtomicBool::new(false),
             ckb_store,
             hodl_tracker: std::sync::Mutex::new(hodl_tracker),
+            cell_dist_tracker: std::sync::Mutex::new(cell_dist_tracker),
         })
     }
 
@@ -952,6 +1015,7 @@ impl Indexer {
             );
         }
         self.reconcile_hodl_tracker_with_tip(actual_start)?;
+        self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
 
         self.maybe_start_label_import();

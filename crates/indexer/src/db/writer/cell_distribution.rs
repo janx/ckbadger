@@ -11,11 +11,9 @@ use chrono::NaiveDate;
 use ckbadger_store::{CellDistributionTrackerState, DailyCellDistribution};
 
 /// Number of size buckets for cell distribution.
-#[allow(dead_code)]
 const NUM_BUCKETS: usize = 6;
 
 /// CKB per shannon.
-#[allow(dead_code)]
 const CKB: i64 = 100_000_000;
 
 /// Determine the size bucket index for a given occupied capacity (in shannons).
@@ -26,7 +24,6 @@ const CKB: i64 = 100_000_000;
 /// Bucket 3: 10,000-99,999 CKB
 /// Bucket 4: 100,000-999,999 CKB
 /// Bucket 5: >=1,000,000 CKB
-#[allow(dead_code)]
 fn size_bucket(occupied_capacity: i64) -> usize {
     let ckb = occupied_capacity / CKB;
     match ckb {
@@ -41,7 +38,6 @@ fn size_bucket(occupied_capacity: i64) -> usize {
 
 /// Tracks live cell capacity by creation date and size bucket for cell distribution chart computation.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct CellDistributionTracker {
     /// Total live capacity (shannons) per cell creation date per size bucket.
     capacity_by_date_and_bucket: HashMap<NaiveDate, [i128; NUM_BUCKETS]>,
@@ -55,7 +51,6 @@ pub struct CellDistributionTracker {
     last_snapshot_date: Option<NaiveDate>,
 }
 
-#[allow(dead_code)]
 impl CellDistributionTracker {
     pub fn new() -> Self {
         Self {
@@ -274,7 +269,7 @@ impl CellDistributionTracker {
     }
 
     /// Look up the date for a given block number using binary search on transitions.
-    fn block_number_to_date(&self, block_number: i64) -> Option<NaiveDate> {
+    pub fn block_number_to_date(&self, block_number: i64) -> Option<NaiveDate> {
         if self.block_date_transitions.is_empty() {
             return None;
         }

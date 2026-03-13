@@ -2121,6 +2121,7 @@ impl Indexer {
                                         self.udt_cell_cache.clear();
                                         let (reorg_tip, _) = self.repo.get_sync_tip().await?;
                                         self.reconcile_hodl_tracker_with_tip(reorg_tip)?;
+                                        self.reconcile_cell_dist_tracker_with_tip(reorg_tip)?;
                                         let current_epoch =
                                             self.pipeline_reset_epoch.load(Ordering::SeqCst);
                                         info!(
@@ -2129,7 +2130,7 @@ impl Indexer {
                                             db_tip,
                                             chain_tip,
                                             reorg_tip,
-                                            "Reorg handled, caches cleared, HODL tracker reconciled, draining stale parsed batches"
+                                            "Reorg handled, caches cleared, trackers reconciled, draining stale parsed batches"
                                         );
                                         self.request_pipeline_reset(
                                             "reorg handled",
@@ -2279,6 +2280,21 @@ impl Indexer {
                                     return Err(consistency_err).with_context(|| {
                                         format!(
                                             "HODL tracker inconsistent after batch cleanup to tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                                            cleanup_tip
+                                        )
+                                    });
+                                }
+                                if let Err(consistency_err) =
+                                    self.reconcile_cell_dist_tracker_with_tip(cleanup_tip)
+                                {
+                                    error!(
+                                        cleanup_tip,
+                                        "Cell distribution tracker consistency check failed after batch cleanup: {:?}",
+                                        consistency_err
+                                    );
+                                    return Err(consistency_err).with_context(|| {
+                                        format!(
+                                            "Cell distribution tracker inconsistent after batch cleanup to tip {}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
                                             cleanup_tip
                                         )
                                     });
