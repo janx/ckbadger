@@ -318,8 +318,12 @@ impl CkbadgerStore {
                         | AssetChange::DaoWithdrawComplete { .. }
                 )
             }),
-            Some("script_call") => entry
+            Some("type_call") => entry
                 .type_calls
+                .as_ref()
+                .is_some_and(|calls| !calls.is_empty()),
+            Some("lock_call") => entry
+                .lock_calls
                 .as_ref()
                 .is_some_and(|calls| !calls.is_empty()),
             Some(_) => false,

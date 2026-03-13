@@ -501,10 +501,10 @@ fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
         if !matches!(
             value,
-            "all" | "ckb" | "token" | "nft" | "dao" | "script_call"
+            "all" | "ckb" | "token" | "nft" | "dao" | "type_call" | "lock_call"
         ) {
             return Err(ApiError::bad_request(format!(
-                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, script_call",
+                "invalid activity filter '{}'; expected one of: all, ckb, token, nft, dao, type_call, lock_call",
                 value
             )));
         }

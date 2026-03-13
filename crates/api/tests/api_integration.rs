@@ -7206,7 +7206,7 @@ async fn test_address_activities_rejects_unknown_filter() {
 }
 
 #[tokio::test]
-async fn test_address_activities_return_type_calls_separately_and_support_script_call_filter() {
+async fn test_address_activities_return_type_calls_separately_and_support_type_call_filter() {
     let core_store = test_store();
     let append_only_store = test_append_only_store();
     let lock_hash = vec![0x12; 32];
@@ -7284,7 +7284,7 @@ async fn test_address_activities_return_type_calls_separately_and_support_script
     let app = create_router(config).await;
     let request = Request::builder()
         .uri(format!(
-            "/api/v1/addresses/0x{}/activities?filter=script_call",
+            "/api/v1/addresses/0x{}/activities?filter=type_call",
             hex::encode(&lock_hash)
         ))
         .body(Body::empty())
