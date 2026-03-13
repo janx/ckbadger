@@ -185,56 +185,58 @@ export default function ScriptByCodeHashPage({
         <TerminalPanel className="mb-6">
           <TerminalPanelHeader indicator="active">Deployment</TerminalPanelHeader>
           <TerminalPanelContent padding="none">
-            <div className="border-base-border bg-base-surface/50 text-text-dim flex border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
-              <div className="w-40">Code Cell</div>
-              <div className="flex-1">Code Hash</div>
-              <div className="w-20 text-center">Hash Type</div>
-              <div className="w-20 text-center">Kind</div>
-              <div className="w-24 text-right">Cells</div>
-              <div className="w-32 text-right">Capacity</div>
-            </div>
-            <TerminalRow hoverable={false}>
-              <div className="flex items-center">
-                <div className="w-40">
-                  {codeCellTxHash && codeCellOutputIndex !== null ? (
-                    <Link
-                      href={`/cell/${codeCellTxHash}-${codeCellOutputIndex}`}
-                      className="hover:underline"
-                    >
-                      <HexDisplay
-                        value={`${codeCellTxHash}:${codeCellOutputIndex}`}
-                        size="sm"
-                        startChars={8}
-                        endChars={8}
-                      />
-                    </Link>
-                  ) : (
-                    <span className="text-text-dim">-</span>
-                  )}
-                </div>
-                <div className="flex-1">
-                  <HexDisplay value={codeHash} truncate={false} size="sm" />
-                </div>
-                <div className="w-20 text-center">
-                  <Badge variant="gray">
-                    {getScriptRefBadgeLabel(knownScript?.hashType || hashType)}
-                  </Badge>
-                </div>
-                <div className="w-20 text-center">
-                  {knownScript?.scriptKind || (scriptKind !== 'both' ? scriptKind : null) ? (
-                    <Badge variant="neutral">{knownScript?.scriptKind || scriptKind}</Badge>
-                  ) : (
-                    <span className="text-text-dim">-</span>
-                  )}
-                </div>
-                <div className="text-text-dim w-24 text-right font-mono">
-                  {knownScript ? knownScript.liveCellsCount.toLocaleString() : '-'}
-                </div>
-                <div className="text-text-dim w-32 text-right">
-                  {knownScript ? <Capacity value={knownScript.liveCapacitySum} /> : '-'}
-                </div>
+            <div className="overflow-x-auto">
+              <div className="border-base-border bg-base-surface/50 text-text-dim flex min-w-[760px] border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+                <div className="w-40 shrink-0">Code Cell</div>
+                <div className="min-w-0 flex-1">Code Hash</div>
+                <div className="w-28 shrink-0 text-center">Hash Type</div>
+                <div className="w-20 shrink-0 text-center">Kind</div>
+                <div className="w-24 shrink-0 text-right">Cells</div>
+                <div className="w-36 shrink-0 text-right">Capacity</div>
               </div>
-            </TerminalRow>
+              <TerminalRow hoverable={false}>
+                <div className="flex min-w-[760px] items-center">
+                  <div className="w-40 shrink-0">
+                    {codeCellTxHash && codeCellOutputIndex !== null ? (
+                      <Link
+                        href={`/cell/${codeCellTxHash}-${codeCellOutputIndex}`}
+                        className="hover:underline"
+                      >
+                        <HexDisplay
+                          value={`${codeCellTxHash}:${codeCellOutputIndex}`}
+                          size="sm"
+                          startChars={8}
+                          endChars={8}
+                        />
+                      </Link>
+                    ) : (
+                      <span className="text-text-dim">-</span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1 break-all">
+                    <HexDisplay value={codeHash} truncate={false} size="sm" />
+                  </div>
+                  <div className="w-28 shrink-0 text-center">
+                    <Badge variant="gray">
+                      {getScriptRefBadgeLabel(knownScript?.hashType || hashType)}
+                    </Badge>
+                  </div>
+                  <div className="w-20 shrink-0 text-center">
+                    {knownScript?.scriptKind || (scriptKind !== 'both' ? scriptKind : null) ? (
+                      <Badge variant="neutral">{knownScript?.scriptKind || scriptKind}</Badge>
+                    ) : (
+                      <span className="text-text-dim">-</span>
+                    )}
+                  </div>
+                  <div className="text-text-dim w-24 shrink-0 text-right font-mono">
+                    {knownScript ? knownScript.liveCellsCount.toLocaleString() : '-'}
+                  </div>
+                  <div className="text-text-dim w-36 shrink-0 text-right">
+                    {knownScript ? <Capacity value={knownScript.liveCapacitySum} /> : '-'}
+                  </div>
+                </div>
+              </TerminalRow>
+            </div>
             <div className="border-base-border border-t px-4 py-3">
               <div className="text-text-dim mb-2 text-[11px] uppercase tracking-wider">
                 Same Deployment References
