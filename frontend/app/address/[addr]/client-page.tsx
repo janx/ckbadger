@@ -675,10 +675,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {activeTab === 'activities' && (
               <>
                 <div className="border-base-border flex items-center gap-2 border-b px-4 py-2">
-                  <label className="text-text-dim font-mono text-xs uppercase tracking-wider">
+                  <label
+                    htmlFor="activity-filter"
+                    className="text-text-dim font-mono text-xs uppercase tracking-wider"
+                  >
                     Filter
                   </label>
                   <select
+                    id="activity-filter"
                     value={activityFilter}
                     onChange={(e) => {
                       setActivityFilter(e.target.value as typeof activityFilter);
