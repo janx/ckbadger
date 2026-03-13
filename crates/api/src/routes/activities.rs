@@ -241,16 +241,13 @@ fn normalized_script_name(info: Option<&ScriptInfo>) -> Option<String> {
 fn resolve_script_info_cached<'a>(
     store: &CkbadgerStore,
     cache: &'a mut HashMap<Vec<u8>, Option<ScriptInfo>>,
-    type_code_hash: &[u8],
+    code_hash: &[u8],
 ) -> anyhow::Result<Option<&'a ScriptInfo>> {
-    if !cache.contains_key(type_code_hash) {
-        cache.insert(
-            type_code_hash.to_vec(),
-            store.get_script_info(type_code_hash)?,
-        );
+    if !cache.contains_key(code_hash) {
+        cache.insert(code_hash.to_vec(), store.get_script_info(code_hash)?);
     }
 
-    Ok(cache.get(type_code_hash).and_then(Option::as_ref))
+    Ok(cache.get(code_hash).and_then(Option::as_ref))
 }
 
 fn convert_type_call(
