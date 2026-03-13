@@ -3,11 +3,11 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 
+#[cfg(test)]
+use ckbadger_store::types::ActivityEntry;
 use ckbadger_store::types::{
     AssetAction, AssetChange, OwnerActivityDelta, ScriptCallEntry, TxActivityBundle,
 };
-#[cfg(test)]
-use ckbadger_store::types::ActivityEntry;
 
 use crate::parser::cell::ParsedCell;
 use crate::parser::udt::UdtParser;

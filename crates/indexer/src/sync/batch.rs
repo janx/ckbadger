@@ -35,7 +35,6 @@ use super::dao_helpers::*;
 use super::diagnostics::*;
 use super::helpers::*;
 use super::indexer::{Indexer, CACHE_INVALIDATION_INTERVAL};
-use super::latest_activities::to_latest_items_from_bundles;
 use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
@@ -1667,7 +1666,6 @@ impl Indexer {
             let store = self.writer.store();
             let append_only_store = &self.append_only_store;
             let writer = &self.writer;
-            let latest_activities_buf = &self.latest_activities;
             let dao_withdraw_outpoints = dao_withdraw_outpoints_from_map(&consumed_dao_map);
 
             let tt;
@@ -2768,11 +2766,6 @@ impl Indexer {
                                         &tx_views,
                                         token_info_cache,
                                     );
-
-                                let latest_items = to_latest_items_from_bundles(&bundles);
-                                if !latest_items.is_empty() {
-                                    latest_activities_buf.push_batch(latest_items);
-                                }
 
                                 for bundle in bundles {
                                     for owner in &bundle.owners {
@@ -4033,11 +4026,6 @@ impl Indexer {
                         &token_info_cache,
                     );
 
-                    let latest_items = to_latest_items_from_bundles(&bundles);
-                    if !latest_items.is_empty() {
-                        self.latest_activities.push_batch(latest_items);
-                    }
-
                     for bundle in bundles {
                         for owner in &bundle.owners {
                             // Accumulate daily activity stats
@@ -4436,13 +4424,6 @@ impl Indexer {
                     "Finalize commit done"
                 );
             }
-        }
-
-        // Persist latest activities ring buffer snapshot to sync_meta
-        if !skip_activities {
-            self.writer
-                .store()
-                .put_latest_activities(&self.latest_activities.snapshot())?;
         }
 
         // HODL wave tracker update

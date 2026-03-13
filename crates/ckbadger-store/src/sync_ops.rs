@@ -4,7 +4,7 @@ use anyhow::anyhow;
 
 use crate::keys::sync_meta_keys;
 use crate::store::CkbadgerStore;
-use crate::types::{DeepForkInfo, LatestActivityItem, ReorgEvent, RuntimeStatus, SyncStatus};
+use crate::types::{DeepForkInfo, ReorgEvent, RuntimeStatus, SyncStatus};
 
 impl CkbadgerStore {
     pub fn get_sync_status(&self) -> anyhow::Result<SyncStatus> {
@@ -286,31 +286,12 @@ impl CkbadgerStore {
 
         Ok(None)
     }
-
-    /// Store latest activities snapshot for the homepage feed.
-    pub fn put_latest_activities(&self, items: &[LatestActivityItem]) -> anyhow::Result<()> {
-        let data = bincode::serialize(items)?;
-        self.put_cf(
-            self.cf_sync_meta(),
-            sync_meta_keys::LATEST_ACTIVITIES,
-            &data,
-        )
-    }
-
-    /// Get latest activities snapshot for the homepage feed.
-    pub fn get_latest_activities(&self) -> anyhow::Result<Vec<LatestActivityItem>> {
-        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::LATEST_ACTIVITIES)? {
-            Some(data) => Ok(bincode::deserialize(&data)?),
-            None => Ok(Vec::new()),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::keys::sync_meta_keys;
-    use crate::types::ActivityEntry;
 
     #[test]
     fn test_runtime_status_lifecycle() {
@@ -508,46 +489,5 @@ mod tests {
                 .contains("failed to deserialize latest reorg event marker"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn test_latest_activities_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let items = vec![LatestActivityItem {
-            lock_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0xBB; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0xCC; 20],
-            entry: ActivityEntry {
-                tx_hash: vec![0x01; 32],
-                block_hash: vec![0x02; 32],
-                block_number: 100,
-                tx_index: 1,
-                timestamp: 1_700_000_000,
-                ckb_delta: 500_00000000,
-                used_delta: 0,
-                is_cellbase: false,
-                has_type_script: false,
-                asset_changes: vec![],
-                script_calls: None,
-                peers: vec![],
-            },
-        }];
-
-        store.put_latest_activities(&items).unwrap();
-        let loaded = store.get_latest_activities().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].lock_hash, vec![0xAA; 32]);
-        assert_eq!(loaded[0].entry.block_number, 100);
-    }
-
-    #[test]
-    fn test_latest_activities_empty_when_unset() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let loaded = store.get_latest_activities().unwrap();
-        assert!(loaded.is_empty());
     }
 }

@@ -157,6 +157,52 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    pub fn get_latest_activities(&self) -> anyhow::Result<Vec<LatestActivityItem>> {
+        const LATEST_ACTIVITY_LIMIT: usize = 64;
+
+        let mut results = Vec::with_capacity(LATEST_ACTIVITY_LIMIT);
+        let mut cursor = None;
+
+        loop {
+            let bundles = self.list_tx_activity_bundles_recent(LATEST_ACTIVITY_LIMIT, cursor)?;
+            if bundles.is_empty() {
+                break;
+            }
+
+            let bundles_len = bundles.len();
+            let mut last_seen = None;
+            for bundle in bundles {
+                last_seen = Some((bundle.block_number, bundle.tx_index));
+                if bundle.is_cellbase {
+                    continue;
+                }
+
+                for owner in &bundle.owners {
+                    results.push(LatestActivityItem {
+                        lock_hash: owner.lock_hash.clone(),
+                        lock_code_hash: owner.lock_code_hash.clone(),
+                        lock_hash_type: owner.lock_hash_type,
+                        lock_args: owner.lock_args.clone(),
+                        entry: bundle_owner_to_activity_entry(&bundle, owner),
+                    });
+                    if results.len() >= LATEST_ACTIVITY_LIMIT {
+                        return Ok(results);
+                    }
+                }
+            }
+
+            if bundles_len < LATEST_ACTIVITY_LIMIT {
+                break;
+            }
+            let Some(next_cursor) = last_seen else {
+                break;
+            };
+            cursor = Some(next_cursor);
+        }
+
+        Ok(results)
+    }
+
     /// List activities for an address (lock_hash), newest first.
     ///
     /// Optionally start after the given `(block_num, tx_idx)` cursor.
@@ -435,5 +481,46 @@ mod tests {
         assert_eq!(rows[0].block_number, 300);
         assert_eq!(rows[1].block_number, 200);
         assert_eq!(rows[2].block_number, 100);
+    }
+
+    #[test]
+    fn test_get_latest_activities_reads_from_bundles() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let lock_hash = [0xAA; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        let mut bundle = make_bundle(200, 1, 1);
+        bundle.owners[0].lock_hash = lock_hash.to_vec();
+        bundle.owners[0].lock_code_hash = vec![0x11; 32];
+        bundle.owners[0].lock_hash_type = 1;
+        bundle.owners[0].lock_args = vec![0x22; 20];
+        batch.put_tx_activity_bundle(&bundle);
+        batch.commit().unwrap();
+
+        let latest = store.get_latest_activities().unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].lock_hash, lock_hash);
+        assert_eq!(latest[0].entry.block_number, 200);
+        assert_eq!(latest[0].entry.tx_hash, bundle.tx_hash);
+    }
+
+    #[test]
+    fn test_get_latest_activities_skips_cellbase_bundles() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let mut cellbase = make_bundle(200, 0, 1);
+        cellbase.is_cellbase = true;
+        let non_cellbase = make_bundle(199, 1, 1);
+        batch.put_tx_activity_bundle(&cellbase);
+        batch.put_tx_activity_bundle(&non_cellbase);
+        batch.commit().unwrap();
+
+        let latest = store.get_latest_activities().unwrap();
+        assert_eq!(latest.len(), 1);
+        assert_eq!(latest[0].entry.block_number, 199);
+        assert_eq!(latest[0].entry.tx_hash, non_cellbase.tx_hash);
     }
 }

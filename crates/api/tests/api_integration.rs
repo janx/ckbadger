@@ -15,11 +15,10 @@ use ckbadger_store::types::{
     ActivityEntry, AssetAction, AssetChange, CachedBlockHeader, ClusterAggregate,
     ClusterDailyDelta, DailyBlockStats, DailyStats, DaoDailySnapshot, DaoDepositCacheEntry,
     DeepForkInfo, EpochStats, HourlyStats, IdentityCollectionAggregate, IdentityEntry,
-    IdentityExtra, IdentityStandard, LatestActivityItem, LiveCellInfo, MinerStats,
-    ObjectCollectionActivityEntry, ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry,
-    ObjectExtra, ObjectStandard, OwnerActivityDelta, ReorgEvent, ScriptCallEntry, ScriptDailyDelta,
-    ScriptInfo, SporeDailyDelta, SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle,
-    TxIndexEntry,
+    IdentityExtra, IdentityStandard, LiveCellInfo, MinerStats, ObjectCollectionActivityEntry,
+    ObjectCollectionAggregate, ObjectDailyDelta, ObjectEntry, ObjectExtra, ObjectStandard,
+    OwnerActivityDelta, ReorgEvent, ScriptCallEntry, ScriptDailyDelta, ScriptInfo, SporeDailyDelta,
+    SporeMediaProfile, TokenDailyDelta, TokenInfo, TxActivityBundle, TxIndexEntry,
 };
 use ckbadger_store::CkbadgerStore;
 
@@ -7355,16 +7354,28 @@ async fn test_latest_activities_return_asset_changes_and_script_calls_as_separat
             ..Default::default()
         },
     );
-    core_batch.commit().unwrap();
-    core_store
-        .put_latest_activities(&[LatestActivityItem {
+    core_batch.put_tx_activity_bundle(&TxActivityBundle {
+        tx_hash: entry.tx_hash.clone(),
+        block_hash: entry.block_hash.clone(),
+        block_number: entry.block_number,
+        tx_index: entry.tx_index,
+        timestamp: entry.timestamp,
+        is_cellbase: entry.is_cellbase,
+        owners: vec![OwnerActivityDelta {
             lock_hash,
             lock_code_hash,
             lock_hash_type: 1,
             lock_args,
-            entry,
-        }])
-        .unwrap();
+            ckb_delta: entry.ckb_delta,
+            used_delta: entry.used_delta,
+            has_type_script: entry.has_type_script,
+            involved_script_code_hashes: vec![vec![0x24; 32], type_code_hash.clone()],
+            asset_changes: entry.asset_changes.clone(),
+            script_calls: entry.script_calls.clone(),
+            peers: entry.peers.clone(),
+        }],
+    });
+    core_batch.commit().unwrap();
 
     let config = test_config_with_append_only(core_store, append_only_store);
     let app = create_router(config).await;
