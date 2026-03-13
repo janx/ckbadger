@@ -10,15 +10,7 @@ use crate::batch::StoreBatch;
 pub(crate) type SporeBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 pub(crate) type SporeOutpointLookup = (Vec<u8>, i16, Vec<u8>);
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 impl CkbadgerStore {
     pub fn get_spore(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {

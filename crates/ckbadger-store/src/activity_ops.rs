@@ -4,15 +4,7 @@ use crate::keys;
 use crate::store::*;
 use crate::types::*;
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 fn validate_tx_activity_bundle_identity(
     bundle: &TxActivityBundle,

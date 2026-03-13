@@ -973,10 +973,8 @@ impl Indexer {
                     );
                     continue;
                 }
-                let writer = BatchWriter::with_fast_sync_mode(
-                    store_for_task.clone(),
-                    append_store_for_task.clone(),
-                );
+                let writer =
+                    BatchWriter::new(store_for_task.clone(), append_store_for_task.clone());
                 match writer.refresh_token_24h_transfers() {
                     Ok(count) => info!("Refreshed 24h transfers for {} tokens", count),
                     Err(e) => warn!("Failed to refresh token 24h transfers: {}", e),

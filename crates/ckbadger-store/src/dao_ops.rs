@@ -12,15 +12,7 @@ const DAO_BY_BLOCK_OUTPOINT_OFFSET: usize = 8;
 const DAO_BY_STATUS_OUTPOINT_OFFSET: usize = 10;
 const DAO_BY_LOCK_OUTPOINT_OFFSET: usize = 40;
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 #[cfg(test)]
 type DaoStatusPaginationHook = Box<dyn Fn(&CkbadgerStore, &[u8]) + Send + Sync + 'static>;

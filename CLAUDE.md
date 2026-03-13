@@ -158,7 +158,7 @@ crates/
   api/            # Axum REST/WebSocket server library (port 8101)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/verify/   #   Data integrity verification suite (56 checks)
-  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 44 domain + 1 append-only CFs)
+  ckbadger-store/ # Embedded RocksDB storage engine (dual-store, 46 domain + 1 append-only CFs)
   common/         # Shared types (block, cell, tx, script, error)
   ckb-store-reader/ # Read-only CKB RocksDB reader (optional direct read mode)
   tui/            # Terminal monitoring UI library (sync/memory/throughput)

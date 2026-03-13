@@ -45,8 +45,18 @@ mod token_ops;
 mod tx_ops;
 mod undo_log_ops;
 
+/// Convert bytes to lowercase hex string (no `0x` prefix).
+pub fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
 pub use batch::StoreBatch;
-pub use cell_ops::TokenCellStats;
 pub use reorg_ops::RollbackResult;
 pub use store::{
     known_append_only_secondary_store_paths, known_domain_secondary_store_paths,

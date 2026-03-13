@@ -24,17 +24,6 @@ impl BatchWriter {
         }
     }
 
-    pub fn with_fast_sync_mode(
-        store: Arc<CkbadgerStore>,
-        append_only_store: Arc<CkbadgerStore>,
-    ) -> Self {
-        Self {
-            store,
-            append_only_store,
-            cache_invalidator: None,
-        }
-    }
-
     pub fn with_cache(
         store: Arc<CkbadgerStore>,
         append_only_store: Arc<CkbadgerStore>,

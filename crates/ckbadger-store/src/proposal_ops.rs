@@ -1,10 +1,8 @@
 //! Pending proposal operations for the transaction pipeline visualization.
 
+use crate::store::CkbadgerStore;
 use ckbadger_common::CachedProposal;
 use rocksdb::IteratorMode;
-use tracing::warn;
-
-use crate::store::CkbadgerStore;
 
 impl CkbadgerStore {
     /// Write a pending proposal to the store. Overwrites if proposal_id already exists.
@@ -25,12 +23,9 @@ impl CkbadgerStore {
         let mut proposals = Vec::new();
         for item in iter {
             let (_, value) = item?;
-            match serde_json::from_slice::<CachedProposal>(&value) {
-                Ok(p) => proposals.push(p),
-                Err(e) => {
-                    warn!("Failed to deserialize pending proposal: {}", e);
-                }
-            }
+            let p = serde_json::from_slice::<CachedProposal>(&value)
+                .map_err(|e| anyhow::anyhow!("failed to deserialize pending proposal: {}", e))?;
+            proposals.push(p);
         }
         Ok(proposals)
     }
@@ -42,18 +37,14 @@ impl CkbadgerStore {
         let mut to_delete = Vec::new();
         for item in iter {
             let (key, value) = item?;
-            match serde_json::from_slice::<CachedProposal>(&value) {
-                Ok(p) if p.is_expired(current_tip) => {
-                    to_delete.push(key.to_vec());
-                }
-                Ok(_) => {}
-                Err(e) => {
-                    warn!(
-                        "Failed to deserialize pending proposal during cleanup: {}",
-                        e
-                    );
-                    to_delete.push(key.to_vec());
-                }
+            let p = serde_json::from_slice::<CachedProposal>(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize pending proposal during cleanup: {}",
+                    e
+                )
+            })?;
+            if p.is_expired(current_tip) {
+                to_delete.push(key.to_vec());
             }
         }
         let count = to_delete.len();
@@ -70,16 +61,15 @@ mod tests {
 
     use crate::store::CkbadgerStore;
 
-    fn open_test_store() -> CkbadgerStore {
-        let dir = tempfile::tempdir().unwrap();
+    fn open_test_store() -> (tempfile::TempDir, CkbadgerStore) {
+        let dir = tempfile::TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        std::mem::forget(dir);
-        store
+        (dir, store)
     }
 
     #[test]
     fn test_put_and_get_all_pending_proposals() {
-        let store = open_test_store();
+        let (_dir, store) = open_test_store();
         let p1 = CachedProposal::new_minimal("abcdef1234abcdef1234".to_string(), 100, 0);
         let p2 = CachedProposal::new_minimal("1234567890abcdef1234".to_string(), 100, 1);
         store.put_pending_proposal(&p1).unwrap();
@@ -90,7 +80,7 @@ mod tests {
 
     #[test]
     fn test_delete_pending_proposal() {
-        let store = open_test_store();
+        let (_dir, store) = open_test_store();
         let p1 = CachedProposal::new_minimal("abcdef1234abcdef1234".to_string(), 100, 0);
         let p2 = CachedProposal::new_minimal("1234567890abcdef1234".to_string(), 101, 1);
         store.put_pending_proposal(&p1).unwrap();
@@ -105,7 +95,7 @@ mod tests {
 
     #[test]
     fn test_delete_expired_proposals() {
-        let store = open_test_store();
+        let (_dir, store) = open_test_store();
         let old = CachedProposal::new_minimal("oldproposal123456789".to_string(), 50, 0);
         let recent = CachedProposal::new_minimal("newproposal123456789".to_string(), 1000, 0);
         store.put_pending_proposal(&old).unwrap();
@@ -119,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_put_overwrites_existing_proposal() {
-        let store = open_test_store();
+        let (_dir, store) = open_test_store();
         let p1 = CachedProposal::new_minimal("abcdef1234abcdef1234".to_string(), 100, 0);
         store.put_pending_proposal(&p1).unwrap();
         let p1_enriched = CachedProposal::new_with_details(
@@ -139,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_get_all_returns_empty_when_no_proposals() {
-        let store = open_test_store();
+        let (_dir, store) = open_test_store();
         let all = store.get_all_pending_proposals().unwrap();
         assert!(all.is_empty());
     }

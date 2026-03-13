@@ -70,6 +70,14 @@ pub struct ConsumedCellMeta {
     pub consumed_by_tx: Option<Vec<u8>>,
 }
 
+/// Aggregated cell statistics for a token.
+#[derive(Debug, Clone, Default)]
+pub struct TokenCellStats {
+    pub cells_count: i64,
+    pub total_capacity: i128,
+    pub total_used_capacity: i128,
+}
+
 impl ConsumedCellInfo {
     pub fn from_live_cell_info(
         info: &LiveCellInfo,

@@ -9,15 +9,7 @@ pub(crate) type DotbitLiveOutpoint = (Vec<u8>, i16);
 pub(crate) type DotbitLiveOutpointMap = HashMap<Vec<u8>, DotbitLiveOutpoint>;
 pub(crate) type DotbitOutpointLookup = (Vec<u8>, i16, Vec<u8>);
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 impl CkbadgerStore {
     pub fn get_dotbit_account_id_by_outpoint(
@@ -27,8 +19,13 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let key = keys::encode_dotbit_account_outpoint_key(tx_hash, output_index);
         match self.get_cf(self.cf_stats_object(), &key)? {
-            Some(value) if !value.is_empty() => Ok(Some(value)),
-            _ => Ok(None),
+            Some(value) if value.is_empty() => anyhow::bail!(
+                "empty dotbit account id for outpoint: tx_hash=0x{}, output_index={}",
+                bytes_to_hex(tx_hash),
+                output_index
+            ),
+            Some(value) => Ok(Some(value)),
+            None => Ok(None),
         }
     }
 

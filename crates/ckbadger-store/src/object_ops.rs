@@ -9,15 +9,7 @@ use crate::types::{
 
 pub(crate) type ObjectBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 impl CkbadgerStore {
     pub fn get_object(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
@@ -393,15 +385,21 @@ impl CkbadgerStore {
         );
 
         let mut results = Vec::new();
-        let action_filter_parsed = action_filter.map(|s| match s {
-            "mint" => AssetAction::Mint,
-            "transfer" => AssetAction::Transfer,
-            "burn" => AssetAction::Burn,
-            "recycle" => AssetAction::Recycle,
-            "renew" => AssetAction::Renew,
-            "update" => AssetAction::Update,
-            _ => AssetAction::Mint, // unreachable if caller validates
-        });
+        let action_filter_parsed = match action_filter {
+            Some(s) => Some(match s {
+                "mint" => AssetAction::Mint,
+                "transfer" => AssetAction::Transfer,
+                "burn" => AssetAction::Burn,
+                "recycle" => AssetAction::Recycle,
+                "renew" => AssetAction::Renew,
+                "update" => AssetAction::Update,
+                other => anyhow::bail!(
+                    "unsupported action filter in list_object_collection_activities: {:?}",
+                    other
+                ),
+            }),
+            None => None,
+        };
 
         for item in iter {
             let (key, value) = item.map_err(|e| {
@@ -499,7 +497,7 @@ mod tests {
         (dir, store)
     }
 
-    fn test_append_only_store() -> (TempDir, CkbadgerStore) {
+    fn test_domain_store() -> (TempDir, CkbadgerStore) {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         (dir, store)
@@ -852,7 +850,7 @@ mod tests {
 
     #[test]
     fn test_list_object_collection_activities_empty() {
-        let (_dir, store) = test_append_only_store();
+        let (_dir, store) = test_domain_store();
         let cid = [0x01u8; 32];
         let results = store
             .list_object_collection_activities(&cid, 10, None, None)
@@ -862,7 +860,7 @@ mod tests {
 
     #[test]
     fn test_list_object_collection_activities_basic_pagination() {
-        let (_dir, store) = test_append_only_store();
+        let (_dir, store) = test_domain_store();
         let cid = [0x01u8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -900,7 +898,7 @@ mod tests {
 
     #[test]
     fn test_list_object_collection_activities_action_filter() {
-        let (_dir, store) = test_append_only_store();
+        let (_dir, store) = test_domain_store();
         let cid = [0x02u8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -945,7 +943,7 @@ mod tests {
 
     #[test]
     fn test_list_object_collection_activities_multi_action_per_tx() {
-        let (_dir, store) = test_append_only_store();
+        let (_dir, store) = test_domain_store();
         let cid = [0x03u8; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1031,7 +1029,7 @@ mod tests {
 
     #[test]
     fn test_list_object_collection_activities_isolation_between_collections() {
-        let (_dir, store) = test_append_only_store();
+        let (_dir, store) = test_domain_store();
         let cid_a = [0x0Au8; 32];
         let cid_b = [0x0Bu8; 32];
 
@@ -1065,7 +1063,7 @@ mod tests {
 
     #[test]
     fn test_count_object_collection_activities() {
-        let (_dir, store) = test_append_only_store();
+        let (_dir, store) = test_domain_store();
         let cid = [0x0Cu8; 32];
         let cid_empty = [0x0Du8; 32];
 

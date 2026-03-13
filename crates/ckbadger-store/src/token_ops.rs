@@ -11,15 +11,7 @@ use crate::types::{
     TokenTransferRecord,
 };
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 #[derive(Debug, Clone)]
 pub struct TokenDailyValidationError {

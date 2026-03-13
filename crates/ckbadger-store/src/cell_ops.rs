@@ -9,23 +9,8 @@ use crate::types::{
     LiveCellInfo, PositionedCellInfo,
 };
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
-
-/// Aggregated cell statistics for a token.
-#[derive(Debug, Clone, Default)]
-pub struct TokenCellStats {
-    pub cells_count: i64,
-    pub total_capacity: i128,
-    pub total_used_capacity: i128,
-}
+use crate::bytes_to_hex;
+use crate::types::TokenCellStats;
 
 impl CkbadgerStore {
     pub fn get_cell_by_outpoint_key(

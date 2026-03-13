@@ -546,7 +546,12 @@ impl BatchWriter {
                     hour_bucket,
                 );
                 let current = state.get_hourly_transfer(self.store.as_ref(), &key)?;
-                let next = current + 1;
+                let next = current.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "hourly transfer counter overflow for .bit collection at hour_bucket={}",
+                        hour_bucket
+                    )
+                })?;
                 batch.put_object_hourly_transfer(&DOTBIT_SENTINEL_COLLECTION, hour_bucket, next);
                 state.put_hourly_transfer(key, next);
             }

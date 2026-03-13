@@ -351,15 +351,7 @@ fn clear_dao_withdraw_completion_fields(entry: &mut DaoDepositCacheEntry) {
     entry.compensation = None;
 }
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 fn truncate_hodl_tracker_state_for_rollback(
     state: &mut HodlTrackerState,

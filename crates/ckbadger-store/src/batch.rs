@@ -14,15 +14,7 @@ struct AppendBatchOp {
     value: Option<Vec<u8>>,
 }
 
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        out.push(HEX[(b >> 4) as usize] as char);
-        out.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    out
-}
+use crate::bytes_to_hex;
 
 /// Accumulates writes across all CFs and commits atomically.
 pub struct StoreBatch<'a> {
@@ -1291,16 +1283,6 @@ mod tests {
                     peers: vec![],
                 })
                 .collect(),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn make_nft_collection_activity(tx_hash_byte: u8) -> ObjectCollectionActivityEntry {
-        ObjectCollectionActivityEntry {
-            tx_hash: vec![tx_hash_byte; 32],
-            block_hash: vec![tx_hash_byte.wrapping_add(1); 32],
-            timestamp_ms: 1_700_000_000_000 + i64::from(tx_hash_byte),
-            actions: vec![AssetAction::Transfer],
         }
     }
 
