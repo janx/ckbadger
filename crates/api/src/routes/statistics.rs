@@ -2289,8 +2289,11 @@ async fn fetch_network_stats_from_db(
     };
 
     let difficulty = compact_to_difficulty(compact_target);
-    let hash_rate = if avg_time > 0.0 {
-        difficulty as f64 / avg_time
+    // Use epoch average block time for stable hash rate estimate.
+    // Individual block intervals are too noisy; the epoch window (~4h)
+    // matches CKB's difficulty adjustment granularity.
+    let hash_rate = if epoch_avg_time > 0.0 {
+        difficulty as f64 / epoch_avg_time
     } else {
         0.0
     };
