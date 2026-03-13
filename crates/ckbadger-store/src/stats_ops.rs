@@ -434,6 +434,145 @@ impl CkbadgerStore {
         )
     }
 
+    // ---- Cell distribution snapshots ----
+
+    pub fn put_cell_distribution(
+        &self,
+        date: &str,
+        snapshot: &DailyCellDistribution,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_stats_key(stats_prefix::CELL_DISTRIBUTION, date.as_bytes());
+        let value = bincode::serialize(snapshot)?;
+        self.put_cf(self.cf_stats_hodl(), &key, &value)
+    }
+
+    pub fn get_cell_distribution(
+        &self,
+        date: &str,
+    ) -> anyhow::Result<Option<DailyCellDistribution>> {
+        let key = keys::encode_stats_key(stats_prefix::CELL_DISTRIBUTION, date.as_bytes());
+        match self.get_cf(self.cf_stats_hodl(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_latest_cell_distribution(&self) -> anyhow::Result<Option<DailyCellDistribution>> {
+        let prefix = [stats_prefix::CELL_DISTRIBUTION];
+        let seek_key = [stats_prefix::CELL_DISTRIBUTION + 1];
+        let iter = self.iterator_cf(
+            self.cf_stats_hodl(),
+            rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Reverse),
+        );
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_hodl in get_latest_cell_distribution: {}",
+                    e
+                )
+            })?;
+            if key.first().copied().unwrap_or_default() < stats_prefix::CELL_DISTRIBUTION {
+                break;
+            }
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let snapshot: DailyCellDistribution =
+                bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize cell distribution in get_latest_cell_distribution: key=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+            return Ok(Some(snapshot));
+        }
+
+        Ok(None)
+    }
+
+    // ---- Address cohort snapshots ----
+
+    pub fn put_address_cohort(
+        &self,
+        date: &str,
+        snapshot: &DailyAddressCohort,
+    ) -> anyhow::Result<()> {
+        let key = keys::encode_stats_key(stats_prefix::ADDR_COHORT, date.as_bytes());
+        let value = bincode::serialize(snapshot)?;
+        self.put_cf(self.cf_stats_hodl(), &key, &value)
+    }
+
+    pub fn get_address_cohort(&self, date: &str) -> anyhow::Result<Option<DailyAddressCohort>> {
+        let key = keys::encode_stats_key(stats_prefix::ADDR_COHORT, date.as_bytes());
+        match self.get_cf(self.cf_stats_hodl(), &key)? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_latest_address_cohort(&self) -> anyhow::Result<Option<DailyAddressCohort>> {
+        let prefix = [stats_prefix::ADDR_COHORT];
+        let seek_key = [stats_prefix::ADDR_COHORT + 1];
+        let iter = self.iterator_cf(
+            self.cf_stats_hodl(),
+            rocksdb::IteratorMode::From(&seek_key, rocksdb::Direction::Reverse),
+        );
+
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate stats_hodl in get_latest_address_cohort: {}",
+                    e
+                )
+            })?;
+            if key.first().copied().unwrap_or_default() < stats_prefix::ADDR_COHORT {
+                break;
+            }
+            if !key.starts_with(&prefix) {
+                continue;
+            }
+            let snapshot: DailyAddressCohort =
+                bincode::deserialize(&value).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize address cohort in get_latest_address_cohort: key=0x{}, error={}",
+                        bytes_to_hex(&key),
+                        e
+                    )
+                })?;
+            return Ok(Some(snapshot));
+        }
+
+        Ok(None)
+    }
+
+    // ---- Cell distribution tracker state persistence ----
+
+    pub fn get_cell_dist_tracker_state(
+        &self,
+    ) -> anyhow::Result<Option<CellDistributionTrackerState>> {
+        match self.get_cf(
+            self.cf_sync_meta(),
+            crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
+        )? {
+            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn put_cell_dist_tracker_state(
+        &self,
+        state: &CellDistributionTrackerState,
+    ) -> anyhow::Result<()> {
+        let value = bincode::serialize(state)?;
+        self.put_cf(
+            self.cf_sync_meta(),
+            crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
+            &value,
+        )
+    }
+
     // ---- Daily activity stats ----
 
     pub fn get_daily_activity_stats(
@@ -1322,5 +1461,168 @@ mod daily_activity_stats_tests {
         assert_eq!(results[0].1.transfer_count, 20);
         assert_eq!(results[1].0, "2026030912");
         assert_eq!(results[1].1.transfer_count, 30);
+    }
+}
+
+#[cfg(test)]
+mod cell_distribution_tests {
+    use super::*;
+    use crate::CkbadgerStore;
+
+    #[test]
+    fn test_cell_distribution_put_get_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let dist = DailyCellDistribution {
+            age_band_lt1d: 100_000_000,
+            age_band_1d_7d: 200_000_000,
+            age_band_7d_30d: 300_000_000,
+            age_band_30d_180d: 400_000_000,
+            age_band_gt180d: 500_000_000,
+            size_bucket_counts: [10, 20, 30, 40, 50, 60],
+            size_bucket_capacities: [1000, 2000, 3000, 4000, 5000, 6000],
+        };
+
+        store.put_cell_distribution("20240115", &dist).unwrap();
+
+        let retrieved = store.get_cell_distribution("20240115").unwrap().unwrap();
+        assert_eq!(retrieved.age_band_lt1d, 100_000_000);
+        assert_eq!(retrieved.age_band_gt180d, 500_000_000);
+        assert_eq!(retrieved.size_bucket_counts, [10, 20, 30, 40, 50, 60]);
+        assert_eq!(
+            retrieved.size_bucket_capacities,
+            [1000, 2000, 3000, 4000, 5000, 6000]
+        );
+
+        // Non-existent date returns None
+        assert!(store.get_cell_distribution("20240116").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_latest_cell_distribution_returns_most_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        // Empty store returns None
+        assert!(store.get_latest_cell_distribution().unwrap().is_none());
+
+        let d1 = DailyCellDistribution {
+            age_band_lt1d: 100,
+            ..Default::default()
+        };
+        let d2 = DailyCellDistribution {
+            age_band_lt1d: 200,
+            ..Default::default()
+        };
+        let d3 = DailyCellDistribution {
+            age_band_lt1d: 300,
+            ..Default::default()
+        };
+
+        // Insert out of order
+        store.put_cell_distribution("20240115", &d2).unwrap();
+        store.put_cell_distribution("20240113", &d1).unwrap();
+        store.put_cell_distribution("20240117", &d3).unwrap();
+
+        let latest = store.get_latest_cell_distribution().unwrap().unwrap();
+        assert_eq!(latest.age_band_lt1d, 300); // most recent by key sort
+    }
+
+    #[test]
+    fn test_address_cohort_put_get_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        let cohort = DailyAddressCohort {
+            cohorts: vec![
+                AddressCohortEntry {
+                    cohort_month: "2024-01".to_string(),
+                    used_capacity: 1_000_000,
+                    total_balance: 5_000_000,
+                },
+                AddressCohortEntry {
+                    cohort_month: "2024-02".to_string(),
+                    used_capacity: 2_000_000,
+                    total_balance: 8_000_000,
+                },
+            ],
+        };
+
+        store.put_address_cohort("20240215", &cohort).unwrap();
+
+        let retrieved = store.get_address_cohort("20240215").unwrap().unwrap();
+        assert_eq!(retrieved.cohorts.len(), 2);
+        assert_eq!(retrieved.cohorts[0].cohort_month, "2024-01");
+        assert_eq!(retrieved.cohorts[0].used_capacity, 1_000_000);
+        assert_eq!(retrieved.cohorts[1].total_balance, 8_000_000);
+
+        // Non-existent date returns None
+        assert!(store.get_address_cohort("20240216").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_latest_address_cohort_returns_most_recent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        // Empty store returns None
+        assert!(store.get_latest_address_cohort().unwrap().is_none());
+
+        let c1 = DailyAddressCohort {
+            cohorts: vec![AddressCohortEntry {
+                cohort_month: "2024-01".to_string(),
+                used_capacity: 100,
+                total_balance: 500,
+            }],
+        };
+        let c2 = DailyAddressCohort {
+            cohorts: vec![AddressCohortEntry {
+                cohort_month: "2024-02".to_string(),
+                used_capacity: 200,
+                total_balance: 800,
+            }],
+        };
+
+        store.put_address_cohort("20240115", &c1).unwrap();
+        store.put_address_cohort("20240215", &c2).unwrap();
+
+        let latest = store.get_latest_address_cohort().unwrap().unwrap();
+        assert_eq!(latest.cohorts.len(), 1);
+        assert_eq!(latest.cohorts[0].cohort_month, "2024-02");
+    }
+
+    #[test]
+    fn test_cell_dist_tracker_state_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+
+        // Initially none
+        assert!(store.get_cell_dist_tracker_state().unwrap().is_none());
+
+        let state = CellDistributionTrackerState {
+            capacity_by_date_and_bucket: vec![
+                ("20240101".to_string(), [100, 200, 300, 400, 500, 600]),
+                ("20240102".to_string(), [110, 210, 310, 410, 510, 610]),
+            ],
+            count_by_bucket: [10, 20, 30, 40, 50, 60],
+            total_capacity_by_bucket: [1000, 2000, 3000, 4000, 5000, 6000],
+            last_snapshot_date: Some("20240102".to_string()),
+        };
+
+        store.put_cell_dist_tracker_state(&state).unwrap();
+
+        let retrieved = store.get_cell_dist_tracker_state().unwrap().unwrap();
+        assert_eq!(retrieved.capacity_by_date_and_bucket.len(), 2);
+        assert_eq!(retrieved.count_by_bucket, [10, 20, 30, 40, 50, 60]);
+        assert_eq!(
+            retrieved.total_capacity_by_bucket,
+            [1000, 2000, 3000, 4000, 5000, 6000]
+        );
+        assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
+        assert_eq!(
+            retrieved.capacity_by_date_and_bucket[1].1,
+            [110, 210, 310, 410, 510, 610]
+        );
     }
 }
