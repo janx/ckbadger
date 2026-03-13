@@ -255,7 +255,7 @@ ckbadger verify --list-checks             # List all checks
 | **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**              |
 | Bulk sync rules  | `docs/prompts/BULK_SYNC.md`       | Bulk sync logic or sync-mode boundary changes |
 | Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes                 |
-| Activity system  | `docs/prompts/ACTIVITY_SYSTEM.md` | Activity feed or activity CF changes          |
+| Activity system  | `docs/prompts/ACTIVITY_DESIGN.md` | Activity feed or activity CF changes          |
 | CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals                   |
 | Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations                      |
 | DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes            |
