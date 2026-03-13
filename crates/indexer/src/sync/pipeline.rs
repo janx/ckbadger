@@ -3046,4 +3046,304 @@ mod tests {
             dotbit_account_id.to_vec()
         );
     }
+
+    // ── Helpers for spore/mNFT consumption tests ──────────────────────
+
+    fn make_cellbase_tx_data(block_number: i64) -> TxData {
+        TxData {
+            hash: [0x00; 32],
+            block_number,
+            tx_index: 0,
+            inputs_count: 1,
+            outputs_count: 1,
+            is_cellbase: true,
+            inputs: vec![],
+            cells: vec![],
+            witnesses: vec![],
+            outputs_data: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: Utc.timestamp_millis_opt(0).single().expect("timestamp"),
+        }
+    }
+
+    fn make_consuming_tx_data(
+        tx_hash: [u8; 32],
+        block_number: i64,
+        prev_tx_hash: [u8; 32],
+        prev_output_index: i32,
+    ) -> TxData {
+        use crate::parser::transaction::ParsedInput;
+        TxData {
+            hash: tx_hash,
+            block_number,
+            tx_index: 0,
+            inputs_count: 1,
+            outputs_count: 0,
+            is_cellbase: false,
+            inputs: vec![ParsedInput {
+                previous_tx_hash: prev_tx_hash,
+                previous_output_index: prev_output_index,
+                since: 0,
+            }],
+            cells: vec![],
+            witnesses: vec![],
+            outputs_data: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: Utc.timestamp_millis_opt(0).single().expect("timestamp"),
+        }
+    }
+
+    fn make_creating_tx_data(
+        tx_hash: [u8; 32],
+        block_number: i64,
+        type_code_hash: Vec<u8>,
+        type_args: Vec<u8>,
+    ) -> TxData {
+        use crate::parser::cell::ParsedCell;
+        TxData {
+            hash: tx_hash,
+            block_number,
+            tx_index: 0,
+            inputs_count: 0,
+            outputs_count: 1,
+            is_cellbase: false,
+            inputs: vec![],
+            cells: vec![ParsedCell {
+                capacity: 100_00000000,
+                lock_code_hash: vec![0xBB; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0xCC; 20],
+                lock_script_hash: vec![0xDD; 32],
+                type_code_hash: Some(type_code_hash),
+                type_hash_type: Some(1),
+                type_args: Some(type_args),
+                type_script_hash: Some(vec![0xEE; 32]),
+                data_hash: vec![0xFF; 32],
+                data_size: 0,
+                data: vec![],
+            }],
+            witnesses: vec![],
+            outputs_data: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: Utc.timestamp_millis_opt(0).single().expect("timestamp"),
+        }
+    }
+
+    fn make_positioned_cell_info(
+        type_code_hash: Vec<u8>,
+        type_args: Vec<u8>,
+    ) -> PositionedCellInfo {
+        PositionedCellInfo::new(
+            LiveCellInfo {
+                capacity: 100_00000000,
+                lock_script_hash: vec![0xAA; 32],
+                lock_code_hash: vec![0xBB; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0xCC; 20],
+                type_script_hash: Some(vec![0xDD; 32]),
+                type_code_hash: Some(type_code_hash),
+                type_hash_type: Some(1),
+                type_args: Some(type_args),
+                data_size: 0,
+                occupied_capacity: 61_00000000,
+                udt_amount: None,
+            },
+            14_000_000,
+        )
+    }
+
+    // ── Spore/mNFT consumption identification tests ───────────────────
+
+    #[test]
+    fn test_precompute_identifies_spore_consumption() {
+        use crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2;
+
+        let spore_code_hash = crate::rpc::parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
+        let spore_id = vec![0x55u8; 32];
+        let prev_tx_hash = [0x11u8; 32];
+
+        // 1 block, 2 transactions: TX0=cellbase, TX1=consume spore
+        let all_tx_data = vec![
+            make_cellbase_tx_data(14_000_000),
+            make_consuming_tx_data([0xAA; 32], 14_000_000, prev_tx_hash, 0),
+        ];
+        let parsed_blocks = vec![create_test_parsed_block(14_000_000, 2, 0)];
+
+        // The consumed cell is a spore cell from a previous batch
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        input_cell_info.insert(
+            (prev_tx_hash.to_vec(), 0),
+            make_positioned_cell_info(spore_code_hash, spore_id.clone()),
+        );
+
+        let output = run_nft_precompute(
+            &parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("precompute");
+
+        assert_eq!(
+            output.consumed_spore.len(),
+            1,
+            "should identify one spore consumption"
+        );
+        assert_eq!(output.consumed_spore[0].spore_id, spore_id);
+        assert_eq!(output.consumed_spore[0].block_number, 14_000_000);
+        assert_eq!(output.consumed_spore[0].consuming_tx_hash, [0xAA; 32]);
+    }
+
+    #[test]
+    fn test_precompute_identifies_mnft_consumption() {
+        let mnft_code_hash = crate::rpc::parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH);
+        // mNFT token_id: 20-byte issuer_id + 4-byte class_id + 4-byte token_index = 28 bytes
+        let mut token_id = vec![0x22u8; 20];
+        token_id.extend_from_slice(&7u32.to_le_bytes());
+        token_id.extend_from_slice(&42u32.to_le_bytes());
+        let prev_tx_hash = [0x11u8; 32];
+
+        // 1 block, 2 transactions: TX0=cellbase, TX1=consume mNFT
+        let all_tx_data = vec![
+            make_cellbase_tx_data(14_000_000),
+            make_consuming_tx_data([0xBB; 32], 14_000_000, prev_tx_hash, 0),
+        ];
+        let parsed_blocks = vec![create_test_parsed_block(14_000_000, 2, 0)];
+
+        // The consumed cell is an mNFT token cell from a previous batch
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        input_cell_info.insert(
+            (prev_tx_hash.to_vec(), 0),
+            make_positioned_cell_info(mnft_code_hash, token_id.clone()),
+        );
+
+        let output = run_nft_precompute(
+            &parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("precompute");
+
+        assert_eq!(
+            output.consumed_mnft.len(),
+            1,
+            "should identify one mNFT consumption"
+        );
+        assert_eq!(output.consumed_mnft[0].token_id, token_id);
+        assert_eq!(output.consumed_mnft[0].block_number, 14_000_000);
+        assert_eq!(output.consumed_mnft[0].consuming_tx_hash, [0xBB; 32]);
+    }
+
+    #[test]
+    fn test_precompute_same_batch_spore_transfer_not_consumed() {
+        use crate::parser::spore::SPORE_CODE_HASH_MAINNET_V2;
+
+        let spore_code_hash = crate::rpc::parse_hex_to_bytes(SPORE_CODE_HASH_MAINNET_V2);
+        let spore_id = vec![0x55u8; 32];
+        let prev_tx_hash = [0x11u8; 32];
+
+        // 1 block, 3 transactions:
+        //   TX0 (index 0) = cellbase
+        //   TX1 (index 1) = consumes a spore cell
+        //   TX2 (index 2) = creates a new cell with the SAME spore_id (transfer/re-creation)
+        let all_tx_data = vec![
+            make_cellbase_tx_data(14_000_000),
+            make_consuming_tx_data([0xAA; 32], 14_000_000, prev_tx_hash, 0),
+            make_creating_tx_data(
+                [0xCC; 32],
+                14_000_000,
+                spore_code_hash.clone(),
+                spore_id.clone(),
+            ),
+        ];
+        let parsed_blocks = vec![create_test_parsed_block(14_000_000, 3, 0)];
+
+        // The consumed cell from a previous batch
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        input_cell_info.insert(
+            (prev_tx_hash.to_vec(), 0),
+            make_positioned_cell_info(spore_code_hash, spore_id.clone()),
+        );
+
+        let output = run_nft_precompute(
+            &parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("precompute");
+
+        // The spore was transferred (re-created in TX2 after being consumed in TX1),
+        // so it should NOT be marked as consumed.
+        assert!(
+            output.consumed_spore.is_empty(),
+            "spore transferred within same batch must NOT be marked as consumed, got {} events",
+            output.consumed_spore.len()
+        );
+    }
+
+    #[test]
+    fn test_precompute_same_batch_mnft_transfer_not_consumed() {
+        let mnft_code_hash = crate::rpc::parse_hex_to_bytes(MNFT_TOKEN_CODE_HASH);
+        let mut token_id = vec![0x22u8; 20];
+        token_id.extend_from_slice(&7u32.to_le_bytes());
+        token_id.extend_from_slice(&42u32.to_le_bytes());
+        let prev_tx_hash = [0x11u8; 32];
+
+        // 1 block, 3 transactions:
+        //   TX0 (index 0) = cellbase
+        //   TX1 (index 1) = consumes an mNFT token cell
+        //   TX2 (index 2) = creates a new cell with the SAME token_id (transfer)
+        let all_tx_data = vec![
+            make_cellbase_tx_data(14_000_000),
+            make_consuming_tx_data([0xBB; 32], 14_000_000, prev_tx_hash, 0),
+            make_creating_tx_data(
+                [0xDD; 32],
+                14_000_000,
+                mnft_code_hash.clone(),
+                token_id.clone(),
+            ),
+        ];
+        let parsed_blocks = vec![create_test_parsed_block(14_000_000, 3, 0)];
+
+        // The consumed cell from a previous batch
+        let mut input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
+        input_cell_info.insert(
+            (prev_tx_hash.to_vec(), 0),
+            make_positioned_cell_info(mnft_code_hash, token_id.clone()),
+        );
+
+        let output = run_nft_precompute(
+            &parsed_blocks,
+            &all_tx_data,
+            &input_cell_info,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect("precompute");
+
+        // The mNFT was transferred (re-created in TX2 after being consumed in TX1),
+        // so it should NOT be marked as consumed.
+        assert!(
+            output.consumed_mnft.is_empty(),
+            "mNFT transferred within same batch must NOT be marked as consumed, got {} events",
+            output.consumed_mnft.len()
+        );
+    }
 }
