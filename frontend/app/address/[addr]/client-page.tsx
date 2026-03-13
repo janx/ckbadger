@@ -703,13 +703,19 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   <div className="text-text-dim py-12 text-center">Loading activities...</div>
                 ) : activities?.data && activities?.data.length > 0 ? (
                   <>
-                    {activities?.data.map((activity: Activity) => (
-                      <ActivityEventGroup
-                        key={`${activity.txHash}-${activity.txIndex}`}
-                        activity={activity}
-                        formatTimeAgo={(ts) => formatTimeAgo(Number(ts))}
-                      />
-                    ))}
+                    <div
+                      className="md:grid md:items-baseline md:gap-x-4"
+                      style={{ gridTemplateColumns: '13rem 1fr auto 5rem' }}
+                    >
+                      {activities?.data.map((activity: Activity, idx: number) => (
+                        <ActivityEventGroup
+                          key={`${activity.txHash}-${activity.txIndex}`}
+                          activity={activity}
+                          formatTimeAgo={(ts) => formatTimeAgo(Number(ts))}
+                          isFirst={idx === 0}
+                        />
+                      ))}
+                    </div>
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination

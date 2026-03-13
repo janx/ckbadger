@@ -1,5 +1,6 @@
 'use client';
 
+import { Fragment } from 'react';
 import Link from '@/components/ui/link';
 import {
   getScriptDetailHref,
@@ -34,8 +35,7 @@ export function formatScriptRef(sc: {
   scriptName?: string;
 }): string {
   if (sc.scriptName?.trim()) return sc.scriptName!.trim();
-  // script_kind:<first 4 bytes of script_hash>
-  const hashPrefix = sc.scriptHash.slice(0, 10); // "0x" + 8 hex chars = 4 bytes
+  const hashPrefix = sc.scriptHash.slice(0, 10);
   return `${sc.typeHashType}:${hashPrefix}`;
 }
 
@@ -94,51 +94,50 @@ export function ScriptCallExpr({ sc }: { sc: ActivityScriptCall }) {
 }
 
 // ---------------------------------------------------------------------------
-// Event sub-row rendering — one row per asset change / script call / CKB delta
+// EventParts — badge (left) and value (right) as separate elements
 // ---------------------------------------------------------------------------
 
-interface EventRowProps {
-  className?: string;
+interface EventParts {
+  badge: React.ReactNode;
+  value: React.ReactNode;
 }
 
-function AssetEventRow({ change, className }: { change: ActivityAssetChange } & EventRowProps) {
+function getAssetEventParts(change: ActivityAssetChange): EventParts {
   switch (change.type) {
     case 'daoDeposit':
-      return (
-        <div className={cn('flex items-center justify-between gap-2', className)}>
-          <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Deposit</span>
+      return {
+        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Deposit</span>,
+        value: (
           <span className="text-positive font-mono text-xs tabular-nums">
             +{formatCkbAmount(change.capacity).full} CKB locked
           </span>
-        </div>
-      );
+        ),
+      };
     case 'daoWithdrawRequest':
-      return (
-        <div className={cn('flex items-center justify-between gap-2', className)}>
-          <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>
+      return {
+        badge: <span className="text-gold font-mono text-xs">{'\u25C6'} DAO Withdraw Request</span>,
+        value: (
           <span className="text-gold font-mono text-xs tabular-nums">
             {formatCkbAmount(change.capacity).full} CKB
           </span>
-        </div>
-      );
+        ),
+      };
     case 'daoWithdrawComplete':
-      return (
-        <div className={cn('flex flex-col gap-0.5', className)}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-positive font-mono text-xs">
-              {'\u25C6'} DAO Withdraw Complete
-            </span>
+      return {
+        badge: (
+          <span className="text-positive font-mono text-xs">{'\u25C6'} DAO Withdraw Complete</span>
+        ),
+        value: (
+          <div className="flex flex-col items-end gap-0.5">
             <span className="text-positive font-mono text-xs tabular-nums">
               +{formatCkbAmount(change.capacity).full} CKB
             </span>
-          </div>
-          <div className="flex justify-end">
             <span className="text-positive font-mono text-[10px] tabular-nums">
               +{formatCkbAmount(change.compensation).full} CKB compensation
             </span>
           </div>
-        </div>
-      );
+        ),
+      };
     case 'token': {
       const delta = BigInt(change.delta);
       const isPositive = delta > BigInt(0);
@@ -149,11 +148,13 @@ function AssetEventRow({ change, className }: { change: ActivityAssetChange } & 
       const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
       const symbol = change.symbol?.trim();
       const label = symbol || truncateHash(change.typeScriptHash, 8, 6);
-      return (
-        <div className={cn('flex items-center justify-between gap-2', className)}>
+      return {
+        badge: (
           <span className="font-mono text-xs text-[#ff66aa]">
             {'\u25CF'} {label} Transfer
           </span>
+        ),
+        value: (
           <Link
             href={getTokenDetailHref(change.typeScriptHash)}
             className={cn(
@@ -165,17 +166,19 @@ function AssetEventRow({ change, className }: { change: ActivityAssetChange } & 
             {prefix}
             {formatted} {label}
           </Link>
-        </div>
-      );
+        ),
+      };
     }
     case 'object': {
       const std = formatStandard(change.standard);
       const action = capitalizeAction(change.action);
-      return (
-        <div className={cn('flex items-center justify-between gap-2', className)}>
+      return {
+        badge: (
           <span className="text-lavender font-mono text-xs">
             {'\u2B21'} {std} {action}
           </span>
+        ),
+        value: (
           <Link
             href={getObjectDetailHref(change.objectId)}
             className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
@@ -183,17 +186,19 @@ function AssetEventRow({ change, className }: { change: ActivityAssetChange } & 
           >
             {truncateHash(change.objectId, 8, 6)}
           </Link>
-        </div>
-      );
+        ),
+      };
     }
     case 'identity': {
       const std = formatStandard(change.standard);
       const action = capitalizeAction(change.action);
-      return (
-        <div className={cn('flex items-center justify-between gap-2', className)}>
+      return {
+        badge: (
           <span className="text-aqua font-mono text-xs">
             {'\u2736'} {std} {action}
           </span>
+        ),
+        value: (
           <Link
             href={getIdentityItemDetailHref(change.standard, change.identityId)}
             className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
@@ -201,42 +206,36 @@ function AssetEventRow({ change, className }: { change: ActivityAssetChange } & 
           >
             {truncateHash(change.identityId, 8, 6)}
           </Link>
-        </div>
-      );
+        ),
+      };
     }
   }
 }
 
-function ScriptEventRow({ sc, className }: { sc: ActivityScriptCall } & EventRowProps) {
-  return (
-    <div className={cn('flex items-center justify-between gap-2', className)}>
-      <span className="text-amber min-w-0 truncate font-mono text-xs">
-        {'\u2699'} Script call <ScriptCallExpr sc={sc} />
+function getScriptEventParts(sc: ActivityScriptCall): EventParts {
+  return {
+    badge: <span className="text-amber font-mono text-xs">{'\u2699'} Script call</span>,
+    value: (
+      <span className="font-mono text-xs">
+        <ScriptCallExpr sc={sc} />
       </span>
-    </div>
-  );
+    ),
+  };
 }
 
-function CkbEventRow({
-  delta,
-  isCellbase,
-  className,
-}: {
-  delta: string;
-  isCellbase: boolean;
-} & EventRowProps) {
+function getCkbEventParts(delta: string, isCellbase: boolean): EventParts {
   const icon = isCellbase ? '\u2605' : '\u2197';
   const label = isCellbase ? 'Coinbase' : 'CKB Transfer';
   const colorClass = isCellbase ? 'text-gold' : 'text-jade';
 
-  return (
-    <div className={cn('flex items-center justify-between gap-2', className)}>
+  return {
+    badge: (
       <span className={cn('font-mono text-xs', colorClass)}>
         {icon} {label}
       </span>
-      <CkbDelta delta={delta} />
-    </div>
-  );
+    ),
+    value: <CkbDelta delta={delta} />,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -246,34 +245,49 @@ function CkbEventRow({
 export interface ActivityEventGroupProps {
   activity: Activity;
   formatTimeAgo: (timestamp: string | number) => string;
+  /** Whether this is the first group — controls the top separator line. */
+  isFirst?: boolean;
 }
 
-export function ActivityEventGroup({ activity, formatTimeAgo }: ActivityEventGroupProps) {
-  const eventRows: React.ReactNode[] = [];
+/**
+ * Renders a TX group as both:
+ *  - Narrow (< md): a self-contained stacked card
+ *  - Wide (≥ md): bare grid cells — the **parent** must be the grid container
+ *    (`md:grid` with `gridTemplateColumns: '13rem 1fr auto 5rem'`)
+ */
+export function ActivityEventGroup({
+  activity,
+  formatTimeAgo,
+  isFirst = true,
+}: ActivityEventGroupProps) {
+  const events: EventParts[] = [];
 
-  // 1. Asset changes
-  activity.assetChanges.forEach((change, i) => {
-    eventRows.push(<AssetEventRow key={`asset-${i}`} change={change} />);
+  activity.assetChanges.forEach((change) => {
+    events.push(getAssetEventParts(change));
   });
-
-  // 2. Script calls
-  activity.scriptCalls.forEach((sc, i) => {
-    eventRows.push(<ScriptEventRow key={`script-${i}`} sc={sc} />);
+  activity.scriptCalls.forEach((sc) => {
+    events.push(getScriptEventParts(sc));
   });
-
-  // 3. CKB delta — always shown
-  eventRows.push(
-    <CkbEventRow key="ckb" delta={activity.ckbDelta} isCellbase={activity.isCellbase} />
-  );
+  events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase));
 
   const txLink = `/tx/${activity.txHash}`;
   const blockLink = `/blocks/${activity.blockNumber}`;
   const time = formatTimeAgo(Number(activity.timestamp));
 
+  // Vertical padding helper — first/last rows of a group get more padding
+  const cellPy = (i: number): string => {
+    const first = i === 0;
+    const last = i === events.length - 1;
+    if (first && last) return 'py-2';
+    if (first) return 'pt-2 pb-0.5';
+    if (last) return 'pt-0.5 pb-2';
+    return 'py-0.5';
+  };
+
   return (
-    <div className="border-base-border/50 border-b px-4 py-2 last:border-b-0">
-      {/* Narrow viewport: stacked layout */}
-      <div className="md:hidden">
+    <>
+      {/* === Narrow viewport (< md): self-contained stacked card === */}
+      <div className="border-base-border/50 border-b px-4 py-2 last:border-b-0 md:hidden">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 font-mono text-xs">
             <Link href={txLink} className="text-text hover:text-aqua transition-colors">
@@ -286,41 +300,55 @@ export function ActivityEventGroup({ activity, formatTimeAgo }: ActivityEventGro
           </div>
           <span className="text-text-dim shrink-0 font-mono text-[10px]">{time}</span>
         </div>
-        <div className="mt-1 space-y-0.5 pl-2">{eventRows}</div>
+        <div className="mt-1 space-y-0.5 pl-2">
+          {events.map((event, i) => (
+            <div key={i} className="flex items-center justify-between gap-2">
+              {event.badge}
+              {event.value}
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Wide viewport: TX hash column + event rows inline */}
-      <div className="hidden md:block">
-        {eventRows.map((row, i) => (
-          <div key={i} className="flex items-center gap-4">
-            {/* TX hash column — only shown on first row */}
-            <div className="w-56 shrink-0 lg:w-64">
-              {i === 0 ? (
-                <div className="flex items-center gap-1.5 font-mono text-xs">
-                  <Link href={txLink} className="text-text hover:text-aqua transition-colors">
-                    {truncateHash(activity.txHash, 8, 6)}
-                  </Link>
-                  <span className="text-text-dim">{'\u00B7'}</span>
-                  <Link
-                    href={blockLink}
-                    className="text-text-dim hover:text-text transition-colors"
-                  >
-                    #{activity.blockNumber.toLocaleString()}
-                  </Link>
-                </div>
-              ) : null}
-            </div>
-
-            {/* Event row — fills remaining space */}
-            <div className="min-w-0 flex-1">{row}</div>
-
-            {/* Time — only shown on first row */}
-            <div className="w-20 shrink-0 text-right">
-              {i === 0 ? <span className="text-text-dim font-mono text-[10px]">{time}</span> : null}
-            </div>
+      {/* === Wide viewport (≥ md): bare grid cells — parent provides the grid === */}
+      {/* Group separator — full-width border between TX groups */}
+      {!isFirst && (
+        <div
+          className="border-base-border/50 hidden border-t md:block"
+          style={{ gridColumn: '1 / -1' }}
+        />
+      )}
+      {events.map((event, i) => (
+        <Fragment key={i}>
+          {/* Col 1: TX hash — first row only */}
+          <div className={cn('hidden items-center pl-4 md:flex', cellPy(i))}>
+            {i === 0 ? (
+              <div className="flex items-center gap-1.5 font-mono text-xs">
+                <Link href={txLink} className="text-text hover:text-aqua transition-colors">
+                  {truncateHash(activity.txHash, 8, 6)}
+                </Link>
+                <span className="text-text-dim">{'\u00B7'}</span>
+                <Link href={blockLink} className="text-text-dim hover:text-text transition-colors">
+                  #{activity.blockNumber.toLocaleString()}
+                </Link>
+              </div>
+            ) : null}
           </div>
-        ))}
-      </div>
-    </div>
+
+          {/* Col 2: Badge — right-aligned to sit close to value column */}
+          <div className={cn('hidden min-w-0 truncate text-right md:block', cellPy(i))}>
+            {event.badge}
+          </div>
+
+          {/* Col 3: Value — right-aligned, auto-sized */}
+          <div className={cn('hidden text-right md:block', cellPy(i))}>{event.value}</div>
+
+          {/* Col 4: Time — first row only */}
+          <div className={cn('hidden pr-4 text-right md:block', cellPy(i))}>
+            {i === 0 ? <span className="text-text-dim font-mono text-[10px]">{time}</span> : null}
+          </div>
+        </Fragment>
+      ))}
+    </>
   );
 }
