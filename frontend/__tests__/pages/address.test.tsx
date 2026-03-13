@@ -318,12 +318,17 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    const fallbackLabel = `${typeScriptHash.slice(0, 10)}...${typeScriptHash.slice(-8)}`;
+    // ActivityEventGroup uses truncateHash(hash, 8, 6) for token fallback label
+    const fallbackLabel = `${typeScriptHash.slice(0, 8)}...${typeScriptHash.slice(-6)}`;
     await waitFor(() => {
-      expect(screen.getAllByRole('link', { name: fallbackLabel })[0]).toHaveAttribute(
-        'href',
-        `/tokens/${typeScriptHash}`
+      // The token delta link text includes the amount + label, so find by partial match
+      const links = screen.getAllByRole('link');
+      const tokenLink = links.find(
+        (l) =>
+          l.getAttribute('href') === `/tokens/${typeScriptHash}` &&
+          l.textContent?.includes(fallbackLabel)
       );
+      expect(tokenLink).toBeDefined();
     });
   });
 
@@ -445,7 +450,9 @@ describe('AddressDetailPage', () => {
       expect(screen.getByText('Active')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'CKB' }));
+    // Activity filter is now a <select> dropdown
+    const filterSelect = screen.getByRole('combobox');
+    fireEvent.change(filterSelect, { target: { value: 'ckb' } });
     await waitFor(() => {
       expect(api.getAddressActivities).toHaveBeenCalledWith(
         lockA,
@@ -524,8 +531,9 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
+    // ActivityEventGroup renders identity as "\u2736 .bit Mint" (appears in both mobile + desktop views)
     await waitFor(() => {
-      expect(screen.getAllByText('Mint .bit')[0]).toBeInTheDocument();
+      expect(screen.getAllByText(/\.bit Mint/)[0]).toBeInTheDocument();
     });
   });
 
@@ -561,17 +569,13 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    await waitFor(
-      () => {
-        expect(screen.getAllByText('Mint did:ckb')[0]).toBeInTheDocument();
-      },
-      {
-        timeout: 3000,
-      }
-    );
+    // ActivityEventGroup renders identity as "\u2736 did:ckb Mint" (appears in both mobile + desktop views)
+    await waitFor(() => {
+      expect(screen.getAllByText(/did:ckb Mint/)[0]).toBeInTheDocument();
+    });
   });
 
-  it('shows script calls in a dedicated activity section with script metadata', async () => {
+  it('shows script calls and token changes in activity event rows', async () => {
     vi.mocked(api.getAddress).mockResolvedValue(mockAddressWithLockScriptInfo);
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       data: [
@@ -612,17 +616,15 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    await waitFor(
-      () => {
-        expect(screen.getByLabelText('Activity script calls')).toHaveTextContent('RGB++ Lock');
-      },
-      {
-        timeout: 3000,
-      }
-    );
+    // ActivityEventGroup renders script calls inline with ScriptCallExpr link (mobile + desktop)
+    await waitFor(() => {
+      expect(screen.getAllByText('RGB++ Lock')[0]).toBeInTheDocument();
+    });
 
-    expect(screen.getByLabelText('Activity assets')).toHaveTextContent('SEAL');
-    expect(screen.getByLabelText('Activity script calls')).toHaveTextContent('RGB++ Lock');
+    // Token change rendered as "SEAL Transfer" label with link (mobile + desktop)
+    expect(screen.getAllByText(/SEAL Transfer/)[0]).toBeInTheDocument();
+
+    // Script call name is a link to the script detail page
     expect(screen.getAllByRole('link', { name: 'RGB++ Lock' })[0]).toHaveAttribute(
       'href',
       '/scripts/RGB%2B%2B%20Lock'

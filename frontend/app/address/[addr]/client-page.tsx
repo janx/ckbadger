@@ -17,15 +17,8 @@ import { HexDisplay } from '@/components/ui/hex-display';
 import { Capacity } from '@/components/ui/capacity';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import {
-  api,
-  type AddressToken,
-  type DaoDeposit,
-  type Activity,
-  type ActivityAssetChange,
-  type ActivityScriptCall,
-} from '@/lib/api';
-import { getScriptDetailHref } from '@/lib/detail-routes';
+import { api, type AddressToken, type DaoDeposit, type Activity } from '@/lib/api';
+import { ActivityEventGroup } from '@/components/activity-event-row';
 import { useParams } from '@/src/navigation';
 import { formatTimeAgo, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
@@ -241,95 +234,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     if (days < 1) return '<1 day';
     if (days === 1) return '1 day';
     return `${days} days`;
-  };
-  const AssetChangeBadge = ({ change }: { change: ActivityAssetChange }) => {
-    const formatAssetStandardLabel = (standard: string): string => {
-      const normalized = standard.toLowerCase();
-      if (normalized === 'dotbit') return '.bit';
-      if (normalized === 'm-nft' || normalized === 'mnft') return 'M-NFT';
-      if (normalized === 'spore') return 'Spore';
-      if (normalized === 'did_ckb' || normalized === 'did:ckb') return 'did:ckb';
-      return standard.toUpperCase();
-    };
-    switch (change.type) {
-      case 'token': {
-        const isPositive = !change.delta.startsWith('-');
-        const isZero = change.delta === '0';
-        const absDelta = change.delta.startsWith('-') ? change.delta.slice(1) : change.delta;
-        const formatted = formatTokenBalance(absDelta, change.decimals ?? 0);
-        const sign = isZero ? '' : isPositive ? '+' : '-';
-        const color = isZero ? 'text-text-dim' : isPositive ? 'text-positive' : 'text-negative';
-        const tokenLabel = change.symbol?.trim()
-          ? change.symbol.trim()
-          : shortHash(change.typeScriptHash);
-        return (
-          <span className={`font-mono text-xs ${color}`}>
-            {sign}
-            {formatted}{' '}
-            <Link href={`/tokens/${change.typeScriptHash}`} className="hover:underline">
-              {tokenLabel}
-            </Link>
-          </span>
-        );
-      }
-      case 'object':
-        return (
-          <Badge variant="neutral">
-            {change.action.charAt(0).toUpperCase() + change.action.slice(1)}{' '}
-            {formatAssetStandardLabel(change.standard)}
-          </Badge>
-        );
-      case 'identity':
-        return (
-          <Badge variant="neutral">
-            {change.action.charAt(0).toUpperCase() + change.action.slice(1)}{' '}
-            {formatAssetStandardLabel(change.standard)}
-          </Badge>
-        );
-      case 'daoDeposit':
-        return <Badge variant="neutral">DAO Deposit</Badge>;
-      case 'daoWithdrawRequest':
-        return <Badge variant="gold">DAO Withdraw Request</Badge>;
-      case 'daoWithdrawComplete':
-        return (
-          <span className="flex items-center gap-1">
-            <Badge variant="green">DAO Withdraw</Badge>
-            <span className="text-positive font-mono text-xs">
-              +{formatCkbAmount(change.compensation).full} CKB
-            </span>
-          </span>
-        );
-    }
-  };
-  const scriptCallLabel = (change: ActivityScriptCall) => {
-    const name = change.scriptName?.trim();
-    if (name) return name;
-    return shortHash(change.typeCodeHash);
-  };
-  const ScriptCallBadge = ({ change }: { change: ActivityScriptCall }) => {
-    return (
-      <div className="border-base-border/60 bg-base-elevated/70 rounded border px-2 py-1">
-        <div className="flex items-center gap-1.5">
-          <Link
-            href={getScriptDetailHref({
-              name: change.scriptName,
-              codeHash: change.typeCodeHash,
-              hashType: change.typeHashType,
-              scriptKind: 'type',
-            })}
-            className="text-gold hover:text-gold-bright font-mono text-xs transition-colors"
-          >
-            {scriptCallLabel(change)}
-          </Link>
-          <span className="border-base-border/60 text-text-dim rounded border px-1 py-0.5 font-mono text-[10px] uppercase">
-            {change.typeHashType}
-          </span>
-        </div>
-        <div className="text-text-dim mt-1 font-mono text-[10px]">
-          args {shortHash(change.typeArgs)}
-        </div>
-      </div>
-    );
   };
   return (
     <div className="bg-base-bg min-h-screen">
@@ -770,184 +674,38 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           <TerminalPanelContent padding="none">
             {activeTab === 'activities' && (
               <>
-                <div className="border-base-border flex items-center gap-1.5 border-b px-4 py-2">
-                  {(
-                    ['all', 'ckb', 'token', 'object', 'identity', 'dao', 'script_call'] as const
-                  ).map((f) => (
-                    <button
-                      key={f}
-                      onClick={() => {
-                        setActivityFilter(f);
-                        activitiesPagination.reset();
-                      }}
-                      className={`rounded px-2 py-0.5 font-mono text-xs transition-colors ${
-                        activityFilter === f
-                          ? 'bg-emphasis/15 text-emphasis'
-                          : 'text-text-dim hover:text-text'
-                      }`}
-                    >
-                      {
-                        {
-                          all: 'All',
-                          ckb: 'CKB',
-                          token: 'Token',
-                          object: 'Object',
-                          identity: 'Identity',
-                          dao: 'DAO',
-                          script_call: 'Script Call',
-                        }[f]
-                      }
-                    </button>
-                  ))}
+                <div className="border-base-border flex items-center gap-2 border-b px-4 py-2">
+                  <label className="text-text-dim font-mono text-xs uppercase tracking-wider">
+                    Filter
+                  </label>
+                  <select
+                    value={activityFilter}
+                    onChange={(e) => {
+                      setActivityFilter(e.target.value as typeof activityFilter);
+                      activitiesPagination.reset();
+                    }}
+                    className="border-base-border bg-base-elevated text-text focus:ring-jade/50 rounded border px-2 py-1 font-mono text-xs focus:outline-none focus:ring-1"
+                  >
+                    <option value="all">All</option>
+                    <option value="ckb">CKB</option>
+                    <option value="token">Token</option>
+                    <option value="object">Object</option>
+                    <option value="identity">Identity</option>
+                    <option value="dao">DAO</option>
+                    <option value="script_call">Script Call</option>
+                  </select>
                 </div>
                 {activitiesLoading ? (
                   <div className="text-text-dim py-12 text-center">Loading activities...</div>
                 ) : activities?.data && activities?.data.length > 0 ? (
                   <>
-                    <div className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:flex">
-                      <div className="flex-1">Transaction</div>
-                      <div className="w-20">Type</div>
-                      <div className="w-44 text-right">CKB Change</div>
-                      <div className="w-28 text-right lg:w-40">Assets</div>
-                      <div className="w-36 text-right lg:w-52">Script Calls</div>
-                      <div className="w-20 text-right">Time</div>
-                    </div>
-                    {activities?.data.map((activity: Activity) => {
-                      const delta = BigInt(activity.ckbDelta);
-                      const isPositive = delta > BigInt(0);
-                      const isNegative = delta < BigInt(0);
-                      const deltaColor = isPositive
-                        ? 'text-positive'
-                        : isNegative
-                          ? 'text-negative'
-                          : 'text-text-dim';
-                      return (
-                        <TerminalRow key={`${activity.txHash}-${activity.txIndex}`}>
-                          <div className="hidden w-full items-center gap-4 md:flex">
-                            <div className="min-w-0 flex-1">
-                              <Link href={`/tx/${activity.txHash}`}>
-                                <HexDisplay
-                                  value={activity.txHash}
-                                  truncate
-                                  startChars={6}
-                                  endChars={6}
-                                />
-                              </Link>
-                              <Link
-                                href={`/blocks/${activity.blockNumber}`}
-                                className="text-text-dim hover:text-text block font-mono text-xs"
-                              >
-                                #{activity.blockNumber.toLocaleString()}
-                              </Link>
-                            </div>
-                            <div className="w-20">
-                              {activity.isCellbase ? (
-                                <Badge variant="gold">Coinbase</Badge>
-                              ) : isPositive ? (
-                                <Badge variant="green">Received</Badge>
-                              ) : isNegative ? (
-                                <Badge variant="red">Sent</Badge>
-                              ) : (
-                                <Badge variant="gray">Self</Badge>
-                              )}
-                            </div>
-                            <div className="w-44 whitespace-nowrap text-right">
-                              <span className={`font-mono text-sm ${deltaColor}`}>
-                                {isPositive && '+'}
-                                {formatCkbAmount(activity.ckbDelta).full} CKB
-                              </span>
-                            </div>
-                            <div
-                              role="group"
-                              aria-label="Activity assets"
-                              className="flex w-28 min-w-0 justify-end lg:w-40"
-                            >
-                              <div className="flex flex-wrap items-center justify-end gap-1">
-                                {activity.assetChanges.map((change, i) => (
-                                  <AssetChangeBadge key={i} change={change} />
-                                ))}
-                              </div>
-                            </div>
-                            <div
-                              role="group"
-                              aria-label="Activity script calls"
-                              className="flex w-36 min-w-0 justify-end lg:w-52"
-                            >
-                              <div className="flex min-w-0 flex-col items-end gap-1">
-                                {activity.scriptCalls.map((change, i) => (
-                                  <ScriptCallBadge key={i} change={change} />
-                                ))}
-                              </div>
-                            </div>
-                            <div className="text-text-dim w-20 text-right text-sm">
-                              {formatTimeAgo(Number(activity.timestamp))}
-                            </div>
-                          </div>
-                          <div className="space-y-1.5 md:hidden">
-                            <div className="flex items-center justify-between gap-2">
-                              <Link href={`/tx/${activity.txHash}`}>
-                                <HexDisplay
-                                  value={activity.txHash}
-                                  truncate
-                                  startChars={8}
-                                  endChars={6}
-                                />
-                              </Link>
-                              <span className="text-text-dim shrink-0 text-xs">
-                                {formatTimeAgo(Number(activity.timestamp))}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="flex items-center gap-2">
-                                {activity.isCellbase ? (
-                                  <Badge variant="gold">Coinbase</Badge>
-                                ) : isPositive ? (
-                                  <Badge variant="green">Received</Badge>
-                                ) : isNegative ? (
-                                  <Badge variant="red">Sent</Badge>
-                                ) : (
-                                  <Badge variant="gray">Self</Badge>
-                                )}
-                                <Link
-                                  href={`/blocks/${activity.blockNumber}`}
-                                  className="text-text-dim font-mono text-xs hover:underline"
-                                >
-                                  #{activity.blockNumber.toLocaleString()}
-                                </Link>
-                              </div>
-                              <span className={`font-mono text-sm ${deltaColor}`}>
-                                {isPositive && '+'}
-                                {formatCkbAmount(activity.ckbDelta).full} CKB
-                              </span>
-                            </div>
-                            {activity.assetChanges.length > 0 && (
-                              <div className="space-y-1">
-                                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                  Assets
-                                </div>
-                                <div className="flex flex-wrap gap-1">
-                                  {activity.assetChanges.map((change, i) => (
-                                    <AssetChangeBadge key={i} change={change} />
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            {activity.scriptCalls.length > 0 && (
-                              <div className="space-y-1">
-                                <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                  Scripts
-                                </div>
-                                <div className="space-y-1">
-                                  {activity.scriptCalls.map((change, i) => (
-                                    <ScriptCallBadge key={i} change={change} />
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </TerminalRow>
-                      );
-                    })}
+                    {activities?.data.map((activity: Activity) => (
+                      <ActivityEventGroup
+                        key={`${activity.txHash}-${activity.txIndex}`}
+                        activity={activity}
+                        formatTimeAgo={(ts) => formatTimeAgo(Number(ts))}
+                      />
+                    ))}
                     {(activities?.hasMore || activitiesPagination.hasPrevious) && (
                       <TerminalPanelFooter className="flex justify-center">
                         <CursorPagination
