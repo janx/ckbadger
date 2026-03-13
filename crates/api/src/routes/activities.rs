@@ -348,20 +348,17 @@ fn decode_rgbpp_lock_args(args: &[u8]) -> Option<serde_json::Value> {
 }
 
 fn decode_btc_time_lock_args(args: &[u8]) -> Option<serde_json::Value> {
-    // BTC time lock args: first 32 bytes = lock_script hash,
-    // next 4 bytes = after (u32 LE), next 32 bytes = btc_txid (LE)
-    // Total minimum: 68 bytes
-    if args.len() < 68 {
+    // BTC time lock args: btc_txid is always the last 32 bytes (LE).
+    // Minimum 36 bytes (matching indexer parser).
+    if args.len() < 36 {
         return None;
     }
-    let after = u32::from_le_bytes(args[32..36].try_into().ok()?);
-    let mut btc_txid = args[36..68].to_vec();
+    let mut btc_txid = args[args.len() - 32..].to_vec();
     btc_txid.reverse();
     Some(serde_json::json!({
         "protocol": "rgbpp",
         "action": "btcTimeLock",
         "btcTxid": hex::encode(&btc_txid),
-        "after": after,
     }))
 }
 
@@ -856,25 +853,35 @@ mod tests {
 
     #[test]
     fn test_decode_btc_time_lock_args_valid() {
+        // btc_txid is the last 32 bytes (LE, reversed for display)
         let mut args = vec![0; 68];
-        // lock_script_hash: 32 bytes (don't care for decoding)
-        // after: u32 LE at [32..36]
-        args[32..36].copy_from_slice(&100u32.to_le_bytes());
-        // btc_txid at [36..68] stored LE
         for i in 0..32 {
             args[36 + i] = (32 - i) as u8;
         }
         let result = decode_btc_time_lock_args(&args).unwrap();
         assert_eq!(result["protocol"], "rgbpp");
         assert_eq!(result["action"], "btcTimeLock");
-        assert_eq!(result["after"], 100);
+        assert!(result.get("after").is_none());
+        let txid = result["btcTxid"].as_str().unwrap();
+        assert!(txid.starts_with("0102"));
+    }
+
+    #[test]
+    fn test_decode_btc_time_lock_args_extracts_last_32_bytes() {
+        // Verify "last 32 bytes" semantics with variable-length args
+        let mut args = vec![0; 100];
+        // Put txid in last 32 bytes (not at fixed offset 36..68)
+        for i in 0..32 {
+            args[68 + i] = (32 - i) as u8;
+        }
+        let result = decode_btc_time_lock_args(&args).unwrap();
         let txid = result["btcTxid"].as_str().unwrap();
         assert!(txid.starts_with("0102"));
     }
 
     #[test]
     fn test_decode_btc_time_lock_args_too_short() {
-        let args = vec![0; 67]; // 1 byte short
+        let args = vec![0; 35]; // 1 byte short of minimum 36
         assert!(decode_btc_time_lock_args(&args).is_none());
     }
 }
