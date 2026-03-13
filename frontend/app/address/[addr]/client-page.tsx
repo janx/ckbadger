@@ -808,7 +808,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       <div className="flex-1">Transaction</div>
                       <div className="w-20">Type</div>
                       <div className="w-44 text-right">CKB Change</div>
-                      <div className="w-32 text-right lg:w-48">Assets</div>
+                      <div className="w-28 text-right lg:w-40">Assets</div>
+                      <div className="w-36 text-right lg:w-52">Script Calls</div>
                       <div className="w-20 text-right">Time</div>
                     </div>
                     {activities?.data.map((activity: Activity) => {
@@ -856,31 +857,27 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                                 {formatCkbAmount(activity.ckbDelta).full} CKB
                               </span>
                             </div>
-                            <div className="flex w-32 min-w-0 flex-col items-end gap-2 lg:w-56">
-                              {activity.assetChanges.length > 0 && (
-                                <div className="flex min-w-0 flex-col items-end gap-1">
-                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                    Assets
-                                  </div>
-                                  <div className="flex flex-wrap items-center justify-end gap-1">
-                                    {activity.assetChanges.map((change, i) => (
-                                      <AssetChangeBadge key={i} change={change} />
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              {activity.scriptCalls.length > 0 && (
-                                <div className="flex min-w-0 flex-col items-end gap-1">
-                                  <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">
-                                    Scripts
-                                  </div>
-                                  <div className="flex min-w-0 flex-col items-end gap-1">
-                                    {activity.scriptCalls.map((change, i) => (
-                                      <ScriptCallBadge key={i} change={change} />
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
+                            <div
+                              role="group"
+                              aria-label="Activity assets"
+                              className="flex w-28 min-w-0 justify-end lg:w-40"
+                            >
+                              <div className="flex flex-wrap items-center justify-end gap-1">
+                                {activity.assetChanges.map((change, i) => (
+                                  <AssetChangeBadge key={i} change={change} />
+                                ))}
+                              </div>
+                            </div>
+                            <div
+                              role="group"
+                              aria-label="Activity script calls"
+                              className="flex w-36 min-w-0 justify-end lg:w-52"
+                            >
+                              <div className="flex min-w-0 flex-col items-end gap-1">
+                                {activity.scriptCalls.map((change, i) => (
+                                  <ScriptCallBadge key={i} change={change} />
+                                ))}
+                              </div>
                             </div>
                             <div className="text-text-dim w-20 text-right text-sm">
                               {formatTimeAgo(Number(activity.timestamp))}

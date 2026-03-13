@@ -607,11 +607,17 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    await waitFor(() => {
-      expect(screen.getAllByText('RGB++ Lock').length).toBeGreaterThan(0);
-    });
+    await waitFor(
+      () => {
+        expect(screen.getByLabelText('Activity script calls')).toHaveTextContent('RGB++ Lock');
+      },
+      {
+        timeout: 3000,
+      }
+    );
 
-    expect(screen.getAllByText('Scripts')[0]).toBeInTheDocument();
+    expect(screen.getByLabelText('Activity assets')).toHaveTextContent('SEAL');
+    expect(screen.getByLabelText('Activity script calls')).toHaveTextContent('RGB++ Lock');
     expect(screen.getAllByRole('link', { name: 'RGB++ Lock' })[0]).toHaveAttribute(
       'href',
       '/scripts/RGB%2B%2B%20Lock'
