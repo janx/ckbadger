@@ -300,6 +300,7 @@ describe('AddressDetailPage', () => {
           isCellbase: false,
           peers: [],
           typeCalls: [],
+          lockCalls: [],
           assetChanges: [
             {
               type: 'token',
@@ -513,6 +514,7 @@ describe('AddressDetailPage', () => {
           isCellbase: false,
           peers: [],
           typeCalls: [],
+          lockCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -551,6 +553,7 @@ describe('AddressDetailPage', () => {
           isCellbase: false,
           peers: [],
           typeCalls: [],
+          lockCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -606,6 +609,7 @@ describe('AddressDetailPage', () => {
               scriptName: 'RGB++ Lock',
             },
           ],
+          lockCalls: [],
         },
       ],
       total: 1,

@@ -24,6 +24,7 @@ function makeActivity(
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
+    lockCalls: overrides.lockCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }

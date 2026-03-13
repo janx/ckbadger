@@ -15,6 +15,7 @@ function makeActivity(overrides: Partial<Activity> = {}): Activity {
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
     typeCalls: overrides.typeCalls ?? [],
+    lockCalls: overrides.lockCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }

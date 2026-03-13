@@ -451,6 +451,16 @@ interface ActivityTypeCall {
   protocolName?: string;
 }
 
+interface ActivityLockCall {
+  lockCodeHash: string;
+  lockHashType: string;
+  lockArgs: string;
+  scriptHash: string;
+  scriptName?: string;
+  role: 'protocol_action' | 'access_control';
+  decoded?: Record<string, unknown>;
+}
+
 interface Activity {
   txHash: string;
   blockNumber: number;
@@ -461,6 +471,7 @@ interface Activity {
   isCellbase: boolean;
   assetChanges: ActivityAssetChange[];
   typeCalls: ActivityTypeCall[];
+  lockCalls: ActivityLockCall[];
   peers: string[];
 }
 
@@ -475,6 +486,7 @@ interface GlobalActivity {
   isCellbase: boolean;
   assetChanges: ActivityAssetChange[];
   typeCalls: ActivityTypeCall[];
+  lockCalls: ActivityLockCall[];
   peers: string[];
 }
 
@@ -1400,6 +1412,7 @@ export type {
   Activity,
   ActivityAssetChange,
   ActivityTypeCall,
+  ActivityLockCall,
   GlobalActivity,
   ScriptCountEntry,
   DailyActivityStats,
