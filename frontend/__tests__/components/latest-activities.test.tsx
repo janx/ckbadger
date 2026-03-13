@@ -1,12 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { LatestActivities } from '@/components/latest-activities';
-import {
-  api,
-  type ActivityAssetChange,
-  type ActivityScriptCall,
-  type GlobalActivity,
-} from '@/lib/api';
+import type { GlobalActivity } from '@/lib/api';
+import { api } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -32,32 +28,12 @@ function makeActivity(
   };
 }
 
-function tokenChange(delta: string): ActivityAssetChange {
-  return {
-    type: 'token',
-    typeScriptHash: '0xtoken',
-    delta,
-    symbol: 'SEAL',
-    decimals: 8,
-  };
-}
-
-function scriptCall(name = 'RGB++ Lock'): ActivityScriptCall {
-  return {
-    typeCodeHash: '0xcodehash',
-    typeHashType: 'type',
-    typeArgs: '0x1234abcd',
-    scriptHash: '0xscript-hash',
-    scriptName: name,
-  };
-}
-
-describe('LatestActivities', () => {
+describe('LatestActivities stream', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders one transaction block for multiple activities sharing a tx hash', async () => {
+  it('renders each activity as a separate stream item (no tx grouping)', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
         address: 'ckb1qsender11111111111111111111111111111111111111111',
@@ -73,124 +49,116 @@ describe('LatestActivities', () => {
 
     render(<LatestActivities />);
 
-    await waitFor(
-      () => {
-        expect(
-          screen
-            .getAllByRole('link')
-            .filter((link) => link.getAttribute('href') === '/tx/0xtx-shared')
-        ).toHaveLength(1);
-      },
-      {
-        timeout: 3000,
-      }
-    );
+    await waitFor(() => {
+      const addressLinks = screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/address/'));
+      expect(addressLinks).toHaveLength(2);
+    });
   });
 
-  it('renders only the first three participants and shows a more hint for the rest', async () => {
-    const hiddenAddress = 'ckb1qhidden444444444444444444444444444444444444444';
-
+  it('renders a DAO deposit with the DAO Deposit label', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
-        address: 'ckb1qsender11111111111111111111111111111111111111111',
-        txHash: '0xtx-many',
-        ckbDelta: '-10000000000',
+        address: 'ckb1qdao111111111111111111111111111111111111111111111',
+        txHash: '0xtx-dao',
+        ckbDelta: '-10200000000',
+        assetChanges: [{ type: 'daoDeposit', capacity: '10200000000' }],
       }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/DAO Deposit/)).toBeInTheDocument();
+    });
+  });
+
+  it('renders a token transfer with the token symbol', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
-        address: 'ckb1qsender22222222222222222222222222222222222222222',
-        txHash: '0xtx-many',
-        ckbDelta: '-5000000000',
+        address: 'ckb1qtoken1111111111111111111111111111111111111111111',
+        txHash: '0xtx-token',
+        assetChanges: [
+          { type: 'token', typeScriptHash: '0xtoken', delta: '1200', symbol: 'SEAL', decimals: 8 },
+        ],
       }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/SEAL Transfer/)).toBeInTheDocument();
+    });
+  });
+
+  it('renders a script call with the script name', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
-        address: 'ckb1qreceiver333333333333333333333333333333333333333',
-        txHash: '0xtx-many',
-        ckbDelta: '14900000000',
+        address: 'ckb1qscript1111111111111111111111111111111111111111111',
+        txHash: '0xtx-script',
+        scriptCalls: [
+          {
+            typeCodeHash: '0xcode',
+            typeHashType: 'type',
+            typeArgs: '0x1234',
+            scriptHash: '0xhash',
+            scriptName: 'Omnilock',
+          },
+        ],
       }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Script: Omnilock/)).toBeInTheDocument();
+    });
+  });
+
+  it('renders CKB transfer for activities with no assets and no script calls', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
-        address: hiddenAddress,
-        txHash: '0xtx-many',
+        address: 'ckb1qtransfer11111111111111111111111111111111111111111',
+        txHash: '0xtx-ckb',
+        ckbDelta: '-50000000000',
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/CKB Transfer/)).toBeInTheDocument();
+    });
+  });
+
+  it('limits visible items to 20', async () => {
+    const activities = Array.from({ length: 25 }, (_, i) =>
+      makeActivity({
+        address: `ckb1qaddr${String(i).padStart(40, '0')}`,
+        txHash: `0xtx-${i}`,
+        blockNumber: 11_000 - i,
         ckbDelta: '100000000',
-      }),
-    ]);
-
-    render(<LatestActivities />);
-
-    await waitFor(() => {
-      expect(screen.getByText('+1 more')).toBeInTheDocument();
-    });
-
-    expect(
-      screen
-        .getAllByRole('link')
-        .filter((link) => link.getAttribute('href')?.startsWith('/address/'))
-        .map((link) => link.getAttribute('href'))
-    ).toEqual([
-      '/address/ckb1qsender11111111111111111111111111111111111111111',
-      '/address/ckb1qsender22222222222222222222222222222222222222222',
-      '/address/ckb1qreceiver333333333333333333333333333333333333333',
-    ]);
-    expect(
-      screen
-        .getAllByRole('link')
-        .some((link) => link.getAttribute('href') === `/address/${hiddenAddress}`)
-    ).toBe(false);
-  });
-
-  it('renders script calls in a dedicated section separate from asset badges', async () => {
-    vi.mocked(api.getLatestActivities).mockResolvedValue([
-      makeActivity({
-        address: 'ckb1qscript1111111111111111111111111111111111111111',
-        txHash: '0xtx-script-call',
-        ckbDelta: '-100000000',
-        assetChanges: [tokenChange('-500')],
-        scriptCalls: [scriptCall()],
-      }),
-    ]);
-
-    render(<LatestActivities />);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText('1 sent · 0 received · 1 asset event · 1 script call')
-      ).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('Assets')).toBeInTheDocument();
-    expect(screen.getByText('Scripts')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'RGB++ Lock' })).toHaveAttribute(
-      'href',
-      '/scripts/RGB%2B%2B%20Lock'
-    );
-  });
-
-  it('renders five activity groups and hides any additional groups', async () => {
-    const txHashes = ['0xtx-1', '0xtx-2', '0xtx-3', '0xtx-4', '0xtx-5', '0xtx-6'];
-
-    vi.mocked(api.getLatestActivities).mockResolvedValue(
-      txHashes.map((txHash, index) =>
-        makeActivity({
-          address: `ckb1qgroup${index}11111111111111111111111111111111111111`,
-          txHash,
-          blockNumber: 11_000 - index,
-          timestamp: String(1_700_000_000 - index),
-          ckbDelta: '100000000',
-        })
-      )
+      })
     );
 
+    vi.mocked(api.getLatestActivities).mockResolvedValue(activities);
+
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(
-        screen.getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('/tx/'))
-      ).toHaveLength(5);
+      const addressLinks = screen
+        .getAllByRole('link')
+        .filter((link) => link.getAttribute('href')?.startsWith('/address/'));
+      expect(addressLinks).toHaveLength(20);
     });
+  });
 
-    expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/tx/0xtx-5')
-    ).toBe(true);
-    expect(
-      screen.getAllByRole('link').some((link) => link.getAttribute('href') === '/tx/0xtx-6')
-    ).toBe(false);
+  it('shows skeleton while loading', () => {
+    vi.mocked(api.getLatestActivities).mockReturnValue(new Promise(() => {}));
+
+    render(<LatestActivities />);
+
+    expect(screen.getByTestId('latest-activities-content')).toBeInTheDocument();
   });
 });
