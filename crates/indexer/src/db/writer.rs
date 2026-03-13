@@ -51,6 +51,7 @@ impl BatchWriter {
 
 pub mod activities;
 mod addresses;
+pub(crate) mod cell_distribution;
 mod cells;
 mod chain;
 mod dao;

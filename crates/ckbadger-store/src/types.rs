@@ -784,6 +784,7 @@ pub struct CellDistributionTrackerState {
     pub capacity_by_date_and_bucket: Vec<(String, [i128; 6])>,
     pub count_by_bucket: [i64; 6],
     pub total_capacity_by_bucket: [i128; 6],
+    pub date_transitions: Vec<(i64, String)>,
     pub last_snapshot_date: Option<String>,
 }
 

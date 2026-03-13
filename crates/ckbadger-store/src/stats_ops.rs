@@ -1607,6 +1607,7 @@ mod cell_distribution_tests {
             ],
             count_by_bucket: [10, 20, 30, 40, 50, 60],
             total_capacity_by_bucket: [1000, 2000, 3000, 4000, 5000, 6000],
+            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
             last_snapshot_date: Some("20240102".to_string()),
         };
 
