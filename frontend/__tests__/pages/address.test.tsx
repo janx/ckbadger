@@ -299,7 +299,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
-          scriptCalls: [],
+          typeCalls: [],
           assetChanges: [
             {
               type: 'token',
@@ -512,7 +512,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
-          scriptCalls: [],
+          typeCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -550,7 +550,7 @@ describe('AddressDetailPage', () => {
           usedDelta: '0',
           isCellbase: false,
           peers: [],
-          scriptCalls: [],
+          typeCalls: [],
           assetChanges: [
             {
               type: 'identity',
@@ -597,7 +597,7 @@ describe('AddressDetailPage', () => {
               decimals: 8,
             },
           ],
-          scriptCalls: [
+          typeCalls: [
             {
               typeCodeHash: '0xcodehash',
               typeHashType: 'type',
@@ -616,7 +616,7 @@ describe('AddressDetailPage', () => {
 
     render(<AddressDetailPage />);
 
-    // ActivityEventGroup renders script calls inline with ScriptCallExpr link (mobile + desktop)
+    // ActivityEventGroup renders type calls inline with TypeCallExpr link (mobile + desktop)
     await waitFor(() => {
       expect(screen.getAllByText('RGB++ Lock')[0]).toBeInTheDocument();
     });

@@ -23,7 +23,7 @@ function makeActivity(
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
-    scriptCalls: overrides.scriptCalls ?? [],
+    typeCalls: overrides.typeCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -97,7 +97,7 @@ describe('LatestActivities stream', () => {
       makeActivity({
         address: 'ckb1qscript1111111111111111111111111111111111111111111',
         txHash: '0xtx-script',
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -113,7 +113,7 @@ describe('LatestActivities stream', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/Omnilock/)).toBeInTheDocument();
-      expect(screen.getByText(/Script call/)).toBeInTheDocument();
+      expect(screen.getByText(/Type call/)).toBeInTheDocument();
     });
   });
 
@@ -122,7 +122,7 @@ describe('LatestActivities stream', () => {
       makeActivity({
         address: 'ckb1qprotocol111111111111111111111111111111111111111',
         txHash: '0xtx-protocol',
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -140,8 +140,8 @@ describe('LatestActivities stream', () => {
     await waitFor(() => {
       expect(screen.getByText('Stable++')).toBeInTheDocument();
       expect(screen.getByText(/Pool/)).toBeInTheDocument();
-      // Should NOT show "Script call" text when protocol name is present
-      expect(screen.queryByText(/Script call/)).not.toBeInTheDocument();
+      // Should NOT show "Type call" text when protocol name is present
+      expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
     });
   });
 

@@ -13,7 +13,7 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
-    scriptCalls: overrides.scriptCalls ?? [],
+    typeCalls: overrides.typeCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -80,7 +80,7 @@ describe('classifyActivity', () => {
   it('classifies script call', () => {
     const result = classifyActivity(
       makeActivity({
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',
@@ -91,7 +91,7 @@ describe('classifyActivity', () => {
         ],
       })
     );
-    expect(result.type).toBe('scriptCall');
+    expect(result.type).toBe('typeCall');
   });
 
   it('classifies CKB transfer as fallback', () => {
@@ -117,7 +117,7 @@ describe('classifyActivity', () => {
         assetChanges: [
           { type: 'token', typeScriptHash: '0xt', delta: '100', symbol: 'X', decimals: 8 },
         ],
-        scriptCalls: [
+        typeCalls: [
           {
             typeCodeHash: '0xcode',
             typeHashType: 'type',

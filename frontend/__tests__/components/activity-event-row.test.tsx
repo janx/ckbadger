@@ -14,7 +14,7 @@ function makeActivity(overrides: Partial<Activity> = {}): Activity {
     usedDelta: overrides.usedDelta ?? '0',
     isCellbase: overrides.isCellbase ?? false,
     assetChanges: overrides.assetChanges ?? [],
-    scriptCalls: overrides.scriptCalls ?? [],
+    typeCalls: overrides.typeCalls ?? [],
     peers: overrides.peers ?? [],
   };
 }
@@ -90,7 +90,7 @@ describe('ActivityEventGroup', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
-          scriptCalls: [
+          typeCalls: [
             {
               typeCodeHash: '0xcode',
               typeHashType: 'type',
@@ -104,14 +104,14 @@ describe('ActivityEventGroup', () => {
       />
     );
     expect(screen.getAllByText(/Omnilock/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Script call/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Type call/).length).toBeGreaterThan(0);
   });
 
-  it('renders protocol name instead of Script call when protocolName is set', () => {
+  it('renders protocol name instead of Type call when protocolName is set', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
-          scriptCalls: [
+          typeCalls: [
             {
               typeCodeHash: '0xcode',
               typeHashType: 'type',
@@ -127,8 +127,8 @@ describe('ActivityEventGroup', () => {
     );
     expect(screen.getAllByText(/Stable\+\+/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Pool/).length).toBeGreaterThan(0);
-    // Should NOT show "Script call" when protocol name is present
-    expect(screen.queryByText(/Script call/)).not.toBeInTheDocument();
+    // Should NOT show "Type call" when protocol name is present
+    expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
   });
 
   it('renders multiple event types in one activity', () => {
@@ -140,7 +140,7 @@ describe('ActivityEventGroup', () => {
             { type: 'token', typeScriptHash: '0xt', delta: '500', symbol: 'SEAL', decimals: 0 },
             { type: 'object', objectId: '0xobj123', standard: 'spore', action: 'mint' },
           ],
-          scriptCalls: [
+          typeCalls: [
             {
               typeCodeHash: '0xc',
               typeHashType: 'type',
@@ -156,7 +156,7 @@ describe('ActivityEventGroup', () => {
     // All four event types present: token, object, script call, CKB
     expect(screen.getAllByText(/SEAL Transfer/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Spore Mint/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Script call/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Type call/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
   });
 

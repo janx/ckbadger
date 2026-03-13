@@ -1,4 +1,4 @@
-import type { ActivityAssetChange, ActivityScriptCall, GlobalActivity } from '@/lib/api';
+import type { ActivityAssetChange, ActivityTypeCall, GlobalActivity } from '@/lib/api';
 
 export type ActivityType =
   | 'daoDeposit'
@@ -7,14 +7,14 @@ export type ActivityType =
   | 'token'
   | 'object'
   | 'identity'
-  | 'scriptCall'
+  | 'typeCall'
   | 'ckbTransfer';
 
 export interface ClassifiedActivity {
   type: ActivityType;
   activity: GlobalActivity;
   primaryAssetChange: ActivityAssetChange | null;
-  primaryScriptCall: ActivityScriptCall | null;
+  primaryTypeCall: ActivityTypeCall | null;
 }
 
 const ASSET_TYPE_PRIORITY: Array<{ assetType: string; activityType: ActivityType }> = [
@@ -34,17 +34,17 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
         type: activityType,
         activity,
         primaryAssetChange: match,
-        primaryScriptCall: activity.scriptCalls[0] ?? null,
+        primaryTypeCall: activity.typeCalls[0] ?? null,
       };
     }
   }
 
-  if (activity.scriptCalls.length > 0) {
+  if (activity.typeCalls.length > 0) {
     return {
-      type: 'scriptCall',
+      type: 'typeCall',
       activity,
       primaryAssetChange: null,
-      primaryScriptCall: activity.scriptCalls[0],
+      primaryTypeCall: activity.typeCalls[0],
     };
   }
 
@@ -52,6 +52,6 @@ export function classifyActivity(activity: GlobalActivity): ClassifiedActivity {
     type: 'ckbTransfer',
     activity,
     primaryAssetChange: null,
-    primaryScriptCall: null,
+    primaryTypeCall: null,
   };
 }

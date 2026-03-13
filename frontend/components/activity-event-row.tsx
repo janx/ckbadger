@@ -10,7 +10,7 @@ import {
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
-import type { Activity, ActivityAssetChange, ActivityScriptCall } from '@/lib/api';
+import type { Activity, ActivityAssetChange, ActivityTypeCall } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -65,10 +65,10 @@ export function CkbDelta({ delta }: { delta: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// ScriptCallExpr — script name link with args
+// TypeCallExpr — script name link with args
 // ---------------------------------------------------------------------------
 
-export function ScriptCallExpr({ sc }: { sc: ActivityScriptCall }) {
+export function TypeCallExpr({ sc }: { sc: ActivityTypeCall }) {
   const fnName = formatScriptRef(sc);
   const args = truncateHash(sc.typeArgs, 6, 4);
 
@@ -212,7 +212,7 @@ function getAssetEventParts(change: ActivityAssetChange): EventParts {
   }
 }
 
-function getScriptEventParts(sc: ActivityScriptCall): EventParts {
+function getTypeEventParts(sc: ActivityTypeCall): EventParts {
   return {
     badge: (
       <span className="text-amber font-mono text-xs">
@@ -223,13 +223,13 @@ function getScriptEventParts(sc: ActivityScriptCall): EventParts {
             <span className="text-text-dim"> · </span>
           </>
         ) : (
-          'Script call'
+          'Type call'
         )}
       </span>
     ),
     value: (
       <span className="font-mono text-xs">
-        <ScriptCallExpr sc={sc} />
+        <TypeCallExpr sc={sc} />
       </span>
     ),
   };
@@ -277,8 +277,8 @@ export function ActivityEventGroup({
   activity.assetChanges.forEach((change) => {
     events.push(getAssetEventParts(change));
   });
-  activity.scriptCalls.forEach((sc) => {
-    events.push(getScriptEventParts(sc));
+  activity.typeCalls.forEach((sc) => {
+    events.push(getTypeEventParts(sc));
   });
   events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase));
 

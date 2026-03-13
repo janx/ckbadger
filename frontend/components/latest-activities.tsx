@@ -20,7 +20,7 @@ import {
   CkbDelta,
   formatStandard,
   capitalizeAction,
-  ScriptCallExpr,
+  TypeCallExpr,
 } from '@/components/activity-event-row';
 
 const MAX_STREAM_ITEMS = 20;
@@ -102,8 +102,8 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       }
       return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
     }
-    case 'scriptCall':
-      return { icon: '\u2699', label: 'Script Call', colorClass: 'text-amber' };
+    case 'typeCall':
+      return { icon: '\u2699', label: 'Type Call', colorClass: 'text-amber' };
     case 'ckbTransfer':
       return { icon: '\u2197', label: 'CKB Transfer', colorClass: 'text-jade' };
     default:
@@ -364,10 +364,10 @@ function StreamItemIdentity({ classified }: { classified: ClassifiedActivity }) 
   );
 }
 
-function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }) {
-  const { activity, primaryScriptCall } = classified;
+function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryTypeCall } = classified;
   const badge = getTypeBadge(classified);
-  const protocolName = primaryScriptCall?.protocolName;
+  const protocolName = primaryTypeCall?.protocolName;
 
   return (
     <>
@@ -380,9 +380,9 @@ function StreamItemScriptCall({ classified }: { classified: ClassifiedActivity }
               <span className="text-text-dim"> · </span>
             </>
           ) : (
-            'Script call '
+            'Type call '
           )}
-          {primaryScriptCall ? <ScriptCallExpr sc={primaryScriptCall} /> : null}
+          {primaryTypeCall ? <TypeCallExpr sc={primaryTypeCall} /> : null}
         </span>
         <span className="text-text-dim shrink-0 font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
@@ -412,8 +412,8 @@ function StreamItem({ classified }: { classified: ClassifiedActivity }) {
       return <StreamItemObject classified={classified} />;
     case 'identity':
       return <StreamItemIdentity classified={classified} />;
-    case 'scriptCall':
-      return <StreamItemScriptCall classified={classified} />;
+    case 'typeCall':
+      return <StreamItemTypeCall classified={classified} />;
     default:
       return <StreamItemCkbTransfer classified={classified} />;
   }
