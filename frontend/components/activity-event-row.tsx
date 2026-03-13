@@ -10,7 +10,7 @@ import {
 } from '@/lib/detail-routes';
 import { formatCkbAmount, truncateHash, cn } from '@/lib/utils';
 import { formatTokenBalance } from '@/lib/format-asset';
-import type { Activity, ActivityAssetChange, ActivityTypeCall } from '@/lib/api';
+import type { Activity, ActivityAssetChange, ActivityTypeCall, ActivityLockCall } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -90,6 +90,50 @@ export function TypeCallExpr({ sc }: { sc: ActivityTypeCall }) {
       <span className="text-aqua/70">{args}</span>
       <span className="text-text-dim">)</span>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LockCallExpr — lock script name link with args
+// ---------------------------------------------------------------------------
+
+export function LockCallExpr({ lc }: { lc: ActivityLockCall }) {
+  const fnName = lc.scriptName?.trim() || `${lc.lockHashType}:${lc.scriptHash.slice(0, 10)}`;
+  const args = truncateHash(lc.lockArgs, 6, 4);
+
+  return (
+    <>
+      <Link
+        href={getScriptDetailHref({
+          name: lc.scriptName,
+          codeHash: lc.lockCodeHash,
+          hashType: lc.lockHashType,
+          scriptKind: 'lock',
+        })}
+        className="text-gold hover:text-gold/80 transition-colors"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {fnName}
+      </Link>
+      <span className="text-text-dim">(</span>
+      <span className="text-aqua/70">{args}</span>
+      <span className="text-text-dim">)</span>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LockCallBadge — compact pill label
+// ---------------------------------------------------------------------------
+
+export function LockCallBadge({ lc }: { lc: ActivityLockCall }) {
+  const name =
+    (lc.decoded?.protocol as string) || lc.scriptName?.trim() || lc.lockCodeHash.slice(0, 10);
+
+  return (
+    <span className="text-text-dim bg-base-elevated/80 rounded px-1 py-0.5 font-mono text-[9px] uppercase">
+      {name}
+    </span>
   );
 }
 
@@ -235,6 +279,31 @@ function getTypeEventParts(sc: ActivityTypeCall): EventParts {
   };
 }
 
+function getLockEventParts(lc: ActivityLockCall): EventParts {
+  const protocolName = (lc.decoded?.protocol as string) || lc.scriptName?.trim();
+
+  return {
+    badge: (
+      <span className="text-violet font-mono text-xs">
+        {'\u26A1'}{' '}
+        {protocolName ? (
+          <>
+            {protocolName}
+            <span className="text-text-dim"> · </span>
+          </>
+        ) : (
+          'Lock call'
+        )}
+      </span>
+    ),
+    value: (
+      <span className="font-mono text-xs">
+        <LockCallExpr lc={lc} />
+      </span>
+    ),
+  };
+}
+
 function getCkbEventParts(delta: string, isCellbase: boolean): EventParts {
   const icon = isCellbase ? '\u2605' : '\u2197';
   const label = isCellbase ? 'Coinbase' : 'CKB Transfer';
@@ -279,6 +348,9 @@ export function ActivityEventGroup({
   });
   activity.typeCalls.forEach((sc) => {
     events.push(getTypeEventParts(sc));
+  });
+  activity.lockCalls.forEach((lc) => {
+    events.push(getLockEventParts(lc));
   });
   events.push(getCkbEventParts(activity.ckbDelta, activity.isCellbase));
 

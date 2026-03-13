@@ -21,6 +21,8 @@ import {
   formatStandard,
   capitalizeAction,
   TypeCallExpr,
+  LockCallExpr,
+  LockCallBadge,
 } from '@/components/activity-event-row';
 
 const MAX_STREAM_ITEMS = 20;
@@ -102,6 +104,8 @@ function getTypeBadge(classified: ClassifiedActivity): TypeBadgeInfo {
       }
       return { icon: '\u2726', label: 'Identity', colorClass: 'text-aqua' };
     }
+    case 'protocolAction':
+      return { icon: '\u26A1', label: 'Protocol', colorClass: 'text-violet' };
     case 'typeCall':
       return { icon: '\u2699', label: 'Type Call', colorClass: 'text-amber' };
     case 'ckbTransfer':
@@ -130,9 +134,12 @@ function StreamItemCkbTransfer({ classified }: { classified: ClassifiedActivity 
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('font-mono text-xs', badge.colorClass)}>
-          {badge.icon} {badge.label}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className={cn('font-mono text-xs', badge.colorClass)}>
+            {badge.icon} {badge.label}
+          </span>
+          {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
+        </div>
         <span className="text-text-dim font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
         </span>
@@ -258,9 +265,12 @@ function StreamItemToken({ classified }: { classified: ClassifiedActivity }) {
   return (
     <>
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('font-mono text-xs', badge.colorClass)}>
-          {badge.icon} {badge.label}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className={cn('font-mono text-xs', badge.colorClass)}>
+            {badge.icon} {badge.label}
+          </span>
+          {classified.primaryLockCall && <LockCallBadge lc={classified.primaryLockCall} />}
+        </div>
         <span className="text-text-dim font-mono text-[10px]">
           {formatTimeAgo(activity.timestamp)}
         </span>
@@ -396,6 +406,47 @@ function StreamItemTypeCall({ classified }: { classified: ClassifiedActivity }) 
   );
 }
 
+function StreamItemProtocolAction({ classified }: { classified: ClassifiedActivity }) {
+  const { activity, primaryLockCall } = classified;
+
+  const protocolName =
+    (primaryLockCall?.decoded?.protocol as string) ||
+    primaryLockCall?.scriptName?.trim() ||
+    'Protocol';
+  const action =
+    (primaryLockCall?.decoded?.intentType as string) ||
+    (primaryLockCall?.decoded?.action as string) ||
+    '';
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-violet min-w-0 truncate font-mono text-xs">
+          {'\u26A1'} <span className="text-violet">{protocolName}</span>
+          {action ? (
+            <>
+              <span className="text-text-dim"> · </span>
+              <span className="text-violet/70">{action}</span>
+            </>
+          ) : primaryLockCall ? (
+            <>
+              <span className="text-text-dim"> · </span>
+              <LockCallExpr lc={primaryLockCall} />
+            </>
+          ) : null}
+        </span>
+        <span className="text-text-dim shrink-0 font-mono text-[10px]">
+          {formatTimeAgo(activity.timestamp)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <AddressLink address={activity.address} />
+        <CkbDelta delta={activity.ckbDelta} />
+      </div>
+    </>
+  );
+}
+
 function StreamItem({ classified }: { classified: ClassifiedActivity }) {
   switch (classified.type) {
     case 'ckbTransfer':
@@ -412,6 +463,8 @@ function StreamItem({ classified }: { classified: ClassifiedActivity }) {
       return <StreamItemObject classified={classified} />;
     case 'identity':
       return <StreamItemIdentity classified={classified} />;
+    case 'protocolAction':
+      return <StreamItemProtocolAction classified={classified} />;
     case 'typeCall':
       return <StreamItemTypeCall classified={classified} />;
     default:

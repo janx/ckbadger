@@ -162,6 +162,32 @@ describe('LatestActivities stream', () => {
     });
   });
 
+  it('renders a protocol action lock call with script name', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qlockaction111111111111111111111111111111111111',
+        txHash: '0xtx-lock',
+        lockCalls: [
+          {
+            lockCodeHash: '0xintent',
+            lockHashType: 'type',
+            lockArgs: '0xargs',
+            scriptHash: '0xhash',
+            scriptName: 'UTXOSwap Intent',
+            role: 'protocol_action',
+          },
+        ],
+      }),
+    ]);
+
+    render(<LatestActivities />);
+
+    await waitFor(() => {
+      // Script name appears twice: once as protocol label, once as link text in LockCallExpr
+      expect(screen.getAllByText(/UTXOSwap Intent/).length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   it('limits visible items to 20', async () => {
     const activities = Array.from({ length: 25 }, (_, i) =>
       makeActivity({

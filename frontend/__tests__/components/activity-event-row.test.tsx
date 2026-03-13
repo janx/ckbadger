@@ -194,4 +194,45 @@ describe('ActivityEventGroup', () => {
     render(<ActivityEventGroup activity={makeActivity()} formatTimeAgo={() => '5 mins ago'} />);
     expect(screen.getAllByText('5 mins ago').length).toBeGreaterThan(0);
   });
+
+  it('renders lock call sub-row with script name', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          lockCalls: [
+            {
+              lockCodeHash: '0xintent',
+              lockHashType: 'type',
+              lockArgs: '0xargs1234',
+              scriptHash: '0xhash',
+              scriptName: 'UTXOSwap Intent',
+              role: 'protocol_action',
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/UTXOSwap Intent/).length).toBeGreaterThan(0);
+  });
+
+  it('renders Lock call label when lock call has no script name or protocol', () => {
+    render(
+      <ActivityEventGroup
+        activity={makeActivity({
+          lockCalls: [
+            {
+              lockCodeHash: '0xunknown',
+              lockHashType: 'type',
+              lockArgs: '0xargs',
+              scriptHash: '0xhash',
+              role: 'access_control',
+            },
+          ],
+        })}
+        formatTimeAgo={mockFormatTimeAgo}
+      />
+    );
+    expect(screen.getAllByText(/Lock call/).length).toBeGreaterThan(0);
+  });
 });
