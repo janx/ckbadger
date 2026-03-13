@@ -1,11 +1,13 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{anyhow, Result};
 use tracing::{error, info, warn};
 
-use ckbadger_store::types::PositionedCellInfo;
+use ckbadger_store::types::{
+    AddressBalance, AddressCohortEntry, DailyAddressCohort, PositionedCellInfo,
+};
 
 use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
@@ -180,6 +182,10 @@ impl Indexer {
             if let Some((snapshot_date, snapshot)) = tracker.maybe_snapshot(block_date) {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
                 store.put_cell_distribution(&date_str, &snapshot)?;
+
+                // Materialize address cohort snapshot at the same day boundary
+                let cohort = Self::compute_address_cohort_snapshot(store, &tracker, &date_str)?;
+                store.put_address_cohort(&date_str, &cohort)?;
             }
         }
 
@@ -187,6 +193,59 @@ impl Indexer {
         store.put_cell_dist_tracker_state(&tracker.to_state())?;
 
         Ok(())
+    }
+
+    /// Compute an address cohort snapshot by scanning all address balances.
+    ///
+    /// For each address with a positive balance, looks up the creation month
+    /// (from `first_seen_block` via block-date transitions) and accumulates
+    /// `used_capacity` and `balance` per cohort month.
+    fn compute_address_cohort_snapshot(
+        store: &ckbadger_store::CkbadgerStore,
+        tracker: &crate::db::writer::cell_distribution::CellDistributionTracker,
+        date_str: &str,
+    ) -> Result<DailyAddressCohort> {
+        let mut cohorts: BTreeMap<String, (i128, i128)> = BTreeMap::new();
+
+        let iter = store.iterator_cf(store.cf_addr_balance(), rocksdb::IteratorMode::Start);
+
+        for item in iter {
+            let (_key, value) = item.map_err(|e| {
+                anyhow!(
+                    "failed to iterate addr_balance for address cohort snapshot (date={}): {}",
+                    date_str,
+                    e
+                )
+            })?;
+            let balance: AddressBalance = bincode::deserialize(&value).map_err(|e| {
+                anyhow!(
+                    "failed to deserialize address balance for address cohort snapshot (date={}): {}",
+                    date_str,
+                    e
+                )
+            })?;
+            // Only include addresses with positive balance
+            if balance.balance <= 0 {
+                continue;
+            }
+            if let Some(first_seen_date) = tracker.block_number_to_date(balance.first_seen_block) {
+                let cohort_month = first_seen_date.format("%Y-%m").to_string();
+                let entry = cohorts.entry(cohort_month).or_insert((0, 0));
+                entry.0 += balance.used_capacity;
+                entry.1 += balance.balance;
+            }
+        }
+
+        let entries: Vec<AddressCohortEntry> = cohorts
+            .into_iter()
+            .map(|(month, (used, total))| AddressCohortEntry {
+                cohort_month: month,
+                used_capacity: used,
+                total_balance: total,
+            })
+            .collect();
+
+        Ok(DailyAddressCohort { cohorts: entries })
     }
 
     // === get_chain_block_hash, get_chain_tip ===
