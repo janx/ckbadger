@@ -148,6 +148,8 @@ fn build_activity_input_views(
             Ok(crate::db::writer::activities::InputCellView {
                 lock_script_hash: info.lock_script_hash.clone(),
                 lock_code_hash: info.lock_code_hash.clone(),
+                lock_hash_type: info.lock_hash_type,
+                lock_args: info.lock_args.clone(),
                 capacity: info.capacity,
                 occupied_capacity: info.occupied_capacity,
                 type_code_hash: info.type_code_hash.clone(),
