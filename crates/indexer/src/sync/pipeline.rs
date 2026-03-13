@@ -35,7 +35,10 @@ use super::indexer::{
 use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
-use super::types::{CachedCellInfo, DotbitConsumptionEvent, PreParsedNftData, ReorgAction, TxData};
+use super::types::{
+    CachedCellInfo, DotbitConsumptionEvent, MnftConsumptionEvent, PreParsedNftData, ReorgAction,
+    SporeConsumptionEvent, TxData,
+};
 use super::undo::*;
 use crate::bulk_sync_perf::BatchSample;
 
@@ -151,6 +154,8 @@ fn run_nft_precompute(
     let mut dotbit_tx_actions: HashMap<usize, String> = HashMap::new();
     let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
     let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
+    let mut batch_spore_latest_create: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut batch_mnft_latest_create: HashMap<Vec<u8>, usize> = HashMap::new();
 
     let dotbit_code_hash =
         crate::rpc::parse_hex_to_bytes(crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID);
@@ -210,11 +215,46 @@ fn run_nft_precompute(
                     .or_insert(dotbit_create_order);
                 dotbit_accounts.push((tx_global_index, account));
             }
+
+            // Track spore and mNFT output creations for same-batch ordering
+            for cell in &tx_data.cells {
+                if let Some(ref tc) = cell.type_code_hash {
+                    if SporeParser::is_spore_type_script(tc) {
+                        if let Some(ref type_args) = cell.type_args {
+                            if !type_args.is_empty() {
+                                batch_spore_latest_create
+                                    .entry(type_args.clone())
+                                    .and_modify(|current| {
+                                        if tx_global_index > *current {
+                                            *current = tx_global_index;
+                                        }
+                                    })
+                                    .or_insert(tx_global_index);
+                            }
+                        }
+                    } else if MnftParser::is_token_type_script(tc) {
+                        if let Some(ref type_args) = cell.type_args {
+                            if type_args.len() >= 28 {
+                                batch_mnft_latest_create
+                                    .entry(type_args.clone())
+                                    .and_modify(|current| {
+                                        if tx_global_index > *current {
+                                            *current = tx_global_index;
+                                        }
+                                    })
+                                    .or_insert(tx_global_index);
+                            }
+                        }
+                    }
+                }
+            }
         }
         block_tx_idx += tx_count_for_block;
     }
 
     let mut consumed_dotbit: Vec<DotbitConsumptionEvent> = Vec::new();
+    let mut consumed_spore: Vec<SporeConsumptionEvent> = Vec::new();
+    let mut consumed_mnft: Vec<MnftConsumptionEvent> = Vec::new();
     let mut block_tx_idx = 0usize;
     for parsed in all_parsed_blocks {
         let tx_count_for_block = parsed.transactions_count as usize;
@@ -249,29 +289,67 @@ fn run_nft_precompute(
                 let cell_info = input_cell_info
                     .get(&key)
                     .or_else(|| batch_cell_infos.get(&key));
-                let is_dotbit = cell_info
-                    .and_then(|info| info.type_code_hash.as_ref())
-                    .map(|tc| DotbitParser::is_account_cell_type_script(tc))
-                    .unwrap_or(false);
-                if !is_dotbit {
-                    continue;
-                }
 
-                let account_id = cell_info
-                    .and_then(|info| info.type_args.as_ref())
-                    .filter(|args| args.len() == 20 && !args.iter().all(|&b| b == 0))
-                    .cloned()
-                    .or_else(|| dotbit_outpoint_fallback.get(&key).cloned());
-                if let Some(account_id) = account_id {
-                    let latest_create_order =
-                        batch_dotbit_latest_create_order.get(&account_id).copied();
-                    if should_consume_dotbit_account(latest_create_order, dotbit_consume_order) {
-                        consumed_dotbit.push(DotbitConsumptionEvent {
-                            account_id,
-                            block_number: parsed.number,
-                            consuming_tx_hash: tx_data.hash,
-                            tx_global_index,
-                        });
+                if let Some(cell_info) = cell_info {
+                    if let Some(ref tc) = cell_info.type_code_hash {
+                        // DotBit check (existing)
+                        if DotbitParser::is_account_cell_type_script(tc) {
+                            let account_id = cell_info
+                                .type_args
+                                .as_ref()
+                                .filter(|args| args.len() == 20 && !args.iter().all(|&b| b == 0))
+                                .cloned()
+                                .or_else(|| dotbit_outpoint_fallback.get(&key).cloned());
+                            if let Some(account_id) = account_id {
+                                let latest_create_order =
+                                    batch_dotbit_latest_create_order.get(&account_id).copied();
+                                if should_consume_dotbit_account(
+                                    latest_create_order,
+                                    dotbit_consume_order,
+                                ) {
+                                    consumed_dotbit.push(DotbitConsumptionEvent {
+                                        account_id,
+                                        block_number: parsed.number,
+                                        consuming_tx_hash: tx_data.hash,
+                                        tx_global_index,
+                                    });
+                                }
+                            }
+                        }
+                        // Spore check
+                        else if SporeParser::is_spore_type_script(tc) {
+                            if let Some(ref type_args) = cell_info.type_args {
+                                if !type_args.is_empty() {
+                                    let latest_create =
+                                        batch_spore_latest_create.get(type_args).copied();
+                                    if should_consume_spore(latest_create, tx_global_index) {
+                                        consumed_spore.push(SporeConsumptionEvent {
+                                            spore_id: type_args.clone(),
+                                            block_number: parsed.number,
+                                            consuming_tx_hash: tx_data.hash,
+                                            tx_global_index,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        // mNFT token check
+                        else if MnftParser::is_token_type_script(tc) {
+                            if let Some(ref type_args) = cell_info.type_args {
+                                if type_args.len() >= 28 {
+                                    let latest_create =
+                                        batch_mnft_latest_create.get(type_args).copied();
+                                    if should_consume_mnft_token(latest_create, tx_global_index) {
+                                        consumed_mnft.push(MnftConsumptionEvent {
+                                            token_id: type_args.clone(),
+                                            block_number: parsed.number,
+                                            consuming_tx_hash: tx_data.hash,
+                                            tx_global_index,
+                                        });
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -285,8 +363,8 @@ fn run_nft_precompute(
         mnft_tokens,
         dotbit_accounts,
         consumed_dotbit,
-        consumed_spore: Vec::new(),
-        consumed_mnft: Vec::new(),
+        consumed_spore,
+        consumed_mnft,
         dotbit_tx_actions,
     })
 }
