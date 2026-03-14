@@ -11,6 +11,7 @@ pub mod spore;
 pub mod stablepp;
 pub mod transaction;
 pub mod udt;
+pub mod utxoswap;
 
 pub use block::BlockParser;
 pub use cell::CellParser;
