@@ -12,6 +12,7 @@ path = "src/lib.rs"
 ckbadger-common = { path = "../common" }
 ckb-store-reader = { path = "../ckb-store-reader" }
 ckbadger-store = { path = "../ckbadger-store" }
+ckbadger-indexer = { path = "../indexer" }
 
 # Async runtime
 tokio = { workspace = true }

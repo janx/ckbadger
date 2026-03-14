@@ -317,6 +317,16 @@ static LOCK_ARGS_DECODERS: LazyLock<HashMap<Vec<u8>, ArgsDecoder>> = LazyLock::n
             decode_fiber_commitment_lock_args as ArgsDecoder,
         );
     }
+    // UTXOSwap intent lock
+    for hex in [
+        "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e", // mainnet
+        "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101", // testnet
+    ] {
+        m.insert(
+            parse_hex_code_hash(hex),
+            decode_utxoswap_intent_args as ArgsDecoder,
+        );
+    }
     m
 });
 
@@ -385,6 +395,31 @@ fn decode_fiber_commitment_lock_args(args: &[u8]) -> Option<serde_json::Value> {
         "settlementHash": format!("0x{}", hex::encode(settlement_hash)),
         "settlementFlag": settlement_flag,
     }))
+}
+
+fn decode_utxoswap_intent_args(args: &[u8]) -> Option<serde_json::Value> {
+    use ckbadger_indexer::parser::utxoswap::parse_intent_args;
+
+    let parsed = parse_intent_args(args)?;
+
+    let mut result = serde_json::json!({
+        "protocol": "utxoswap",
+        "intentType": parsed.intent_type.display_name(),
+        "poolTypeHash": format!("0x{}", hex::encode(parsed.pool_type_hash)),
+        "amountIn": parsed.amount_in.to_string(),
+        "amountOutMin": parsed.amount_out_min.to_string(),
+        "assetInIndex": parsed.asset_in_index,
+    });
+
+    if let Some(extra) = &parsed.create_pool_extra {
+        result["assetX"] = serde_json::json!(format!("0x{}", hex::encode(extra.asset_x)));
+        result["assetY"] = serde_json::json!(format!("0x{}", hex::encode(extra.asset_y)));
+        result["amountX"] = serde_json::json!(extra.amount_x.to_string());
+        result["amountY"] = serde_json::json!(extra.amount_y.to_string());
+        result["totalFeeRate"] = serde_json::json!(extra.total_fee_rate);
+    }
+
+    Some(result)
 }
 
 fn convert_lock_call(
@@ -1021,5 +1056,64 @@ mod tests {
         );
         assert!(LOCK_ARGS_DECODERS.contains_key(&funding_mainnet));
         assert!(LOCK_ARGS_DECODERS.contains_key(&commitment_mainnet));
+    }
+
+    #[test]
+    fn test_decode_utxoswap_intent_swap() {
+        let mut args = vec![0u8; 90];
+        args[0..20].fill(0xAA);
+        args[20..40].fill(0xBB);
+        args[56] = 3; // SwapExactInputForOutput
+        args[57] = 1; // asset_in_index
+        args[58..74].copy_from_slice(&1_000_000u128.to_le_bytes());
+        args[74..90].copy_from_slice(&500_000u128.to_le_bytes());
+
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["protocol"], "utxoswap");
+        assert_eq!(result["intentType"], "SwapExactInput");
+        assert_eq!(result["assetInIndex"], 1);
+        assert_eq!(result["amountIn"], "1000000");
+        assert_eq!(result["amountOutMin"], "500000");
+        assert!(result.get("assetX").is_none());
+    }
+
+    #[test]
+    fn test_decode_utxoswap_intent_create_pool() {
+        let mut args = vec![0u8; 154];
+        args[0..20].fill(0xAA);
+        args[20..40].fill(0xBB);
+        args[56] = 0; // CreatePool
+        args[57] = 30; // total_fee_rate
+        args[58..90].fill(0xCC);
+        args[90..122].fill(0xDD);
+        args[122..138].copy_from_slice(&5_000u128.to_le_bytes());
+        args[138..154].copy_from_slice(&10_000u128.to_le_bytes());
+
+        let result = decode_utxoswap_intent_args(&args).unwrap();
+        assert_eq!(result["protocol"], "utxoswap");
+        assert_eq!(result["intentType"], "CreatePool");
+        assert_eq!(result["totalFeeRate"], 30);
+        assert_eq!(result["amountX"], "5000");
+        assert_eq!(result["amountY"], "10000");
+        assert!(result["assetX"].as_str().unwrap().starts_with("0x"));
+        assert!(result["assetY"].as_str().unwrap().starts_with("0x"));
+    }
+
+    #[test]
+    fn test_decode_utxoswap_intent_too_short() {
+        let args = vec![0u8; 89];
+        assert!(decode_utxoswap_intent_args(&args).is_none());
+    }
+
+    #[test]
+    fn test_utxoswap_intent_locks_have_decoders() {
+        let mainnet = parse_hex_code_hash(
+            "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e",
+        );
+        let testnet = parse_hex_code_hash(
+            "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101",
+        );
+        assert!(LOCK_ARGS_DECODERS.contains_key(&mainnet));
+        assert!(LOCK_ARGS_DECODERS.contains_key(&testnet));
     }
 }
