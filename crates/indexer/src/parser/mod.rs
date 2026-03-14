@@ -8,6 +8,7 @@ pub mod mnft;
 pub mod rgbpp;
 pub mod script;
 pub mod spore;
+pub mod stablepp;
 pub mod transaction;
 pub mod udt;
 
