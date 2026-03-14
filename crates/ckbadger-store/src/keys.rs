@@ -781,11 +781,16 @@ pub fn encode_identity_owner_prefix(collection_id: &[u8]) -> [u8; 32] {
 }
 
 /// Zero-pad an ID to exactly 32 bytes. IDs shorter than 32 bytes (e.g. mNFT class_id = 24B)
-/// are right-padded with zeros; IDs already 32+ bytes are truncated to 32.
+/// are right-padded with zeros. Panics if the ID exceeds 32 bytes to prevent silent key
+/// collisions from truncation.
 fn pad_id_32(id: &[u8]) -> [u8; 32] {
+    assert!(
+        id.len() <= 32,
+        "pad_id_32: ID exceeds 32 bytes (got {}), which would cause key collisions from truncation",
+        id.len()
+    );
     let mut buf = [0u8; 32];
-    let len = id.len().min(32);
-    buf[..len].copy_from_slice(&id[..len]);
+    buf[..id.len()].copy_from_slice(id);
     buf
 }
 
@@ -852,14 +857,15 @@ pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, bool, u32) {
     (code_hash, is_type, date)
 }
 
-/// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx(4B BE) = 44 bytes
-/// Uses descending block_num so newest transfers come first in prefix scan.
+/// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
+/// Uses descending block_num and tx_idx so newest transfers come first in prefix scan.
 pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
     let block_desc = (i64::MAX - block_num).to_be_bytes();
+    let tx_idx_desc = (i32::MAX - tx_idx).to_be_bytes();
     let mut key = Vec::with_capacity(44);
     key.extend_from_slice(&type_hash[..32]);
     key.extend_from_slice(&block_desc);
-    key.extend_from_slice(&tx_idx.to_be_bytes());
+    key.extend_from_slice(&tx_idx_desc);
     key
 }
 
@@ -867,7 +873,8 @@ pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) 
 pub fn decode_token_transfer_key(key: &[u8]) -> (i64, i32) {
     let block_desc = i64::from_be_bytes(key[32..40].try_into().unwrap());
     let block_num = i64::MAX - block_desc;
-    let tx_idx = i32::from_be_bytes(key[40..44].try_into().unwrap());
+    let tx_idx_desc = i32::from_be_bytes(key[40..44].try_into().unwrap());
+    let tx_idx = i32::MAX - tx_idx_desc;
     (block_num, tx_idx)
 }
 
@@ -1787,6 +1794,12 @@ mod tests {
     fn test_pad_id_32_empty() {
         let padded = pad_id_32(&[]);
         assert_eq!(padded, [0u8; 32]);
+    }
+
+    #[test]
+    #[should_panic(expected = "ID exceeds 32 bytes")]
+    fn test_pad_id_32_rejects_oversized() {
+        pad_id_32(&[0xBB; 33]);
     }
 
     #[test]

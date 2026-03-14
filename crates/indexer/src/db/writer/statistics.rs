@@ -1063,9 +1063,12 @@ impl BatchWriter {
             burnt,
         };
 
+        // Batch all DAO stats writes atomically
+        let mut dao_batch = StoreBatch::new(&self.store);
+
         let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         let value = bincode::serialize(&latest)?;
-        self.store.put_stats_key(&key, &value)?;
+        dao_batch.put_stats(&key, &value);
 
         // Build and store top depositors
         {
@@ -1096,7 +1099,9 @@ impl BatchWriter {
                 tip_block_number,
                 depositors,
             };
-            self.store.put_dao_top_depositors(&top)?;
+            let top_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_TOP_DEPOSITORS, b"latest");
+            let top_value = bincode::serialize(&top)?;
+            dao_batch.put_stats(&top_key, &top_value);
         }
 
         // Update today's dao daily snapshot with the latest unclaimed compensation
@@ -1106,8 +1111,10 @@ impl BatchWriter {
             let snap_key =
                 keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, date_key.as_bytes());
             let snap_value = bincode::serialize(&today_snapshot)?;
-            self.store.put_stats_key(&snap_key, &snap_value)?;
+            dao_batch.put_stats(&snap_key, &snap_value);
         }
+
+        dao_batch.commit()?;
 
         Ok(())
     }

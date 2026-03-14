@@ -1385,7 +1385,9 @@ impl CkbadgerStore {
             keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT
             | keys::STATS_PREFIX_DAO_LATEST_STATS
             | keys::STATS_PREFIX_DAO_TOP_DEPOSITORS => Ok(self.cf_stats_dao()),
-            keys::STATS_PREFIX_HODL_WAVE => Ok(self.cf_stats_hodl()),
+            keys::STATS_PREFIX_HODL_WAVE
+            | keys::STATS_PREFIX_CELL_DISTRIBUTION
+            | keys::STATS_PREFIX_ADDR_COHORT => Ok(self.cf_stats_hodl()),
             keys::STATS_PREFIX_SCRIPT_DAILY => Ok(self.cf_stats_script()),
             keys::STATS_PREFIX_TOKEN_TRANSFERS
             | keys::STATS_PREFIX_TOKEN_HOURLY

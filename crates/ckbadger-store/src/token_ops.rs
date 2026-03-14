@@ -1591,11 +1591,15 @@ mod tests {
 
         let (block_num, last_idx, entry) = &result[0];
         assert_eq!(*block_num, 100);
-        assert_eq!(*last_idx, 2);
+        // With descending tx_idx encoding, within a block entries are iterated
+        // from highest tx_idx to lowest, so last_idx (cursor) is the lowest.
+        assert_eq!(*last_idx, 0);
         assert_eq!(entry.tx_hash, tx_hash.to_vec());
         assert_eq!(entry.transfers.len(), 3);
-        assert!(entry.transfers[0].is_mint);
-        assert!(!entry.transfers[1].is_mint);
+        // With descending tx_idx, iteration order is tx_idx=2, 1, 0.
+        // tx_idx=0 was the mint, so it appears last in the transfers vec.
+        assert!(!entry.transfers[0].is_mint);
+        assert!(entry.transfers[2].is_mint);
     }
 
     #[test]
@@ -1660,10 +1664,15 @@ mod tests {
         );
         batch.commit().unwrap();
 
+        // Verify i32::MAX as cursor tx_idx does not cause overflow.
+        // With descending tx_idx encoding, i32::MAX lands at the start of
+        // block 100's entries (before tx_idx=0), so the entry IS returned.
         let page = store
             .list_token_transfers(&type_hash, 10, Some((100, i32::MAX)))
             .unwrap();
-        assert!(page.is_empty());
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].0, 100); // block_num
+        assert_eq!(page[0].1, 0); // tx_idx
     }
 
     #[test]
@@ -1718,8 +1727,8 @@ mod tests {
         assert_eq!(result.len(), 1);
         let actions = &result[0].2.actions;
         assert_eq!(actions.len(), 2);
-        assert!(matches!(actions[0], AssetAction::Mint));
-        assert!(matches!(actions[1], AssetAction::Transfer));
+        assert!(actions.iter().any(|a| matches!(a, AssetAction::Mint)));
+        assert!(actions.iter().any(|a| matches!(a, AssetAction::Transfer)));
     }
 
     #[test]
