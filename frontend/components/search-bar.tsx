@@ -19,6 +19,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
+  const [compactCaretIndex, setCompactCaretIndex] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
   const router = useRouter();
@@ -58,6 +59,22 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const syncCompactCaretPosition = (target?: HTMLInputElement | null) => {
+    if (!target) {
+      return;
+    }
+
+    setCompactCaretIndex(target.selectionStart ?? target.value.length);
+  };
+
+  const resetSearchState = () => {
+    setIsOpen(false);
+    setIsInputFocused(false);
+    setQuery('');
+    setCompactCaretIndex(0);
+    setSubmitFeedback(null);
+  };
+
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = query.trim();
@@ -65,10 +82,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
 
     if (selectedIndex >= 0 && results[selectedIndex]) {
       router.push(results[selectedIndex].url);
-      setIsOpen(false);
-      setIsInputFocused(false);
-      setQuery('');
-      setSubmitFeedback(null);
+      resetSearchState();
       return;
     }
 
@@ -84,20 +98,14 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       );
       if (blockExactHash) {
         router.push(blockExactHash.url);
-        setIsOpen(false);
-        setIsInputFocused(false);
-        setQuery('');
-        setSubmitFeedback(null);
+        resetSearchState();
         return;
       }
     }
 
     if (results.length === 1) {
       router.push(results[0].url);
-      setIsOpen(false);
-      setIsInputFocused(false);
-      setQuery('');
-      setSubmitFeedback(null);
+      resetSearchState();
       return;
     }
 
@@ -110,10 +118,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     const route = resolveSearchRoute(trimmed);
     if (trimmed.length < 2 && route) {
       router.push(route);
-      setIsOpen(false);
-      setIsInputFocused(false);
-      setQuery('');
-      setSubmitFeedback(null);
+      resetSearchState();
       return;
     }
 
@@ -135,15 +140,15 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
 
   const handleResultClick = (result: SearchResult) => {
     router.push(result.url);
-    setIsOpen(false);
-    setIsInputFocused(false);
-    setQuery('');
-    setSubmitFeedback(null);
+    resetSearchState();
   };
 
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
   const compactVisibleText = query || SEARCH_PLACEHOLDER;
+  const compactCaretPosition = query ? compactCaretIndex : 0;
+  const compactTextBeforeCursor = compactVisibleText.slice(0, compactCaretPosition);
+  const compactTextAfterCursor = compactVisibleText.slice(compactCaretPosition);
   const showShortcutHints = isHome || isCompact;
 
   return (
@@ -170,33 +175,24 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               aria-hidden="true"
               className="pointer-events-none absolute inset-y-0 left-4 right-14 z-10 flex items-center overflow-hidden"
             >
-              {query ? (
-                <>
-                  <span
-                    data-testid="compact-search-command-text"
-                    className="text-jade/95 min-w-0 truncate whitespace-nowrap font-mono text-[13px] tracking-[0.015em]"
-                  >
-                    {compactVisibleText}
-                  </span>
-                  <span
-                    data-testid="compact-search-cursor"
-                    className="bg-jade/90 animate-blink-cursor ml-1 inline-block h-[1.05em] w-[7px] shrink-0"
-                  />
-                </>
-              ) : (
-                <>
+              <span
+                data-testid="compact-search-command-text"
+                className={cn(
+                  'min-w-0 truncate whitespace-nowrap font-mono text-[13px] tracking-[0.015em]',
+                  query ? 'text-jade/95' : 'text-text-dim/40'
+                )}
+              >
+                <span data-testid="compact-search-text-before-cursor">
+                  {compactTextBeforeCursor}
+                </span>
+                {isInputFocused && (
                   <span
                     data-testid="compact-search-cursor"
-                    className="bg-jade/90 animate-blink-cursor mr-1 inline-block h-[1.05em] w-[7px] shrink-0"
+                    className="bg-jade/90 animate-blink-cursor inline-block h-[1.05em] w-[7px] shrink-0 align-[-0.12em]"
                   />
-                  <span
-                    data-testid="compact-search-command-text"
-                    className="text-text-dim/40 min-w-0 truncate whitespace-nowrap font-mono text-[13px] tracking-[0.015em]"
-                  >
-                    {compactVisibleText}
-                  </span>
-                </>
-              )}
+                )}
+                <span data-testid="compact-search-text-after-cursor">{compactTextAfterCursor}</span>
+              </span>
             </span>
           )}
           <input
@@ -206,15 +202,20 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
+              syncCompactCaretPosition(e.target);
               setSelectedIndex(-1);
               setIsOpen(true);
             }}
-            onFocus={() => {
+            onFocus={(e) => {
               setIsOpen(true);
               setIsInputFocused(true);
+              syncCompactCaretPosition(e.target);
             }}
             onBlur={() => setIsInputFocused(false)}
+            onClick={(e) => syncCompactCaretPosition(e.currentTarget)}
             onKeyDown={handleKeyDown}
+            onKeyUp={(e) => syncCompactCaretPosition(e.currentTarget)}
+            onSelect={(e) => syncCompactCaretPosition(e.currentTarget)}
             placeholder={SEARCH_PLACEHOLDER}
             className={cn(
               'text-text-bright w-full font-mono transition-colors focus:outline-none',

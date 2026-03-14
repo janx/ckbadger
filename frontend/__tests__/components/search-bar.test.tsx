@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '../utils/test-utils';
+import { act, fireEvent, render, screen, waitFor } from '../utils/test-utils';
 import { api } from '@/lib/api';
 
 const SHARED_PLACEHOLDER = 'Search block / tx / address / cell ...';
@@ -82,6 +82,43 @@ describe('SearchBar', () => {
     expect(commandText).not.toHaveTextContent(SHARED_PLACEHOLDER);
     expect(commandText).not.toHaveTextContent('[/?]');
     expect(commandCursor).toBeInTheDocument();
+  });
+
+  it('only shows the compact fake caret while the input is focused', () => {
+    render(<SearchBar variant="compact" />);
+
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+
+    expect(screen.queryByTestId('compact-search-cursor')).not.toBeInTheDocument();
+
+    fireEvent.focus(input);
+    expect(screen.getByTestId('compact-search-cursor')).toBeInTheDocument();
+
+    fireEvent.blur(input);
+    expect(screen.queryByTestId('compact-search-cursor')).not.toBeInTheDocument();
+  });
+
+  it('moves the compact fake caret with the input selection', () => {
+    vi.mocked(api.search).mockImplementationOnce(() => new Promise(() => {}));
+
+    render(<SearchBar variant="compact" />);
+
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER) as HTMLInputElement;
+    act(() => {
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: '0xabc123' } });
+    });
+
+    expect(screen.getByTestId('compact-search-text-before-cursor')).toHaveTextContent('0xabc123');
+    expect(screen.getByTestId('compact-search-text-after-cursor')).toHaveTextContent('');
+
+    act(() => {
+      input.setSelectionRange(4, 4);
+      fireEvent.select(input);
+    });
+
+    expect(screen.getByTestId('compact-search-text-before-cursor')).toHaveTextContent('0xab');
+    expect(screen.getByTestId('compact-search-text-after-cursor')).toHaveTextContent('c123');
   });
 
   it('renders semantic icons for different search result types', async () => {
