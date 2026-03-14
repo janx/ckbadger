@@ -75,6 +75,7 @@ pub struct OwnerActivityDelta {
     pub asset_changes: Vec<AssetChange>,     // Classified asset changes
     pub type_calls: Option<Vec<TypeCallEntry>>, // Unrecognized type scripts
     pub lock_calls: Option<Vec<LockCallEntry>>, // Non-standard lock scripts
+    pub protocol_actions: Vec<ProtocolAction>,   // Detected protocol-level actions
     pub peers: Vec<Vec<u8>>,                 // Lock hashes of ALL other parties
 }
 ```
@@ -106,6 +107,7 @@ pub struct ActivityEntry {
     pub asset_changes: Vec<AssetChange>,
     pub type_calls: Option<Vec<TypeCallEntry>>,
     pub lock_calls: Option<Vec<LockCallEntry>>,
+    pub protocol_actions: Vec<ProtocolAction>,
     pub peers: Vec<Vec<u8>>,
 }
 ```
@@ -175,6 +177,21 @@ pub struct LockCallEntry {
 }
 ```
 
+### ProtocolAction — Cross-Layer Protocol Detection
+
+Protocol actions capture high-level protocol behaviors detected from cross-layer signals (e.g., lock script patterns, cell structure). Unlike asset changes which are derived from type scripts, protocol actions are detected by `ProtocolDetector` implementations that analyze the full transaction context.
+
+```rust
+// crates/ckbadger-store/src/types.rs
+pub struct ProtocolAction {
+    pub protocol: String,       // e.g., "rgbpp"
+    pub action: String,         // e.g., "leap_to_ckb", "transfer", "btc_time_locked"
+    pub metadata: serde_json::Value,  // Protocol-specific details (e.g., btc_txid)
+}
+```
+
+The `protocol_actions` field appears on both `OwnerActivityDelta` (write path) and `ActivityEntry` (read path).
+
 ### LatestActivityItem — Global Feed Item
 
 Wraps `ActivityEntry` with lock script context for CKB address resolution.
@@ -208,6 +225,7 @@ pub struct DailyActivityStats {
     pub unique_address_count: u32,        // Distinct lock_hashes
     pub total_ckb_moved: u128,            // Sum of |ckb_delta| across all owners
     pub script_counts: HashMap<String, u32>,  // Per-code_hash counts (hex string keys)
+    pub protocol_action_counts: HashMap<String, u32>,  // Per-protocol action counts (e.g., "rgbpp" => 5)
 }
 ```
 
@@ -449,15 +467,16 @@ StoreBatch::put_addr_tx(&mut self, lock_hash: &[u8], block_num: i64, tx_idx: i32
 fn matches_activity_filter(entry: &ActivityEntry, filter: Option<&str>) -> bool
 ```
 
-| Filter               | Condition                                      |
-| -------------------- | ---------------------------------------------- |
-| `"ckb"`              | `asset_changes.is_empty() && !has_type_script` |
-| `"token"`            | Has `AssetChange::Token`                       |
-| `"nft"` / `"object"` | Has `AssetChange::Object`                      |
-| `"dao"`              | Has DAO asset change variant                   |
-| `"type_call"`        | Has `type_calls` with entries                  |
-| `"lock_call"`        | Has `lock_calls` with entries                  |
-| `None` / `"all"`     | Always matches                                 |
+| Filter               | Condition                                                              |
+| -------------------- | ---------------------------------------------------------------------- |
+| `"ckb"`              | `asset_changes.is_empty() && !has_type_script`                         |
+| `"token"`            | Has `AssetChange::Token`                                               |
+| `"nft"` / `"object"` | Has `AssetChange::Object`                                              |
+| `"dao"`              | Has DAO asset change variant                                           |
+| `"type_call"`        | Has `type_calls` with entries                                          |
+| `"lock_call"`        | Has `lock_calls` with entries                                          |
+| `"protocol:*"`       | Has `protocol_actions` matching protocol name (e.g., `protocol:rgbpp`) |
+| `None` / `"all"`     | Always matches                                                         |
 
 ---
 
@@ -499,6 +518,7 @@ pub struct ActivityResponse {
     pub asset_changes: Vec<AssetChangeResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
+    pub protocol_actions: Vec<ProtocolActionResponse>,
     pub peers: Vec<String>,         // CKB addresses
 }
 
@@ -524,6 +544,12 @@ pub struct LockCallResponse {
     pub script_name: Option<String>,    // Resolved from ScriptInfo DB
     pub role: String,               // "protocol_action" or "access_control"
     pub decoded: Option<Value>,     // Decoded args (e.g., RGB++ btcTxid)
+}
+
+pub struct ProtocolActionResponse {
+    pub protocol: String,           // e.g., "rgbpp"
+    pub action: String,             // e.g., "leap_to_ckb", "transfer"
+    pub metadata: Value,            // Protocol-specific details
 }
 ```
 
@@ -614,13 +640,14 @@ interface ClassifiedActivity {
 
 **Priority order** (highest to lowest):
 
-1. DAO changes (deposit, withdraw request, withdraw complete)
-2. Token changes
-3. Object changes (Spore, mNFT)
-4. Identity changes (.bit, did:ckb)
-5. Protocol action lock calls (`role === 'protocol_action'`)
-6. Type calls (unrecognized type scripts)
-7. CKB transfer (fallback)
+1. Protocol actions (`protocol_actions` non-empty)
+2. DAO changes (deposit, withdraw request, withdraw complete)
+3. Token changes
+4. Object changes (Spore, mNFT)
+5. Identity changes (.bit, did:ckb)
+6. Protocol action lock calls (`role === 'protocol_action'`)
+7. Type calls (unrecognized type scripts)
+8. CKB transfer (fallback)
 
 The `primaryAssetChange` is the first matching asset in priority order. The `primaryTypeCall` is the first type call (if any). The `primaryLockCall` is always the first lock call (if any). These are used for the homepage stream display where only one badge per activity is shown.
 
@@ -853,16 +880,17 @@ Falls back to `⚙ Type call Pool(0xab12...cd34)` when no protocol.
 
 ### Core Data Structures
 
-| File                                 | Content                                                                                                                         |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `crates/ckbadger-store/src/types.rs` | ActivityEntry, TxActivityBundle, OwnerActivityDelta, AssetChange, TypeCallEntry, LockCallEntry, DailyActivityStats, AssetAction |
+| File                                 | Content                                                                                                                                         |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/ckbadger-store/src/types.rs` | ActivityEntry, TxActivityBundle, OwnerActivityDelta, AssetChange, TypeCallEntry, LockCallEntry, ProtocolAction, DailyActivityStats, AssetAction |
 
 ### Activity Builder
 
-| File                                         | Content                                                                                             |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `crates/indexer/src/db/writer/activities.rs` | build_activity_bundles_for_block(), CodeHashes, classify_input/output, emit_object/identity_changes |
-| `crates/indexer/build.rs`                    | Compile-time extraction of xudt_compatible code_hashes                                              |
+| File                                             | Content                                                                                             |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `crates/indexer/src/db/writer/activities.rs`     | build_activity_bundles_for_block(), CodeHashes, classify_input/output, emit_object/identity_changes |
+| `crates/indexer/src/db/writer/rgbpp_detector.rs` | RgbppDetector: ProtocolDetector impl (leap_to_ckb, leap_to_btc, transfer, btc_time_locked, receive) |
+| `crates/indexer/build.rs`                        | Compile-time extraction of xudt_compatible code_hashes                                              |
 
 ### Storage
 
@@ -887,12 +915,12 @@ Falls back to `⚙ Type call Pool(0xab12...cd34)` when no protocol.
 
 ### Frontend
 
-| File                                         | Content                                                                     |
-| -------------------------------------------- | --------------------------------------------------------------------------- |
-| `frontend/lib/api.ts`                        | ActivityTypeCall, ActivityLockCall, Activity, GlobalActivity types          |
-| `frontend/lib/activity-classify.ts`          | classifyActivity(), ClassifiedActivity, ActivityType                        |
-| `frontend/components/latest-activities.tsx`  | Homepage stream: StreamItem\* components                                    |
-| `frontend/components/activity-event-row.tsx` | Address page: ActivityEventGroup, TypeCallExpr, LockCallExpr, LockCallBadge |
+| File                                         | Content                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `frontend/lib/api.ts`                        | ActivityTypeCall, ActivityLockCall, ActivityProtocolAction, Activity, GlobalActivity types |
+| `frontend/lib/activity-classify.ts`          | classifyActivity(), ClassifiedActivity, ActivityType                                       |
+| `frontend/components/latest-activities.tsx`  | Homepage stream: StreamItem\* components                                                   |
+| `frontend/components/activity-event-row.tsx` | Address page: ActivityEventGroup, TypeCallExpr, LockCallExpr, LockCallBadge                |
 
 ### Pipeline Integration
 

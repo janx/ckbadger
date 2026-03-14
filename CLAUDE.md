@@ -250,16 +250,17 @@ ckbadger verify --list-checks             # List all checks
 
 **BEFORE making changes to CKB-related code, READ the relevant documentation:**
 
-| Topic            | Document                          | Must Read Before                              |
-| ---------------- | --------------------------------- | --------------------------------------------- |
-| **Worldview**    | `docs/prompts/WORLD_VIEW.md`      | **Any design or implementation**              |
-| Bulk sync rules  | `docs/prompts/BULK_SYNC.md`       | Bulk sync logic or sync-mode boundary changes |
-| Reorg handling   | `docs/prompts/REORG_HANDLING.md`  | Reorg or fork-related changes                 |
-| Activity system  | `docs/prompts/ACTIVITY_DESIGN.md` | Activity feed or activity CF changes          |
-| CKB protocol     | `docs/rfcs/`                      | Understanding CKB internals                   |
-| Nervos docs      | `docs/docs.nervos.org/`           | User-facing explanations                      |
-| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`        | Any DAO/supply/circulation changes            |
-| Architecture     | `docs/ARCHITECTURE_MAP.md`        | Module ownership questions                    |
+| Topic            | Document                                                    | Must Read Before                              |
+| ---------------- | ----------------------------------------------------------- | --------------------------------------------- |
+| **Worldview**    | `docs/prompts/WORLD_VIEW.md`                                | **Any design or implementation**              |
+| Bulk sync rules  | `docs/prompts/BULK_SYNC.md`                                 | Bulk sync logic or sync-mode boundary changes |
+| Reorg handling   | `docs/prompts/REORG_HANDLING.md`                            | Reorg or fork-related changes                 |
+| Activity system  | `docs/prompts/ACTIVITY_DESIGN.md`                           | Activity feed or activity CF changes          |
+| Protocol actions | `docs/plans/2026-03-14-protocol-action-framework-design.md` | Protocol detector or protocol action changes  |
+| CKB protocol     | `docs/rfcs/`                                                | Understanding CKB internals                   |
+| Nervos docs      | `docs/docs.nervos.org/`                                     | User-facing explanations                      |
+| DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`                                  | Any DAO/supply/circulation changes            |
+| Architecture     | `docs/ARCHITECTURE_MAP.md`                                  | Module ownership questions                    |
 
 ### Common Knowledge (CKB Core Concept)
 
@@ -337,7 +338,7 @@ const DAO_OCCUPIED_CAPACITY: u64 = 102_00000000; // 102 CKB
 | WebSocket        | `crates/api/src/ws/`                                                                                                    |
 | RPC client       | `crates/indexer/src/rpc/client.rs`                                                                                      |
 | Parsers          | `crates/indexer/src/parser/*.rs` (block, cell, dao, script, spore, dotbit, mnft, transaction, udt, rgbpp, media_source) |
-| DB writers       | `crates/indexer/src/db/writer/*.rs` (14 modules)                                                                        |
+| DB writers       | `crates/indexer/src/db/writer/*.rs` (15 modules, includes rgbpp_detector.rs)                                            |
 | Label import     | `crates/indexer/src/label_import.rs`                                                                                    |
 | Verify checks    | `crates/indexer/src/verify/*.rs`                                                                                        |
 | TUI              | `crates/tui/src/`                                                                                                       |
