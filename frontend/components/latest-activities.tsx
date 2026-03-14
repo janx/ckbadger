@@ -522,9 +522,21 @@ function StreamItem({ classified }: { classified: ClassifiedActivity }) {
 
 interface LatestActivitiesProps {
   isRealtime?: boolean;
+  queryLimit?: number;
+  maxItems?: number;
+  showViewAllLink?: boolean;
+  scrollable?: boolean;
+  panelClassName?: string;
 }
 
-export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) {
+export function LatestActivities({
+  isRealtime = false,
+  queryLimit = 32,
+  maxItems = MAX_STREAM_ITEMS,
+  showViewAllLink = true,
+  scrollable = false,
+  panelClassName,
+}: LatestActivitiesProps) {
   useEffect(() => ensureKeyframes(), []);
   const [newItemKeys, setNewItemKeys] = useState<Set<string>>(new Set());
   const prevKeysRef = useRef<Set<string>>(new Set());
@@ -534,8 +546,8 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
     isLoading,
     isFetching,
   } = useQuery({
-    queryKey: ['latest-activities'],
-    queryFn: () => api.getLatestActivities(32),
+    queryKey: ['latest-activities', queryLimit],
+    queryFn: () => api.getLatestActivities(queryLimit),
     refetchInterval: 10000,
   });
 
@@ -543,8 +555,8 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
   const showSkeleton = isLoading || (itemCount === 0 && isFetching);
 
   const classifiedItems = useMemo<ClassifiedActivity[]>(
-    () => (activities ? activities.slice(0, MAX_STREAM_ITEMS).map((a) => classifyActivity(a)) : []),
-    [activities]
+    () => (activities ? activities.slice(0, maxItems).map((a) => classifyActivity(a)) : []),
+    [activities, maxItems]
   );
 
   useEffect(() => {
@@ -569,22 +581,29 @@ export function LatestActivities({ isRealtime = false }: LatestActivitiesProps) 
     }
   }, [classifiedItems]);
 
-  const headerActions = (
+  const headerActions = showViewAllLink ? (
     <Link
       href="/activities"
       className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
     >
       VIEW ALL &rarr;
     </Link>
-  );
+  ) : null;
 
   return (
-    <TerminalPanel variant="default" glow={isRealtime} className="flex h-[38rem] flex-col">
+    <TerminalPanel
+      variant="default"
+      glow={isRealtime}
+      className={cn('flex h-[38rem] flex-col', panelClassName)}
+    >
       <TerminalPanelHeader indicator={isRealtime ? 'active' : 'inactive'} actions={headerActions}>
         Latest Activities
       </TerminalPanelHeader>
       <TerminalPanelContent padding="none" className="min-h-0 flex-1">
-        <div data-testid="latest-activities-content" className="h-full overflow-hidden">
+        <div
+          data-testid="latest-activities-content"
+          className={cn('h-full', scrollable ? 'overflow-y-auto' : 'overflow-hidden')}
+        >
           {showSkeleton
             ? Array.from({ length: 8 }).map((_, i) => (
                 <div

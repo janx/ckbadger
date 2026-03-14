@@ -43,6 +43,7 @@ function lazyParamPage<TProps extends object>(
 }
 
 const HomePage = lazyPage(() => import('@/app/page'));
+const ActivitiesPage = lazyPage(() => import('@/app/activities/page'));
 const AssetsPage = lazyPage(() => import('@/app/assets/page'));
 const BlocksPage = lazyPage(() => import('@/app/blocks/page'));
 const BlockDetailPage = lazyPage(() => import('@/app/blocks/[id]/page'));
@@ -169,6 +170,10 @@ export function createAppRouter(): RouteObject[] {
         {
           index: true,
           element: <HomePage />,
+        },
+        {
+          path: 'activities',
+          element: <ActivitiesPage />,
         },
         {
           path: 'assets',

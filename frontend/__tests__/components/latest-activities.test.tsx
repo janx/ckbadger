@@ -215,4 +215,22 @@ describe('LatestActivities stream', () => {
 
     expect(screen.getByTestId('latest-activities-content')).toBeInTheDocument();
   });
+
+  it('supports page mode without the self-referential view-all link', async () => {
+    vi.mocked(api.getLatestActivities).mockResolvedValue([
+      makeActivity({
+        address: 'ckb1qpage1111111111111111111111111111111111111111111',
+        txHash: '0xtx-page',
+        ckbDelta: '100000000',
+      }),
+    ]);
+
+    render(<LatestActivities queryLimit={64} maxItems={64} showViewAllLink={false} scrollable />);
+
+    await waitFor(() => {
+      expect(api.getLatestActivities).toHaveBeenCalledWith(64);
+    });
+    expect(screen.queryByRole('link', { name: /view all/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('latest-activities-content')).toHaveClass('overflow-y-auto');
+  });
 });
