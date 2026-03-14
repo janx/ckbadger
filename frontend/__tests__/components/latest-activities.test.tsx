@@ -114,12 +114,12 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Omnilock/)).toBeInTheDocument();
-      expect(screen.getByText(/Type call/)).toBeInTheDocument();
+      expect(screen.getAllByText(/Omnilock/).length).toBeGreaterThan(0);
+      expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
     });
   });
 
-  it('renders protocol name for script calls with protocolName', async () => {
+  it('renders script name for script calls with scriptName', async () => {
     vi.mocked(api.getLatestActivities).mockResolvedValue([
       makeActivity({
         address: 'ckb1qprotocol111111111111111111111111111111111111111',
@@ -130,8 +130,7 @@ describe('LatestActivities stream', () => {
             typeHashType: 'type',
             typeArgs: '0x1234',
             scriptHash: '0xhash',
-            scriptName: 'Pool',
-            protocolName: 'Stable++',
+            scriptName: 'Stable++ Pool',
           },
         ],
       }),
@@ -140,9 +139,7 @@ describe('LatestActivities stream', () => {
     render(<LatestActivities />);
 
     await waitFor(() => {
-      expect(screen.getByText('Stable++')).toBeInTheDocument();
-      expect(screen.getByText(/Pool/)).toBeInTheDocument();
-      // Should NOT show "Type call" text when protocol name is present
+      expect(screen.getAllByText(/Stable\+\+ Pool/).length).toBeGreaterThan(0);
       expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
     });
   });
@@ -175,7 +172,6 @@ describe('LatestActivities stream', () => {
             lockArgs: '0xargs',
             scriptHash: '0xhash',
             scriptName: 'UTXOSwap Intent',
-            role: 'protocol_action',
           },
         ],
       }),

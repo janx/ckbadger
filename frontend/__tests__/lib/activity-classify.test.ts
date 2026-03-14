@@ -143,26 +143,7 @@ describe('classifyActivity', () => {
     expect(result.primaryAssetChange).toEqual({ type: 'daoDeposit', capacity: '10200000000' });
   });
 
-  it('classifies protocol action lock call as protocolAction', () => {
-    const result = classifyActivity(
-      makeActivity({
-        lockCalls: [
-          {
-            lockCodeHash: '0xintent',
-            lockHashType: 'type',
-            lockArgs: '0xargs',
-            scriptHash: '0xhash',
-            scriptName: 'UTXOSwap Intent',
-            role: 'protocol_action',
-          },
-        ],
-      })
-    );
-    expect(result.displayType).toBe('protocolAction');
-    expect(result.primaryLockCall).toBeTruthy();
-  });
-
-  it('asset change takes priority over protocol action lock call', () => {
+  it('asset change takes priority over lock calls', () => {
     const result = classifyActivity(
       makeActivity({
         assetChanges: [
@@ -174,16 +155,14 @@ describe('classifyActivity', () => {
             lockHashType: 'type',
             lockArgs: '0xargs',
             scriptHash: '0xhash',
-            role: 'protocol_action',
           },
         ],
       })
     );
     expect(result.displayType).toBe('token');
-    expect(result.primaryLockCall?.role).toBe('protocol_action');
   });
 
-  it('access control lock call does not create protocolAction type', () => {
+  it('lock call without protocol action does not create protocolAction type', () => {
     const result = classifyActivity(
       makeActivity({
         lockCalls: [
@@ -193,13 +172,11 @@ describe('classifyActivity', () => {
             lockArgs: '0xargs',
             scriptHash: '0xhash',
             scriptName: 'RGB++',
-            role: 'access_control',
           },
         ],
       })
     );
     expect(result.displayType).toBe('ckbTransfer');
-    expect(result.primaryLockCall?.role).toBe('access_control');
   });
 
   it('classifies protocol action as protocolAction', () => {

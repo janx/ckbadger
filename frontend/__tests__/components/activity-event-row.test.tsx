@@ -106,10 +106,11 @@ describe('ActivityEventGroup', () => {
       />
     );
     expect(screen.getAllByText(/Omnilock/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Type call/).length).toBeGreaterThan(0);
+    // scriptName replaces "Type call" label
+    expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
   });
 
-  it('renders protocol name instead of Type call when protocolName is set', () => {
+  it('renders script name instead of Type call when scriptName is set', () => {
     render(
       <ActivityEventGroup
         activity={makeActivity({
@@ -119,17 +120,14 @@ describe('ActivityEventGroup', () => {
               typeHashType: 'type',
               typeArgs: '0x1234',
               scriptHash: '0xhash',
-              scriptName: 'Pool',
-              protocolName: 'Stable++',
+              scriptName: 'Stable++ Pool',
             },
           ],
         })}
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    expect(screen.getAllByText(/Stable\+\+/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Pool/).length).toBeGreaterThan(0);
-    // Should NOT show "Type call" when protocol name is present
+    expect(screen.getAllByText(/Stable\+\+ Pool/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Type call/)).not.toBeInTheDocument();
   });
 
@@ -155,10 +153,10 @@ describe('ActivityEventGroup', () => {
         formatTimeAgo={mockFormatTimeAgo}
       />
     );
-    // All four event types present: token, object, script call, CKB
+    // All four event types present: token, object, script call (labeled by scriptName), CKB
     expect(screen.getAllByText(/SEAL Transfer/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Spore Mint/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Type call/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Spore/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/CKB Transfer/).length).toBeGreaterThan(0);
   });
 
@@ -207,7 +205,6 @@ describe('ActivityEventGroup', () => {
               lockArgs: '0xargs1234',
               scriptHash: '0xhash',
               scriptName: 'UTXOSwap Intent',
-              role: 'protocol_action',
             },
           ],
         })}
@@ -227,7 +224,6 @@ describe('ActivityEventGroup', () => {
               lockHashType: 'type',
               lockArgs: '0xargs',
               scriptHash: '0xhash',
-              role: 'access_control',
             },
           ],
         })}
