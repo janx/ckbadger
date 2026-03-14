@@ -302,7 +302,7 @@ mod tests {
         );
 
         let meta = &alice_owner.protocol_actions[0].metadata;
-        assert_eq!(meta["intentType"], "SwapExactInput");
+        assert_eq!(meta["intentType"], "SwapExactInputForOutput");
         assert_eq!(meta["amountIn"], "1000");
         assert_eq!(meta["amountOutMin"], "500");
         assert_eq!(meta["assetInIndex"], 0);
@@ -371,7 +371,7 @@ mod tests {
         );
 
         let meta = &alice_owner.protocol_actions[0].metadata;
-        assert_eq!(meta["intentType"], "SwapExactInput");
+        assert_eq!(meta["intentType"], "SwapExactInputForOutput");
         assert_eq!(meta["amountIn"], "2000");
         assert_eq!(meta["amountOutMin"], "1500");
         assert_eq!(meta["assetInIndex"], 1);

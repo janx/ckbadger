@@ -1070,7 +1070,7 @@ mod tests {
 
         let result = decode_utxoswap_intent_args(&args).unwrap();
         assert_eq!(result["protocol"], "utxoswap");
-        assert_eq!(result["intentType"], "SwapExactInput");
+        assert_eq!(result["intentType"], "SwapExactInputForOutput");
         assert_eq!(result["assetInIndex"], 1);
         assert_eq!(result["amountIn"], "1000000");
         assert_eq!(result["amountOutMin"], "500000");

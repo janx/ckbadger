@@ -59,8 +59,8 @@ impl IntentType {
             Self::CreatePool => "CreatePool",
             Self::AddLiquidity => "AddLiquidity",
             Self::RemoveLiquidity => "RemoveLiquidity",
-            Self::SwapExactInputForOutput => "SwapExactInput",
-            Self::SwapInputForExactOutput => "SwapExactOutput",
+            Self::SwapExactInputForOutput => "SwapExactInputForOutput",
+            Self::SwapInputForExactOutput => "SwapInputForExactOutput",
             Self::ClaimProtocolLiquidity => "ClaimProtocolLiquidity",
         }
     }
@@ -253,11 +253,11 @@ mod tests {
         );
         assert_eq!(
             IntentType::SwapExactInputForOutput.display_name(),
-            "SwapExactInput"
+            "SwapExactInputForOutput"
         );
         assert_eq!(
             IntentType::SwapInputForExactOutput.display_name(),
-            "SwapExactOutput"
+            "SwapInputForExactOutput"
         );
         assert_eq!(
             IntentType::ClaimProtocolLiquidity.display_name(),
