@@ -57,6 +57,8 @@ export type ParsedMarkdownPage =
   | { kind: 'token_detail'; pathname: string; typeHash: string }
   | { kind: 'transactions_list'; pathname: '/transactions' }
   | { kind: 'tx_detail'; pathname: string; hash: string }
+  | { kind: 'fiber_channels_list'; pathname: '/fiber/channels' }
+  | { kind: 'fiber_channel_detail'; pathname: string; channelId: string }
   | { kind: 'unknown'; pathname: string };
 
 export const MARKDOWN_ROUTE_PATTERNS = [
@@ -85,6 +87,8 @@ export const MARKDOWN_ROUTE_PATTERNS = [
   '/scripts/{name}',
   '/tokens',
   '/tokens/{typeHash}',
+  '/fiber/channels',
+  '/fiber/channels/{channelId}',
   '/transactions',
   '/tx/{hash}',
 ] as const;
@@ -116,6 +120,9 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
   if (normalized === '/charts') return { kind: 'charts_overview', pathname: '/charts' };
   if (normalized === '/dao/charts') return { kind: 'dao_charts', pathname: '/dao/charts' };
   if (normalized === '/dao') return { kind: 'dao_overview', pathname: '/dao' };
+  if (normalized === '/fiber/channels') {
+    return { kind: 'fiber_channels_list', pathname: '/fiber/channels' };
+  }
   if (normalized === '/forks') return { kind: 'forks_list', pathname: '/forks' };
   if (normalized === '/hardforks') return { kind: 'hardforks', pathname: '/hardforks' };
   if (normalized === '/objects') return { kind: 'objects_list', pathname: '/objects' };
@@ -167,6 +174,15 @@ export function parseMarkdownSourcePath(pathname: string): ParsedMarkdownPage {
       kind: 'clusters_detail',
       pathname: normalized,
       clusterId: decodeParam(clusterMatch[1]),
+    };
+  }
+
+  const fiberChannelMatch = normalized.match(/^\/fiber\/channels\/([^/]+)$/);
+  if (fiberChannelMatch) {
+    return {
+      kind: 'fiber_channel_detail',
+      pathname: normalized,
+      channelId: decodeParam(fiberChannelMatch[1]),
     };
   }
 

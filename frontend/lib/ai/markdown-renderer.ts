@@ -1488,5 +1488,23 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+
+    case 'fiber_channels_list': {
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        '# Fiber Channels',
+        '',
+        'List of Fiber payment channels on CKB.',
+      ]);
+      return { status: 200, body };
+    }
+
+    case 'fiber_channel_detail': {
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# Fiber Channel ${page.channelId}`,
+        '',
+        'Channel detail page.',
+      ]);
+      return { status: 200, body };
+    }
   }
 }
