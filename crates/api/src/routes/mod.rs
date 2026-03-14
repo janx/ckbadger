@@ -3,6 +3,7 @@ pub mod assets;
 mod blocks;
 mod cells;
 mod dao;
+mod fiber;
 mod forks;
 mod graph;
 pub(crate) mod hardforks;
@@ -35,6 +36,7 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(search::routes())
         .merge(tokens::routes())
         .merge(dao::routes())
+        .merge(fiber::routes())
         .merge(spore::routes())
         .merge(mempool::routes())
         .merge(scripts::routes())
