@@ -1683,6 +1683,9 @@ impl Indexer {
                 Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
                     self.config.is_mainnet(),
                 )),
+                Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
+                    self.config.is_mainnet(),
+                )),
             ];
 
             let tt;
@@ -4116,6 +4119,9 @@ impl Indexer {
                     self.config.is_mainnet(),
                 )),
                 Box::new(crate::db::writer::stablepp_detector::StableppDetector::new(
+                    self.config.is_mainnet(),
+                )),
+                Box::new(crate::db::writer::utxoswap_detector::UtxoSwapDetector::new(
                     self.config.is_mainnet(),
                 )),
             ];

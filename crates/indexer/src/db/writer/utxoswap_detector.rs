@@ -1,9 +1,6 @@
 //! UTXOSwap protocol detector: identifies intent lifecycle events
 //! (submitted / settled) by analyzing Intent Lock cell transitions.
 
-// Struct is not yet registered in the sync pipeline (Task 4); suppress until then.
-#![allow(dead_code)]
-
 use ckbadger_store::types::{AssetChange, LockCallEntry, ProtocolAction, TypeCallEntry};
 
 use crate::parser::utxoswap::{is_intent_lock, parse_intent_args};
