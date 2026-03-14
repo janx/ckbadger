@@ -100,6 +100,8 @@ const NominalApcPage = lazyPage(() => import('@/app/charts/nominal-apc/page'));
 const TotalDepositPage = lazyPage(() => import('@/app/charts/total-deposit/page'));
 const TransactionCountPage = lazyPage(() => import('@/app/charts/transaction-count/page'));
 const UncleRatePage = lazyPage(() => import('@/app/charts/uncle-rate/page'));
+const FiberChannelsPage = lazyPage(() => import('@/app/fiber/channels/page'));
+const FiberChannelDetailPage = lazyPage(() => import('@/app/fiber/channels/[id]/page'));
 const DaoPage = lazyPage(() => import('@/app/dao/page'));
 const HardforksPage = lazyPage(() => import('@/app/hardforks/page'));
 const ScriptByCodeHashRoute = lazyParamPage(
@@ -331,6 +333,14 @@ export function createAppRouter(): RouteObject[] {
         {
           path: 'charts/uncle-rate',
           element: <UncleRatePage />,
+        },
+        {
+          path: 'fiber/channels',
+          element: <FiberChannelsPage />,
+        },
+        {
+          path: 'fiber/channels/:id',
+          element: <FiberChannelDetailPage />,
         },
         {
           path: 'dao',

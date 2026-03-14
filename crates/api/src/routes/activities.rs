@@ -560,8 +560,6 @@ pub(crate) fn build_global_activity_response(
 }
 
 const ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
-type CanonicalActivityLocation = (i64, i32, Vec<u8>);
-type CanonicalActivityLocationMap = HashMap<Vec<u8>, CanonicalActivityLocation>;
 
 fn validate_activity_filter(filter: Option<&str>) -> Result<(), ApiRouteError> {
     if let Some(value) = filter {
@@ -588,25 +586,25 @@ fn parse_activity_cursor(value: &str) -> Option<(i64, i32)> {
     }
 }
 
-fn canonical_activity_locations(
+/// Check if an addr_tx entry is canonical using the same logic as
+/// the transactions endpoint (`is_canonical_addr_tx` in cells.rs):
+/// verify tx_hash location matches (block_num, tx_idx) in TX_HASH_MAP + TX_INDEX.
+/// No block_hash comparison — position match is sufficient for canonicity.
+fn is_canonical_activity(
     store: &CkbadgerStore,
-    rows: &[(i64, i32, ActivityEntry)],
-) -> anyhow::Result<CanonicalActivityLocationMap> {
-    if rows.is_empty() {
-        return Ok(HashMap::new());
+    block_num: i64,
+    tx_idx: i32,
+    tx_hash: &[u8],
+) -> anyhow::Result<bool> {
+    let Some((canonical_block, canonical_tx_idx)) = store.get_tx_location(tx_hash)? else {
+        return Ok(false);
+    };
+    if canonical_block != block_num || canonical_tx_idx != tx_idx {
+        return Ok(false);
     }
-    let tx_hashes: Vec<Vec<u8>> = rows
-        .iter()
-        .map(|(_, _, entry)| entry.tx_hash.clone())
-        .collect();
-    let tx_batch = store.get_canonical_tx_identities_by_hash_batch(&tx_hashes)?;
-    let mut out = HashMap::with_capacity(tx_batch.len());
-    for (tx_hash, tx_row_opt) in tx_batch {
-        if let Some((block_num, tx_idx, block_hash)) = tx_row_opt {
-            out.insert(tx_hash, (block_num, tx_idx, block_hash));
-        }
-    }
-    Ok(out)
+    Ok(store
+        .get_tx_index(canonical_block, canonical_tx_idx)?
+        .is_some())
 }
 
 fn list_canonical_activities_page(
@@ -631,14 +629,12 @@ fn list_canonical_activities_page(
             break;
         }
         let rows_len = rows.len();
-        let canonical_locations = canonical_activity_locations(canonical_store, &rows)?;
         let mut last_seen = None;
         for (block_num, tx_idx, entry) in rows {
             last_seen = Some((block_num, tx_idx));
             if entry.block_number == block_num
                 && entry.tx_index == tx_idx
-                && canonical_locations.get(&entry.tx_hash)
-                    == Some(&(block_num, tx_idx, entry.block_hash.clone()))
+                && is_canonical_activity(canonical_store, block_num, tx_idx, &entry.tx_hash)?
             {
                 out.push((block_num, tx_idx, entry));
                 if out.len() >= limit {
@@ -735,24 +731,19 @@ async fn get_latest_activities(
     let activities = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let items = store.get_latest_activities()?;
 
-        // Filter to canonical entries only (same logic as address activities)
-        let tx_hashes: Vec<Vec<u8>> = items.iter().map(|i| i.entry.tx_hash.clone()).collect();
-        let canonical_batch = store.get_canonical_tx_identities_by_hash_batch(&tx_hashes)?;
-        let canonical_map: CanonicalActivityLocationMap = canonical_batch
-            .into_iter()
-            .filter_map(|(tx_hash, loc)| loc.map(|l| (tx_hash, l)))
-            .collect();
-
+        // Filter to canonical entries only (same logic as address activities):
+        // verify tx location matches (block_num, tx_idx) — no block_hash comparison.
         let mut script_info_cache = HashMap::new();
         let activities: Vec<GlobalActivityResponse> = items
             .into_iter()
             .filter(|item| {
-                canonical_map.get(&item.entry.tx_hash)
-                    == Some(&(
-                        item.entry.block_number,
-                        item.entry.tx_index,
-                        item.entry.block_hash.clone(),
-                    ))
+                is_canonical_activity(
+                    store.as_ref(),
+                    item.entry.block_number,
+                    item.entry.tx_index,
+                    &item.entry.tx_hash,
+                )
+                .unwrap_or(false)
             })
             .take(limit)
             .map(|item| {

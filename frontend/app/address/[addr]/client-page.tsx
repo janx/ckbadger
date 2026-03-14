@@ -36,9 +36,7 @@ export default function AddressDetailPage() {
 function AddressDetailPageContent({ addr }: { addr: string }) {
   const [selectedToken, setSelectedToken] = useState<AddressToken | null>(null);
   const [selectedDao, setSelectedDao] = useState(false);
-  const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions' | 'fiber'>(
-    'activities'
-  );
+  const [activeTab, setActiveTab] = useState<'activities' | 'cells' | 'transactions'>('activities');
   const [activityFilter, setActivityFilter] = useState<
     | 'all'
     | 'ckb'
@@ -88,7 +86,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address && !!daoSummary?.hasDaoActivity,
     placeholderData: keepPreviousData,
   });
-  const { data: activities, isLoading: activitiesLoading } = useQuery({
+  const {
+    data: activities,
+    isLoading: activitiesLoading,
+    isError: activitiesError,
+  } = useQuery({
     queryKey: [
       'address-activities',
       address?.lockScriptHash,
@@ -159,14 +161,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!address,
     placeholderData: keepPreviousData,
   });
-  const { data: fiberChannels, isLoading: fiberLoading } = useQuery({
+  const { data: fiberChannels } = useQuery({
     queryKey: ['address-fiber-channels', address?.lockScriptHash, fiberPagination.cursor],
     queryFn: () =>
       api.getAddressFiberChannels(address!.lockScriptHash, {
         limit: 20,
         cursor: fiberPagination.cursor,
       }),
-    enabled: !!address && activeTab === 'fiber',
+    enabled: !!address,
     placeholderData: keepPreviousData,
   });
   const handleTokenSelect = (token: AddressToken | null) => {
@@ -607,6 +609,118 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             </TerminalPanelContent>
           </TerminalPanel>
         )}
+        {fiberChannels?.data && fiberChannels.data.length > 0 && (
+          <TerminalPanel>
+            <TerminalPanelHeader>
+              Fiber Channels
+              <span className="text-text-dim ml-2 text-sm">
+                ({fiberChannels.total ?? fiberChannels.data.length})
+              </span>
+            </TerminalPanelHeader>
+            <TerminalPanelContent padding="none">
+              <div
+                className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
+                style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
+              >
+                <div>Channel ID</div>
+                <div>Status</div>
+                <div>Participants</div>
+                <div className="text-right">Capacity</div>
+                <div className="text-right">Opened</div>
+              </div>
+              {fiberChannels.data.map((channel: FiberChannel) => {
+                const stateBadge = (() => {
+                  switch (channel.state) {
+                    case 'open':
+                      return <Badge variant="green">Open</Badge>;
+                    case 'cooperativelyClosed':
+                      return <Badge variant="gray">Closed</Badge>;
+                    case 'forceClosed':
+                      return <Badge variant="red">Force Closed</Badge>;
+                    case 'settled':
+                      return <Badge variant="neutral">Settled</Badge>;
+                    default:
+                      return <Badge variant="gray">{channel.state}</Badge>;
+                  }
+                })();
+                return (
+                  <TerminalRow key={channel.channelId}>
+                    <div
+                      className="hidden w-full items-center gap-x-4 md:grid"
+                      style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
+                    >
+                      <div>
+                        <Link href={`/fiber/channels/${channel.channelId}`}>
+                          <HexDisplay
+                            value={channel.channelId}
+                            truncate
+                            startChars={8}
+                            endChars={6}
+                          />
+                        </Link>
+                      </div>
+                      <div>{stateBadge}</div>
+                      <div className="flex flex-wrap gap-1">
+                        {channel.participants.map((pAddr) => (
+                          <Link
+                            key={pAddr}
+                            href={`/address/${pAddr}`}
+                            className="text-text-dim hover:text-text font-mono text-xs transition-colors"
+                          >
+                            {pAddr.length > 20
+                              ? `${pAddr.slice(0, 10)}...${pAddr.slice(-8)}`
+                              : pAddr}
+                          </Link>
+                        ))}
+                      </div>
+                      <div className="text-text-bright text-right font-mono text-sm">
+                        {formatCkbAmount(channel.capacity).full} CKB
+                      </div>
+                      <div className="text-text-dim text-right text-sm">
+                        {formatTimeAgo(channel.openTimestamp)}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 md:hidden">
+                      <div className="flex items-center justify-between gap-2">
+                        <Link href={`/fiber/channels/${channel.channelId}`}>
+                          <HexDisplay
+                            value={channel.channelId}
+                            truncate
+                            startChars={8}
+                            endChars={6}
+                          />
+                        </Link>
+                        {stateBadge}
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-sm">
+                        <span className="text-text-bright font-mono">
+                          {formatCkbAmount(channel.capacity).full} CKB
+                        </span>
+                        <span className="text-text-dim text-xs">
+                          {formatTimeAgo(channel.openTimestamp)}
+                        </span>
+                      </div>
+                    </div>
+                  </TerminalRow>
+                );
+              })}
+            </TerminalPanelContent>
+            {(fiberChannels.hasMore || fiberPagination.hasPrevious) && (
+              <TerminalPanelFooter className="flex justify-center">
+                <CursorPagination
+                  total={fiberChannels.total}
+                  totalLabel="channels"
+                  pageSize={20}
+                  hasMore={fiberChannels.hasMore}
+                  hasPrevious={fiberPagination.hasPrevious}
+                  page={fiberPagination.page}
+                  onNext={() => fiberPagination.goToNext(fiberChannels.nextCursor)}
+                  onPrevious={fiberPagination.goToPrevious}
+                />
+              </TerminalPanelFooter>
+            )}
+          </TerminalPanel>
+        )}
         <TerminalPanel>
           <TerminalPanelHeader
             actions={
@@ -648,16 +762,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   Transactions
                   <span className="ml-1 opacity-75">({address.transactionsCount})</span>
                 </button>
-                <button
-                  onClick={() => setActiveTab('fiber')}
-                  className={`rounded px-3 py-1 font-mono text-sm transition-colors ${
-                    activeTab === 'fiber'
-                      ? 'bg-emphasis/15 text-emphasis'
-                      : 'text-text hover:text-text-bright'
-                  }`}
-                >
-                  Fiber
-                </button>
               </div>
             }
           >
@@ -677,8 +781,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   </Badge>
                 )}
               </div>
-            ) : activeTab === 'fiber' ? (
-              'Fiber Channels'
             ) : (
               'Transactions'
             )}
@@ -742,6 +844,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 </div>
                 {activitiesLoading ? (
                   <div className="text-text-dim py-12 text-center">Loading activities...</div>
+                ) : activitiesError ? (
+                  <div className="text-negative py-12 text-center">Failed to load activities</div>
                 ) : activities?.data && activities?.data.length > 0 ? (
                   <>
                     <div
@@ -1104,121 +1208,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   </>
                 ) : (
                   <div className="text-text-dim py-12 text-center">No transactions</div>
-                )}
-              </>
-            )}
-            {activeTab === 'fiber' && (
-              <>
-                {fiberLoading ? (
-                  <div className="text-text-dim py-12 text-center">Loading Fiber channels...</div>
-                ) : fiberChannels?.data && fiberChannels.data.length > 0 ? (
-                  <>
-                    <div
-                      className="border-base-border bg-base-surface/50 text-text-dim hidden items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider md:grid"
-                      style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
-                    >
-                      <div>Channel ID</div>
-                      <div>Status</div>
-                      <div>Participants</div>
-                      <div className="text-right">Capacity</div>
-                      <div className="text-right">Opened</div>
-                    </div>
-                    {fiberChannels.data.map((channel: FiberChannel) => {
-                      const stateBadge = (() => {
-                        switch (channel.state) {
-                          case 'open':
-                            return <Badge variant="green">Open</Badge>;
-                          case 'cooperativelyClosed':
-                            return <Badge variant="gray">Closed</Badge>;
-                          case 'forceClosed':
-                            return <Badge variant="red">Force Closed</Badge>;
-                          case 'settled':
-                            return <Badge variant="neutral">Settled</Badge>;
-                          default:
-                            return <Badge variant="gray">{channel.state}</Badge>;
-                        }
-                      })();
-                      return (
-                        <TerminalRow key={channel.channelId}>
-                          <div
-                            className="hidden w-full items-center gap-x-4 md:grid"
-                            style={{ gridTemplateColumns: '12rem 6rem 1fr 8rem 5.5rem' }}
-                          >
-                            <div>
-                              <Link href={`/fiber/channels/${channel.channelId}`}>
-                                <HexDisplay
-                                  value={channel.channelId}
-                                  truncate
-                                  startChars={8}
-                                  endChars={6}
-                                />
-                              </Link>
-                            </div>
-                            <div>{stateBadge}</div>
-                            <div className="flex flex-wrap gap-1">
-                              {channel.participants.map((pAddr) => (
-                                <Link
-                                  key={pAddr}
-                                  href={`/address/${pAddr}`}
-                                  className="text-text-dim hover:text-text font-mono text-xs transition-colors"
-                                >
-                                  {pAddr.length > 20
-                                    ? `${pAddr.slice(0, 10)}...${pAddr.slice(-8)}`
-                                    : pAddr}
-                                </Link>
-                              ))}
-                            </div>
-                            <div className="text-text-bright text-right font-mono text-sm">
-                              {formatCkbAmount(channel.capacity).full} CKB
-                            </div>
-                            <div className="text-text-dim text-right text-sm">
-                              {formatTimeAgo(channel.openTimestamp)}
-                            </div>
-                          </div>
-                          {/* Mobile layout */}
-                          <div className="space-y-1.5 md:hidden">
-                            <div className="flex items-center justify-between gap-2">
-                              <Link href={`/fiber/channels/${channel.channelId}`}>
-                                <HexDisplay
-                                  value={channel.channelId}
-                                  truncate
-                                  startChars={8}
-                                  endChars={6}
-                                />
-                              </Link>
-                              {stateBadge}
-                            </div>
-                            <div className="flex items-center justify-between gap-2 text-sm">
-                              <span className="text-text-bright font-mono">
-                                {formatCkbAmount(channel.capacity).full} CKB
-                              </span>
-                              <span className="text-text-dim text-xs">
-                                {formatTimeAgo(channel.openTimestamp)}
-                              </span>
-                            </div>
-                          </div>
-                        </TerminalRow>
-                      );
-                    })}
-                    {(fiberChannels.hasMore || fiberPagination.hasPrevious) && (
-                      <TerminalPanelFooter className="flex justify-center">
-                        <CursorPagination
-                          total={fiberChannels.total}
-                          totalLabel="channels"
-                          pageSize={20}
-                          hasMore={fiberChannels.hasMore}
-                          hasPrevious={fiberPagination.hasPrevious}
-                          page={fiberPagination.page}
-                          onNext={() => fiberPagination.goToNext(fiberChannels.nextCursor)}
-                          onPrevious={fiberPagination.goToPrevious}
-                        />
-                      </TerminalPanelFooter>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-text-dim py-12 text-center">
-                    No Fiber channels for this address
-                  </div>
                 )}
               </>
             )}
