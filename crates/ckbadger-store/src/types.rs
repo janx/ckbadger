@@ -1117,6 +1117,41 @@ pub enum AssetAction {
 }
 
 // ============================================
+// Group J2: Fiber Channel State
+// ============================================
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FiberChannelState {
+    Open,
+    CooperativelyClosed,
+    ForceClosed,
+    Settled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FiberChannel {
+    pub funding_tx_hash: Vec<u8>,
+    pub funding_output_index: u32,
+    pub state: FiberChannelState,
+    pub capacity: u64,
+    pub udt_type_hash: Option<Vec<u8>>,
+    pub udt_amount: Option<u128>,
+    pub open_block: i64,
+    pub open_timestamp: i64,
+    pub close_tx_hash: Option<Vec<u8>>,
+    pub close_block: Option<i64>,
+    pub close_timestamp: Option<i64>,
+    pub commitment_tx_hash: Option<Vec<u8>>,
+    pub commitment_output_index: Option<u32>,
+    pub delay_epoch: Option<u64>,
+    pub settlement_tx_hash: Option<Vec<u8>>,
+    pub settlement_block: Option<i64>,
+    pub settlement_timestamp: Option<i64>,
+    pub participants: Vec<Vec<u8>>,
+    pub funding_lock_args: Vec<u8>,
+}
+
+// ============================================
 // Group J: Daily Activity Stats
 // ============================================
 

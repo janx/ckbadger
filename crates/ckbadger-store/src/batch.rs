@@ -1050,6 +1050,39 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_script_info(), code_hash, &value);
     }
 
+    // ---- Fiber Channels ----
+
+    pub fn put_fiber_channel(&mut self, channel_id: &[u8], channel: &FiberChannel) {
+        let value = bincode::serialize(channel).expect("serialize FiberChannel");
+        self.put_cf(self.store.cf_fiber_channels(), channel_id, &value);
+    }
+
+    pub fn put_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8], channel_id: &[u8]) {
+        self.put_cf(
+            self.store.cf_fiber_channel_by_commitment(),
+            commitment_hash,
+            channel_id,
+        );
+    }
+
+    pub fn put_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {
+        let key = keys::encode_addr_fiber_channel_key(lock_hash, channel_id);
+        self.put_cf(self.store.cf_addr_fiber_channels(), key, []);
+    }
+
+    pub fn delete_fiber_channel(&mut self, channel_id: &[u8]) {
+        self.delete_cf(self.store.cf_fiber_channels(), channel_id);
+    }
+
+    pub fn delete_fiber_channel_by_commitment(&mut self, commitment_hash: &[u8]) {
+        self.delete_cf(self.store.cf_fiber_channel_by_commitment(), commitment_hash);
+    }
+
+    pub fn delete_addr_fiber_channel(&mut self, lock_hash: &[u8], channel_id: &[u8]) {
+        let key = keys::encode_addr_fiber_channel_key(lock_hash, channel_id);
+        self.delete_cf(self.store.cf_addr_fiber_channels(), &key);
+    }
+
     // ---- Sync meta ----
 
     pub fn put_sync_meta(&mut self, key: &[u8], value: &[u8]) {

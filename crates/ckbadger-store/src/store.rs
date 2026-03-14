@@ -313,6 +313,9 @@ pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities"
 pub const CF_IDENTITY_AGG: &str = "identity_agg";
 pub const CF_IDENTITY_COLLECTION_ACTIVITIES: &str = "identity_collection_activities";
 pub const CF_PENDING_PROPOSALS: &str = "pending_proposals";
+pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
+pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
+pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreClass {
@@ -381,6 +384,9 @@ pub const ALL_CFS: &[&str] = &[
     CF_IDENTITY_AGG,
     CF_IDENTITY_COLLECTION_ACTIVITIES,
     CF_PENDING_PROPOSALS,
+    CF_FIBER_CHANNELS,
+    CF_FIBER_CHANNEL_BY_COMMITMENT,
+    CF_ADDR_FIBER_CHANNELS,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -433,6 +439,9 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_IDENTITY_AGG,
     CF_IDENTITY_COLLECTION_ACTIVITIES,
     CF_PENDING_PROPOSALS,
+    CF_FIBER_CHANNELS,
+    CF_FIBER_CHANNEL_BY_COMMITMENT,
+    CF_ADDR_FIBER_CHANNELS,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1209,6 +1218,15 @@ impl CkbadgerStore {
     }
     pub fn cf_pending_proposals(&self) -> &ColumnFamily {
         self.cf(CF_PENDING_PROPOSALS)
+    }
+    pub fn cf_fiber_channels(&self) -> &ColumnFamily {
+        self.cf(CF_FIBER_CHANNELS)
+    }
+    pub fn cf_fiber_channel_by_commitment(&self) -> &ColumnFamily {
+        self.cf(CF_FIBER_CHANNEL_BY_COMMITMENT)
+    }
+    pub fn cf_addr_fiber_channels(&self) -> &ColumnFamily {
+        self.cf(CF_ADDR_FIBER_CHANNELS)
     }
 
     // ---- Raw DB operations ----

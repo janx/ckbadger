@@ -1148,6 +1148,70 @@ pub mod sync_meta_keys {
     pub const MEMORY_STATS: &[u8] = b"memory_stats";
 }
 
+// -- Fiber Channels --
+
+pub const FIBER_CHANNEL_KEY_SIZE: usize = 32;
+
+pub fn encode_fiber_channel_id(funding_tx_hash: &[u8], output_index: u32) -> Vec<u8> {
+    use ckb_hash::new_blake2b;
+    let mut hasher = new_blake2b();
+    hasher.update(funding_tx_hash);
+    hasher.update(&output_index.to_le_bytes());
+    let mut hash = vec![0u8; 32];
+    hasher.finalize(&mut hash);
+    hash
+}
+
+pub const FIBER_OUTPOINT_SIZE: usize = 36;
+
+pub fn encode_fiber_outpoint(tx_hash: &[u8], output_index: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(FIBER_OUTPOINT_SIZE);
+    out.extend_from_slice(tx_hash);
+    out.extend_from_slice(&output_index.to_le_bytes());
+    out
+}
+
+pub fn decode_fiber_outpoint(data: &[u8]) -> (Vec<u8>, u32) {
+    assert!(
+        data.len() >= FIBER_OUTPOINT_SIZE,
+        "decode_fiber_outpoint: expected at least {} bytes, got {}",
+        FIBER_OUTPOINT_SIZE,
+        data.len()
+    );
+    let tx_hash = data[0..32].to_vec();
+    let output_index = u32::from_le_bytes(data[32..36].try_into().unwrap());
+    (tx_hash, output_index)
+}
+
+pub const ADDR_FIBER_CHANNEL_KEY_SIZE: usize = 64;
+
+pub fn encode_addr_fiber_channel_key(lock_hash: &[u8], channel_id: &[u8]) -> Vec<u8> {
+    assert!(
+        lock_hash.len() >= 32,
+        "encode_addr_fiber_channel_key: lock_hash must be >= 32 bytes, got {}",
+        lock_hash.len()
+    );
+    assert!(
+        channel_id.len() >= 32,
+        "encode_addr_fiber_channel_key: channel_id must be >= 32 bytes, got {}",
+        channel_id.len()
+    );
+    let mut key = Vec::with_capacity(ADDR_FIBER_CHANNEL_KEY_SIZE);
+    key.extend_from_slice(&lock_hash[..32]);
+    key.extend_from_slice(&channel_id[..32]);
+    key
+}
+
+pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
+    assert!(
+        key.len() >= ADDR_FIBER_CHANNEL_KEY_SIZE,
+        "decode_addr_fiber_channel_key: expected at least {} bytes, got {}",
+        ADDR_FIBER_CHANNEL_KEY_SIZE,
+        key.len()
+    );
+    (&key[0..32], &key[32..64])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
