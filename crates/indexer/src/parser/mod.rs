@@ -2,6 +2,7 @@ pub mod block;
 pub mod cell;
 pub mod dao;
 pub mod dotbit;
+pub mod fiber;
 pub mod media_source;
 pub mod mnft;
 pub mod rgbpp;
